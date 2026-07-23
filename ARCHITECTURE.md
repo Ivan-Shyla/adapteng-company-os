@@ -112,6 +112,9 @@ AdaptEng не заявляет:
 - Target account list и keyword set ещё не созданы.
 - Формальной AI/data policy пока нет.
 - Финансовый register и отдельная accounting integration пока не нужны.
+- На общем n8n Cloud, кроме бизнес-домена Marketing, работают личные
+  автоматизации Job Monitor (поиск вакансий) и English Coach (Telegram-обучение).
+  Они не входят в company scope, но используют общий runtime и credentials.
 
 ### 1.5 Цели
 
@@ -333,7 +336,7 @@ Default go/no-go criteria:
 |---|---|
 | `system_id` | stable slug |
 | `name` | service/workflow name |
-| `domain` | company / website / marketing / automation / agent / utility |
+| `domain` | company / website / marketing / automation / agent / personal / utility |
 | `repository` | GitHub URL |
 | `runtime` | Cloudways / n8n Cloud / Coolify / GitHub / other |
 | `status` | live / pilot / blocked / paused / retired |
@@ -645,7 +648,40 @@ target.
 `PalinaRuban/adapteng` is historical and has no active authority. It is not a
 source for deployment, content, architecture or rollback.
 
-### 6.3 n8n Cloud cutover
+### 6.3 Домены автоматизаций и их принадлежность
+
+Источник истины по списку — `adapteng-automation-platform/n8n/workflow-index.json`
+(81 workflow). Все домены учитываются явно, чтобы cutover и ратификация не
+натыкались на «неизвестные» workflows.
+
+| Домен | Группа | Workflows (active) | Принадлежность | Правило |
+|---|---|---:|---|---|
+| Marketing Machine | MM | 45 (12) | AdaptEng business | Подключается к Company OS (§5): Baserow/Drive/agent |
+| Job Monitor | JM | 23 (10) | Личная автоматизация Ивана (поиск вакансий) | Не company scope; изолирована от company данных |
+| English Coach | EC | 12 (7) | Личный/отдельный продукт (Telegram-обучение) | Не company scope; изолирована от company данных |
+| Test / Catalog | EXP | 1 (0) | Utility | keep или delete при ратификации |
+
+Только **Marketing** — промышленная бизнес-автоматизация AdaptEng, и именно её
+§5 подключает к Baserow, Shared Drive и нашему агенту. **Job Monitor** и
+**English Coach** — личные/отдельные автоматизации, которые сегодня работают на
+том же n8n Cloud и делят credentials (OpenAI, Google, Telegram, Gmail).
+
+Правила для личных доменов:
+
+- не пишут в company `adapteng_ops`, company Baserow tables и company Shared
+  Drive; если JM сейчас пишет в `adapteng_ops` (per automation-platform audit),
+  при ратификации выделить отдельную схему/namespace или отдельный store;
+- представлены в `Systems_Automations` как отдельные записи с `domain = personal`,
+  чтобы single interface оставался честным, но без личных данных в company tables;
+- имеют отдельные API credentials и budget, чтобы личное использование не
+  расходовало company AI cap (§7.4);
+- при n8n Cloud → self-hosted переносятся отдельным путём и не являются company
+  flagship migration.
+
+Это сохраняет фокус Company OS на промышленном бизнесе и одновременно честно
+учитывает все 81 workflow.
+
+### 6.4 n8n Cloud cutover
 
 Не выполнять big-bang migration.
 
@@ -661,13 +697,16 @@ DNS/TLS
 → record evidence
 ```
 
-Порядок:
+Порядок (company workflows):
 
-1. public/read-only JM workflow;
+1. read-only marketing/content workflow (наименьший риск);
 2. article/content workflow;
 3. case/media workflow;
 4. website lead intake;
 5. approval/publishing workflows.
+
+Личные JM/EC (§6.3) переносятся отдельно, вне company data path, и не считаются
+первым company workflow.
 
 Paused/experimental workflows переносятся только после решения `keep / merge /
 archive / delete`.
@@ -1004,7 +1043,7 @@ Official references used for this decision:
 | `MKT-002` | marketing + automation | Connect article flow to `Content_Items` and Drive | One article draft appears in Google Doc |
 | `MKT-003` | marketing + Drive | Define limited-access approved folders, snapshot hash and publish receipt | Approved/published status cannot be set by model or draft credential |
 | `N8N-001` | DNS/Coolify | Finish self-hosted n8n access | TLS/health/UI verified |
-| `N8N-002` | automation-platform | Ratify workflow inventory | Every workflow is keep/merge/archive/delete |
+| `N8N-002` | automation-platform | Ratify workflow inventory and classify domain | Company (MM) vs personal (JM/EC) separated; each workflow is keep/merge/archive/delete; personal isolated from company data |
 | `N8N-003` | automation-platform | Shadow first read-only workflow | No duplicate/external write; outputs reconciled |
 
 ### 10.4 Days 15–45: extend our agent
@@ -1069,6 +1108,7 @@ agent schemas → artifact mode → adapters → content skill → eval → live
 | self-hosted n8n | Infrastructure prepared, cutover incomplete | DNS/TLS and shadow |
 | Website | Live | Lead contract and restore evidence |
 | Media intake | Live | Baserow/Drive content link |
+| Personal automations (JM/EC) | Live on shared n8n Cloud | Classify `domain=personal` and isolate from company data |
 | Article/case drafts | Partial | Unified Drive/Baserow lifecycle |
 | AI code agent | Phase 3 proven | `business_artifact` mode |
 | Business AI skills | Not live | Content & Case Draft pilot |
