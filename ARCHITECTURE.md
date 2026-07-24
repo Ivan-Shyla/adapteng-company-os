@@ -109,8 +109,13 @@ AdaptEng не заявляет:
 - Active leads, opportunities, projects и service cases пока отсутствуют.
 - Есть личная partner network, но company relationship register ещё не создан.
 - Lead/follow-up/outcome нигде системно не фиксируются.
-- Документы находятся в личных Google Drive и OneDrive.
-- Google Workspace ещё не приобретён.
+- Existing documents still need controlled migration from personal Google Drive
+  and OneDrive; Google Workspace Business Standard is active, and the
+  company-owned Shared Drive with eight standing folders is provisioned.
+- Shared Drive owner Manager/recovery confirmation and optional CI
+  variables/live adapter smoke remain follow-up.
+- Baserow is deployed and healthy in Coolify, but public DNS, TLS/UI/admin,
+  live schema initialization and off-host restore evidence remain open.
 - Target account list и keyword set ещё не созданы.
 - Формальной AI/data policy пока нет.
 - Финансовый register и отдельная accounting integration пока не нужны.
@@ -697,12 +702,12 @@ one-click интерфейс без покупки Baserow paid automation featu
 | Cloudways WordPress | Live website and published content | Keep |
 | GoDaddy | Domain and DNS | Keep |
 | Zoho | Mail/SMTP | Keep; no Gmail migration |
-| Google Workspace | Company documents and Shared Drive | Buy Business Standard |
+| Google Workspace | Company documents; Shared Drive provisioned | Keep; finish owner/recovery acceptance |
 | Hetzner + Coolify | Self-hosted runtime | Keep |
 | `adapteng_ops` Postgres | Runs, audit, dedup, cost and canonical approval ledger | Keep |
 | n8n Cloud | Current authoritative automation runtime | Keep until staged cutover |
 | self-hosted n8n | Target runtime, currently awaiting completion | Finish and migrate gradually |
-| Baserow self-hosted Free | Human Company OS interface | Deploy |
+| Baserow self-hosted Free | Human Company OS interface; service healthy | Finish DNS/TLS/admin and live schema run |
 | Telegram + email | Alerts and approval notification | Keep |
 | GitHub | Code, contracts, architecture and evidence | Keep |
 
@@ -1073,13 +1078,13 @@ Baserow должен существовать проверенный restore Pos
 
 | Item | Pilot decision |
 |---|---|
-| Google Workspace Business Standard | Required; one user, 2 TB; reserve up to €15/month before VAT and confirm checkout price |
+| Google Workspace Business Standard | Active; one user, 2 TB; approximately €13.80/month in the current architecture snapshot |
 | Baserow self-hosted Free | €0 software; existing server |
 | n8n Community self-hosted | €0 software; existing server |
 | Coolify | Existing |
 | Hetzner server | Existing; upgrade only after measured resource pressure |
 | AI API (runtime) | Hard cap €10/month on business_artifact runtime; optional if local/configured model passes |
-| Backup/object storage | Use approved existing arrangement; add only for quarantine/offsite need |
+| Backup/object storage | Storage Box BX11 is planned at €3.20/month but is not evidenced as purchased and is not actual spend |
 
 Owner `dev_model_budget` (code_change, §7.4) — персональная подписка на
 разработку, **не** company recurring cost и не входит в суммы ниже.
@@ -1087,9 +1092,11 @@ Owner `dev_model_budget` (code_change, §7.4) — персональная по�
 The previous €30 AI cap did **not** include server or Workspace and was therefore
 ambiguous. It is replaced by the explicit €10 model-only runtime pilot cap.
 
-Planned new recurring spend is therefore approximately **up to €25/month before
-VAT**: Workspace reserve + optional model cap. Baserow/n8n/Coolify add no
-software fee, and no new server is approved until the existing host is measured.
+Current evidenced new recurring spend is approximately **€13.80/month** for
+Workspace. The €10 runtime model amount remains a fail-closed cap, not evidenced
+spend. Baserow/n8n/Coolify add no software fee and currently use existing server
+resources. Storage Box BX11 remains planned, not purchased, and no new server is
+approved until the existing host is measured.
 Existing Hetzner/Cloudways/Zoho costs remain current company costs and must be
 entered from actual invoices rather than estimated web prices.
 
@@ -1130,23 +1137,23 @@ Official references used for this decision:
 
 | ID | Repository/system | Work | Definition of done |
 |---|---|---|---|
-| `COS-001` | Google Workspace | Buy Business Standard, verify domain, keep Zoho MX; create Cloud Identity Free break-glass admin | Company login works; MX unchanged; break-glass admin has 2FA + offline recovery codes |
-| `COS-002` | Google Drive | Create `AdaptEng Company` structure | Organization owns Shared Drive; Ivan has Manager/admin access and tested recovery; folders match §4 |
+| `COS-001` | Google Workspace | Buy Business Standard, verify domain, keep Zoho MX; create Cloud Identity Free break-glass admin | Company login works; MX unchanged; break-glass admin has 2FA + offline recovery codes. **Partial:** Business Standard is active; break-glass/MFA/recovery inventory remains open. |
+| `COS-002` | Google Drive | Create `AdaptEng Company` structure | Organization owns Shared Drive; Ivan has Manager/admin access and tested recovery; folders match §4. **Provisioned:** structure merged in automation-platform PR #62 and provisioning workflow in PR #64; owner Manager/recovery confirmation remains open. |
 | `SEC-001` | Accounts | Password manager, MFA and recovery inventory | Every critical system has status/owner/recovery |
 | `OPS-001` | Hetzner/Coolify | Record 7-day resource baseline | CPU/RAM/disk/swap known |
-| `OPS-002` | n8n | Create Drive service account credential | Test file created/deleted in approved folder |
+| `OPS-002` | n8n | Create Drive service account credential | Test file created/deleted in approved folder. **Repository workflow merged:** automation-platform PR #64; optional CI variables/live adapter smoke remain follow-up. |
 
 ### 10.2 Days 4–14: one-person interface
 
 | ID | Repository/system | Work | Definition of done |
 |---|---|---|---|
-| `COS-003` | Baserow/Coolify | Deploy self-hosted Free with private/protected access | Login, HTTPS, backup and health work |
-| `COS-004` | Baserow | Create eight tables and ten views | Schema matches §3; no sample PII |
+| `COS-003` | Baserow/Coolify | Deploy self-hosted Free with private/protected access | Login, HTTPS, backup and health work. **Deployed, not accepted:** service is healthy and the daily backup command produced a verified archive; public DNS is NXDOMAIN, so TLS/UI/admin remain blocked, and off-host export/restore remains open. |
+| `COS-004` | Baserow | Create eight tables and ten views | Schema matches §3; no sample PII. **Repository implementation merged:** automation-platform PR #61; live schema run is blocked by `COS-003` DNS/admin. |
 | `COS-005` | Baserow | Load systems, repos and known partners | Today/Systems views are useful; seeded `Systems_Automations` includes Zoho SMTP (email drafts/alerts), n8n Cloud, self-hosted n8n, Postgres, Cloudways, Hetzner/Coolify |
 | `SEC-002` | Accounts/n8n/Postgres | Separate personal JM/EC from company | Personal workflows use own API keys/budget and own Postgres schema/store; no personal workflow uses a company credential or writes company data |
 | `BIZ-001` | Baserow (Days 8–21) | 10 outreach Actions from known European network | 10 `Actions` with `due_at`; each has recorded `outcome`; doubles as real UAT of Pipeline/Actions views |
-| `AUT-001` | automation-platform | Versioned Baserow adapter | Upsert by stable ID is idempotent; patches only workflow-owned fields (§3.4) |
-| `AUT-002` | automation-platform | Shared Drive folder adapter | Folder creation by stable ID is idempotent |
+| `AUT-001` | automation-platform | Versioned Baserow adapter | Upsert by stable ID is idempotent; patches only workflow-owned fields (§3.4). **Repository implementation merged:** automation-platform PR #59; live Baserow use remains gated. |
+| `AUT-002` | automation-platform | Shared Drive folder adapter | Folder creation by stable ID is idempotent. **Repository implementation merged:** automation-platform PR #59; optional live adapter smoke remains. |
 
 ### 10.3 Days 8–30: connect existing automations
 
@@ -1156,24 +1163,26 @@ Official references used for this decision:
 | `MKT-002` | marketing + automation | Connect article flow to `Content_Items` and Drive | One article draft appears in Google Doc |
 | `MKT-003` | marketing + Drive | Define limited-access approved folders, snapshot hash and publish receipt | Approved/published status cannot be set by model or draft credential |
 | `N8N-001` | DNS/Coolify | Finish self-hosted n8n access | TLS/health/UI verified |
-| `N8N-002` | automation-platform | Ratify workflow inventory and classify domain | Company (MM) vs personal (JM/EC) separated; each workflow is keep/merge/archive/delete; personal isolated from company data |
+| `N8N-002` | automation-platform | Ratify workflow inventory and classify domain | Company (MM) vs personal (JM/EC) separated; each workflow is keep/merge/archive/delete; personal isolated from company data. **Taxonomy ratified:** automation-platform PR #60 (`af36d3a`); `SEC-002` isolation remains open. |
 | `N8N-003` | automation-platform | Shadow first read-only workflow | No duplicate/external write; outputs reconciled |
 
 ### 10.4 Days 15–45: extend our agent
 
 | ID | Repository/system | Work | Definition of done |
 |---|---|---|---|
-| `AG-001` | ai-dev-loop-control-plane | Add business artifact schemas | CI passes; code mode unchanged |
-| `AG-002` | ai-dev-loop-control-plane | Add artifact completion/evidence lifecycle | Non-Git task completes by artifact gates |
-| `AG-003` | automation-platform | Connect control-plane to Postgres/Gateway | Run identity, cost and outcome persisted |
-| `AG-004` | automation-platform | Add pending-only Baserow/Drive adapters | Agent cannot approve or publish |
-| `AG-005` | control-plane | Linux/Coolify acceptance | Critical safety tests pass in container |
+| `AG-001` | ai-dev-loop-control-plane | Add business artifact schemas | CI passes; code mode unchanged. **Repository implementation merged:** control-plane PR #33. |
+| `AG-002` | ai-dev-loop-control-plane | Add artifact completion/evidence lifecycle | Non-Git task completes by artifact gates. **Repository implementation merged:** control-plane PR #33. |
+| `AG-003` | ai-dev-loop-control-plane | Add artifact envelope | Artifact URI/hash, citations, schema, model usage and evidence digest are required. |
+| `AG-004` | automation-platform | Add Postgres run adapter | Task/run/outcome reconciles idempotently in `adapteng_ops`. **Repository implementation merged:** automation-platform PR #65; live wiring remains open. |
+| `AG-005` | automation-platform | Add pending-only Baserow/Drive adapters | Agent cannot approve or publish. **Repository implementation merged:** automation-platform PR #63; live adapter smoke remains open. |
+| `AG-006` | ai-dev-loop-control-plane | Linux/Coolify acceptance | Critical safety tests pass in container. **Repository implementation merged:** control-plane PR #34. |
+| `AG-007` | ai-dev-loop-control-plane | Business eval harness | Synthetic security set and approved representative quality set. **Harness merged:** control-plane PR #35; founder-approved representative inputs and real eval remain open. |
 
 ### 10.5 Days 30–60: first business AI pilot
 
 | ID | Repository/system | Work | Definition of done |
 |---|---|---|---|
-| `AI-001` | marketing/control-plane | Content & Case Draft skill | Inputs/outputs follow schemas |
+| `AI-001` | marketing/control-plane | Content & Case Draft skill | Inputs/outputs follow schemas. **Repository implementation merged:** marketing PR #19 (`5b9af0e`), deterministic draft-only behavior with 106 tests; real use is blocked on founder-ratified claims, style guide, source documents and pilot configuration. |
 | `AI-002` | automation-platform | 20-case shadow eval | Pilot gates in §7.5 measured |
 | `AI-003` | Baserow | Review/outcome capture | Accept/edit/reject and time saved recorded |
 | `AI-004` | Owner | Go/no-go | Continue only if useful and within cost |
@@ -1182,8 +1191,8 @@ Official references used for this decision:
 
 | ID | Repository/system | Work | Definition of done |
 |---|---|---|---|
-| `WEB-001` | website + automation | Versioned `lead.created` contract | Source, consent, language, service and correlation ID |
-| `WEB-002` | website + Baserow | Form → Opportunity → one-day Action | Three synthetic leads, no loss/duplicate |
+| `WEB-001` | website + automation | Versioned `lead.created` contract | Source, consent, language, service and correlation ID. **Draft only:** website PR #78 remains held because merge auto-deploys the producer; it is not live. |
+| `WEB-002` | website + Baserow | Form → Opportunity → one-day Action | Three synthetic leads, no loss/duplicate. **Repository consumer merged:** automation-platform PR #66 (`b94c72e`); live import/activation remains blocked on atomic company-owned dedupe with concurrent proof, reviewed origin hardening, request-body retention verification, inactive shadow and synthetic E2E. |
 | `INT-001` | automation-platform | Read-only integrity/reconcile check | Weekly job compares Baserow↔Postgres↔Drive; on drift creates an `Action`, never auto-writes business fields; not pilot-blocking |
 | `N8N-004` | automation-platform | Cut over selected content workflow | Cloud twin disabled; seven-day evidence |
 | `N8N-005` | automation-platform | Cut over lead workflow last | Fallback and rollback proven |
@@ -1202,34 +1211,47 @@ Official references used for this decision:
 ### 10.8 Dependency order
 
 ```text
-Workspace → Shared Drive → n8n Drive credential
-         └→ Baserow (backup verified first) → adapters → case/article integration
+Workspace (active) → Shared Drive (provisioned; owner/recovery acceptance open)
+                   → n8n Drive credential/live smoke
+
+Baserow service (healthy) → DNS/TLS/admin → schema live run
+                         → off-host export/restore proof
+                         → write-capable adapters → case/article integration
 
 SEC-002 (isolate personal JM/EC) → connect company automations
 
-self-hosted n8n access → shadow → content cutover → lead cutover
+self-hosted n8n DNS/TLS → inactive shadow → content cutover → lead cutover
 
-agent schemas → artifact mode → adapters → content skill → eval → live pilot
+agent repository work → founder-ratified sources/config → inactive A0/A1 shadow
+                      → measured eval → live pilot
+
+lead contract + repository consumer → dedupe/origin/retention proof
+                                    → inactive shadow + synthetic E2E
+                                    → import/activate consumer → merge producer PR #78
 ```
 
 ---
 
 ## 11. Current status
 
-| Component | Status on 2026-07-24 | Next milestone |
+| Component | Status on 2026-07-25 | Next milestone |
 |---|---|---|
-| Company architecture | Ready | Execute `COS-001` |
-| Google Workspace | Purchased; service account + domain-wide delegation configured | Break-glass admin (`SEC-001`) + Shared Drive (`COS-002`) |
-| Baserow | Not deployed; adapters `AUT-001`/`AUT-002` merged | Deploy on Coolify (`COS-003`), then point adapters at instance |
-| Postgres `adapteng_ops` | Live | Formal migration/run integration |
+| Company architecture | Authoritative; §13 first-base foundation is incomplete | Close live acceptance, restore and pilot gates below |
+| Google Workspace | Business Standard active (~€13.80/month); company Shared Drive and eight folders provisioned/dry-run verified | **Owner: Ivan** — confirm Manager/recovery; optionally set CI variables and run live adapter smoke |
+| Baserow | Service deployed/healthy in Coolify; daily backup command produced a verified archive; adapters/schema exist in repositories | **Owner: Ivan** — create public DNS A record, then verify TLS/UI, create admin, run schema live, and complete off-host export/restore |
+| Postgres `adapteng_ops` | Live; `AG-004` run ledger merged in PR #65 | Review the in-progress canonical approval-ledger/outbox PR, then wire and verify live; do not treat it as complete |
 | n8n Cloud | Live authority | Keep during migration |
-| self-hosted n8n | Infrastructure prepared, cutover incomplete | DNS/TLS and shadow |
-| Website | Live; `lead.created` v1 contract built (`WEB-001`, PR #78 draft) | Migrate MM-18 consumer to v1 before deploy; restore evidence |
+| self-hosted n8n | Infrastructure exists; DNS/TLS, shadow and cutover incomplete; governance/Coolify PR #58 is under review | **Owner: Ivan** — complete DNS/TLS, review PR #58, then inactive shadow; n8n Cloud remains authority |
+| Website | Existing site live; producer PR #78 is draft/held; MM-18 repository consumer merged in PR #66, but neither v1 path nor `WEB-001` is live | **Owner: Ivan** — keep PR #78 held until dedupe concurrency, origin hardening, body retention, inactive shadow and synthetic E2E gates pass |
 | Media intake | Live | Baserow/Drive content link |
-| Personal automations (JM/EC) | Live on shared n8n Cloud | Classify `domain=personal` and isolate from company data |
-| Article/case drafts | Partial | Unified Drive/Baserow lifecycle |
-| AI code agent | `business_artifact` mode merged (`AG-001`/`AG-002`, PR #33) | First bounded A0/A1 pilot behind approval gate |
-| Business AI skills | Not live | Content & Case Draft pilot |
+| Personal automations (JM/EC) | Live on shared n8n Cloud; taxonomy ratified, isolation incomplete | **Owner: Ivan** — complete `SEC-002` credential/budget/store isolation |
+| Article/case drafts | Existing flow partial; company storage integration and live cutover incomplete | Complete Baserow/Drive integration only after live acceptance and restore gates |
+| AI code agent | Business artifact mode, Linux acceptance and eval harness merged (control-plane PRs #33–#35); run ledger and pending-only adapters merged (automation PRs #65/#63) | Complete approval ledger/outbox review and live wiring before bounded A0/A1 shadow |
+| Business AI skills | `AI-001` Content & Case Draft Assistant implemented in marketing PR #19 (`5b9af0e`), deterministic draft-only, 106 tests; not in real use | **Owner: Ivan** — ratify claims library, style guide, source documents and pilot config, then run inactive measured pilot |
+
+The §13 foundation Definition of Done is not met: Baserow live acceptance and
+write integration, self-hosted cutover, the business-skill pilot, restore drill
+and onboarding evidence remain open.
 
 ---
 
