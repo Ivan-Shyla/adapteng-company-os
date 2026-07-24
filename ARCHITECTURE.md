@@ -71,8 +71,10 @@ flowchart LR
 - Adaptive Engineering Solutions — самостоятельная новая компания.
 - Arnex не является частью AdaptEng, не имеет общего Company OS и не получает
   доступ к данным. Текущие отношения с Arnex — внешний контракт OSVČ.
-- На старте в системе работает Иван. Аккаунт Полины может иметь owner/admin
-  доступ, но не используется как общий пароль.
+- На старте в системе работает только Иван (один interactive user). Второй
+  аккаунт оформляется не как рабочий user, а как break-glass super-admin через
+  бесплатный Cloud Identity Free (без Workspace-лицензии, без доступа к business
+  data), см. §4.1. Общий пароль не используется.
 
 ### 1.2 Рынок и язык
 
@@ -194,6 +196,10 @@ WordPress   = published website content
 Baserow не хранит raw media, большие документы, secrets или полный automation
 log. Он хранит status, owner, next action, stable ID и ссылку на artifact.
 
+«Contracts» в зоне GitHub означает **API/data contracts, schemas и policies**.
+Подписанные договоры, КП и клиентские evidence живут в Shared Drive (§4), а не в
+Git. CI/deploy/restore evidence — GitHub Actions logs и Postgres, не Baserow.
+
 ### 3.2 Один workspace
 
 ```text
@@ -203,13 +209,20 @@ Database:  Company Operations
 
 На старте создаются восемь таблиц.
 
+**Аллокация stable ID.** Human-readable коды (`AE-ORG-0001` и т. д.) выдаёт один
+аллокатор — Baserow-adapter в `automation-platform` через Postgres-счётчик, а не
+Baserow autonumber. Это исключает коллизии при параллельном создании, повторном
+импорте и restore. Коды immutable; для внутренних связей adapter использует
+Baserow `record_id`. Отдельный UUID не вводится, пока миграция из Baserow этого
+не потребует (отложено, см. §3.5).
+
 #### `Organizations`
 
 | Поле | Тип/правило |
 |---|---|
 | `organization_id` | `AE-ORG-0001`, immutable |
 | `name` | required |
-| `relationship_type` | prospect / client / partner / OEM / supplier / other |
+| `organization_roles` | multi-select: prospect / client / partner / OEM / supplier / integrator / other |
 | `country` | ISO country |
 | `preferred_language` | EN / CZ / other |
 | `website` | URL |
@@ -217,7 +230,7 @@ Database:  Company Operations
 | `owner` | Ivan |
 | `source_ref` | required |
 | `last_contact_at` | optional |
-| `next_action_at` | optional |
+| `next_action_at` | projection (см. §3.4) |
 
 #### `People`
 
@@ -229,9 +242,12 @@ Database:  Company Operations
 | `role` | job/relationship role |
 | `email` / `phone` | personal data |
 | `language` | preferred |
-| `consent_basis` | business contact / form consent / unknown |
+| `contact_source` | website form / personal network / public business / outbound / partner |
+| `lawful_basis` | legitimate interest / consent / contract / unknown |
+| `do_not_contact` | bool; set on objection; blocks outreach/marketing |
+| `collected_at` | optional |
 | `last_contact_at` | optional |
-| `next_action_at` | optional |
+| `next_action_at` | projection (см. §3.4) |
 
 #### `Opportunities`
 
@@ -245,13 +261,18 @@ Lead, partner approach и RFQ используют одну таблицу. От
 | `type` | lead / partner / service / RFQ / tender |
 | `source_channel` | website / email / referral / LinkedIn / outbound / portal |
 | `service_line` | один из approved services |
-| `stage` | new / qualifying / decision / active / won / lost / parked |
+| `lifecycle` | open / closed (независимо от stage) |
+| `stage` | new / qualifying / proposal / negotiation / won / lost / parked |
 | `fit` | unknown / low / medium / high |
-| `deadline` | optional |
-| `next_action` | required for open stages |
-| `next_action_at` | required for open stages |
+| `deadline` | optional; **required для type = RFQ / tender** |
+| `next_action` / `next_action_at` | projection (см. §3.4) |
 | `source_ref` | required |
 | `loss_reason` | required when lost |
+
+`stage = qualifying` требует обязательной Action (go/no-go). `won` закрывает
+opportunity (`lifecycle = closed`) и конвертируется в запись `Projects_Cases`;
+`lost`/`parked` тоже переводят `lifecycle = closed`. Partner-подход и commercial
+lead различаются полем `type`, а не отдельным pipeline.
 
 Default go/no-go criteria:
 
@@ -279,14 +300,19 @@ Default go/no-go criteria:
 | `owner` | Ivan |
 | `drive_folder_id` / `drive_url` | required after creation |
 | `evidence_status` | none / collecting / review / approved / restricted |
-| `next_action` / `next_action_at` | required while open |
+| `next_action` / `next_action_at` | projection (см. §3.4) |
 
 #### `Actions`
 
 | Поле | Тип/правило |
 |---|---|
 | `action_id` | `AE-ACT-0001` |
-| `linked_entity_type/id` | organization / opportunity / work / content / system |
+| `linked_organization` | relation, nullable |
+| `linked_opportunity` | relation, nullable |
+| `linked_work` | relation, nullable |
+| `linked_content` | relation, nullable |
+| `linked_document` | relation, nullable |
+| `linked_system` | relation, nullable |
 | `action_type` | decide / contact / prepare / review / publish / fix |
 | `description` | one concrete action |
 | `owner` | Ivan or automation |
@@ -294,6 +320,10 @@ Default go/no-go criteria:
 | `status` | open / in_progress / blocked / done / cancelled |
 | `outcome` | required when done/cancelled |
 | `created_by` | human / workflow / agent + run ID |
+
+Минимум одна relation обязательна. Отдельные nullable relations (а не
+polymorphic `type/id`) дают фильтрацию Actions по каждой сущности и referential
+integrity в Baserow.
 
 #### `Documents_Evidence`
 
@@ -344,7 +374,8 @@ Default go/no-go criteria:
 | `owner` | Ivan / repository |
 | `last_success_at` | workflow/service |
 | `health` | healthy / warning / failed / unknown |
-| `next_action` / `next_review_at` | required for non-healthy |
+| `next_action` | projection (см. §3.4) |
+| `next_review_at` | required for non-healthy |
 | `backup_evidence` | link/date |
 
 ### 3.3 Views
@@ -362,7 +393,26 @@ Baserow Free использует простые filtered grid views, без cus
 9. `40 — Systems`: live/pilot/blocked services.
 10. `41 — Automation Errors`: failed/stale workflows.
 
-### 3.4 Daily routine
+### 3.4 Daily routine, владение полями и projection
+
+`Actions` — единственный источник задач. `00 — Today` и `01 — Ivan Decision` —
+это views таблицы `Actions` (Baserow view всегда одно-табличная), с
+lookup-полями на связанные сущности. `next_action`/`next_action_at` в
+`Organizations`, `People`, `Projects_Cases`, `Opportunities`,
+`Systems_Automations` — **projection** самой ранней открытой связанной Action, а
+не отдельно редактируемое поле. Правило: **каждая ситуация «нужно решение/review»
+= ровно одна открытая Action**, чтобы не появилось два конкурирующих списка задач.
+
+**Владение полями (защита от затирания ручных правок).** У каждой таблицы поля
+делятся на две группы:
+
+- **workflow-owned** — `*_id`, `source_ref`, `automation_run_id`,
+  `drive_folder_id`/`drive_url`, `wordpress_draft_id`, approval-projection,
+  `next_action*`. Adapter обновляет их upsert'ом всегда.
+- **human-owned** — `stage`, `lifecycle`, `fit`, `evidence_status`,
+  `relationship_status`, `outcome`, `do_not_contact`, ручные заметки. Workflow
+  заполняет их **только при создании записи**; при последующих прогонах patch
+  этих полей запрещён (никакого last-write-wins поверх ручных решений).
 
 Иван открывает только:
 
@@ -370,8 +420,24 @@ Baserow Free использует простые filtered grid views, без cus
 2. `01 — Ivan Decision`;
 3. `30 — Content Drafts`, если есть review.
 
-Запись без `next_action` не считается active. Telegram/email сообщает только об
+Запись без открытой Action не считается active. Telegram/email сообщает только об
 ошибке или требуемом решении, но не заменяет Baserow.
+
+### 3.5 Отложенные расширения data model
+
+Чтобы не усложнять старт, следующие сущности **не создаются сейчас** и вводятся
+только по явному триггеру:
+
+| Расширение | Триггер ввода |
+|---|---|
+| Отдельная таблица `Sources` | Пока используем `source_ref` как URI (`drive://`, `email://`, `web://`, `github://`, `baserow://`) + JSON-манифест в Drive/Postgres. Таблица — когда источников на item станет много и нужен реестр licence/retrieved_at |
+| Canonical `entity_uuid` отдельно от display code | Только при миграции из Baserow или мульти-adapter записи |
+| Таблица `Relationships` (роль по проекту/периоду) | Когда роль организации зависит от конкретного проекта, а не общая |
+| Таблица `Channel Publications` | Когда одна тема регулярно переиздаётся на несколько каналов и нужен per-publication receipt отдельно от `Content_Items` |
+| Таблица `Services/Subscriptions` | Когда recurring сервисов станет несколько и `Systems_Automations` перестанет хватать для invoice/renewal |
+| Расширенные GDPR-поля (`marketing_permission`, `privacy_notice_version`, `retention_review_at`, `objection_at`) | При запуске исходящего маркетинга или due-diligence клиента |
+
+До триггера эти данные покрываются существующими полями и манифестами.
 
 ---
 
@@ -398,6 +464,13 @@ Zoho продолжает принимать email. Для запуска Worksp
 4. создать Shared Drive;
 5. проверить ownership и recovery;
 6. только потом подключить n8n.
+
+**Break-glass super-admin.** Помимо основного company user создаётся один
+отдельный super-admin на бесплатном **Cloud Identity Free** (не занимает платный
+Workspace seat, без почтового ящика и доступа к бизнес-данным). Он существует
+только чтобы восстановить доступ, если основной аккаунт потерян/заблокирован.
+Хранится с 2FA и recovery-кодом офлайн. Это единственный второй interactive
+user; повседневно не используется. См. §1.1 и `COS-001`.
 
 ### 4.2 Один Shared Drive
 
@@ -522,7 +595,9 @@ work_item:
 
 1. принимает или создаёт stable ID;
 2. проверяет idempotency key;
-3. создаёт/обновляет Baserow record;
+3. создаёт/обновляет Baserow record — но при update патчит **только
+   workflow-owned поля** (§3.4); human-owned поля пишутся лишь при создании
+   записи и никогда не перезаписываются повторным прогоном;
 4. использует Drive folder ID, а не поиск по названию;
 5. пишет machine run в Postgres;
 6. создаёт draft, но не `approved/published`;
@@ -791,7 +866,9 @@ status.
 Существующий `services/ai-gateway` в `adapteng-automation-platform` становится
 model adapter нашего агента:
 
-- local Ollama where quality and runtime allow;
+- local Ollama **только для classify/extract**, где качество и latency допускают,
+  и **не на company Hetzner host** пока нет отдельного решения по железу (не
+  задерживать pilot ради «бесплатного» локального);
 - approved API model where local quality/latency is insufficient;
 - schema validation;
 - provider/model version;
@@ -806,7 +883,9 @@ model adapter нашего агента:
 2. cheapest available API model;
 3. stronger model only for failed/high-value drafts.
 
-Актуальные standard API candidates на 2026-07-23, USD за 1M tokens:
+Актуальные standard API candidates, USD за 1M tokens (dated snapshot на
+2026-07-24; **canonical model/price catalog живёт в конфиге `ai-gateway`**, не в
+этом документе — таблица здесь только benchmark-ориентир и обновляется PR'ом):
 
 | Model engine | Input | Cached input | Output | Intended test |
 |---|---:|---:|---:|---|
@@ -822,9 +901,16 @@ production default from price alone: it must pass the same quality/citation
 eval. Local Ollama has no API fee but uses hardware and is not a 24/7 option
 until measured on the actual runtime.
 
-AI API cap на pilot: **€10/month**, отдельно от server and Workspace. Cap
-увеличивается только после accepted outputs. При cap exhaustion task становится
-`pending`, direct-call bypass запрещён.
+Бюджеты моделей разделены на два независимых:
+
+- **`dev_model_budget`** — подписка/квота владельца для code_change режима
+  (агентское программирование в `ai-dev-loop-control-plane` токеноёмкое). Это
+  расход владельца на разработку, **вне** €10 runtime-cap; иначе первый же
+  code_change backlog его исчерпает.
+- **`runtime_model_cap` = €10/month** — только на business_artifact runtime
+  (drafts/classify/extract через gateway), отдельно от server и Workspace. Cap
+  fail-closed: при исчерпании task становится `pending`, direct-call bypass
+  запрещён. Увеличивается только после accepted outputs.
 
 ### 7.5 Первый business skill
 
@@ -926,6 +1012,18 @@ evidence, spend и production deployment. Autonomous external send не разр
 Free consumer AI tiers не получают company/client data. Licensed standards не
 копируются в Git и не передаются модели без проверки licence terms.
 
+**PII перед моделью (обязательно до запуска Lead Triage).** Contact PII (имена,
+email, телефон) из `People`/lead-форм **минимизируется/псевдонимизируется** до
+вызова модели — модель получает только текст, нужный для задачи. Privacy notice
+на сайте покрывает автоматическую обработку и перечисляет processor'ов (текущая
+модель-провайдер, хостинг). Для EU data residency используется EU endpoint
+провайдера, где он есть (у OpenAI EU residency ~+10% к цене — приемлемо для
+малого объёма). `do_not_contact` в `People` блокирует любой outreach.
+
+**Граница dev-подписки.** `dev_model_budget` владельца (code_change, §7.4) — это
+персональный расход на разработку, не company runtime data path и не входит в
+€10 runtime-cap и не считается company recurring-стоимостью.
+
 ### 8.3 File intake
 
 Website forms на старте передают structured text, но не client files.
@@ -957,6 +1055,16 @@ commands.
 No high availability is required for one-person stage. Backup without restore
 evidence is not considered a backup.
 
+**Off-host export (D1).** У Google нет нативного scheduled full export, поэтому
+n8n/rclone еженедельно выгружает `10_Company` и все `04_Approved` в off-host
+Hetzner storage bucket с **отдельными credentials** (не тот же service account,
+что у draft-adapter). Это защищает от потери Workspace-аккаунта. Проверенный
+restore этого экспорта — часть Quarterly sample restore.
+
+**Backup-before-Baserow-deploy.** До первого write-capable подключения n8n к
+Baserow должен существовать проверенный restore Postgres/Baserow (иначе первый
+же automation-прогон пишет в незабэкапленный store).
+
 ---
 
 ## 9. Cost model
@@ -970,11 +1078,14 @@ evidence is not considered a backup.
 | n8n Community self-hosted | €0 software; existing server |
 | Coolify | Existing |
 | Hetzner server | Existing; upgrade only after measured resource pressure |
-| AI API | Hard cap €10/month; optional if local/configured model passes |
+| AI API (runtime) | Hard cap €10/month on business_artifact runtime; optional if local/configured model passes |
 | Backup/object storage | Use approved existing arrangement; add only for quarantine/offsite need |
 
+Owner `dev_model_budget` (code_change, §7.4) — персональная подписка на
+разработку, **не** company recurring cost и не входит в суммы ниже.
+
 The previous €30 AI cap did **not** include server or Workspace and was therefore
-ambiguous. It is replaced by the explicit €10 model-only pilot cap.
+ambiguous. It is replaced by the explicit €10 model-only runtime pilot cap.
 
 Planned new recurring spend is therefore approximately **up to €25/month before
 VAT**: Workspace reserve + optional model cap. Baserow/n8n/Coolify add no
@@ -1019,7 +1130,7 @@ Official references used for this decision:
 
 | ID | Repository/system | Work | Definition of done |
 |---|---|---|---|
-| `COS-001` | Google Workspace | Buy Business Standard, verify domain, keep Zoho MX | Company login works; MX unchanged |
+| `COS-001` | Google Workspace | Buy Business Standard, verify domain, keep Zoho MX; create Cloud Identity Free break-glass admin | Company login works; MX unchanged; break-glass admin has 2FA + offline recovery codes |
 | `COS-002` | Google Drive | Create `AdaptEng Company` structure | Organization owns Shared Drive; Ivan has Manager/admin access and tested recovery; folders match §4 |
 | `SEC-001` | Accounts | Password manager, MFA and recovery inventory | Every critical system has status/owner/recovery |
 | `OPS-001` | Hetzner/Coolify | Record 7-day resource baseline | CPU/RAM/disk/swap known |
@@ -1031,8 +1142,10 @@ Official references used for this decision:
 |---|---|---|---|
 | `COS-003` | Baserow/Coolify | Deploy self-hosted Free with private/protected access | Login, HTTPS, backup and health work |
 | `COS-004` | Baserow | Create eight tables and ten views | Schema matches §3; no sample PII |
-| `COS-005` | Baserow | Load systems, repos and known partners | Today/Systems views are useful |
-| `AUT-001` | automation-platform | Versioned Baserow adapter | Upsert by stable ID is idempotent |
+| `COS-005` | Baserow | Load systems, repos and known partners | Today/Systems views are useful; seeded `Systems_Automations` includes Zoho SMTP (email drafts/alerts), n8n Cloud, self-hosted n8n, Postgres, Cloudways, Hetzner/Coolify |
+| `SEC-002` | Accounts/n8n/Postgres | Separate personal JM/EC from company | Personal workflows use own API keys/budget and own Postgres schema/store; no personal workflow uses a company credential or writes company data |
+| `BIZ-001` | Baserow (Days 8–21) | 10 outreach Actions from known European network | 10 `Actions` with `due_at`; each has recorded `outcome`; doubles as real UAT of Pipeline/Actions views |
+| `AUT-001` | automation-platform | Versioned Baserow adapter | Upsert by stable ID is idempotent; patches only workflow-owned fields (§3.4) |
 | `AUT-002` | automation-platform | Shared Drive folder adapter | Folder creation by stable ID is idempotent |
 
 ### 10.3 Days 8–30: connect existing automations
@@ -1071,12 +1184,15 @@ Official references used for this decision:
 |---|---|---|---|
 | `WEB-001` | website + automation | Versioned `lead.created` contract | Source, consent, language, service and correlation ID |
 | `WEB-002` | website + Baserow | Form → Opportunity → one-day Action | Three synthetic leads, no loss/duplicate |
+| `INT-001` | automation-platform | Read-only integrity/reconcile check | Weekly job compares Baserow↔Postgres↔Drive; on drift creates an `Action`, never auto-writes business fields; not pilot-blocking |
 | `N8N-004` | automation-platform | Cut over selected content workflow | Cloud twin disabled; seven-day evidence |
 | `N8N-005` | automation-platform | Cut over lead workflow last | Fallback and rollback proven |
 
 ### 10.7 Days 60–90: value and next choice
 
-1. Create initial partner/account list from known European network.
+1. Expand the partner/account list (seeded early in `COS-005`) and continue the
+   outreach started in `BIZ-001` — commercial motion runs from Days 8–21, not
+   from Day 60.
 2. Add Opportunity/Partner Radar only after sources/keywords are approved.
 3. Prepare s.r.o. document area and legal entity migration fields.
 4. Run restore drills.
@@ -1087,7 +1203,9 @@ Official references used for this decision:
 
 ```text
 Workspace → Shared Drive → n8n Drive credential
-         └→ Baserow → adapters → case/article integration
+         └→ Baserow (backup verified first) → adapters → case/article integration
+
+SEC-002 (isolate personal JM/EC) → connect company automations
 
 self-hosted n8n access → shadow → content cutover → lead cutover
 
@@ -1167,7 +1285,9 @@ The Company OS foundation is complete when:
 7. Ivan remains the only final approver for external/high-impact actions;
 8. monthly incremental cost is visible and justified;
 9. backup restore has been demonstrated;
-10. a new person can understand the company system in under one hour.
+10. a new person can understand the company system in under one hour — evidenced
+    by a written onboarding walkthrough (in `README.md`) that was actually
+    followed once and links into this document's §3–§5.
 
 The competitive advantage is not a large number of agents. It is a connected
 industrial operating loop in which every source becomes a controlled record,
