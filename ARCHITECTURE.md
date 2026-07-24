@@ -1216,19 +1216,19 @@ agent schemas → artifact mode → adapters → content skill → eval → live
 
 ## 11. Current status
 
-| Component | Status on 2026-07-23 | Next milestone |
+| Component | Status on 2026-07-24 | Next milestone |
 |---|---|---|
 | Company architecture | Ready | Execute `COS-001` |
-| Google Workspace | Not purchased | Business Standard + Shared Drive |
-| Baserow | Not deployed | Resource check + `COS-003` |
+| Google Workspace | Purchased; service account + domain-wide delegation configured | Break-glass admin (`SEC-001`) + Shared Drive (`COS-002`) |
+| Baserow | Not deployed; adapters `AUT-001`/`AUT-002` merged | Deploy on Coolify (`COS-003`), then point adapters at instance |
 | Postgres `adapteng_ops` | Live | Formal migration/run integration |
 | n8n Cloud | Live authority | Keep during migration |
 | self-hosted n8n | Infrastructure prepared, cutover incomplete | DNS/TLS and shadow |
-| Website | Live | Lead contract and restore evidence |
+| Website | Live; `lead.created` v1 contract built (`WEB-001`, PR #78 draft) | Migrate MM-18 consumer to v1 before deploy; restore evidence |
 | Media intake | Live | Baserow/Drive content link |
 | Personal automations (JM/EC) | Live on shared n8n Cloud | Classify `domain=personal` and isolate from company data |
 | Article/case drafts | Partial | Unified Drive/Baserow lifecycle |
-| AI code agent | Phase 3 proven | `business_artifact` mode |
+| AI code agent | `business_artifact` mode merged (`AG-001`/`AG-002`, PR #33) | First bounded A0/A1 pilot behind approval gate |
 | Business AI skills | Not live | Content & Case Draft pilot |
 
 ---
