@@ -1280,19 +1280,10 @@ Update only:
 
 Do not create `ARCHITECTURE_v3`, amendment or competing plan.
 
-### Scheduled evidence refresh
-
 App workflow `Weekly Company OS status`
-(`5f501c9b-f912-4a92-b822-ec57259c440c`) is enabled for Mondays at 09:00 local;
-the first/next scheduled run is `2026-07-27T07:01:38Z`. No scheduled run has
-occurred yet.
-
-The workflow audits active repositories read-only and works only in the Company
-OS repository. It updates this existing root `ARCHITECTURE.md` only when
-evidence changed, reuses an open status PR, validates Markdown tables, local
-links and `git diff --check`, and never auto-merges. It is explicitly prohibited
-from mutating DNS, Coolify, n8n, Baserow, databases, website/provider settings or
-credentials, and from exposing secrets, PII or raw payloads.
+(`5f501c9b-f912-4a92-b822-ec57259c440c`) is enabled Mondays at 09:00 local for
+evidence-only repository refresh; it reuses an open status PR, never mutates
+live systems and never auto-merges. Its first scheduled run has not occurred yet.
 
 ### Monthly review
 
