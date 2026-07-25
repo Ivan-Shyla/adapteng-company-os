@@ -115,8 +115,10 @@ AdaptEng не заявляет:
 - Controlled `01_Inbox` adapter smoke passed; Shared Drive owner
   Manager/recovery acceptance and production-unsafe base-structure live apply
   remain open.
-- Baserow is deployed and healthy in Coolify, but public DNS, TLS/UI/admin,
-  live schema initialization and off-host restore evidence remain open.
+- DNS now resolves and both Baserow and n8n answer over HTTPS behind Traefik;
+  the remaining Baserow gaps are a trusted TLS certificate (Traefik still serves
+  its self-signed default — Let's Encrypt not yet issued), first admin, live
+  schema initialization and off-host restore evidence.
 - Target account list и keyword set ещё не созданы.
 - Формальной AI/data policy пока нет.
 - Финансовый register и отдельная accounting integration пока не нужны.
@@ -708,7 +710,7 @@ one-click интерфейс без покупки Baserow paid automation featu
 | `adapteng_ops` Postgres | Runs, audit, dedup, cost and canonical approval ledger | Keep |
 | n8n Cloud | Current authoritative automation runtime | Keep until staged cutover |
 | self-hosted n8n | Target runtime, currently awaiting completion | Finish and migrate gradually |
-| Baserow self-hosted Free | Human Company OS interface; service healthy | Finish DNS/TLS/admin and live schema run |
+| Baserow self-hosted Free | Human Company OS interface; service healthy and reachable over HTTPS (DNS resolves) | Issue trusted TLS (Coolify redeploy/regenerate SSL), create admin, run live schema |
 | Telegram + email | Alerts and approval notification | Keep |
 | GitHub | Code, contracts, architecture and evidence | Keep |
 
@@ -1174,8 +1176,8 @@ Official references used for this decision:
 
 | ID | Repository/system | Work | Definition of done |
 |---|---|---|---|
-| `COS-003` | Baserow/Coolify | Deploy self-hosted Free with private/protected access | Login, HTTPS, backup and health work. **Deployed, not accepted:** service is healthy and the daily backup command produced a verified archive; public DNS is NXDOMAIN, so TLS/UI/admin remain blocked, and off-host export/restore remains open. |
-| `COS-004` | Baserow | Create eight tables and ten views | Schema matches §3; no sample PII. **Repository implementation merged:** automation-platform PR #61; live schema run is blocked by `COS-003` DNS/admin. |
+| `COS-003` | Baserow/Coolify | Deploy self-hosted Free with private/protected access | Login, HTTPS, backup and health work. **Deployed, not accepted:** service is healthy and the daily backup command produced a verified archive; public DNS now resolves (A record `37.27.213.220`) and the app answers over HTTPS (`/` → `/login` → `/signup` → 200), but Traefik still serves its self-signed default certificate (`CN=TRAEFIK DEFAULT CERT`) — Let's Encrypt is not yet issued (ACME failed during the earlier NXDOMAIN window and is not auto-retrying; a Coolify redeploy/regenerate-SSL is required), the first admin is not created, and off-host export/restore remains open. |
+| `COS-004` | Baserow | Create eight tables and ten views | Schema matches §3; no sample PII. **Repository implementation merged:** automation-platform PR #61; live schema run is blocked by `COS-003` TLS/admin (DNS now resolves; trusted TLS and first admin are still pending). |
 | `COS-005` | Baserow | Load systems, repos and known partners | Today/Systems views are useful; seeded `Systems_Automations` includes Zoho SMTP (email drafts/alerts), n8n Cloud, self-hosted n8n, Postgres, Cloudways, Hetzner/Coolify |
 | `SEC-002` | Accounts/n8n/Postgres | Separate personal JM/EC from company | Personal workflows use own API keys/budget and own Postgres schema/store; no personal workflow uses a company credential or writes company data. **Repository guard merged:** automation-platform PR #72 (`2f054680842a691de632f19b02eff22fe1616160`) enforces export/index/classification consistency and credential/resource boundary rules; the exact `ISO-1` waiver expires 2026-08-08. Live credential/store identity and remediation remain open. |
 | `BIZ-001` | Baserow (Days 8–21) | 10 outreach Actions from known European network | 10 `Actions` with `due_at`; each has recorded `outcome`; doubles as real UAT of Pipeline/Actions views |
@@ -1275,11 +1277,11 @@ lead contract + repository identity → migration 004 live plan/restore gate
 |---|---|---|
 | Company architecture | Authoritative; guarded weekly evidence workflow is enabled but has not run yet; §13 first-base foundation is incomplete | First scheduled run 2026-07-27, then close live acceptance, restore and pilot gates below |
 | Google Workspace | Business Standard active (~€13.80/month); company Shared Drive/eight folders provisioned; controlled `01_Inbox` adapter smoke passed in PR #69 | **Owner: Ivan** — confirm Manager/recovery; base-structure live apply remains intentionally untested |
-| Baserow | Service deployed/healthy in Coolify; daily backup command produced a verified archive; adapters/schema exist in repositories | **Owner: Ivan** — create public DNS A record, then verify TLS/UI, create admin, run schema live, and complete off-host export/restore |
+| Baserow | Service deployed/healthy in Coolify; DNS resolves (A `37.27.213.220`) and the app answers over HTTPS (`/` → `/login` → `/signup` → 200); Traefik still serves a self-signed default cert (Let's Encrypt not issued); daily backup archive verified; adapters/schema exist in repositories | **Owner: Ivan** — redeploy/regenerate SSL in Coolify to issue Let's Encrypt, create the first admin at `/signup`, run schema live, and complete off-host export/restore |
 | Postgres `adapteng_ops` | Existing database live; run ledger PR #65, approval/outbox PR #68, atomic lead identity PR #70, AI Gateway PR #71 and integrity manifest PR #74 are repository-merged | **Owner: Ivan** — migrations 003/004/005/006 are not live-applied; plan backup/restore and controlled application before any wiring |
 | `automation-platform` repository | `main` at `e74e0896a848716af9fc425e4f29840ba3cfc715`; PRs #58/#68/#69/#70/#71/#72/#74/#75 merged; exact-head independent reviews and post-merge Validate Repo/Secret Scan are green for the latest media governance merge | Repository evidence does not imply live migration, workflow import, deployment, model call or remediation; complete the component-specific gates below |
 | n8n Cloud | Live authority | Keep during migration |
-| self-hosted n8n | Infrastructure exists; governance/Coolify repository work merged in PR #58, but no live deploy occurred; live app may still source retained branch `4b67fa4` | **Owner: Ivan** — repoint Coolify source to `main`, verify auto-deploy, then complete DNS/TLS and inactive shadow; n8n Cloud remains authority |
+| self-hosted n8n | Infrastructure exists and answers on `n8n.adapteng.com` (`/healthz` → 200), but Traefik still serves a self-signed default cert (Let's Encrypt not issued); governance/Coolify repository work merged in PR #58, but no live deploy occurred; live app may still source retained branch `4b67fa4` | **Owner: Ivan** — redeploy in Coolify to issue Let's Encrypt, repoint Coolify source to `main`, verify auto-deploy, then complete inactive shadow; n8n Cloud remains authority |
 | Website | Existing site live; website main `2a755bee63b6bef0449a48c0d28edec19d1a82aa` includes docs-only PR #68 with green Validate and no Cloudways deploy; producer PR #78 remains draft/held; MM-18 migration 004/live workflow are unchanged | **Owner: Ivan** — keep PR #78 held until migration plan, origin auth, retention proof, HTTP 409 mapping, durable reconciliation, inactive shadow and synthetic E2E pass |
 | Media intake | Live workflow `uBVRMTCKwnUG91kU` remains active/write/MCP-exposed and maps top-level `drive_folder_link`; PR #75 merged an inactive/MCP-disabled sanitized export with canonical compatibility mapping, but no live import occurred and the marketing worker remains undeployed | **Owner: Ivan** — approve snapshot/rollback, import the backward-compatible consumer first, test both `CASE-MOCK-*` Sheet branches, canary one controlled real case, then and only then pull/redeploy the worker |
 | Personal automations (JM/EC) | Live on shared n8n Cloud; taxonomy and `SEC-002` repository guard are merged, but live credential/budget/store isolation is incomplete and the exact `ISO-1` waiver expires 2026-08-08 | **Owner: Ivan** — verify live credential/store identity and remediate the waived resource; no live remediation has occurred |
