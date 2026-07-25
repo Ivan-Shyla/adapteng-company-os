@@ -116,9 +116,10 @@ AdaptEng не заявляет:
   Manager/recovery acceptance and production-unsafe base-structure live apply
   remain open.
 - DNS resolves and both Baserow and n8n serve trusted Let's Encrypt TLS behind
-  Traefik (certificates issued 2026-07-25, valid to 2026-10-23); the remaining
-  Baserow gaps are the first admin, live schema initialization and off-host
-  restore evidence.
+  Traefik (certificates issued 2026-07-25, valid to 2026-10-23); the first admin
+  is created and the Company OS schema is provisioned live (workspace AdaptEng OS
+  → database Company Operations, 8 tables, 107 fields, 10 views; idempotency
+  verified), so the remaining Baserow gap is off-host restore evidence.
 - Target account list и keyword set ещё не созданы.
 - Формальной AI/data policy пока нет.
 - Финансовый register и отдельная accounting integration пока не нужны.
@@ -710,7 +711,7 @@ one-click интерфейс без покупки Baserow paid automation featu
 | `adapteng_ops` Postgres | Runs, audit, dedup, cost and canonical approval ledger | Keep |
 | n8n Cloud | Current authoritative automation runtime | Keep until staged cutover |
 | self-hosted n8n | Target runtime, currently awaiting completion | Finish and migrate gradually |
-| Baserow self-hosted Free | Human Company OS interface; healthy with trusted Let's Encrypt TLS | Create first admin, then run live schema |
+| Baserow self-hosted Free | Human Company OS interface; healthy with trusted Let's Encrypt TLS; Company OS schema provisioned live (8 tables, 107 fields, 10 views) | Off-host export/restore; point the AUT-001 adapter at the Company Operations database for row writes |
 | Telegram + email | Alerts and approval notification | Keep |
 | GitHub | Code, contracts, architecture and evidence | Keep |
 
@@ -1176,8 +1177,8 @@ Official references used for this decision:
 
 | ID | Repository/system | Work | Definition of done |
 |---|---|---|---|
-| `COS-003` | Baserow/Coolify | Deploy self-hosted Free with private/protected access | Login, HTTPS, backup and health work. **Deployed, not accepted:** service is healthy and the daily backup command produced a verified archive; public DNS resolves (A record `37.27.213.220`) and the app answers over HTTPS with a trusted Let's Encrypt certificate (`CN=baserow.adapteng.com`, issued 2026-07-25, valid to 2026-10-23; obtained via a Coolify redeploy after ACME had failed during the earlier NXDOMAIN window), `/` → `/login` → `/signup` → 200. The first admin is not yet created and off-host export/restore remains open. |
-| `COS-004` | Baserow | Create eight tables and ten views | Schema matches §3; no sample PII. **Repository implementation merged:** automation-platform PR #61; live schema run is blocked only by `COS-003` first-admin creation (DNS resolves and trusted Let's Encrypt TLS is issued). |
+| `COS-003` | Baserow/Coolify | Deploy self-hosted Free with private/protected access | Login, HTTPS, backup and health work. **Deployed, not accepted:** service is healthy and the daily backup command produced a verified archive; public DNS resolves (A record `37.27.213.220`) and the app answers over HTTPS with a trusted Let's Encrypt certificate (`CN=baserow.adapteng.com`, issued 2026-07-25, valid to 2026-10-23; obtained via a Coolify redeploy after ACME had failed during the earlier NXDOMAIN window), `/` → `/login` → `/signup` → 200. The first admin is created and verified (it authenticated the COS-004 schema run); off-host export/restore remains open. |
+| `COS-004` | Baserow | Create eight tables and ten views | Schema matches §3; no sample PII. **Live and accepted:** the sanctioned provisioner (automation-platform PR #61) ran against live Baserow via the dispatch-only workflow added in PR #76 and created workspace `AdaptEng OS` → database `Company Operations` → 8 tables, 107 fields, 10 views (plus 15 view filters and 5 sorts); a second run reported `created=0 / existed=147`, proving idempotency and persistence. No sample PII was written. |
 | `COS-005` | Baserow | Load systems, repos and known partners | Today/Systems views are useful; seeded `Systems_Automations` includes Zoho SMTP (email drafts/alerts), n8n Cloud, self-hosted n8n, Postgres, Cloudways, Hetzner/Coolify |
 | `SEC-002` | Accounts/n8n/Postgres | Separate personal JM/EC from company | Personal workflows use own API keys/budget and own Postgres schema/store; no personal workflow uses a company credential or writes company data. **Repository guard merged:** automation-platform PR #72 (`2f054680842a691de632f19b02eff22fe1616160`) enforces export/index/classification consistency and credential/resource boundary rules; the exact `ISO-1` waiver expires 2026-08-08. Live credential/store identity and remediation remain open. |
 | `BIZ-001` | Baserow (Days 8–21) | 10 outreach Actions from known European network | 10 `Actions` with `due_at`; each has recorded `outcome`; doubles as real UAT of Pipeline/Actions views |
@@ -1243,7 +1244,7 @@ Official references used for this decision:
 Workspace (active) → Shared Drive (provisioned; owner/recovery acceptance open)
                    → n8n Drive credential/smoke passed → owner/recovery acceptance
 
-Baserow service (healthy) → DNS/TLS/admin → schema live run
+Baserow service (healthy) → DNS/TLS/admin (done) → schema live run (done)
                          → off-host export/restore proof
                          → write-capable adapters → case/article integration
 
@@ -1277,7 +1278,7 @@ lead contract + repository identity → migration 004 live plan/restore gate
 |---|---|---|
 | Company architecture | Authoritative; guarded weekly evidence workflow is enabled but has not run yet; §13 first-base foundation is incomplete | First scheduled run 2026-07-27, then close live acceptance, restore and pilot gates below |
 | Google Workspace | Business Standard active (~€13.80/month); company Shared Drive/eight folders provisioned; controlled `01_Inbox` adapter smoke passed in PR #69 | **Owner: Ivan** — confirm Manager/recovery; base-structure live apply remains intentionally untested |
-| Baserow | Service deployed/healthy in Coolify; DNS resolves (A `37.27.213.220`) and the app serves trusted Let's Encrypt TLS (`/` → `/login` → `/signup` → 200, valid to 2026-10-23); daily backup archive verified; adapters/schema exist in repositories | **Owner: Ivan** — create the first admin at `https://baserow.adapteng.com/signup`, run schema live, and complete off-host export/restore |
+| Baserow | Service deployed/healthy in Coolify; DNS resolves (A `37.27.213.220`) and the app serves trusted Let's Encrypt TLS (`/` → `/login` → `/signup` → 200, valid to 2026-10-23); daily backup archive verified; first admin created; **Company OS schema provisioned live** (workspace `AdaptEng OS` → database `Company Operations`, 8 tables / 107 fields / 10 views, idempotency verified via a second create-or-get run reporting `existed=147`) through the dispatch-only workflow in automation-platform PR #76 | **Owner: Ivan** — complete off-host export/restore; (next) point the AUT-001 adapter/token at the `Company Operations` database so workflow row writes and stable-id allocation begin |
 | Postgres `adapteng_ops` | Existing database live; run ledger PR #65, approval/outbox PR #68, atomic lead identity PR #70, AI Gateway PR #71 and integrity manifest PR #74 are repository-merged | **Owner: Ivan** — migrations 003/004/005/006 are not live-applied; plan backup/restore and controlled application before any wiring |
 | `automation-platform` repository | `main` at `e74e0896a848716af9fc425e4f29840ba3cfc715`; PRs #58/#68/#69/#70/#71/#72/#74/#75 merged; exact-head independent reviews and post-merge Validate Repo/Secret Scan are green for the latest media governance merge | Repository evidence does not imply live migration, workflow import, deployment, model call or remediation; complete the component-specific gates below |
 | n8n Cloud | Live authority | Keep during migration |
