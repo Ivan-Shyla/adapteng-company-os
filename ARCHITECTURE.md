@@ -831,7 +831,7 @@ bounded task
 
 Этот режим используется сразу для реализации всего backlog Company OS.
 
-#### `business_artifact` — добавить
+#### `business_artifact` — repository-ready, live use gated
 
 ```text
 BusinessTaskEnvelope
@@ -848,7 +848,7 @@ BusinessTaskEnvelope
 
 Business task не создаёт Git branch и не считается завершённым по Git diff.
 
-### 7.3 Что нужно добавить в `ai-dev-loop-control-plane`
+### 7.3 Business artifact building blocks
 
 | ID | Изменение | Done when |
 |---|---|---|
@@ -868,43 +868,44 @@ status.
 
 ### 7.4 Model access
 
-Существующий `services/ai-gateway` в `adapteng-automation-platform` становится
-model adapter нашего агента:
+Canonical `services/ai-gateway` в `adapteng-automation-platform` остаётся
+provider-pluggable model adapter нашего агента. PR-B implementation is **in
+progress and not deployed**; production workflows still make no model calls
+through it.
 
-- local Ollama **только для classify/extract**, где качество и latency допускают,
-  и **не на company Hetzner host** пока нет отдельного решения по железу (не
-  задерживать pilot ради «бесплатного» локального);
-- approved API model where local quality/latency is insufficient;
-- schema validation;
-- provider/model version;
-- token and cost ledger;
-- timeout/retry/circuit breaker;
-- hard budget;
-- no direct model calls from production workflows.
+Gate-0 decision dated 2026-07-25 selects the first **paid pilot candidate**, not
+a deployed/default model:
 
-Первый benchmark:
+| Candidate | Endpoint/residency | Input / cached / output per 1M tokens | Representative call |
+|---|---|---:|---:|
+| Vertex AI `gemini-3.1-flash-lite` | EU multi-region only: `https://aiplatform.eu.rep.googleapis.com` | $0.275 / $0.0275 / $1.65 | 20k input + 4k output ≈ $0.0121 before FX |
 
-1. existing configured/local model;
-2. cheapest available API model;
-3. stronger model only for failed/high-value drafts.
+The candidate remains contingent on ratified `AG-007`/`AI-001` quality,
+citation and safety proof. Gateway requirements:
 
-Актуальные standard API candidates, USD за 1M tokens (dated snapshot на
-2026-07-24; **canonical model/price catalog живёт в конфиге `ai-gateway`**, не в
-этом документе — таблица здесь только benchmark-ориентир и обновляется PR'ом):
+- first model operation is schema-valid, side-effect-free `draft` for `AI-001`;
+- first exact approval-gated action is `external_draft.create`, limited to
+  pending/draft Baserow state; it can never publish or send;
+- schema validation, provider/model version, timeout/retry/circuit breaker and
+  fail-closed budget admission;
+- hard caps of **€0.10/call, €1/day and €10/month**;
+- USD→EUR conversion uses an explicit operator-configured FX rate and `as_of`;
+  missing/stale FX fails closed rather than silently assuming a dynamic rate;
+- token/cost/run ledger stores counts, price inputs and outcome, but not raw
+  model input/output;
+- project cache is disabled as a live gate; no implicit caching, Search/Maps
+  grounding, request-response logging or global-endpoint fallback.
 
-| Model engine | Input | Cached input | Output | Intended test |
-|---|---:|---:|---:|---|
-| Local Ollama | no API fee | — | no API fee | Manual/shadow test on existing hardware |
-| Gemini 2.5 Flash-Lite | $0.10 | $0.01 | $0.40 | Cheapest classify/extract candidate |
-| OpenAI GPT-5.4 Nano | $0.20 | $0.02 | $1.25 | Existing-provider classify/extract candidate |
-| OpenAI GPT-5.4 Mini | $0.75 | $0.075 | $4.50 | Structured content draft candidate |
-| Claude Sonnet 5 | $2.00 | $0.20 | $10.00 | Independent quality benchmark |
+Privacy baseline for paid Google Cloud terms: Google does not train on
+inputs/outputs without permission, and the EU multi-region keeps ML processing
+within the EU. Zero-data-retention-compatible configuration must be verified
+before any real call.
 
-Claude Sonnet 5 introductory price ends 2026-08-31; published standard price
-from 2026-09-01 is $3 input, $0.30 cache read and $15 output. No model becomes
-production default from price alone: it must pass the same quality/citation
-eval. Local Ollama has no API fee but uses hardware and is not a 24/7 option
-until measured on the actual runtime.
+Alternatives remain fallback-only after the same quality proof. First-party
+Anthropic inference is US/global. OpenAI regional processing requires approved
+data controls and approximately 10% regional-processing uplift. Local Ollama
+remains classify/extract-only where measured quality and hardware permit, and
+is not approved for 24/7 use on the current company Hetzner host.
 
 Бюджеты моделей разделены на два независимых:
 
@@ -914,7 +915,8 @@ until measured on the actual runtime.
   code_change backlog его исчерпает.
 - **`runtime_model_cap` = €10/month** — только на business_artifact runtime
   (drafts/classify/extract через gateway), отдельно от server и Workspace. Cap
-  fail-closed: при исчерпании task становится `pending`, direct-call bypass
+  дополняется лимитами €0.10/call и €1/day и fail-closed FX admission: при
+  исчерпании/невалидном FX task становится `pending`, direct-call bypass
   запрещён. Увеличивается только после accepted outputs.
 
 ### 7.5 Первый business skill
@@ -1021,9 +1023,11 @@ Free consumer AI tiers не получают company/client data. Licensed stand
 email, телефон) из `People`/lead-форм **минимизируется/псевдонимизируется** до
 вызова модели — модель получает только текст, нужный для задачи. Privacy notice
 на сайте покрывает автоматическую обработку и перечисляет processor'ов (текущая
-модель-провайдер, хостинг). Для EU data residency используется EU endpoint
-провайдера, где он есть (у OpenAI EU residency ~+10% к цене — приемлемо для
-малого объёма). `do_not_contact` в `People` блокирует любой outreach.
+модель-провайдер, хостинг). Gate-0 разрешает только paid Vertex AI через EU
+multi-region endpoint из §7.4: без Search/Maps grounding, request-response
+logging, implicit caching и global fallback; project cache должен быть
+отключён до live use. Raw input/output не хранится в cost/run ledger.
+`do_not_contact` в `People` блокирует любой outreach.
 
 **Граница dev-подписки.** `dev_model_budget` владельца (code_change, §7.4) — это
 персональный расход на разработку, не company runtime data path и не входит в
@@ -1083,7 +1087,7 @@ Baserow должен существовать проверенный restore Pos
 | n8n Community self-hosted | €0 software; existing server |
 | Coolify | Existing |
 | Hetzner server | Existing; upgrade only after measured resource pressure |
-| AI API (runtime) | Hard cap €10/month on business_artifact runtime; optional if local/configured model passes |
+| AI API (runtime) | Gate-0 candidate is paid Vertex AI in EU multi-region; €0.10/call, €1/day and €10/month caps; no actual runtime spend/model call yet |
 | Backup/object storage | Storage Box BX11 is planned at €3.20/month but is not evidenced as purchased and is not actual spend |
 
 Owner `dev_model_budget` (code_change, §7.4) — персональная подписка на
@@ -1122,12 +1126,14 @@ Official references used for this decision:
   <https://baserow.io/user-docs/set-up-baserow>
 - n8n Community Edition:
   <https://docs.n8n.io/hosting/community-edition-features/>
-- OpenAI model prices:
-  <https://developers.openai.com/api/docs/pricing>
-- Gemini model prices:
-  <https://ai.google.dev/gemini-api/docs/pricing>
-- Anthropic model prices:
-  <https://platform.claude.com/docs/en/about-claude/pricing>
+- Vertex AI generative AI pricing:
+  <https://cloud.google.com/vertex-ai/generative-ai/pricing>
+- Vertex AI locations and multi-region endpoints:
+  <https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations>
+- Vertex AI data residency:
+  <https://cloud.google.com/vertex-ai/docs/general/data-residency>
+- Vertex AI zero data retention and training/privacy controls:
+  <https://docs.cloud.google.com/vertex-ai/generative-ai/docs/vertex-ai-zero-data-retention>
 
 ---
 
@@ -1141,7 +1147,7 @@ Official references used for this decision:
 | `COS-002` | Google Drive | Create `AdaptEng Company` structure | Organization owns Shared Drive; Ivan has Manager/admin access and tested recovery; folders match §4. **Provisioned:** structure merged in automation-platform PR #62 and provisioning workflow in PR #64; owner Manager/recovery confirmation remains open. |
 | `SEC-001` | Accounts | Password manager, MFA and recovery inventory | Every critical system has status/owner/recovery |
 | `OPS-001` | Hetzner/Coolify | Record 7-day resource baseline | CPU/RAM/disk/swap known |
-| `OPS-002` | n8n | Create Drive service account credential | Test file created/deleted in approved folder. **Repository workflow merged:** automation-platform PR #64; optional CI variables/live adapter smoke remain follow-up. |
+| `OPS-002` | n8n | Create Drive service account credential | Test file created/deleted in approved folder. **Controlled live smoke passed:** automation-platform PR #69 (`ff5ccc0`) used approved `01_Inbox`; create/reuse/subfolder reuse/owned cleanup/missing verification passed (61 tests, 1 production-unsafe base-structure skip). Temporary repo variable was removed; owner/recovery acceptance remains open. |
 
 ### 10.2 Days 4–14: one-person interface
 
@@ -1153,7 +1159,7 @@ Official references used for this decision:
 | `SEC-002` | Accounts/n8n/Postgres | Separate personal JM/EC from company | Personal workflows use own API keys/budget and own Postgres schema/store; no personal workflow uses a company credential or writes company data |
 | `BIZ-001` | Baserow (Days 8–21) | 10 outreach Actions from known European network | 10 `Actions` with `due_at`; each has recorded `outcome`; doubles as real UAT of Pipeline/Actions views |
 | `AUT-001` | automation-platform | Versioned Baserow adapter | Upsert by stable ID is idempotent; patches only workflow-owned fields (§3.4). **Repository implementation merged:** automation-platform PR #59; live Baserow use remains gated. |
-| `AUT-002` | automation-platform | Shared Drive folder adapter | Folder creation by stable ID is idempotent. **Repository implementation merged:** automation-platform PR #59; optional live adapter smoke remains. |
+| `AUT-002` | automation-platform | Shared Drive folder adapter | Folder creation by stable ID is idempotent. **Repository implementation merged:** automation-platform PR #59; controlled `01_Inbox` live smoke passed in PR #69 (`ff5ccc0`), while production-unsafe base-structure apply remains intentionally skipped. |
 
 ### 10.3 Days 8–30: connect existing automations
 
@@ -1162,7 +1168,7 @@ Official references used for this decision:
 | `MKT-001` | marketing + automation | Connect live case media intake to `Content_Items` and Drive folders | One sanitized case reaches draft review |
 | `MKT-002` | marketing + automation | Connect article flow to `Content_Items` and Drive | One article draft appears in Google Doc |
 | `MKT-003` | marketing + Drive | Define limited-access approved folders, snapshot hash and publish receipt | Approved/published status cannot be set by model or draft credential |
-| `N8N-001` | DNS/Coolify | Finish self-hosted n8n access | TLS/health/UI verified |
+| `N8N-001` | DNS/Coolify | Finish self-hosted n8n access | TLS/health/UI verified. **Repository governance merged:** automation-platform PR #58 (`a9f60f9`) added hard-fail secret/deploy validation, ADR-0009 and as-built/recovery Coolify docs; AI Gateway was intentionally excluded and no live deploy occurred. Source branch `palinaruban-repo-status-review@4b67fa4` must remain until an operator repoints live Coolify n8n to `main` and verifies auto-deploy safety. |
 | `N8N-002` | automation-platform | Ratify workflow inventory and classify domain | Company (MM) vs personal (JM/EC) separated; each workflow is keep/merge/archive/delete; personal isolated from company data. **Taxonomy ratified:** automation-platform PR #60 (`af36d3a`); `SEC-002` isolation remains open. |
 | `N8N-003` | automation-platform | Shadow first read-only workflow | No duplicate/external write; outputs reconciled |
 
@@ -1174,7 +1180,7 @@ Official references used for this decision:
 | `AG-002` | ai-dev-loop-control-plane | Add artifact completion/evidence lifecycle | Non-Git task completes by artifact gates. **Repository implementation merged:** control-plane PR #33. |
 | `AG-003` | ai-dev-loop-control-plane | Add artifact envelope | Artifact URI/hash, citations, schema, model usage and evidence digest are required. |
 | `AG-004` | automation-platform | Add Postgres run adapter | Task/run/outcome reconciles idempotently in `adapteng_ops`. **Repository implementation merged:** automation-platform PR #65; live wiring remains open. |
-| `AG-005` | automation-platform | Add pending-only Baserow/Drive adapters | Agent cannot approve or publish. **Repository implementation merged:** automation-platform PR #63; live adapter smoke remains open. |
+| `AG-005` | automation-platform | Add pending-only Baserow/Drive adapters | Agent cannot approve or publish. **Repository implementation merged:** adapter PR #63 and canonical approval ledger/outbox PR #68 (`7ec0342`) with hash-only one-time expiring tokens, atomic decision+outbox, `SKIP LOCKED` leases, bounded retry/dead-letter and PII-minimized non-authoritative Baserow projection. Migration 003 is **not live-applied**. |
 | `AG-006` | ai-dev-loop-control-plane | Linux/Coolify acceptance | Critical safety tests pass in container. **Repository implementation merged:** control-plane PR #34. |
 | `AG-007` | ai-dev-loop-control-plane | Business eval harness | Synthetic security set and approved representative quality set. **Harness merged:** control-plane PR #35; founder-approved representative inputs and real eval remain open. |
 
@@ -1192,7 +1198,7 @@ Official references used for this decision:
 | ID | Repository/system | Work | Definition of done |
 |---|---|---|---|
 | `WEB-001` | website + automation | Versioned `lead.created` contract | Source, consent, language, service and correlation ID. **Draft only:** website PR #78 remains held because merge auto-deploys the producer; it is not live. |
-| `WEB-002` | website + Baserow | Form → Opportunity → one-day Action | Three synthetic leads, no loss/duplicate. **Repository consumer merged:** automation-platform PR #66 (`b94c72e`); live import/activation remains blocked on atomic company-owned dedupe with concurrent proof, reviewed origin hardening, request-body retention verification, inactive shadow and synthetic E2E. |
+| `WEB-002` | website + Baserow | Form → Opportunity → one-day Action | Three synthetic leads, no loss/duplicate. **Repository identity merged:** automation-platform PR #70 (`cc5e5e7`) adds migration 004 and PII-minimized `form_id:submission_id`/`sitelead_wp_*` reservation; first call reserves, exact retry duplicates, either-key collision conflicts. PostgreSQL 16 CI passed 7/7, including 32 concurrent calls with exactly one reservation. Migration 004 is **not live-applied** and current MM-18/live n8n is unchanged. |
 | `INT-001` | automation-platform | Read-only integrity/reconcile check | Weekly job compares Baserow↔Postgres↔Drive; on drift creates an `Action`, never auto-writes business fields; not pilot-blocking |
 | `N8N-004` | automation-platform | Cut over selected content workflow | Cloud twin disabled; seven-day evidence |
 | `N8N-005` | automation-platform | Cut over lead workflow last | Fallback and rollback proven |
@@ -1212,7 +1218,7 @@ Official references used for this decision:
 
 ```text
 Workspace (active) → Shared Drive (provisioned; owner/recovery acceptance open)
-                   → n8n Drive credential/live smoke
+                   → n8n Drive credential/smoke passed → owner/recovery acceptance
 
 Baserow service (healthy) → DNS/TLS/admin → schema live run
                          → off-host export/restore proof
@@ -1225,8 +1231,13 @@ self-hosted n8n DNS/TLS → inactive shadow → content cutover → lead cutover
 agent repository work → founder-ratified sources/config → inactive A0/A1 shadow
                       → measured eval → live pilot
 
-lead contract + repository consumer → dedupe/origin/retention proof
-                                    → inactive shadow + synthetic E2E
+approval/outbox repository → migration 003 live plan/restore gate → live wiring
+
+lead contract + repository identity → migration 004 live plan/restore gate
+                                    → origin auth + retention proof
+                                    → duplicate/conflict HTTP 409 mapping
+                                    → durable crash-after-reservation reconciliation
+                                    → inactive self-hosted shadow + synthetic E2E
                                     → import/activate consumer → merge producer PR #78
 ```
 
@@ -1237,17 +1248,18 @@ lead contract + repository consumer → dedupe/origin/retention proof
 | Component | Status on 2026-07-25 | Next milestone |
 |---|---|---|
 | Company architecture | Authoritative; §13 first-base foundation is incomplete | Close live acceptance, restore and pilot gates below |
-| Google Workspace | Business Standard active (~€13.80/month); company Shared Drive and eight folders provisioned/dry-run verified | **Owner: Ivan** — confirm Manager/recovery; optionally set CI variables and run live adapter smoke |
+| Google Workspace | Business Standard active (~€13.80/month); company Shared Drive/eight folders provisioned; controlled `01_Inbox` adapter smoke passed in PR #69 | **Owner: Ivan** — confirm Manager/recovery; base-structure live apply remains intentionally untested |
 | Baserow | Service deployed/healthy in Coolify; daily backup command produced a verified archive; adapters/schema exist in repositories | **Owner: Ivan** — create public DNS A record, then verify TLS/UI, create admin, run schema live, and complete off-host export/restore |
-| Postgres `adapteng_ops` | Live; `AG-004` run ledger merged in PR #65 | Review the in-progress canonical approval-ledger/outbox PR, then wire and verify live; do not treat it as complete |
+| Postgres `adapteng_ops` | Existing database live; run ledger PR #65, approval/outbox PR #68 and atomic lead identity PR #70 are repository-merged | **Owner: Ivan** — migrations 003/004 are not live-applied; plan backup/restore and controlled application before any wiring |
+| `automation-platform` repository | `main` at `cc5e5e7`; PRs #58/#68/#69/#70 merged; post-merge Validate, Secret Scan, five adapter suites and real PostgreSQL semantics checks green | Repository evidence only; preserve all live migration/deploy/cutover gates |
 | n8n Cloud | Live authority | Keep during migration |
-| self-hosted n8n | Infrastructure exists; DNS/TLS, shadow and cutover incomplete; governance/Coolify PR #58 is under review | **Owner: Ivan** — complete DNS/TLS, review PR #58, then inactive shadow; n8n Cloud remains authority |
-| Website | Existing site live; producer PR #78 is draft/held; MM-18 repository consumer merged in PR #66, but neither v1 path nor `WEB-001` is live | **Owner: Ivan** — keep PR #78 held until dedupe concurrency, origin hardening, body retention, inactive shadow and synthetic E2E gates pass |
+| self-hosted n8n | Infrastructure exists; governance/Coolify repository work merged in PR #58, but no live deploy occurred; live app may still source retained branch `4b67fa4` | **Owner: Ivan** — repoint Coolify source to `main`, verify auto-deploy, then complete DNS/TLS and inactive shadow; n8n Cloud remains authority |
+| Website | Existing site live; producer PR #78 is draft/held; MM-18 repository identity is merged through PR #70, but migration 004/current live workflow are unchanged | **Owner: Ivan** — keep PR #78 held until migration plan, origin auth, retention proof, HTTP 409 mapping, durable reconciliation, inactive shadow and synthetic E2E pass |
 | Media intake | Live | Baserow/Drive content link |
 | Personal automations (JM/EC) | Live on shared n8n Cloud; taxonomy ratified, isolation incomplete | **Owner: Ivan** — complete `SEC-002` credential/budget/store isolation |
 | Article/case drafts | Existing flow partial; company storage integration and live cutover incomplete | Complete Baserow/Drive integration only after live acceptance and restore gates |
-| AI code agent | Business artifact mode, Linux acceptance and eval harness merged (control-plane PRs #33–#35); run ledger and pending-only adapters merged (automation PRs #65/#63) | Complete approval ledger/outbox review and live wiring before bounded A0/A1 shadow |
-| Business AI skills | `AI-001` Content & Case Draft Assistant implemented in marketing PR #19 (`5b9af0e`), deterministic draft-only, 106 tests; not in real use | **Owner: Ivan** — ratify claims library, style guide, source documents and pilot config, then run inactive measured pilot |
+| AI code agent | Business artifact mode/eval merged; run ledger, pending-only adapters and canonical approval/outbox repository implementation merged; migration 003 not live | PR-B canonical AI Gateway is **in progress/not deployed**; finish review/evidence before controlled wiring |
+| Business AI skills | `AI-001` merged in marketing PR #19 (`5b9af0e`), deterministic draft-only, 106 tests; Gate-0 selects paid Vertex AI `gemini-3.1-flash-lite` EU candidate, but no real model call occurred | **Owner: Ivan** — ratify claims/style/sources/pilot config and `AG-007` quality set, verify privacy/cache/FX gates, then run inactive measured pilot |
 
 The §13 foundation Definition of Done is not met: Baserow live acceptance and
 write integration, self-hosted cutover, the business-skill pilot, restore drill
