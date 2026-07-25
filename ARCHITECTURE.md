@@ -854,7 +854,7 @@ Business task не создаёт Git branch и не считается заве
 |---|---|---|
 | `AG-001` | `completion_mode: business_artifact` | Existing code mode unchanged; artifact mode schema-valid |
 | `AG-002` | `BusinessTaskEnvelope` | Sources, class, capabilities, limits and approvals validated fail-closed |
-| `AG-003` | `ArtifactEnvelope` | Artifact URI/hash, citations, schema, model usage and evidence digest required |
+| `AG-003` | `ArtifactEnvelope` | Artifact URI/hash, citations, schema, model usage and evidence digest required. **Repository implementation merged:** control-plane PR #36 (`affe6ea1e4d522be0df0641e98a08e20a84549ae`). |
 | `AG-004` | Postgres run adapter | Task/run/outcome reconciles idempotently in `adapteng_ops` |
 | `AG-005` | Baserow/Drive action adapters | Only pending/draft writes; no direct approve/publish |
 | `AG-006` | Linux container acceptance | Same critical gates pass on Coolify runtime |
@@ -866,12 +866,32 @@ Generic agent lifecycle остаётся в control-plane. Domain schemas/prompt
 Action adapter проверяет canonical Postgres approval ID/token, а не Baserow
 status.
 
+`AG-003` proves offline canonical envelope integrity: required schema identity,
+exact logical artifact URI/hash cross-binding, recomputed evidence digest,
+complete envelope self-hash excluding only its own `sha256`, finite non-negative
+`cost_eur` and fail-closed completion. It does not prove that persisted artifact
+bytes match the envelope; storage and action binding remain `AG-004`/`AG-005`.
+
 ### 7.4 Model access
 
 Canonical `services/ai-gateway` в `adapteng-automation-platform` остаётся
-provider-pluggable model adapter нашего агента. PR-B implementation is **in
-progress and not deployed**; production workflows still make no model calls
-through it.
+provider-pluggable model adapter нашего агента. PR-B merged in
+automation-platform PR #71 (`60bc443a4599d205fc24fb9172a2967ae5e8b409`):
+repository implementation and migration 005 are ready, but migration 005 is
+**not live-applied** and no model/deploy/live call occurred.
+
+Two-pass review fixed the approval token being parsed but not passed to the
+typed verifier, and divergent duplicate `call_id` behavior that mapped to HTTP
+502. Final repository behavior threads the token into the verification boundary;
+any reused `call_id` fails closed as HTTP 409 without a second provider call.
+Unit and real PostgreSQL concurrency/cap semantics, repository validation,
+Validate Repo and hard-fail secret scan are green.
+
+Live enablement still requires a real EU Vertex client and GCP service account,
+composition with the canonical approval adapter (its `VerificationRequest`
+still lacks the token and token consumption currently lives in `decide`), a
+concrete pending writer, Coolify/Traefik/secrets/FX configuration and pricing
+recheck. `external_draft_dispatcher` remains `None`.
 
 Gate-0 decision dated 2026-07-25 selects the first **paid pilot candidate**, not
 a deployed/default model:
@@ -1156,7 +1176,7 @@ Official references used for this decision:
 | `COS-003` | Baserow/Coolify | Deploy self-hosted Free with private/protected access | Login, HTTPS, backup and health work. **Deployed, not accepted:** service is healthy and the daily backup command produced a verified archive; public DNS is NXDOMAIN, so TLS/UI/admin remain blocked, and off-host export/restore remains open. |
 | `COS-004` | Baserow | Create eight tables and ten views | Schema matches §3; no sample PII. **Repository implementation merged:** automation-platform PR #61; live schema run is blocked by `COS-003` DNS/admin. |
 | `COS-005` | Baserow | Load systems, repos and known partners | Today/Systems views are useful; seeded `Systems_Automations` includes Zoho SMTP (email drafts/alerts), n8n Cloud, self-hosted n8n, Postgres, Cloudways, Hetzner/Coolify |
-| `SEC-002` | Accounts/n8n/Postgres | Separate personal JM/EC from company | Personal workflows use own API keys/budget and own Postgres schema/store; no personal workflow uses a company credential or writes company data |
+| `SEC-002` | Accounts/n8n/Postgres | Separate personal JM/EC from company | Personal workflows use own API keys/budget and own Postgres schema/store; no personal workflow uses a company credential or writes company data. **Guard implementation in progress;** exact `ISO-1` waiver expires 2026-08-08 and no live remediation has occurred. |
 | `BIZ-001` | Baserow (Days 8–21) | 10 outreach Actions from known European network | 10 `Actions` with `due_at`; each has recorded `outcome`; doubles as real UAT of Pipeline/Actions views |
 | `AUT-001` | automation-platform | Versioned Baserow adapter | Upsert by stable ID is idempotent; patches only workflow-owned fields (§3.4). **Repository implementation merged:** automation-platform PR #59; live Baserow use remains gated. |
 | `AUT-002` | automation-platform | Shared Drive folder adapter | Folder creation by stable ID is idempotent. **Repository implementation merged:** automation-platform PR #59; controlled `01_Inbox` live smoke passed in PR #69 (`ff5ccc0cbd84870e455173ff83865ccd9a47f623`), while production-unsafe base-structure apply remains intentionally skipped. |
@@ -1165,7 +1185,7 @@ Official references used for this decision:
 
 | ID | Repository/system | Work | Definition of done |
 |---|---|---|---|
-| `MKT-001` | marketing + automation | Connect live case media intake to `Content_Items` and Drive folders | One sanitized case reaches draft review |
+| `MKT-001` | marketing + automation | Connect live case media intake to `Content_Items` and Drive folders | One sanitized case reaches draft review. **Repository correction merged:** marketing main `d7e87897c066e1aad1114b61f15f40a7c73903ee` contains PR #11's `drive_folder_url` package correction and worker-envelope regression; reviewed branch/main share tree `29533ec60af170097a61c09963420b9899a5743d`. The worker was not deployed. |
 | `MKT-002` | marketing + automation | Connect article flow to `Content_Items` and Drive | One article draft appears in Google Doc |
 | `MKT-003` | marketing + Drive | Define limited-access approved folders, snapshot hash and publish receipt | Approved/published status cannot be set by model or draft credential |
 | `N8N-001` | DNS/Coolify | Finish self-hosted n8n access | TLS/health/UI verified. **Repository governance merged:** automation-platform PR #58 (`a9f60f9bc12f3bc51d7956a48f1a3ef039d56cb7`) added hard-fail secret/deploy validation, ADR-0009 and as-built/recovery Coolify docs; AI Gateway was intentionally excluded and no live deploy occurred. All pre-merge review blockers were resolved. The only PR #58-specific live follow-up is retaining `palinaruban-repo-status-review@4b67fa4` until an operator repoints live Coolify n8n to `main` and verifies auto-deploy safety. |
@@ -1178,7 +1198,7 @@ Official references used for this decision:
 |---|---|---|---|
 | `AG-001` | ai-dev-loop-control-plane | Add business artifact schemas | CI passes; code mode unchanged. **Repository implementation merged:** control-plane PR #33. |
 | `AG-002` | ai-dev-loop-control-plane | Add artifact completion/evidence lifecycle | Non-Git task completes by artifact gates. **Repository implementation merged:** control-plane PR #33. |
-| `AG-003` | ai-dev-loop-control-plane | Add artifact envelope | Artifact URI/hash, citations, schema, model usage and evidence digest are required. |
+| `AG-003` | ai-dev-loop-control-plane | Add artifact envelope | Artifact URI/hash, citations, schema, model usage and evidence digest are required. **Merged:** control-plane PR #36 (`affe6ea1e4d522be0df0641e98a08e20a84549ae`); independent 32-file review was clean and post-merge CI/Gitleaks passed. This proves offline envelope integrity, not persisted bytes. |
 | `AG-004` | automation-platform | Add Postgres run adapter | Task/run/outcome reconciles idempotently in `adapteng_ops`. **Repository implementation merged:** automation-platform PR #65; live wiring remains open. |
 | `AG-005` | automation-platform | Add pending-only Baserow/Drive adapters | Agent cannot approve or publish. **Repository implementation merged:** adapter PR #63 and canonical approval ledger/outbox PR #68 (final head `a27de9627f15a6d6d7e3f4177d43321499d92cff`, merge `7ec0342673e9fcce73d985ca23718987afb72d81`) with hash-only one-time expiring tokens, atomic decision+outbox, `SKIP LOCKED` leases, bounded retry/dead-letter and PII-minimized non-authoritative Baserow projection. Migration 003 is **not live-applied**. |
 | `AG-006` | ai-dev-loop-control-plane | Linux/Coolify acceptance | Critical safety tests pass in container. **Repository implementation merged:** control-plane PR #34. |
@@ -1199,7 +1219,7 @@ Official references used for this decision:
 |---|---|---|---|
 | `WEB-001` | website + automation | Versioned `lead.created` contract | Source, consent, language, service and correlation ID. **Draft only:** website PR #78 remains held because merge auto-deploys the producer; it is not live. |
 | `WEB-002` | website + Baserow | Form → Opportunity → one-day Action | Three synthetic leads, no loss/duplicate. **Repository identity merged:** automation-platform PR #70 (`cc5e5e7bb41e1b0605f781482e17e163d7015fcf`) adds migration 004 and PII-minimized `form_id:submission_id`/`sitelead_wp_*` reservation; first call reserves, exact retry duplicates, either-key collision conflicts. PostgreSQL 16 CI passed 7/7, including 32 concurrent calls with exactly one reservation. Migration 004 is **not live-applied** and current MM-18/live n8n is unchanged. |
-| `INT-001` | automation-platform | Read-only integrity/reconcile check | Weekly job compares Baserow↔Postgres↔Drive; on drift creates an `Action`, never auto-writes business fields; not pilot-blocking |
+| `INT-001` | automation-platform | Read-only integrity/reconcile check | Weekly job compares Baserow↔Postgres↔Drive; on drift creates an `Action`, never auto-writes business fields; not pilot-blocking. **Runtime-draft foundation in progress after PR #71:** its first PR has no model, write port, `Action`, n8n export/schedule or live sources. |
 | `N8N-004` | automation-platform | Cut over selected content workflow | Cloud twin disabled; seven-day evidence |
 | `N8N-005` | automation-platform | Cut over lead workflow last | Fallback and rollback proven |
 
@@ -1233,6 +1253,10 @@ agent repository work → founder-ratified sources/config → inactive A0/A1 sha
 
 approval/outbox repository → migration 003 live plan/restore gate → live wiring
 
+AI Gateway repository → migration 005 backup/restore gate + controlled apply
+                      → EU Vertex/approval/writer wiring
+                      → Coolify/Traefik/secrets/FX → inactive measured call
+
 lead contract + repository identity → migration 004 live plan/restore gate
                                     → origin auth + retention proof
                                     → duplicate/conflict HTTP 409 mapping
@@ -1250,15 +1274,15 @@ lead contract + repository identity → migration 004 live plan/restore gate
 | Company architecture | Authoritative; guarded weekly evidence workflow is enabled but has not run yet; §13 first-base foundation is incomplete | First scheduled run 2026-07-27, then close live acceptance, restore and pilot gates below |
 | Google Workspace | Business Standard active (~€13.80/month); company Shared Drive/eight folders provisioned; controlled `01_Inbox` adapter smoke passed in PR #69 | **Owner: Ivan** — confirm Manager/recovery; base-structure live apply remains intentionally untested |
 | Baserow | Service deployed/healthy in Coolify; daily backup command produced a verified archive; adapters/schema exist in repositories | **Owner: Ivan** — create public DNS A record, then verify TLS/UI, create admin, run schema live, and complete off-host export/restore |
-| Postgres `adapteng_ops` | Existing database live; run ledger PR #65, approval/outbox PR #68 and atomic lead identity PR #70 are repository-merged | **Owner: Ivan** — migrations 003/004 are not live-applied; plan backup/restore and controlled application before any wiring |
-| `automation-platform` repository | `main` at `cc5e5e7bb41e1b0605f781482e17e163d7015fcf`; PRs #58/#68/#69/#70 merged; post-merge Validate, Secret Scan, five adapter suites and real PostgreSQL semantics checks green | PR #58 review is complete; repository evidence does not imply live migration/deploy/cutover |
+| Postgres `adapteng_ops` | Existing database live; run ledger PR #65, approval/outbox PR #68, atomic lead identity PR #70 and AI Gateway PR #71 are repository-merged | **Owner: Ivan** — migrations 003/004/005 are not live-applied; plan backup/restore and controlled application before any wiring |
+| `automation-platform` repository | `main` at `60bc443a4599d205fc24fb9172a2967ae5e8b409`; PRs #58/#68/#69/#70/#71 merged; post-merge AI Gateway unit/real PostgreSQL semantics/repo validation/Validate Repo/Secret Scan green | Repository evidence does not imply live migration/deploy/model call; complete PR #71 live gates before enablement |
 | n8n Cloud | Live authority | Keep during migration |
 | self-hosted n8n | Infrastructure exists; governance/Coolify repository work merged in PR #58, but no live deploy occurred; live app may still source retained branch `4b67fa4` | **Owner: Ivan** — repoint Coolify source to `main`, verify auto-deploy, then complete DNS/TLS and inactive shadow; n8n Cloud remains authority |
-| Website | Existing site live; producer PR #78 is draft/held; MM-18 repository identity is merged through PR #70, but migration 004/current live workflow are unchanged | **Owner: Ivan** — keep PR #78 held until migration plan, origin auth, retention proof, HTTP 409 mapping, durable reconciliation, inactive shadow and synthetic E2E pass |
-| Media intake | Live | Baserow/Drive content link |
-| Personal automations (JM/EC) | Live on shared n8n Cloud; taxonomy ratified, isolation incomplete | **Owner: Ivan** — complete `SEC-002` credential/budget/store isolation |
+| Website | Existing site live; website main `2a755bee63b6bef0449a48c0d28edec19d1a82aa` includes docs-only PR #68 with green Validate and no Cloudways deploy; producer PR #78 remains draft/held; MM-18 migration 004/live workflow are unchanged | **Owner: Ivan** — keep PR #78 held until migration plan, origin auth, retention proof, HTTP 409 mapping, durable reconciliation, inactive shadow and synthetic E2E pass |
+| Media intake | Live workflow `uBVRMTCKwnUG91kU` remains active/write/MCP-exposed, absent from automation Git, and maps top-level `drive_folder_link`; marketing package correction is merged but worker not deployed | **Owner: Ivan** — after `SEC-002`, export to automation Git, harden MCP and add compatibility mapping before host rollout |
+| Personal automations (JM/EC) | Live on shared n8n Cloud; taxonomy ratified, isolation incomplete; `SEC-002` guard replacement is in progress with `ISO-1` waiver only through 2026-08-08 | **Owner: Ivan** — complete credential/budget/store isolation; no live remediation has occurred |
 | Article/case drafts | Existing flow partial; company storage integration and live cutover incomplete | Complete Baserow/Drive integration only after live acceptance and restore gates |
-| AI code agent | Business artifact mode/eval merged; run ledger, pending-only adapters and canonical approval/outbox repository implementation merged; migration 003 not live | PR-B canonical AI Gateway is **in progress/not deployed**; finish review/evidence before controlled wiring |
+| AI code agent | Business artifact mode/eval and `AG-003` canonical envelope integrity merged; run ledger, pending-only adapters, approval/outbox and AI Gateway repository implementations merged | Migrations 003/005 are not live; complete persisted-byte/action binding and PR #71 live wiring gates before inactive use |
 | Business AI skills | `AI-001` merged in marketing PR #19 (`5b9af0e`), deterministic draft-only, 106 tests; Gate-0 selects paid Vertex AI `gemini-3.1-flash-lite` EU candidate, but no real model call occurred | **Owner: Ivan** — ratify claims/style/sources/pilot config and `AG-007` quality set, verify privacy/cache/FX gates, then run inactive measured pilot |
 
 The §13 foundation Definition of Done is not met: Baserow live acceptance and
