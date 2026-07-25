@@ -1247,7 +1247,7 @@ lead contract + repository identity → migration 004 live plan/restore gate
 
 | Component | Status on 2026-07-25 | Next milestone |
 |---|---|---|
-| Company architecture | Authoritative; §13 first-base foundation is incomplete | Close live acceptance, restore and pilot gates below |
+| Company architecture | Authoritative; guarded weekly evidence workflow is enabled but has not run yet; §13 first-base foundation is incomplete | First scheduled run 2026-07-27, then close live acceptance, restore and pilot gates below |
 | Google Workspace | Business Standard active (~€13.80/month); company Shared Drive/eight folders provisioned; controlled `01_Inbox` adapter smoke passed in PR #69 | **Owner: Ivan** — confirm Manager/recovery; base-structure live apply remains intentionally untested |
 | Baserow | Service deployed/healthy in Coolify; daily backup command produced a verified archive; adapters/schema exist in repositories | **Owner: Ivan** — create public DNS A record, then verify TLS/UI, create admin, run schema live, and complete off-host export/restore |
 | Postgres `adapteng_ops` | Existing database live; run ledger PR #65, approval/outbox PR #68 and atomic lead identity PR #70 are repository-merged | **Owner: Ivan** — migrations 003/004 are not live-applied; plan backup/restore and controlled application before any wiring |
@@ -1279,6 +1279,20 @@ Update only:
 4. actual recurring cost if changed.
 
 Do not create `ARCHITECTURE_v3`, amendment or competing plan.
+
+### Scheduled evidence refresh
+
+App workflow `Weekly Company OS status`
+(`5f501c9b-f912-4a92-b822-ec57259c440c`) is enabled for Mondays at 09:00 local;
+the first/next scheduled run is `2026-07-27T07:01:38Z`. No scheduled run has
+occurred yet.
+
+The workflow audits active repositories read-only and works only in the Company
+OS repository. It updates this existing root `ARCHITECTURE.md` only when
+evidence changed, reuses an open status PR, validates Markdown tables, local
+links and `git diff --check`, and never auto-merges. It is explicitly prohibited
+from mutating DNS, Coolify, n8n, Baserow, databases, website/provider settings or
+credentials, and from exposing secrets, PII or raw payloads.
 
 ### Monthly review
 
