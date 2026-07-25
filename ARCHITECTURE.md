@@ -112,9 +112,8 @@ AdaptEng не заявляет:
 - Existing documents still need controlled migration from personal Google Drive
   and OneDrive; Google Workspace Business Standard is active, and the
   company-owned Shared Drive with eight standing folders is provisioned.
-- Controlled `01_Inbox` adapter smoke passed; Shared Drive owner
-  Manager/recovery acceptance and production-unsafe base-structure live apply
-  remain open.
+- Controlled `01_Inbox` adapter smoke passed in PR #69; owner Manager/recovery
+  confirmation and production-unsafe base-structure live apply remain open.
 - Baserow is deployed and healthy in Coolify, but public DNS, TLS/UI/admin,
   live schema initialization and off-host restore evidence remain open.
 - Target account list и keyword set ещё не созданы.
