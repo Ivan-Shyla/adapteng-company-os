@@ -59,6 +59,23 @@ flowchart LR
   IVAN --> WP["WordPress draft / publication"]
 ```
 
+### 0.1 Карта репозитория (operating structure)
+
+Этот файл — «почему» и план. Операционный слой живёт рядом в папках и
+обновляется теми же PR:
+
+- `registry/` — живой индекс сервисов, workflow, хранилищ и окружений
+  (id/имена, без секретов);
+- `runbooks/` — повторяемые процедуры (n8n, миграции, backup/restore, ротация
+  секретов, инциденты);
+- `decisions/` — ADR-журнал уровня компании (плюс ссылки на платформенные ADR);
+- `ai/` — точки встраивания AI, guardrails, выбор модели с проверенными ценами,
+  контроль затрат;
+- `owner/` — действия только для владельца и карта доступов по именам.
+
+§11 «Current status» остаётся авторитетным, если индекс расходится с ним.
+Границу «индекс, а не реализация» фиксирует `decisions/0001`.
+
 ---
 
 ## 1. Зафиксированный контекст компании
@@ -1223,7 +1240,7 @@ Official references used for this decision:
 |---|---|---|---|
 | `WEB-001` | website + automation | Versioned `lead.created` contract | Source, consent, language, service and correlation ID. **Draft only:** website PR #78 remains held because merge auto-deploys the producer; it is not live. |
 | `WEB-002` | website + Baserow | Form → Opportunity → one-day Action | Three synthetic leads, no loss/duplicate. **Repository identity merged:** automation-platform PR #70 (`cc5e5e7bb41e1b0605f781482e17e163d7015fcf`) adds migration 004 and PII-minimized `form_id:submission_id`/`sitelead_wp_*` reservation; first call reserves, exact retry duplicates, either-key collision conflicts. PostgreSQL 16 CI passed 7/7, including 32 concurrent calls with exactly one reservation. **LIVE PROVEN 2026-07-25 (governed lead-intake pipeline):** migration 004 applied to live `adapteng_ops` (`public.lead_identity_reservation` + `reserve_lead_identity(...)`), and a self-hosted EU n8n workflow (`05ytz5If9kHUOYuA`, header-authenticated webhook, **active, pure-internal**) turns a `lead.created` webhook into a governed Organization → Person → Opportunity → one-day-follow-up Action upsert through the internal adapter, made retry-safe by reserving a stable `business_id` from the reservation authority. Four synthetic end-to-end tests passed with independent Baserow read-back: **T1** create (4 entities `created=true`); **T2** exact replay idempotent (identical stable ids, all `created=false`, zero duplicates); **T3** the reservation function returns `conflict` for a valid-but-inconsistent `(submission, canonical)` pair (routed to HTTP 409; malformed canonicals rejected earlier); **T4** no-loss — an injected mid-chain write failure now returns **HTTP 500** so the producer retries, and the retry completes exactly the missing entities (`opportunity`/`action` `created=true`) without re-creating org/person, every synthetic id appearing exactly once in Baserow. A pre-existing n8n defect was caught and fixed en route: with `responseMode=responseNode`, a node error before the Respond node returned an empty **HTTP 200** (silent lead loss); explicit per-node error outputs to a `Respond500` node restore fail-closed retry semantics. |
-| `INT-001` | automation-platform | Read-only integrity/reconcile check | Weekly job compares Baserow↔Postgres↔Drive; on drift creates an `Action`, never auto-writes business fields; not pilot-blocking. **Read-only foundation merged:** automation-platform PR #74 (`05d3fa4483634051dd39c19a98fe922835e1b1ec`) adds migration 006, fail-closed source snapshots and deterministic findings. Migration 006 is not live-applied; live sources, schedule and `Action` creation remain open, and no AI/write path exists. |
+| `INT-001` | automation-platform | Read-only integrity/reconcile check governed by **ADR-0011** | Compares Baserow↔Postgres↔Drive and emits deterministic **read-only** findings — **no writes, no `Action` creation, no live schedule ever** in the merged foundation. Turning a finding into an `Action`, the live schedule, the n8n workflow, live manifest wiring and deployed credentials are each deferred to a **separate approved PR**; never pilot-blocking. **Read-only foundation merged:** automation-platform PR #74 (`05d3fa4483634051dd39c19a98fe922835e1b1ec`) adds migration 006, fail-closed source snapshots and deterministic findings. Migration 006 is not live-applied; live sources, schedule and `Action` creation remain owner/approved-PR gated, and no AI/write path exists. |
 | `N8N-004` | automation-platform | Cut over selected content workflow | Cloud twin disabled; seven-day evidence |
 | `N8N-005` | automation-platform | Cut over lead workflow last | Fallback and rollback proven |
 
@@ -1308,6 +1325,11 @@ Update only:
 2. completed backlog rows/evidence;
 3. new blocker with owner and next action;
 4. actual recurring cost if changed.
+
+When live reality changes, update the operating layer in the **same** PR:
+`registry/*.yaml` (what exists / where / status), `runbooks/*` (how), and
+`owner/action-items.md` (what the owner must do). Names and ids only — never
+secret values. This is not a competing plan; it is the index that §11 governs.
 
 Do not create `ARCHITECTURE_v3`, amendment or competing plan.
 
