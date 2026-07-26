@@ -34,6 +34,13 @@ external_saas:
     role: mail / SMTP (no Gmail migration)
   - name: Google Workspace (Business Standard)
     role: company documents + Shared Drive (~EUR 13.80/month, 1 user, 2 TB)
+  - name: Google Cloud (Vertex AI + Drive API)
+    project: adapteng-workspace-automation
+    service_account: adapteng-ai-operator@adapteng-workspace-automation.iam.gserviceaccount.com
+    delegation: domain-wide; scope https://www.googleapis.com/auth/drive (delegated to owner primary Workspace user)
+    credential_ref: GOOGLE_SERVICE_ACCOUNT_JSON_B64  # Coolify runtime secret; value NEVER in repo
+    role: EU Vertex model access (ai-gateway) + Drive read (drive-adapter, INT-001 reader)
+    status: provided 2026-07-26; consumers not yet deployed (live wiring stays owner/approved-PR gated)
   - name: GitHub
     role: code, contracts, architecture, evidence
     actions_budget: USD 10/month, hard stop enabled

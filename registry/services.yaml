@@ -34,7 +34,7 @@ services:
     depends_on: [postgres-adapteng-ops (migration 005 ai_gateway), approval-outbox]
     status: repo-merged-not-live
     owner: Ivan
-    notes: PR #71 merged. Migration 005 NOT live-applied. Needs real EU Vertex client + GCP service account + FX config. See ai/model-choices.md and decisions/ (ADR-0010 in automation-platform).
+    notes: PR #71 merged. Migration 005 NOT live-applied. GCP project/SA provided 2026-07-26 (adapteng-workspace-automation, key in Coolify GOOGLE_SERVICE_ACCOUNT_JSON_B64); still needs deploy + real EU Vertex client wiring + FX config. See ai/model-choices.md and decisions/ (ADR-0010 in automation-platform).
 
   - id: integrity-reconciler
     repo: adapteng-automation-platform
@@ -45,7 +45,7 @@ services:
     depends_on: [postgres-adapteng-ops (migration 006 integrity schema)]
     status: repo-merged-not-live
     owner: Ivan
-    notes: PR #74 merged. ADR-0011 defers live schedule, Finding->Action adapter, n8n workflow, live manifest wiring and deployed credentials to future approved PRs; writes are forbidden forever. Full live run also needs Drive service-account creds. See owner/action-items.md.
+    notes: PR #74 merged. ADR-0011 defers live schedule, Finding->Action adapter, n8n workflow, live manifest wiring and deployed credentials to future approved PRs; writes are forbidden forever. Drive service-account creds provided 2026-07-26 (deploy-time unblocked); live run still ADR-0011/approved-PR gated. See owner/action-items.md.
 
   - id: adapteng-run-ledger
     repo: adapteng-automation-platform
@@ -66,7 +66,7 @@ services:
     source_of_truth_for: none (Drive is the document/evidence authority)
     status: repo-merged-not-live
     owner: Ivan
-    notes: Requires Google service-account credentials (owner-held) for any live use.
+    notes: Google service-account provided 2026-07-26 (adapteng-ai-operator, Drive scope, domain-wide delegation; key in Coolify GOOGLE_SERVICE_ACCOUNT_JSON_B64). Deploy-time unblocked; not yet deployed/wired live.
 
   - id: adapteng-baserow-schema
     repo: adapteng-automation-platform

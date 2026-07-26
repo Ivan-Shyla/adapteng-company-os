@@ -10,29 +10,36 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
 
 ## 🔴 Security — do first
 
-- [ ] **Revoke the leaked Baserow token `acJgo3…`.**
-  - **Why:** it was exposed in an earlier Coolify build-arg log and independent
-    testing on 2026-07-25 shows it **still authenticates** against `Company
-    Operations`. Rotating the Coolify copy did **not** revoke it — the old
-    value stays valid until deleted at the source.
-  - **How:** Baserow → Settings → API tokens → delete that token. Then confirm a
-    call using the old value is rejected (see `runbooks/secret-rotation.md`).
+- [x] **Revoke the leaked Baserow token `acJgo3…`.** ✅ **DONE 2026-07-26** — owner
+  revoked it at source (Baserow → API tokens). It no longer authenticates.
+- [ ] **Revoke the temporary cleanup token `temporary-test-cleanup-2026-07-26`.**
+  - **Why:** issued with delete rights on the `AdaptEng OS` database solely to
+    remove synthetic rows (completed 2026-07-26). A standing broad-scoped token is
+    a liability — delete it now that the cleanup is done.
+  - **How:** Baserow → Settings → API tokens → delete
+    `temporary-test-cleanup-2026-07-26`.
 
 ## 🟠 Data hygiene — synthetic test rows
 
-- [ ] **Delete synthetic Baserow rows** created during live proofs (the data
-  token has no delete permission, so this needs an admin JWT):
-  - WEB-002: `AE-{ORG,PER,OPP,ACT}-100002`, `-100003`, `-100004`
-    (tables Organizations 842 / People 843 / Opportunities 844 / Actions 846).
-  - Earlier canary: `AE-ORG-0001`, `AE-ORG-0002`.
-  - The reservation rows in Postgres (`900:1`–`903:1`) are PII-free append-only
-    identity markers; leave them or clear deliberately.
+- [x] **Delete synthetic Baserow rows.** ✅ **DONE 2026-07-26** — removed 14 rows via
+  the temporary cleanup token and verified by read-back: WEB-002
+  `AE-{ORG,PER,OPP,ACT}-100002/3/4` (Organizations 842 / People 843 /
+  Opportunities 844 / Actions 846) and canary `AE-ORG-0001/0002`. The legitimate
+  `AE-SYS-baserow-adapter` registry row (Systems_Automations 849) was left intact;
+  only Baserow's two default-empty rows remain per table.
+  - The Postgres reservation rows (`900:1`–`903:1`) are PII-free append-only
+    identity markers; left in place deliberately.
 
 ## 🟡 Unblock the next build steps
 
-- [ ] **Provide Google service-account credentials** (owner-held) for the
-  `integrity-reconciler` Drive reader and the `drive-adapter`. Without Drive
-  creds the INT-001 all-or-nothing live reconcile cannot run.
+- [x] **Provide Google service-account credentials.** ✅ **DONE 2026-07-26** — SA
+  `adapteng-ai-operator@adapteng-workspace-automation.iam.gserviceaccount.com`
+  (project `adapteng-workspace-automation`), domain-wide delegation for
+  `https://www.googleapis.com/auth/drive`, delegated to the owner's primary
+  Workspace user. Key stored as the Coolify runtime secret
+  `GOOGLE_SERVICE_ACCOUNT_JSON_B64` (value never in repo). This unblocks the
+  **deploy-time** wiring of `drive-adapter` and the INT-001 Drive reader — the
+  *live wiring itself* still rides the INT-001 approved-PR gates below.
 - [ ] **INT-001 (integrity) — approve the deferred wiring, one PR at a time.**
   ADR-0011 defers each of these to a *future approved PR*: live schedule, the
   Finding→Action adapter, the n8n workflow, live manifest wiring, and deployed
@@ -79,3 +86,7 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   fail-closed retry semantics.
 - Baserow Company OS schema provisioned live (8 tables / 107 fields / 10 views);
   read-only table-id binding captured on `main`.
+- Leaked Baserow token revoked at source; 14 synthetic proof rows deleted and
+  verified (2026-07-26).
+- Google service account provisioned with Drive domain-wide delegation; key held
+  in Coolify as `GOOGLE_SERVICE_ACCOUNT_JSON_B64`.
