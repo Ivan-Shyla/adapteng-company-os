@@ -6,6 +6,7 @@
 # No secrets: webhook paths and tokens are marked, not printed.
 version: 1
 updated: 2026-07-26
+last_verified_live: 2026-07-26  # self-hosted n8n API GET /workflows: exactly 2 workflows, both active, both listed below (no drift)
 
 canonical_full_index: adapteng-automation-platform/n8n/workflow-index.json  # 81 workflows total
 
