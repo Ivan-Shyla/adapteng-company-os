@@ -784,8 +784,9 @@ must be reconciled before cutover.
 | Personal workflows | JM / EC | 35 / 17 active in Cloud | Личные/отдельные автоматизации Ивана | Не company scope; изолированы от company данных |
 | Utility / gateway | EXP / gateway | 1 repo baseline; 1 active live-only gateway | Utility | classify explicitly; never silently becomes company authority |
 
-Только **Marketing** — промышленная бизнес-автоматизация AdaptEng, и именно её
-§5 подключает к Baserow, Shared Drive и нашему агенту. **Job Monitor** и
+Только company-домены **Marketing Machine / Lead Monitor** относятся к
+промышленной бизнес-автоматизации AdaptEng, и именно их §5 подключает к Baserow,
+Shared Drive и нашему агенту. **Job Monitor** и
 **English Coach** — личные/отдельные автоматизации, которые сегодня работают на
 том же n8n Cloud и делят credentials (OpenAI, Google, Telegram, Gmail).
 
