@@ -28,12 +28,14 @@ This matches Gate-0 (2026-07-25) and ADR-0010 (AI Gateway = EU Vertex canonical)
 Anthropic first-party inference is US/global. Both are fallback-only under our
 residency rule, despite `gpt-5-mini` being the raw-cheapest.
 
-### Why not simply the cheapest (`gpt-5-mini`)?
+### Why not use a lower sticker-price US endpoint?
 
 Raw price is not the objective — **compliant** price is. Our data must stay in
 the EU with no training/retention. `gemini-3.1-flash-lite` on EU Vertex meets
-that at essentially the same price tier; a few cents/million saved on a US
-endpoint isn't worth breaching residency for client-adjacent content.
+that at the required quality tier; a few tenths of a dollar per million tokens
+saved on a US endpoint is not worth breaching residency for client-adjacent
+content. `gemini-2.5-flash-lite` remains the lower-cost EU option when the
+ratified classify/extract quality set shows it is sufficient.
 
 ## Representative call cost
 
