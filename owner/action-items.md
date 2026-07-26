@@ -90,10 +90,12 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   proven by a service account.
 - [ ] **Personal JM/EC isolation:** verify live credential/store identity;
   the `ISO-1` waiver expires **2026-08-08**.
-- [ ] **n8n Cloud inventory drift:** live API now reports 89 workflows / 42
+- [ ] **n8n Cloud inventory drift:** live API now reports 89 workflows / 40
   active versus 82 repository exports (14 live-only, 7 repo-only). Export,
   sanitize, classify and reconcile before claiming the repository index is
-  authoritative; do not bulk-import/activate during this cleanup.
+  authoritative; do not bulk-import/activate during this cleanup. MM-40 and
+  MM-41 were deliberately unpublished as a safety freeze; do not reactivate
+  their direct-model/public-form path during reconciliation.
 - [ ] **Media intake:** approve snapshot/rollback, import the backward-compatible
   consumer first, canary one real case, then redeploy the marketing worker.
 - [ ] **CASE-2026-001 media review:** repository metadata says redaction resolved,

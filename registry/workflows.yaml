@@ -9,7 +9,7 @@ updated: 2026-07-26
 last_verified_live: 2026-07-26
 live_counts:
   self_hosted: { total: 2, active: 2, drift: none }
-  cloud: { total: 89, active: 42, repo_exports: 82, live_only: 14, repo_only: 7 }
+  cloud: { total: 89, active: 40, repo_exports: 82, live_only: 14, repo_only: 7 }
 
 canonical_full_index: adapteng-automation-platform/n8n/workflow-index.json  # 82 repository exports; live drift above must be reconciled
 
@@ -60,8 +60,19 @@ legacy_cloud_authority_dependencies:
   # Pointers only; the 82 repository exports remain in automation-platform.
   - { id: fTJVvxC0hviQy0im, name: MM-01, dependency: "legacy personal 01_Inbox", cutover: pending }
   - { id: uBVRMTCKwnUG91kU, name: MM-Visual-Evidence-Intake, dependency: "legacy personal 00_Case_Uploads", cutover: pending }
-  - { id: sM8lksVuYfMUeC6U, name: MM-40, dependency: "direct GPT-5 Mini draft generation", cutover: "keep inactive until governed AI pilot is accepted" }
-  - { id: z2dYx1mvy9rXOsLY, name: MM-41, dependency: "legacy personal 00_Case_Uploads", cutover: pending }
+  - id: sM8lksVuYfMUeC6U
+    name: MM-40
+    status: inactive-safety-freeze
+    dependency: direct GPT-5 Mini draft generation
+    live_safety_fix: "version f753e544: fabricated sample/parser facts removed; no-input execution 15197 failed before model"
+    freeze: "unpublished 2026-07-26; version history retained; no direct model entrypoint active"
+    cutover: replace with governed AI Gateway; never reactivate as Company OS AI authority
+  - id: z2dYx1mvy9rXOsLY
+    name: MM-41
+    status: inactive-safety-freeze
+    dependency: public n8n form + legacy personal 00_Case_Uploads + MM-40/MM-42/MM-43 chain
+    freeze: "unpublished 2026-07-26; rollback version eeb3a3f3 retained"
+    cutover: replace with authenticated corporate Drive/Baserow intake; do not reactivate the public legacy form
   - { id: ZKxNt2F9LyRiwQZH, name: MM-42, dependency: "legacy personal 00_Case_Uploads + WordPress draft", cutover: pending }
   - { id: l2mvHcqbkaKhGiAr, name: MM-43, dependency: "legacy case package + social draft path", cutover: pending }
   - { id: T3WHl2kCkPiPOPQd, name: MM-30, dependency: "deterministic draft builder", status: inactive }
@@ -69,7 +80,7 @@ legacy_cloud_authority_dependencies:
 cutover_truth:
   self_hosted_active_count: 2
   cloud_total_count: 89
-  cloud_active_count: 42
+  cloud_active_count: 40
   cloud_company_authority: Marketing Machine and Lead Monitor content/lead workflows
   personal_domains_on_cloud: [Job Monitor, English Coach]
   inventory_drift: 14 live-only / 7 repo-only versus 82 repository exports
