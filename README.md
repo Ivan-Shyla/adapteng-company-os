@@ -5,6 +5,11 @@
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — утверждённая архитектура, рабочий
   интерфейс, хранилище, автоматизации, AI-контур и план 30/60/90 дней.
 
+**Рабочие поверхности:** [Baserow Company Operations](https://baserow.adapteng.com)
+для статусов/решений и [Shared Drive AdaptEng Company](https://drive.google.com/drive/folders/0AC0RFKG8iI-TUk9PVA)
+для файлов. Новые материалы компании не загружать в личный My Drive; точные
+папки указаны в [`runbooks/company-drive.md`](runbooks/company-drive.md).
+
 В этом репозитории нет клиентских документов, персональных данных, паролей,
 runtime-дампов и копий реализации из других репозиториев. Изменения архитектуры
 делаются через PR и обновляют существующий master-файл, а не создают новый
