@@ -14,6 +14,12 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   revoked it at source (Baserow → API tokens). It no longer authenticates.
 - [x] **Revoke the temporary cleanup token `temporary-test-cleanup-2026-07-26`.**
   ✅ **DONE 2026-07-26** — independent API verification now returns HTTP 401.
+- [ ] **Rotate the self-hosted n8n public API management key after launch work.**
+  It was supplied through chat for the governed workflow build. Revoke it in
+  n8n, issue a new operator key only if continued API administration is needed,
+  and keep the replacement in the password manager/runtime secret store — not
+  Git or chat. Existing encrypted workflow credentials/webhooks do not depend
+  on this management key, so rotation should not interrupt AUT-001/WEB-002.
 - [ ] **Retire credentials in legacy `PalinaRuban/adapteng`.** The historical
   WordPress snapshot tracks `wp-config.php` with database settings/salts and a
   stale Azure deployment workflow references a publish-profile secret. Confirm
