@@ -57,7 +57,7 @@ deferred_or_gated_workflows:
     notes: Existing Marketing Machine lead workflow on n8n Cloud; WEB-002 is the governed self-hosted successor path.
 
 legacy_cloud_authority_dependencies:
-  # Pointers only; the full 81-workflow inventory remains in automation-platform.
+  # Pointers only; the 82 repository exports remain in automation-platform.
   - { id: fTJVvxC0hviQy0im, name: MM-01, dependency: "legacy personal 01_Inbox", cutover: pending }
   - { id: uBVRMTCKwnUG91kU, name: MM-Visual-Evidence-Intake, dependency: "legacy personal 00_Case_Uploads", cutover: pending }
   - { id: sM8lksVuYfMUeC6U, name: MM-40, dependency: "direct GPT-5 Mini draft generation", cutover: "keep inactive until governed AI pilot is accepted" }

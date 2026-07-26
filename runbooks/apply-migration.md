@@ -30,8 +30,23 @@ accordingly.
 
 ## Procedure
 
-1. Fetch the exact migration SQL from `main` (byte-for-byte — never hand-retype):
-   `gh api repos/Ivan-Shyla/adapteng-automation-platform/contents/database/migrations/<file>?ref=main --jq .content | base64 -d`
+1. Fetch the exact migration SQL from `main` (byte-for-byte — never hand-retype).
+   PowerShell:
+   ```powershell
+   $encoded = (gh api `
+     'repos/Ivan-Shyla/adapteng-automation-platform/contents/database/migrations/<file>?ref=main' `
+     --jq .content) -join ''
+   [IO.File]::WriteAllBytes(
+     '<file>',
+     [Convert]::FromBase64String($encoded)
+   )
+   ```
+   POSIX shell:
+   ```bash
+   gh api \
+     'repos/Ivan-Shyla/adapteng-automation-platform/contents/database/migrations/<file>?ref=main' \
+     --jq .content | base64 -d > '<file>'
+   ```
 2. Confirm the backup timestamp (step 2 above) and record it.
 3. Apply through a **governed path** (a one-shot n8n Postgres node against the
    internal DB credential, or the adapter's guarded `RUN_MIGRATIONS_ON_START`
