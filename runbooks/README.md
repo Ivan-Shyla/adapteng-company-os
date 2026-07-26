@@ -19,6 +19,7 @@ can repeat it without rediscovering them.
 
 | Runbook | Use when |
 |---|---|
+| [`company-drive.md`](company-drive.md) | Deciding where photos, case files, drafts and approved artifacts belong; migrating safely from personal Drive. |
 | [`n8n-operations.md`](n8n-operations.md) | Building, activating, or debugging a governed n8n workflow via the API. |
 | [`apply-migration.md`](apply-migration.md) | Applying a Postgres migration to live `adapteng_ops`. |
 | [`backup-and-restore.md`](backup-and-restore.md) | Backing up / restoring `adapteng_ops` before a change. |

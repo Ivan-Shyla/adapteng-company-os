@@ -19,7 +19,7 @@ This matches Gate-0 (2026-07-25) and ADR-0010 (AI Gateway = EU Vertex canonical)
 
 | Model | Input | Output | Residency | Verdict |
 |---|---:|---:|---|---|
-| **Vertex `gemini-3.1-flash-lite`** | **$0.25** | **$1.50** | EU multi-region | **Chosen — first pilot** |
+| **Vertex `gemini-3.1-flash-lite`** | **$0.275** | **$1.65** | EU multi-region (non-global price) | **Chosen — first pilot** |
 | Vertex `gemini-2.5-flash-lite` | $0.10 | $0.40 | EU multi-region | Cheaper Google option for classify/extract |
 | OpenAI `gpt-5-mini` | $0.20 | $1.00 | US / regional* | Fallback-only (not EU-native) |
 | Anthropic `claude-haiku-4.5` | $1.00 | $5.00 | US / global | Fallback-only (pricier, not EU-native) |
@@ -41,7 +41,7 @@ Reference workload: **20k input + 4k output** (a draft).
 
 | Model | Input cost | Output cost | Per call (before FX) | Calls within €10/mo* |
 |---|---:|---:|---:|---:|
-| `gemini-3.1-flash-lite` | $0.0050 | $0.0060 | **≈ $0.011** | ~900 |
+| `gemini-3.1-flash-lite` | $0.0055 | $0.0066 | **≈ $0.0121** | ~825 |
 | `gemini-2.5-flash-lite` | $0.0020 | $0.0016 | **≈ $0.0036** | ~2,700 |
 
 \* Illustrative, USD≈EUR at parity for sizing only; the live gateway uses an

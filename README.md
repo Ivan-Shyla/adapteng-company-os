@@ -30,6 +30,7 @@ runtime-дампов и копий реализации из других реп
 |---|---|
 | Что уже живое / где сервис? | [`registry/services.yaml`](registry/services.yaml), [`registry/workflows.yaml`](registry/workflows.yaml) |
 | Какие таблицы Baserow / миграции применены? | [`registry/data-stores.yaml`](registry/data-stores.yaml) |
+| Куда загружать фото, видео, кейсы и drafts? | [`runbooks/company-drive.md`](runbooks/company-drive.md) |
 | Как безопасно поменять workflow / применить миграцию? | [`runbooks/`](runbooks/) |
 | Как ротировать токен (и почему старый ещё живой)? | [`runbooks/secret-rotation.md`](runbooks/secret-rotation.md) |
 | Что должен сделать Иван? | [`owner/action-items.md`](owner/action-items.md) |

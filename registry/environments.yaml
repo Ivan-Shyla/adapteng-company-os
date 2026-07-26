@@ -25,22 +25,28 @@ domains:
 
 external_saas:
   - name: n8n Cloud
-    role: current authoritative automation runtime (until staged cutover)
+    role: current authority for legacy MM/LM/JM/EC workflows; AUT-001 and WEB-002 already run on self-hosted n8n
+    cost: paid/account-specific; record invoice before decommission decision
   - name: Cloudways WordPress
     role: live website + published content (adapteng-website)
+    cost: paid/account-specific; record invoice
   - name: GoDaddy
     role: domain + DNS
+    cost: paid/account-specific; record invoice/renewal
   - name: Zoho
     role: mail / SMTP (no Gmail migration)
+    cost: paid/account-specific; record invoice/plan
   - name: Google Workspace (Business Standard)
-    role: company documents + Shared Drive (~EUR 13.80/month, 1 user, 2 TB)
+    role: company documents + Shared Drive
+    public_price_reference: ~EUR 13.80/user/month on annual commitment, excluding VAT (rechecked 2026-07-26)
+    actual_cost_rule: invoice/VAT is authoritative
   - name: Google Cloud (Vertex AI + Drive API)
     project: adapteng-workspace-automation
     service_account: adapteng-ai-operator@adapteng-workspace-automation.iam.gserviceaccount.com
     delegation: domain-wide; scope https://www.googleapis.com/auth/drive (delegated to owner primary Workspace user)
     credential_ref: GOOGLE_SERVICE_ACCOUNT_JSON_B64  # Coolify runtime secret; value NEVER in repo
-    role: EU Vertex model access (ai-gateway) + Drive read (drive-adapter, INT-001 reader)
-    status: provided 2026-07-26; consumers not yet deployed (live wiring stays owner/approved-PR gated)
+    role: Drive read/write via DWD now; intended ai-gateway identity only after Vertex IAM/ADC permission is independently verified
+    status: provided 2026-07-26; governed Drive bridge in build; Vertex AI User role/endpoint access not yet evidenced
   - name: GitHub
     role: code, contracts, architecture, evidence
     actions_budget: USD 10/month, hard stop enabled
@@ -56,3 +62,8 @@ budgets:
 
 regions_and_residency:
   data_residency: EU (compute in EU; AI model access via EU Vertex multi-region only — see ai/model-choices.md)
+
+software_fee_classification:
+  n8n_community_self_hosted: EUR 0 software fee; Hetzner infrastructure paid
+  baserow_self_hosted_community: EUR 0 software fee; Hetzner infrastructure paid
+  coolify_self_hosted: no incremental software fee evidenced; infrastructure paid

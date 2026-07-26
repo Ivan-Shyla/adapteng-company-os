@@ -20,11 +20,15 @@ external/high-impact actions.
   `Content_Items` (848) via the governed adapter. The first approval-gated
   action is `external_draft.create`, limited to pending/draft state — it can
   **never publish or send**.
-- **Gate (owner):** ratified claims, style guide, and 2–3 source documents;
-  `AG-007` quality/citation/safety proof; privacy (ZDR), cache-off and FX gates
-  verified. See `owner/action-items.md`.
+- **Gate:** ratified claims/style/sources; `AG-007` quality proof; control-plane
+  production admission/no-external-action hardening; canonical Postgres-backed
+  gateway (never the local in-memory test seam); privacy (ZDR), cache-off, Vertex
+  IAM and FX gates. See `owner/action-items.md`.
 - **Status:** `AI-001` merged (marketing PR #19, deterministic, 106 tests);
-  **no real model call yet**. This is the next AI step once inputs are ratified.
+  **no real model call yet**. First owner-approved source/style exists, but the
+  2026-07-26 production audit blocked live use until the completion path validates
+  the full task envelope, requires `no_external_action`, rejects approval/publish
+  fields, and cannot overspend the cap.
 
 ## 2. Lead triage / enrichment on WEB-002 — SECOND
 

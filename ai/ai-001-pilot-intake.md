@@ -1,7 +1,10 @@
 # AI-001 pilot intake
 
-The single artifact that unblocks the **first AI value** — the draft assistant.
-Fill this in and I run a **measured, inactive** pilot on EU Vertex
+This is the owner/content contract for the **first AI value** — the draft
+assistant. It is necessary but no longer the only live gate: a 2026-07-26
+production-readiness audit found completion-path admission/external-action and
+local budget-gate defects in the control plane. A separate hardening PR must
+land before a **measured, inactive** pilot on EU Vertex
 `gemini-3.1-flash-lite`: **drafts only**, written as `pending/draft` into Baserow
 `Content_Items` (848) through the governed adapter. It can **never publish or
 send**, and a human stays the only approver.
@@ -12,16 +15,63 @@ not invent claims, style, or sources for a real engineering company.
 
 ---
 
-## What I need from you (owner)
+## First owner-approved pilot (2026-07-26)
+
+The owner authorized use of the existing `CASE-2026-001` material and allowed a
+provisional presentation/style choice. The legacy source was inventoried
+read-only: one intake marker, one case note, four HEIC images and two MOV videos.
+The original remains untouched; a governed copy to the company Shared Drive is
+in progress.
+
+### Approved source-bounded claims
+
+1. The work was a service visit at an aluminum plant to confirm measurement
+   quality through parallel measurements.
+2. Two portable analyzers were connected to the existing MKAS gas-analysis
+   system for the comparison.
+3. The instruments use different measurement principles and produced aligned
+   results within their stated measurement uncertainty.
+4. The source identifies Endress+Hauser / SICK equipment in the MKAS system and
+   a Wöhler portable analyzer; exact model numbers are not yet evidenced.
+5. The public client description is limited to **an aluminum plant**. No client
+   name, location, date, measured values or regulated-component claim may be
+   invented.
+
+These are case-specific claims, not blanket claims of accreditation,
+certification, regulatory compliance, guaranteed accuracy or laboratory status.
+
+### Provisional style and artifact
+
+- Primary language: English; factual engineering voice; short paragraphs.
+- First artifact: website article/case draft for industrial plant engineering
+  and maintenance readers, with a restrained LinkedIn derivative later.
+- Structure: client need → parallel-measurement method → bounded result → why
+  independent verification matters → factual CTA.
+- Use vendor names only where technically relevant and trademark them
+  accurately. Never imply vendor endorsement.
+- All photos/video require human privacy/redaction review before external use,
+  even though the owner approved the source set for drafting.
+- Output remains `draft`; no model/workflow may approve, publish or send it.
+
+### Acceptance/red lines for this pilot
+
+- Every technical claim maps to the case note or an explicitly approved image.
+- Missing model numbers, readings, uncertainty values and dates remain marked
+  as missing evidence; they are never guessed.
+- No client identity, personal data, GPS/EXIF, safety conclusion, legal
+  compliance conclusion or performance guarantee.
+- The draft must be useful after human editing and must cost less than €0.10.
+- Publication remains an explicit owner action after source/media review.
+
+## What remains for the owner
 
 1. **Claims register** — the factual claims AdaptEng may state (services,
    capacities, certifications, guarantees). One row per claim; the AI may use
    **only approved** claims and may never invent a capability.
 2. **Style guide** — tone, voice (we / AdaptEng), language(s) (EN / CS / RU?),
    do/don't words, length norms per artifact type.
-3. **2–3 real source documents** — actual case/opportunity material for the first
-   drafts. Upload to the Shared Drive and give the links (or Baserow
-   `Content_Items` / case ids).
+3. **2–3 real source documents** — the first source is now `CASE-2026-001`;
+   add two more after the first controlled draft proves the path.
 4. **Artifact scope** — which first: **case write-up**, **article**, or both? And
    the target audience.
 5. **Acceptance set (AG-007)** — 5–10 worked examples of "good" (input → an
@@ -46,8 +96,9 @@ not invent claims, style, or sources for a real engineering company.
 
 ## What I do once you provide the above
 
-1. Wire `ai-gateway` to EU Vertex using the provided service account
-   (`GOOGLE_SERVICE_ACCOUNT_JSON_B64`), apply migration 005 **with a backup**, and
+1. Verify Vertex IAM/ADC access for the intended runtime identity (the provided
+   SA currently has evidenced Drive DWD scope, not evidenced Vertex permission),
+   wire the canonical `ai-gateway`, apply migration 005 **with a backup**, and
    smoke-test with **no business data**.
 2. Run an **AI-002 shadow eval** on your acceptance set (~20 cases) and report
    quality, cost/call and time-saved — **inactive**, changing no live pipeline.

@@ -4,12 +4,36 @@
 # status vocabulary:
 #   live                     - running in production and proven
 #   infra-live-not-cutover   - infrastructure runs, but not yet the authority
+#   live-partial-authority   - production workload runs here, but other domains remain on a legacy authority
+#   live-legacy-binding      - production service is up but still uses a credential/data binding scheduled for cutover
 #   repo-merged-not-live     - code merged to main, no live deploy/wiring yet
 #   planned                  - designed, not built
 version: 1
 updated: 2026-07-26
 
 services:
+  - id: adapteng-website
+    repo: adapteng-website
+    path: wp-content/themes/adapteng + wp-content/plugins/adapteng-core
+    role: Public website, Fluent Forms lead capture and published content.
+    runtime: Cloudways WordPress
+    endpoint: https://adapteng.com
+    source_of_truth_for: published website content + persisted Fluent Forms entries
+    depends_on: [Cloudways WordPress/PHP/MySQL, Fluent Forms, Slim SEO, Zoho SMTP]
+    status: live
+    owner: Ivan
+    notes: Changes under wp-content auto-deploy from main. Draft PR #78 remains held; payload fits WEB-002 in principle but self-hosted URL/header auth, durable retry, 409 dead-letter and producer E2E are still being hardened.
+
+  - id: postgres-adapteng-ops
+    repo: adapteng-automation-platform
+    path: database/migrations
+    role: Internal operational truth for stable IDs, lead reservations and future run/approval/cost ledgers.
+    runtime: Coolify PostgreSQL 16, internal-only
+    source_of_truth_for: id allocation + lead identity reservation
+    status: live
+    owner: Ivan
+    notes: Migrations 001 and 004 are applied and used; 002/003/005/006 remain unapplied. Fresh backup exists, restore drill remains open.
+
   - id: adapteng-baserow-adapter
     repo: adapteng-automation-platform
     path: services/adapteng-baserow-adapter
@@ -81,10 +105,14 @@ services:
   - id: adapteng-media-worker
     repo: adapteng-marketing
     path: services/adapteng-media-worker
-    role: Marketing media/content intake worker.
-    runtime: Coolify (target); undeployed
-    status: repo-merged-not-live
+    role: Live marketing media/content intake and normalization worker.
+    runtime: Coolify (Hetzner)
+    endpoint: https://media-worker.adapteng.com
+    health: HTTP 200 verified 2026-07-26
+    credential_identity: media-worker@adapteng.iam.gserviceaccount.com (project adapteng; legacy GDRIVE_SA_JSON)
+    status: live-legacy-binding
     owner: Ivan
+    notes: Runtime still uses the old service account/personal-Drive path. The backward-compatible governed consumer is merged but not imported, and the worker has not been redeployed with the new company service account.
 
   - id: n8n-self-hosted
     repo: adapteng-automation-platform (deploy/coolify)
@@ -93,16 +121,16 @@ services:
     endpoint: https://n8n.adapteng.com
     tls: Let's Encrypt, valid to 2026-10-23
     source_of_truth_for: Company OS governed workflows (AUT-001, WEB-002)
-    status: infra-live-not-cutover
+    status: live-partial-authority
     owner: Ivan
-    notes: Hosts the two live governed workflows already. Coolify still deploys from branch palinaruban-repo-status-review; repoint to main is an owner action. n8n Cloud remains the authority for MM/JM/EC domains until staged cutover.
+    notes: Hosts exactly two active governed workflows (AUT-001 and WEB-002). Coolify still deploys from branch palinaruban-repo-status-review; repoint to main is an owner action. n8n Cloud remains the authority for MM/LM/JM/EC domains until staged cutover.
 
   - id: n8n-cloud
     repo: n/a (SaaS)
-    role: Current authoritative automation runtime (Marketing Machine + personal JM/EC).
+    role: Current authority for legacy Marketing Machine/Lead Monitor and personal JM/EC workflows.
     status: live
     owner: Ivan
-    notes: Authority until staged, evidence-based cutover (ARCHITECTURE.md §6.4).
+    notes: Live API verified 89 workflows / 42 active on 2026-07-26 versus 82 repository exports (14 live-only, 7 repo-only). Authority until staged, evidence-based cutover (ARCHITECTURE.md §6.4).
 
   - id: baserow-self-hosted
     repo: adapteng-automation-platform (deploy/coolify)
@@ -123,4 +151,10 @@ services:
     source_of_truth_for: agent run lifecycle + evidence envelope
     status: repo-merged-not-live
     owner: Ivan
-    notes: Business-artifact mode + AG-003 envelope integrity merged. See ai/insertion-points.md for where it plugs into Company OS.
+    notes: >-
+      Business-artifact contracts + AG-003 envelope integrity are merged, but a
+      2026-07-26 production-readiness audit blocked live use: completion must
+      enforce the task envelope/no-external-action fields and the local
+      in-memory gateway must not be used as the persistent budget authority.
+      Hardening PR in progress; canonical live model path remains
+      automation-platform ai-gateway.

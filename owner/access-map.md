@@ -7,12 +7,14 @@ these, follow `runbooks/secret-rotation.md`.
 | Credential (name) | Lives in | Held by | Used by | Rotation status |
 |---|---|---|---|---|
 | `BASEROW_API_TOKEN` (Company Operations) | Coolify env variable | Ivan | baserow-adapter | Rotated 2026-07-25; **old leaked token revoked at source 2026-07-26** (no longer authenticates) |
-| `temporary-test-cleanup-2026-07-26` (Baserow token) | Baserow API tokens | Ivan | one-off synthetic-row cleanup (done 2026-07-26) | **Delete now — cleanup complete (action-items 🔴)** |
+| `temporary-test-cleanup-2026-07-26` (Baserow token) | Revoked at Baserow | Ivan | one-off synthetic-row cleanup (done 2026-07-26) | **Revoked and independently returns 401** |
 | `ADAPTER_SERVICE_TOKEN` (internal bearer) | Coolify env variable | Ivan | governed n8n → adapter | Rotated post-canary 2026-07-25 |
 | `X-Webhook-Token` (n8n webhook header) | n8n `httpHeaderAuth` credential | Ivan | AUT-001, WEB-002 webhooks | Current |
 | `X-N8N-API-KEY` (n8n public API key) | n8n instance; owner-held | Ivan | workflow build/ops | Current; expires per JWT `exp` |
 | Coolify API token | Coolify; owner-held | Ivan | deploy automation | Rotate post-launch (owner action ⚪) |
-| `GOOGLE_SERVICE_ACCOUNT_JSON_B64` (SA `adapteng-ai-operator@adapteng-workspace-automation`) | Coolify runtime secret | Ivan | drive-adapter, integrity-reconciler Drive reader, ai-gateway | Provided 2026-07-26; project `adapteng-workspace-automation`, Drive scope, domain-wide delegation to owner Workspace user. Live wiring still INT-001 approved-PR gated |
+| `GOOGLE_SERVICE_ACCOUNT_JSON_B64` (SA `adapteng-ai-operator@adapteng-workspace-automation`) | Coolify runtime secret | Ivan | governed Drive bridge, drive-adapter, integrity-reconciler Drive reader; intended ai-gateway identity | Provided 2026-07-26; Drive DWD scope verified as configured. Governed Drive bridge is the first live consumer in build; Vertex IAM/ADC permission is not yet evidenced |
+| `GDRIVE_SA_JSON` (SA `media-worker@adapteng.iam.gserviceaccount.com`) | Coolify application env | Ivan | current live media-worker | **Legacy binding** — old project/account; replace after snapshot + canary, then revoke |
+| `ADAPTENG_Google_Drive` (`googleDriveOAuth2Api`) | n8n Cloud credential store | Ivan | current MM source/media workflows | **Legacy OAuth** — reads personal My Drive; does not have corporate Shared Drive write access (404 proven 2026-07-26) |
 | `adapteng_ops` Postgres DSN | internal Coolify network | Ivan | adapter, governed workflows | Internal-only (SSL disabled on internal net) |
 | GitHub repo access | GitHub | Ivan | all repos | Actions budget $10/mo hard stop |
 

@@ -12,12 +12,15 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
 
 - [x] **Revoke the leaked Baserow token `acJgo3…`.** ✅ **DONE 2026-07-26** — owner
   revoked it at source (Baserow → API tokens). It no longer authenticates.
-- [ ] **Revoke the temporary cleanup token `temporary-test-cleanup-2026-07-26`.**
-  - **Why:** issued with delete rights on the `AdaptEng OS` database solely to
-    remove synthetic rows (completed 2026-07-26). A standing broad-scoped token is
-    a liability — delete it now that the cleanup is done.
-  - **How:** Baserow → Settings → API tokens → delete
-    `temporary-test-cleanup-2026-07-26`.
+- [x] **Revoke the temporary cleanup token `temporary-test-cleanup-2026-07-26`.**
+  ✅ **DONE 2026-07-26** — independent API verification now returns HTTP 401.
+- [ ] **Retire credentials in legacy `PalinaRuban/adapteng`.** The historical
+  WordPress snapshot tracks `wp-config.php` with database settings/salts and a
+  stale Azure deployment workflow references a publish-profile secret. Confirm
+  production no longer depends on them, rotate DB credentials/WordPress salts/
+  Zoho app password/Azure profile at the providers, remove repository secrets,
+  disable the stale workflow, then archive the repo. A normal commit cannot
+  revoke values already present in Git history.
 
 ## 🟠 Data hygiene — synthetic test rows
 
@@ -50,16 +53,22 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   cache-off and FX gates. Then a measured, inactive pilot can run on EU Vertex
   `gemini-3.1-flash-lite` (see `ai/model-choices.md`). **← the critical path to
   first AI value; fill in [`ai/ai-001-pilot-intake.md`](../ai/ai-001-pilot-intake.md)
-  and I execute.** Google service account is now provided, so only your content
-  is missing.
-- [ ] **Website producer (automation-platform PR #78)** stays held until:
-  migration plan, origin auth, retention proof, HTTP 409 mapping, durable
-  reconciliation, inactive shadow, and synthetic E2E all pass. When unheld,
-  point it at the **WEB-002** webhook with the header token — the governed
-  intake is already live and proven.
+  and I execute.** The owner-approved `CASE-2026-001` source and a provisional
+  evidence-bounded style/claims set are now recorded in the intake file; review
+  that first pilot rather than starting from a blank questionnaire. This is no
+  longer the only blocker: the 2026-07-26 control-plane audit found production
+  admission/no-external-action/cost-gate gaps; a separate hardening PR is in
+  progress before any live model call.
+- [ ] **Website producer (website PR #78)** stays draft/held. WEB-002 and migration
+  004 are already live; remaining producer gates are exact self-hosted endpoint
+  allowlisting, host-only `X-Webhook-Token`, bounded 5xx/transport retry,
+  409 dead-letter/manual review, Fluent Forms retention/reconciliation, dark
+  feature-flag deployment, actual WordPress-producer E2E and rollback. The PR
+  auto-deploys `wp-content/**`, so these cannot be deferred until after merge.
 - [ ] **self-hosted n8n cutover:** repoint the Coolify source from branch
   `palinaruban-repo-status-review` to `main`, verify auto-deploy, then complete
-  the inactive shadow. n8n Cloud remains the authority until then.
+  the inactive shadow. n8n Cloud remains the authority for MM/LM/JM/EC until
+  each individual cutover is evidenced.
 
 ## ⚪ Standing / Definition-of-Done
 
@@ -70,11 +79,26 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   (`runbooks/apply-migration.md`).
 - [ ] **Baserow off-host export/restore** completion; **Google Workspace**
   Manager/recovery acceptance.
+- [ ] **Workspace recovery/break-glass acceptance:** verify Ivan is Manager of
+  `AdaptEng Company`, create/confirm the Cloud Identity Free break-glass
+  super-admin, enable MFA, and store recovery codes offline. This cannot be
+  proven by a service account.
 - [ ] **Personal JM/EC isolation:** verify live credential/store identity;
   the `ISO-1` waiver expires **2026-08-08**.
+- [ ] **n8n Cloud inventory drift:** live API now reports 89 workflows / 42
+  active versus 82 repository exports (14 live-only, 7 repo-only). Export,
+  sanitize, classify and reconcile before claiming the repository index is
+  authoritative; do not bulk-import/activate during this cleanup.
 - [ ] **Media intake:** approve snapshot/rollback, import the backward-compatible
   consumer first, canary one real case, then redeploy the marketing worker.
+- [ ] **CASE-2026-001 media review:** repository metadata says redaction resolved,
+  but a later live Sheet record says `needs_redaction_review` with a visible
+  coordinate risk. Treat all six media files as blocked from publication until
+  a human reconciles the live status and confirms EXIF/GPS/visual redaction.
 - [ ] **Rotate the Coolify API token** post-launch.
+- [ ] **Record actual invoices/renewals** for Hetzner, Cloudways, n8n Cloud,
+  Zoho, GoDaddy and Workspace. Public list prices are planning evidence; invoices
+  are the cost source of truth.
 - [ ] **GitHub Actions** monthly budget is $10 hard-stop — mind it when queueing
   CI-heavy work.
 
