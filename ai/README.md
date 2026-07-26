@@ -13,6 +13,7 @@ never becomes a new ungoverned write path.
 | File | What it covers |
 |---|---|
 | [`insertion-points.md`](insertion-points.md) | The concrete places AI plugs in, in priority order, and the governance gate at each. |
+| [`ai-001-pilot-intake.md`](ai-001-pilot-intake.md) | **Fill-in intake** for the first pilot — the owner inputs that unblock the draft assistant, plus gates and what runs next. |
 | [`guardrails.md`](guardrails.md) | Non-negotiable safety rules for any AI action (pending-only, no publish, PII, fail-closed). |
 | [`model-choices.md`](model-choices.md) | Chosen model + verified current prices + why it's optimal under EU residency. |
 | [`cost-controls.md`](cost-controls.md) | Budgets, caps, ledger, and kill criteria. |

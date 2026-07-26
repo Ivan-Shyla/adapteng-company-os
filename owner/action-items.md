@@ -48,7 +48,10 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
 - [ ] **AI-001 pilot inputs.** Ratify claims, style guide, 2–3 source documents,
   and pilot config; approve the `AG-007` quality set; verify ZDR privacy,
   cache-off and FX gates. Then a measured, inactive pilot can run on EU Vertex
-  `gemini-3.1-flash-lite` (see `ai/model-choices.md`).
+  `gemini-3.1-flash-lite` (see `ai/model-choices.md`). **← the critical path to
+  first AI value; fill in [`ai/ai-001-pilot-intake.md`](../ai/ai-001-pilot-intake.md)
+  and I execute.** Google service account is now provided, so only your content
+  is missing.
 - [ ] **Website producer (automation-platform PR #78)** stays held until:
   migration plan, origin auth, retention proof, HTTP 409 mapping, durable
   reconciliation, inactive shadow, and synthetic E2E all pass. When unheld,
