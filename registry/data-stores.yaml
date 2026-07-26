@@ -1,0 +1,54 @@
+# AdaptEng Company OS — Data Store Registry
+# Authorities, identifiers and migration state. No secrets, no PII, no row data.
+# Precedence (ADR-0011 platform layer map):
+#   Postgres = operational truth | Baserow = structured collaboration | Drive = document/media evidence
+version: 1
+updated: 2026-07-26
+
+baserow:
+  service: baserow-self-hosted (https://baserow.adapteng.com)
+  workspace: { name: "AdaptEng OS", id: 161 }
+  database: { name: "Company Operations", id: 260 }
+  provisioned: "8 tables / 107 fields / 10 views (idempotent, PR #76)"
+  authority: structured human collaboration (the single human work surface)
+  human_owned_fields:   # NEVER overwritten by any workflow/agent; excluded from reconciliation comparison
+    - Content_Items.content_type
+    - Systems_Automations.health
+  physical_table_aliases:  # two logical kinds share one physical table (intentional)
+    - { logical: [PROJECT, CASE], table: Projects_Cases, id: 845 }
+    - { logical: [CONTENT, CONTENT_GROUP], table: Content_Items, id: 848 }
+  tables:
+    - { name: Organizations,       id: 842, business_id_prefix: AE-ORG }
+    - { name: People,              id: 843, business_id_prefix: AE-PER }
+    - { name: Opportunities,       id: 844, business_id_prefix: AE-OPP }
+    - { name: Projects_Cases,      id: 845, business_id_prefix: AE-WRK }
+    - { name: Actions,             id: 846, business_id_prefix: AE-ACT }
+    - { name: Documents_Evidence,  id: 847, business_id_prefix: AE-DOC }
+    - { name: Content_Items,       id: 848, business_id_prefix: AE-CON }
+    - { name: Systems_Automations, id: 849, business_id_prefix: AE-SYS }
+  id_binding: adapteng-automation-platform config/company-operations.binding.env (non-secret numeric ids, captured on main via PR #77)
+
+postgres_adapteng_ops:
+  service: postgres-adapteng-ops (internal Coolify; SSL disabled on internal network)
+  authority: operational truth — id allocation, lead reservation, run/approval ledger
+  schemas: [public, integrity]
+  migrations:
+    - { file: 001_id_allocator.sql,               provides: "AE-* id allocator (public)",                      live: true,  applied: "adapter first boot (RUN_MIGRATIONS_ON_START)" }
+    - { file: 002_run_ledger.sql,                 provides: "task/run/outcome ledger",                         live: false }
+    - { file: 003_approval_outbox.sql,            provides: "approval ledger + outbox (hash-only tokens)",     live: false }
+    - { file: 004_lead_identity.sql,              provides: "public.lead_identity_reservation + reserve_lead_identity()", live: true, applied: "2026-07-25 (WEB-002); function pins search_path=pg_catalog,public" }
+    - { file: 005_ai_gateway.sql,                 provides: "AI gateway cost/run ledger",                      live: false }
+    - { file: 006_integrity_projection_manifest.sql, provides: "integrity schema: projection_manifest + coverage_marker", live: false, note: "kept unapplied until backup/restore planning per ARCHITECTURE.md §11 + ADR-0011" }
+  backup:
+    last_verified: "2026-07-25 13:31 (35.21 KB, Coolify local + owner download)"
+    policy: back up before applying any migration; see runbooks/backup-and-restore.md
+
+google_drive:
+  authority: document / media evidence
+  shared_drive: provisioned (8 folders)
+  status: base structure provisioned; off-host export/restore + owner/recovery acceptance pending (owner)
+  credentials: Google service account (owner-held; required for integrity-reconciler Drive reader and drive-adapter live use)
+
+precedence_notes:
+  - A business fact's canonical owner is Postgres (ids/ledger), surfaced for humans in Baserow, with evidence in Drive.
+  - The integrity-reconciler (when enabled) compares an expected projection manifest against all three, read-only.

@@ -1,0 +1,53 @@
+# AdaptEng Company OS — Workflow Registry
+# Scope: ONLY the n8n workflows that are part of Company OS live operation.
+# The canonical FULL index of all 81 workflows is:
+#   adapteng-automation-platform/n8n/workflow-index.json  (source of truth)
+# Personal domains (Job Monitor / English Coach) are out of Company scope (ARCHITECTURE.md §6.3).
+# No secrets: webhook paths and tokens are marked, not printed.
+version: 1
+updated: 2026-07-26
+
+canonical_full_index: adapteng-automation-platform/n8n/workflow-index.json  # 81 workflows total
+
+company_os_workflows:
+  - id: NsWG1hD8VmIRRwCv
+    name: AUT-001 Systems Registry (governed upsert)
+    runtime: self-hosted n8n (n8n.adapteng.com)
+    trigger: webhook (header-authenticated, X-Webhook-Token; path secret)
+    calls: adapteng-baserow-adapter (internal http://adapteng-baserow-adapter:8080/v1/upsert)
+    writes: Baserow Systems_Automations (table 849), governed by field ownership
+    governance: idempotent upsert; skipped_human_owned protects human fields (e.g. health)
+    status: live-active
+    proven: 2026-07-25 (created AE-SYS-baserow-adapter, idempotent governed re-run, pure-internal, verified 503 on public)
+    owner: Ivan
+
+  - id: 05ytz5If9kHUOYuA
+    name: WEB-002 Lead Intake (governed)
+    runtime: self-hosted n8n (n8n.adapteng.com)
+    trigger: webhook (header-authenticated, X-Webhook-Token; path secret)
+    input_contract: lead.created v1 (source/consent/language/service/correlation id)
+    pipeline: Validate -> reserve_lead_identity (Postgres) -> FetchRid -> build payloads -> 4x governed upsert (Organization, Person, Opportunity, one-day Action) -> Respond200
+    idempotency: business_id derived from a stable Postgres reservation (public.lead_identity_reservation); retry-safe
+    fail_closed: per-node error outputs route to Respond500 (HTTP 500) so a producer retries instead of silently losing a lead
+    calls: adapteng-baserow-adapter (internal)
+    writes: Baserow Organizations 842 / People 843 / Opportunities 844 / Actions 846
+    status: live-active
+    proven: 2026-07-25 (T1 create, T2 idempotent replay, T3 reservation conflict -> HTTP 409, T4 no-loss -> HTTP 500 -> clean retry; independent Baserow read-back, zero duplicates)
+    owner: Ivan
+    consumer_pending: website producer (automation-platform PR #78) is held; point it at this webhook when unheld.
+
+  - id: 5f501c9b-f912-4a92-b822-ec57259c440c
+    name: Weekly Company OS status
+    runtime: app scheduled workflow (not n8n)
+    trigger: schedule (Mondays 09:00 local)
+    effect: evidence-only refresh of this repo's status PR; NEVER mutates live systems; never auto-merges
+    status: enabled (first scheduled run pending)
+    owner: Ivan
+
+deferred_or_gated_workflows:
+  - name: INT-001 integrity reconcile schedule
+    status: deferred-by-ADR-0011
+    notes: No live schedule / no n8n workflow by design until a future approved PR. See registry/services.yaml integrity-reconciler.
+  - name: MM-18 website lead form intake (n8n Cloud)
+    status: cloud-authority
+    notes: Existing Marketing Machine lead workflow on n8n Cloud; WEB-002 is the governed self-hosted successor path.
