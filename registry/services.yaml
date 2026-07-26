@@ -37,7 +37,7 @@ services:
   - id: adapteng-baserow-adapter
     repo: adapteng-automation-platform
     path: services/adapteng-baserow-adapter
-    role: Governed write path into Baserow Company Operations (allocates AE-* business ids, enforces field ownership + idempotency).
+    role: Governed write path into Baserow Company Operations (allocates AE-* business ids and enforces field ownership).
     runtime: Coolify (Hetzner), internal-only
     endpoint_internal: http://adapteng-baserow-adapter:8080  # /v1/upsert, /healthz
     public_endpoint: none (public URL removed after canary; verified 503)
@@ -47,7 +47,13 @@ services:
     depends_on: [postgres-adapteng-ops (id allocator, migration 001), baserow-company-operations]
     status: live
     owner: Ivan
-    notes: Migration 001 applied on first boot via RUN_MIGRATIONS_ON_START, then flag returned to false. Proven live by AUT-001 + WEB-002.
+    notes: >-
+      Migration 001 applied on first boot via RUN_MIGRATIONS_ON_START, then the
+      flag returned to false. Proven live by AUT-001 + WEB-002. Replay is safe
+      with an explicit business_id and through WEB-002's migration-004 lead
+      reservation. Bare COUNTER creates with business_id omitted allocate a new
+      ID on each call; generic hash-only reservation is in build before
+      automated case/content/document writes.
 
   - id: ai-gateway
     repo: adapteng-automation-platform

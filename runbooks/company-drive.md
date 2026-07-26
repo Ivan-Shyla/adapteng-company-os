@@ -86,3 +86,6 @@ OAuth must not become the long-term write credential.
 4. A replay creates no duplicate folder/file.
 5. Any media intended for publication has a human redaction/privacy review.
 6. Baserow receives only stable IDs, status and Drive links — never the binary.
+   For automatic case/content/document creation, reserve/reuse the business ID
+   from a SHA-256 source identity first. Never retry a COUNTER upsert with
+   `business_id` omitted: that operation intentionally allocates a new ID.
