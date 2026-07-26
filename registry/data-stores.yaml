@@ -18,14 +18,14 @@ baserow:
     - { logical: [PROJECT, CASE], table: Projects_Cases, id: 845 }
     - { logical: [CONTENT, CONTENT_GROUP], table: Content_Items, id: 848 }
   tables:
-    - { name: Organizations,       id: 842, business_id_prefix: AE-ORG }
-    - { name: People,              id: 843, business_id_prefix: AE-PER }
-    - { name: Opportunities,       id: 844, business_id_prefix: AE-OPP }
-    - { name: Projects_Cases,      id: 845, business_id_prefix: AE-WRK }
-    - { name: Actions,             id: 846, business_id_prefix: AE-ACT }
-    - { name: Documents_Evidence,  id: 847, business_id_prefix: AE-DOC }
-    - { name: Content_Items,       id: 848, business_id_prefix: AE-CON }
-    - { name: Systems_Automations, id: 849, business_id_prefix: AE-SYS }
+    - { name: Organizations,       id: 842, business_id_prefixes: [AE-ORG] }
+    - { name: People,              id: 843, business_id_prefixes: [AE-PER] }
+    - { name: Opportunities,       id: 844, business_id_prefixes: [AE-OPP] }
+    - { name: Projects_Cases,      id: 845, business_id_prefixes: [AE-PRJ, AE-CAS] }
+    - { name: Actions,             id: 846, business_id_prefixes: [AE-ACT] }
+    - { name: Documents_Evidence,  id: 847, business_id_prefixes: [AE-DOC] }
+    - { name: Content_Items,       id: 848, business_id_prefixes: [AE-CNT, AE-CGR] }
+    - { name: Systems_Automations, id: 849, business_id_prefixes: [AE-SYS] }
   id_binding: adapteng-automation-platform config/company-operations.binding.env (non-secret numeric ids, captured on main via PR #77)
 
 postgres_adapteng_ops:
