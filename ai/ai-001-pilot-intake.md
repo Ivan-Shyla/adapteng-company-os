@@ -10,8 +10,9 @@ land before a **measured, inactive** pilot on EU Vertex
 send**, and a human stays the only approver.
 
 Why this and not more: AI attaches to the already-governed spine (see
-`insertion-points.md`). The only thing missing is *your* ratified content — I must
-not invent claims, style, or sources for a real engineering company.
+`insertion-points.md`). This file supplies the source/claims/style side of the
+first pilot; the remaining technical gates are the control-plane hardening,
+governed Drive path, canonical AI Gateway and measured evaluation below.
 
 ---
 
@@ -63,20 +64,26 @@ certification, regulatory compliance, guaranteed accuracy or laboratory status.
 - The draft must be useful after human editing and must cost less than €0.10.
 - Publication remains an explicit owner action after source/media review.
 
-## What remains for the owner
+## Ratification still required
 
-1. **Claims register** — the factual claims AdaptEng may state (services,
-   capacities, certifications, guarantees). One row per claim; the AI may use
-   **only approved** claims and may never invent a capability.
-2. **Style guide** — tone, voice (we / AdaptEng), language(s) (EN / CS / RU?),
-   do/don't words, length norms per artifact type.
-3. **2–3 real source documents** — the first source is now `CASE-2026-001`;
-   add two more after the first controlled draft proves the path.
-4. **Artifact scope** — which first: **case write-up**, **article**, or both? And
-   the target audience.
-5. **Acceptance set (AG-007)** — 5–10 worked examples of "good" (input → an
-   acceptable draft) plus **red-lines**: claims/safety/citation rules a draft must
-   never violate.
+The first pilot scope is now fixed: one English website article/case draft for
+industrial plant engineering and maintenance readers, using only the bounded
+claims above. The provisional draft may be generated and stored as
+`DRAFT_NOT_APPROVED`; Ivan still performs the final source/claims/style review
+before any model-assisted revision is accepted or anything is published.
+
+Broader program inputs are not blockers for this first controlled draft:
+
+1. **Company claims register** — factual AdaptEng services, capacities,
+   certifications and guarantees. One row per claim; the AI may use **only
+   approved** claims and may never invent a capability.
+2. **Reusable style guide** — extend the provisional English pilot style to
+   channel/language rules after the first review.
+3. **Additional sources** — add two more real source documents only after this
+   controlled path proves copy, evidence links, review and replay safety.
+4. **Acceptance set (AG-007)** — prepare 5–10 worked examples from approved
+   sources; Ivan ratifies the set before a live model evaluation is allowed to
+   influence a business draft.
 
 ## Shape (so it's directly usable)
 

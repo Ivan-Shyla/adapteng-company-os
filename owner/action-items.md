@@ -48,17 +48,16 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   Finding→Action adapter, the n8n workflow, live manifest wiring, and deployed
   credentials. Keep **migration 006 unapplied** until backup/restore planning.
   Nothing here should be forced by an agent.
-- [ ] **AI-001 pilot inputs.** Ratify claims, style guide, 2–3 source documents,
-  and pilot config; approve the `AG-007` quality set; verify ZDR privacy,
-  cache-off and FX gates. Then a measured, inactive pilot can run on EU Vertex
-  `gemini-3.1-flash-lite` (see `ai/model-choices.md`). **← the critical path to
-  first AI value; fill in [`ai/ai-001-pilot-intake.md`](../ai/ai-001-pilot-intake.md)
-  and I execute.** The owner-approved `CASE-2026-001` source and a provisional
-  evidence-bounded style/claims set are now recorded in the intake file; review
-  that first pilot rather than starting from a blank questionnaire. This is no
-  longer the only blocker: the 2026-07-26 control-plane audit found production
-  admission/no-external-action/cost-gate gaps; a separate hardening PR is in
-  progress before any live model call.
+- [ ] **AI-001 first-pilot ratification.** `CASE-2026-001`, its bounded claims,
+  English website-article scope and provisional style are already recorded in
+  [`ai/ai-001-pilot-intake.md`](../ai/ai-001-pilot-intake.md); no blank
+  questionnaire or extra sources are required to create the first
+  `DRAFT_NOT_APPROVED`. Before a live model-assisted revision, Ivan reviews that
+  pilot contract and ratifies the `AG-007` acceptance set. Technical gates remain
+  ZDR/cache-off/FX verification plus the 2026-07-26 control-plane
+  admission/no-external-action/cost hardening. Then a measured, inactive EU
+  Vertex `gemini-3.1-flash-lite` evaluation may run; publication remains a
+  separate human decision.
 - [ ] **Website producer (website PR #78)** stays draft/held. WEB-002 and migration
   004 are already live; remaining producer gates are exact self-hosted endpoint
   allowlisting, host-only `X-Webhook-Token`, bounded 5xx/transport retry,
