@@ -65,13 +65,13 @@ legacy_cloud_authority_dependencies:
     status: inactive-safety-freeze
     dependency: direct GPT-5 Mini draft generation
     live_safety_fix: "version f753e544: fabricated sample/parser facts removed; no-input execution 15197 failed before model"
-    freeze: "unpublished 2026-07-26; version history retained; no direct model entrypoint active"
+    freeze: "unpublished; Manual Start + Execute Workflow Trigger disabled (draft 72c56b5e); execution API rejects it before a run; version history retained"
     cutover: replace with governed AI Gateway; never reactivate as Company OS AI authority
   - id: z2dYx1mvy9rXOsLY
     name: MM-41
     status: inactive-safety-freeze
     dependency: public n8n form + legacy personal 00_Case_Uploads + MM-40/MM-42/MM-43 chain
-    freeze: "unpublished 2026-07-26; rollback version eeb3a3f3 retained"
+    freeze: "unpublished; Case Intake Form trigger disabled (draft 07d25f5f); execution API rejects it before a run; rollback version eeb3a3f3 retained"
     cutover: replace with authenticated corporate Drive/Baserow intake; do not reactivate the public legacy form
   - { id: ZKxNt2F9LyRiwQZH, name: MM-42, dependency: "legacy personal 00_Case_Uploads + WordPress draft", cutover: pending }
   - { id: l2mvHcqbkaKhGiAr, name: MM-43, dependency: "legacy case package + social draft path", cutover: pending }
