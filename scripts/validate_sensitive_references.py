@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
@@ -51,14 +52,8 @@ CREDENTIAL_PROSE_NAME = re.compile(
     r")\b",
     re.IGNORECASE,
 )
-CREDENTIAL_QUOTED_LITERAL = re.compile(
-    r"`(?P<backtick>[^`\s]+)`"
-    r'|"(?P<double>[^"\s]+)"'
-    r"|'(?P<single>[^'\s]+)'"
-    r"|\u201c(?P<typographic_double>[^\u201d\s]+)\u201d"
-    r"|\u2018(?P<typographic_single>[^\u2019\s]+)\u2019"
-)
-CLAUSE_TERMINATORS = frozenset(".!?;\r\n")
+CLAUSE_TERMINATORS = frozenset(".!?;")
+SENTENCE_FINAL_PUNCTUATION = frozenset(".!?")
 QUOTE_PAIRS = {
     "`": "`",
     '"': '"',
@@ -66,6 +61,20 @@ QUOTE_PAIRS = {
     "\u201c": "\u201d",
     "\u2018": "\u2019",
 }
+ASCII_ESCAPE_AWARE_QUOTES = frozenset({'"', "'"})
+CREDENTIAL_DASH_TRANSLATION = str.maketrans(
+    {
+        "\u2010": "-",
+        "\u2011": "-",
+        "\u2012": "-",
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2015": "-",
+        "\ufe58": "-",
+        "\ufe63": "-",
+        "\uff0d": "-",
+    }
+)
 LEAKED_TOKEN_LITERAL = re.compile(
     r"\b(?:leaked|compromised)\b[^\n`]{0,80}\btoken\b[^\n`]{0,20}`[^`]+`",
     re.IGNORECASE,
@@ -102,6 +111,21 @@ SAFE_LITERAL_LABELS = {
     "owner-only",
     "stored-in-secret-manager",
 }
+
+
+@dataclass(frozen=True)
+class QuotedSpan:
+    start: int
+    end: int
+    content_start: int
+    content_end: int
+
+
+@dataclass(frozen=True)
+class ClauseSegment:
+    start: int
+    end: int
+    quoted_spans: tuple[QuotedSpan, ...]
 
 
 def tracked_files() -> list[Path]:
@@ -149,47 +173,144 @@ def allowed_resource_placeholder(value: str) -> bool:
     )
 
 
-def logical_clause_end(line: str, start: int) -> int:
-    index = start
-    while index < len(line):
-        character = line[index]
-        closing_quote = QUOTE_PAIRS.get(character)
-        if closing_quote is not None:
+def is_escaped(text: str, index: int) -> bool:
+    """Return whether the character at index has an odd backslash prefix."""
+    backslashes = 0
+    cursor = index - 1
+    while cursor >= 0 and text[cursor] == "\\":
+        backslashes += 1
+        cursor -= 1
+    return backslashes % 2 == 1
+
+
+def is_quote_opener(text: str, index: int) -> bool:
+    """Recognize a supported opener without treating apostrophes as quotes."""
+    character = text[index]
+    if character not in QUOTE_PAIRS:
+        return False
+    if character in ASCII_ESCAPE_AWARE_QUOTES and is_escaped(text, index):
+        return False
+    if index + 1 >= len(text) or text[index + 1].isspace():
+        return False
+    if character == "'":
+        if index > 0 and text[index - 1].isalnum():
+            return False
+    return True
+
+
+def scan_clauses(text: str) -> tuple[ClauseSegment, ...]:
+    """Segment clauses and paired literals in one escape-aware pass."""
+    clauses: list[ClauseSegment] = []
+    quoted_spans: list[QuotedSpan] = []
+    clause_start = 0
+    quote_start: int | None = None
+    quote_opener: str | None = None
+    quote_closer: str | None = None
+
+    def finish_clause(end: int, next_start: int) -> None:
+        nonlocal clause_start, quoted_spans
+        if clause_start < end:
+            clauses.append(
+                ClauseSegment(
+                    start=clause_start,
+                    end=end,
+                    quoted_spans=tuple(quoted_spans),
+                )
+            )
+        clause_start = next_start
+        quoted_spans = []
+
+    index = 0
+    while index < len(text):
+        character = text[index]
+
+        if character in "\r\n":
+            next_index = index + 1
             if (
-                character == "'"
-                and index > 0
-                and index + 1 < len(line)
-                and line[index - 1].isalnum()
-                and line[index + 1].isalnum()
+                character == "\r"
+                and next_index < len(text)
+                and text[next_index] == "\n"
             ):
+                next_index += 1
+            finish_clause(index, next_index)
+            quote_start = None
+            quote_opener = None
+            quote_closer = None
+            index = next_index
+            continue
+
+        if quote_start is not None:
+            closes_quote = character == quote_closer
+            if (
+                closes_quote
+                and quote_opener in ASCII_ESCAPE_AWARE_QUOTES
+                and is_escaped(text, index)
+            ):
+                closes_quote = False
+            if closes_quote:
+                quoted_spans.append(
+                    QuotedSpan(
+                        start=quote_start,
+                        end=index + 1,
+                        content_start=quote_start + 1,
+                        content_end=index,
+                    )
+                )
+                terminal_quote = (
+                    index > quote_start + 1
+                    and text[index - 1] in SENTENCE_FINAL_PUNCTUATION
+                    and not is_escaped(text, index - 1)
+                )
+                quote_start = None
+                quote_opener = None
+                quote_closer = None
                 index += 1
+                if terminal_quote:
+                    finish_clause(index, index)
                 continue
-            closing_index = line.find(closing_quote, index + 1)
-            if closing_index != -1:
-                quoted_content = line[index + 1 : closing_index]
-                if "\r" not in quoted_content and "\n" not in quoted_content:
-                    index = closing_index + 1
-                    continue
+            index += 1
+            continue
+
+        if is_quote_opener(text, index):
+            quote_start = index
+            quote_opener = character
+            quote_closer = QUOTE_PAIRS[character]
+            index += 1
+            continue
+
         if character in CLAUSE_TERMINATORS:
-            return index
+            index += 1
+            finish_clause(index, index)
+            continue
+
         index += 1
-    return len(line)
+
+    finish_clause(len(text), len(text))
+    return tuple(clauses)
 
 
 def credential_prose_literals(line: str) -> Iterator[str]:
-    for credential in CREDENTIAL_PROSE_NAME.finditer(line):
-        clause_end = logical_clause_end(line, credential.end())
-        for literal in CREDENTIAL_QUOTED_LITERAL.finditer(
-            line,
-            credential.end(),
-            clause_end,
-        ):
-            value = next(
-                group
-                for group in literal.groups()
-                if group is not None
-            )
-            yield value
+    for clause in scan_clauses(line):
+        clause_text = line[clause.start : clause.end]
+        normalized_clause = clause_text.translate(CREDENTIAL_DASH_TRANSLATION)
+        credential_ends: list[int] = []
+        for credential in CREDENTIAL_PROSE_NAME.finditer(normalized_clause):
+            credential_start = clause.start + credential.start()
+            credential_end = clause.start + credential.end()
+            if any(
+                span.start <= credential_start
+                and credential_end <= span.end
+                for span in clause.quoted_spans
+            ):
+                continue
+            credential_ends.append(credential_end)
+
+        for span in clause.quoted_spans:
+            if not any(end <= span.start for end in credential_ends):
+                continue
+            value = line[span.content_start : span.content_end]
+            if value and not any(character.isspace() for character in value):
+                yield value
 
 
 def inspect_url(raw: str) -> list[str]:
