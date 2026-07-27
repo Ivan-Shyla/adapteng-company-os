@@ -60,6 +60,84 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
         name = "BASEROW_API_" + "TOKEN "
         self.assertEqual([], inspect_line(name + "`host-only`"))
 
+    def test_rejects_cleanup_token_in_normal_prose(self) -> None:
+        line = (
+            "A normal sentence records the cleanup "
+            + "token `"
+            + "synthetic-prose-secret-1234567890"
+            + "` for owner rotation."
+        )
+        self.assertIn("credential-prose-literal", inspect_line(line))
+
+    def test_rejects_related_credential_names_in_prose(self) -> None:
+        literal = "synthetic-prose-secret-1234567890"
+        for credential_name in (
+            "token",
+            "API token",
+            "API key",
+            "secret",
+            "password",
+            "cleanup token",
+            "access token",
+            "bearer token",
+            "credential",
+        ):
+            for quote in ("`", '"', "'"):
+                with self.subTest(credential_name=credential_name, quote=quote):
+                    line = (
+                        "The "
+                        + credential_name
+                        + " was recorded for owner follow-up as "
+                        + quote
+                        + literal
+                        + quote
+                        + " before rotation."
+                    )
+                    self.assertIn("credential-prose-literal", inspect_line(line))
+
+    def test_credential_prose_detector_stays_within_clause(self) -> None:
+        line = (
+            "The cleanup token reference was removed. "
+            + "The unrelated audit label `"
+            + "synthetic-prose-secret-1234567890"
+            + "` remains."
+        )
+        self.assertEqual([], inspect_line(line))
+
+    def test_rejects_generic_secret_prefixed_prose_literal(self) -> None:
+        line = (
+            "The cleanup "
+            + "token `secret:"
+            + "synthetic-prose-secret-1234567890"
+            + "` requires rotation."
+        )
+        self.assertIn("credential-prose-literal", inspect_line(line))
+
+    def test_allows_safe_credential_prose_references(self) -> None:
+        safe_values = (
+            "[REDACTED]",
+            "[REDACTED-CREDENTIAL-VALUE]",
+            "redacted-token-placeholder",
+            "sha256:fingerprint-redacted",
+            "sha256:" + ("a" * 64),
+            "PLACEHOLDER_CREDENTIAL_VALUE",
+            "${CLEANUP_TOKEN}",
+            "{{secret_manager.cleanup_token}}",
+            "env:COMPANY_BASEROW_CLEANUP_TOKEN",
+            "secret-manager:cleanup-token",
+            "stored-in-secret-manager",
+            "owner-managed-host-only",
+        )
+        for value in safe_values:
+            with self.subTest(value=value):
+                line = (
+                    "The cleanup "
+                    + "token `"
+                    + value
+                    + "` is a non-secret reference."
+                )
+                self.assertEqual([], inspect_line(line))
+
     def test_rejects_literal_secret_assignment(self) -> None:
         line = "api_" + "key = " + "synthetic-secret-value-1234567890"
         self.assertIn("literal-secret-assignment", inspect_line(line))

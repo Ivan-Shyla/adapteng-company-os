@@ -42,6 +42,16 @@ CREDENTIAL_NAME_LITERAL = re.compile(
     r"|(?P<bare_value>[A-Za-z0-9_./+=-]{20,})"
     r")"
 )
+CREDENTIAL_PROSE_LITERAL = re.compile(
+    r"\b(?P<name>"
+    r"api[\s_-]+(?:token|key)"
+    r"|(?:cleanup|access|bearer)[\s_-]+token"
+    r"|token|secret|password|credential"
+    r")\b"
+    r"(?P<context>[^.!?;\n`\"']{0,64}?)"
+    r"(?P<quote>[`\"'])(?P<quoted_value>[^`\"'\s]+)(?P=quote)",
+    re.IGNORECASE,
+)
 LEAKED_TOKEN_LITERAL = re.compile(
     r"\b(?:leaked|compromised)\b[^\n`]{0,80}\btoken\b[^\n`]{0,20}`[^`]+`",
     re.IGNORECASE,
@@ -54,6 +64,22 @@ SECRET_QUERY_KEYS = {
     "password",
     "secret",
     "token",
+}
+SAFE_SECRET_REFERENCE = re.compile(
+    r"(?:env(?:ironment)?|secret[-_]?manager|vault|key[-_]?vault)"
+    r"(?::|://|/)[A-Za-z0-9_./${}:-]+",
+    re.IGNORECASE,
+)
+SAFE_HASH_REFERENCE = re.compile(
+    r"(?:md5|sha(?:1|224|256|384|512)|hash|fingerprint)"
+    r"[:=_-][A-Fa-f0-9]{8,128}",
+    re.IGNORECASE,
+)
+SAFE_LITERAL_LABELS = {
+    "host-only",
+    "owner-managed-host-only",
+    "owner-only",
+    "stored-in-secret-manager",
 }
 
 
@@ -75,11 +101,16 @@ def allowed_placeholder(value: str) -> bool:
     normalized = value.strip().lower()
     return (
         normalized in {"false", "none", "null", "true"}
+        or normalized in SAFE_LITERAL_LABELS
+        or normalized in {"[placeholder]", "[redacted]"}
         or normalized.startswith(("<", "$", "{{"))
         or "example" in normalized
         or "fingerprint" in normalized
+        or "hash-redacted" in normalized
         or "placeholder" in normalized
         or "redacted" in normalized
+        or bool(SAFE_SECRET_REFERENCE.fullmatch(value))
+        or bool(SAFE_HASH_REFERENCE.fullmatch(value))
         or bool(re.fullmatch(r"[A-Z][A-Z0-9_]+", value))
     )
 
@@ -144,6 +175,11 @@ def inspect_line(
         value = credential.group("quoted_value") or credential.group("bare_value")
         if not allowed_placeholder(value):
             violations.append("credential-name-literal")
+
+    for credential in CREDENTIAL_PROSE_LITERAL.finditer(line):
+        value = credential.group("quoted_value")
+        if len(value) >= 20 and not allowed_placeholder(value):
+            violations.append("credential-prose-literal")
 
     if LEAKED_TOKEN_LITERAL.search(line):
         violations.append("leaked-token-literal")
