@@ -6,6 +6,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
@@ -42,16 +43,29 @@ CREDENTIAL_NAME_LITERAL = re.compile(
     r"|(?P<bare_value>[A-Za-z0-9_./+=-]{20,})"
     r")"
 )
-CREDENTIAL_PROSE_LITERAL = re.compile(
+CREDENTIAL_PROSE_NAME = re.compile(
     r"\b(?P<name>"
-    r"api[\s_-]+(?:token|key)"
-    r"|(?:cleanup|access|bearer)[\s_-]+token"
+    r"api[ \t_-]+(?:token|key)"
+    r"|(?:cleanup|access|bearer)[ \t_-]+token"
     r"|token|secret|password|credential"
-    r")\b"
-    r"(?P<context>[^.!?;\n`\"']{0,64}?)"
-    r"(?P<quote>[`\"'])(?P<quoted_value>[^`\"'\s]+)(?P=quote)",
+    r")\b",
     re.IGNORECASE,
 )
+CREDENTIAL_QUOTED_LITERAL = re.compile(
+    r"`(?P<backtick>[^`\s]+)`"
+    r'|"(?P<double>[^"\s]+)"'
+    r"|'(?P<single>[^'\s]+)'"
+    r"|\u201c(?P<typographic_double>[^\u201d\s]+)\u201d"
+    r"|\u2018(?P<typographic_single>[^\u2019\s]+)\u2019"
+)
+CLAUSE_TERMINATORS = frozenset(".!?;\r\n")
+QUOTE_PAIRS = {
+    "`": "`",
+    '"': '"',
+    "'": "'",
+    "\u201c": "\u201d",
+    "\u2018": "\u2019",
+}
 LEAKED_TOKEN_LITERAL = re.compile(
     r"\b(?:leaked|compromised)\b[^\n`]{0,80}\btoken\b[^\n`]{0,20}`[^`]+`",
     re.IGNORECASE,
@@ -73,6 +87,13 @@ SAFE_SECRET_REFERENCE = re.compile(
 SAFE_HASH_REFERENCE = re.compile(
     r"(?:md5|sha(?:1|224|256|384|512)|hash|fingerprint)"
     r"[:=_-][A-Fa-f0-9]{8,128}",
+    re.IGNORECASE,
+)
+SAFE_GOVERNED_IDENTIFIER = re.compile(
+    r"AE-[A-Z][A-Z0-9]*-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*"
+)
+SAFE_BOOLEAN_SETTING = re.compile(
+    r"[A-Za-z][A-Za-z0-9_.-]*=(?:false|true|null|none)",
     re.IGNORECASE,
 )
 SAFE_LITERAL_LABELS = {
@@ -111,6 +132,8 @@ def allowed_placeholder(value: str) -> bool:
         or "redacted" in normalized
         or bool(SAFE_SECRET_REFERENCE.fullmatch(value))
         or bool(SAFE_HASH_REFERENCE.fullmatch(value))
+        or bool(SAFE_GOVERNED_IDENTIFIER.fullmatch(value))
+        or bool(SAFE_BOOLEAN_SETTING.fullmatch(value))
         or bool(re.fullmatch(r"[A-Z][A-Z0-9_]+", value))
     )
 
@@ -124,6 +147,49 @@ def allowed_resource_placeholder(value: str) -> bool:
         or "placeholder" in normalized
         or "redacted" in normalized
     )
+
+
+def logical_clause_end(line: str, start: int) -> int:
+    index = start
+    while index < len(line):
+        character = line[index]
+        closing_quote = QUOTE_PAIRS.get(character)
+        if closing_quote is not None:
+            if (
+                character == "'"
+                and index > 0
+                and index + 1 < len(line)
+                and line[index - 1].isalnum()
+                and line[index + 1].isalnum()
+            ):
+                index += 1
+                continue
+            closing_index = line.find(closing_quote, index + 1)
+            if closing_index != -1:
+                quoted_content = line[index + 1 : closing_index]
+                if "\r" not in quoted_content and "\n" not in quoted_content:
+                    index = closing_index + 1
+                    continue
+        if character in CLAUSE_TERMINATORS:
+            return index
+        index += 1
+    return len(line)
+
+
+def credential_prose_literals(line: str) -> Iterator[str]:
+    for credential in CREDENTIAL_PROSE_NAME.finditer(line):
+        clause_end = logical_clause_end(line, credential.end())
+        for literal in CREDENTIAL_QUOTED_LITERAL.finditer(
+            line,
+            credential.end(),
+            clause_end,
+        ):
+            value = next(
+                group
+                for group in literal.groups()
+                if group is not None
+            )
+            yield value
 
 
 def inspect_url(raw: str) -> list[str]:
@@ -176,8 +242,7 @@ def inspect_line(
         if not allowed_placeholder(value):
             violations.append("credential-name-literal")
 
-    for credential in CREDENTIAL_PROSE_LITERAL.finditer(line):
-        value = credential.group("quoted_value")
+    for value in credential_prose_literals(line):
         if len(value) >= 20 and not allowed_placeholder(value):
             violations.append("credential-prose-literal")
 

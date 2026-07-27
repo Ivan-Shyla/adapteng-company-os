@@ -69,6 +69,52 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
         )
         self.assertIn("credential-prose-literal", inspect_line(line))
 
+    def test_rejects_long_same_clause_credential_prose(self) -> None:
+        literal = "synthetic-long-clause-secret-1234567890"
+        filler = (
+            " remains documented through an intentionally extended governance "
+            + "explanation with owner review and containment evidence before value "
+        )
+        line = "The cleanup " + "token" + filler + "`" + literal + "` must rotate."
+        distance = line.index("`") - (line.lower().index("token") + len("token"))
+        self.assertGreater(distance, 64)
+        self.assertIn("credential-prose-literal", inspect_line(line))
+
+    def test_rejects_typographic_credential_prose_literals(self) -> None:
+        literal = "synthetic-typographic-secret-1234567890"
+        for opening, closing in (
+            ("\u201c", "\u201d"),
+            ("\u2018", "\u2019"),
+        ):
+            with self.subTest(opening=opening):
+                line = (
+                    "The access "
+                    + "token "
+                    + opening
+                    + literal
+                    + closing
+                    + " must rotate."
+                )
+                self.assertIn("credential-prose-literal", inspect_line(line))
+
+    def test_rejects_mixed_case_punctuated_credential_prose(self) -> None:
+        line = (
+            "During review, the ClEaNuP-"
+            + "ToKeN, after owner approval, was `"
+            + "synthetic-punctuated-secret-1234567890"
+            + "` and must rotate."
+        )
+        self.assertIn("credential-prose-literal", inspect_line(line))
+
+    def test_clause_scanner_ignores_punctuation_inside_paired_literal(self) -> None:
+        line = (
+            "The cleanup "
+            + "token `"
+            + "synthetic.secret.value.1234567890"
+            + "` must rotate."
+        )
+        self.assertIn("credential-prose-literal", inspect_line(line))
+
     def test_rejects_related_credential_names_in_prose(self) -> None:
         literal = "synthetic-prose-secret-1234567890"
         for credential_name in (
@@ -96,9 +142,31 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                     self.assertIn("credential-prose-literal", inspect_line(line))
 
     def test_credential_prose_detector_stays_within_clause(self) -> None:
+        for separator in (". ", "; ", "! ", "? ", "\n"):
+            with self.subTest(separator=separator):
+                line = (
+                    "The cleanup token reference was removed"
+                    + separator
+                    + "The unrelated audit label `"
+                    + "synthetic-prose-secret-1234567890"
+                    + "` remains."
+                )
+                self.assertEqual([], inspect_line(line))
+
+    def test_credential_prose_detector_requires_paired_quotes(self) -> None:
         line = (
-            "The cleanup token reference was removed. "
-            + "The unrelated audit label `"
+            "The cleanup "
+            + "token \u201c"
+            + "synthetic-mismatched-secret-1234567890"
+            + "\u2019 must rotate."
+        )
+        self.assertEqual([], inspect_line(line))
+
+    def test_newline_terminates_an_open_quoted_context(self) -> None:
+        line = (
+            'The cleanup token "reference'
+            + "\n"
+            + '" The unrelated audit label `'
             + "synthetic-prose-secret-1234567890"
             + "` remains."
         )
@@ -128,16 +196,22 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
             "secret-manager:cleanup-token",
             "stored-in-secret-manager",
             "owner-managed-host-only",
+            "AE-SYS-baserow-adapter",
+            "rejectUnauthorized=false",
         )
-        for value in safe_values:
-            with self.subTest(value=value):
-                line = (
-                    "The cleanup "
-                    + "token `"
-                    + value
-                    + "` is a non-secret reference."
-                )
-                self.assertEqual([], inspect_line(line))
+        quote_pairs = (("`", "`"), ("\u201c", "\u201d"), ("\u2018", "\u2019"))
+        for opening, closing in quote_pairs:
+            for value in safe_values:
+                with self.subTest(value=value, opening=opening):
+                    line = (
+                        "The cleanup "
+                        + "token "
+                        + opening
+                        + value
+                        + closing
+                        + " is a non-secret reference."
+                    )
+                    self.assertEqual([], inspect_line(line))
 
     def test_rejects_literal_secret_assignment(self) -> None:
         line = "api_" + "key = " + "synthetic-secret-value-1234567890"
