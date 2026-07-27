@@ -78,11 +78,18 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   `gemini-3.1-flash-lite` call may run through the canonical gateway. Never
   reactivate or route around frozen direct-model workflow MM-22.
 - [ ] **Website producer (website PR #78)** stays draft/held. WEB-002 and migration
-  004 are already live; remaining producer gates are exact self-hosted endpoint
-  allowlisting, host-only `X-Webhook-Token`, bounded 5xx/transport retry,
-  409 dead-letter/manual review, Fluent Forms retention/reconciliation, dark
-  feature-flag deployment, actual WordPress-producer E2E and rollback. The PR
-  auto-deploys `wp-content/**`, so these cannot be deferred until after merge.
+  004 are already live and the body is compatible in principle, but current
+  transport is unsafe: only the old n8n Cloud allowlist, no host-only
+  `X-Webhook-Token`, no durable retry, no 409 dead-letter and no producer E2E.
+  The PR auto-deploys `wp-content/**`, so these cannot be deferred until after
+  merge. Follow the [producer cutover
+  sequence](../runbooks/n8n-operations.md#website-producer-cutover-safety):
+  preserve flat MM-18 as host-only legacy default; add dark WEB-002
+  URL/token allowlist + auth; store only Fluent Forms entry refs in the outbox;
+  2xx ack, 5xx/transport retry, 409 dead-letter/manual review, other 4xx config
+  alert; actual WordPress T1–T4; atomic flag cutover with no dual-write;
+  seven-day reconciliation; retire MM-18 last. Keep model-provider legal
+  placeholders unpublished.
 - [ ] **self-hosted n8n cutover:** repoint the Coolify source from branch
   `palinaruban-repo-status-review` to `main`, verify auto-deploy, then complete
   the inactive shadow. n8n Cloud remains the authority for MM/LM/JM/EC until

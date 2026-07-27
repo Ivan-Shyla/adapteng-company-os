@@ -45,7 +45,21 @@ company_os_workflows:
     status: live-active
     proven: 2026-07-25 (T1 create, T2 idempotent replay, T3 reservation conflict -> HTTP 409, T4 no-loss -> HTTP 500 -> clean retry; independent Baserow read-back, zero duplicates)
     owner: Ivan
-    consumer_pending: website producer (automation-platform PR #78) is held; point it at this webhook when unheld.
+    consumer_pending: "website producer (adapteng-website PR #78) is held; point it at this webhook when unheld."
+    producer_cutover:
+      producer: "adapteng-website PR #78"
+      compatibility: WEB-002-compatible body in principle
+      status: held-transport-unsafe
+      current_gaps: [old n8n Cloud allowlist only, no host-only X-Webhook-Token, no durable retry, no 409 dead-letter, no producer E2E, wp-content auto-deploy on merge]
+      legacy_default: preserve flat MM-18 behind a host-only flag
+      dark_mode: allowlisted self-hosted WEB-002 URL plus host-only token/header auth
+      outbox: Fluent Forms entry references only
+      response_policy: { "2xx": ack, "5xx_or_transport": retry, "409": dead-letter/manual-review, "other_4xx": config-alert }
+      canary: actual WordPress producer T1-T4
+      cutover: atomic flag switch; no dual-write
+      reconciliation: seven days before retirement
+      retirement: MM-18 last
+      legal_placeholders: model-provider placeholders remain unpublished
 
   - id: 5f501c9b-f912-4a92-b822-ec57259c440c
     name: Weekly Company OS status
@@ -61,7 +75,11 @@ deferred_or_gated_workflows:
     notes: No live schedule / no n8n workflow by design until a future approved PR. See registry/services.yaml integrity-reconciler.
   - name: MM-18 website lead form intake (n8n Cloud)
     status: cloud-authority
-    notes: Existing Marketing Machine lead workflow on n8n Cloud; WEB-002 is the governed self-hosted successor path.
+    notes: >-
+      Existing flat Marketing Machine lead workflow on n8n Cloud. Preserve it
+      as the host-only legacy default while PR #78's WEB-002 mode is dark; never
+      dual-write. Retire MM-18 only after actual WordPress T1-T4, atomic flag
+      cutover and seven-day reconciliation.
 
 non_authority_cloud_safety_freezes:
   - id: d1SDcRTgMqS9Zvgi

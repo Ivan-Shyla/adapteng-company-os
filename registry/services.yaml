@@ -21,8 +21,19 @@ services:
     source_of_truth_for: published website content + persisted Fluent Forms entries
     depends_on: [Cloudways WordPress/PHP/MySQL, Fluent Forms, Slim SEO, Zoho SMTP]
     status: live
+    producer_pr: adapteng-website#78
+    producer_status: held-transport-unsafe
     owner: Ivan
-    notes: Changes under wp-content auto-deploy from main. Draft PR #78 remains held; payload fits WEB-002 in principle but self-hosted URL/header auth, durable retry, 409 dead-letter and producer E2E are still being hardened.
+    notes: >-
+      Changes under wp-content auto-deploy from main. PR #78's body fits WEB-002
+      in principle, but current transport has only the old n8n Cloud allowlist:
+      no host-only X-Webhook-Token, durable retry, 409 dead-letter or producer
+      E2E. Preserve flat MM-18 as the host-only legacy default. Add dark WEB-002
+      URL/token allowlist + auth and a Fluent Forms entry-ref-only outbox. Treat
+      2xx as ack, 5xx/transport as retry, 409 as dead-letter/manual review and
+      other 4xx as config alert. Require actual WordPress T1-T4, atomic
+      no-dual-write flag cutover, seven-day reconciliation and MM-18 retirement
+      last. Model-provider legal placeholders stay unpublished.
 
   - id: postgres-adapteng-ops
     repo: adapteng-automation-platform

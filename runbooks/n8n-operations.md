@@ -14,6 +14,37 @@ the public API. Proven building AUT-001 (`NsWG1hD8VmIRRwCv`) and WEB-002
 - The workflow must **fail closed**: a downstream error must return a non-2xx
   so the producer retries, never an empty 200 (see "The 200-on-error trap").
 
+## Website producer cutover safety
+
+Website PR #78's `lead.created` body is WEB-002-compatible in principle, but its
+current transport is **unsafe and held**: it has only the old n8n Cloud
+allowlist, no host-only `X-Webhook-Token`, no durable retry, no HTTP 409
+dead-letter, and no producer E2E. Merging also auto-deploys `wp-content/**`.
+
+Safe sequence:
+
+1. Preserve the existing flat MM-18 path behind a host-only legacy-default flag.
+2. Add a **dark** WEB-002 mode with an allowlisted self-hosted URL and host-only
+   token/header authentication. Do not send live leads yet.
+3. Persist only Fluent Forms entry references in the producer outbox — no copied
+   lead payload or parallel business authority.
+4. Handle responses exactly: 2xx acknowledges/removes the queued reference;
+   5xx or transport failure stays queued and retries durably; 409 moves to
+   dead-letter/manual review; every other 4xx raises a configuration alert and
+   does not blind-retry.
+5. Run T1–T4 from the **actual WordPress/Fluent Forms producer**, not a direct
+   webhook client: T1 new lead/2xx ack, T2 exact replay/idempotency, T3 conflict/
+   409 dead-letter, T4 injected 5xx or transport failure followed by a clean
+   retry with no loss or duplicate.
+6. Switch the host-only mode flag atomically. Never dual-write to MM-18 and
+   WEB-002.
+7. Reconcile Fluent Forms entry references against Postgres/Baserow outcomes for
+   seven days.
+8. Retire MM-18 last, only after the reconciliation window is clean and rollback
+   is proven.
+
+Keep all model-provider legal placeholders unpublished throughout this cutover.
+
 ## Access
 
 - Base URL: `https://n8n.adapteng.com/api/v1`
