@@ -138,11 +138,12 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   reactivate or route around frozen direct-model workflow MM-22.
 - [ ] **Website producer (website PR #78)** stays draft/held. Head
   `b0e3a656cf6659b893810e11a15b9f515527ab79` is historical last-reviewed
-  evidence only. Current GitHub head
-  `1baedaf732088edcc3fa4e40892d23d42b140d7b` remains draft, unmerged,
-  undeployed and independently **REVIEW-BLOCKED** on seven delivery/data-race
-  issues; it is not review-clean or cutover-ready. Require remediation and a
-  new immutable review-clean head before following the [producer cutover
+  evidence only. Head `1baedaf732088edcc3fa4e40892d23d42b140d7b` is the
+  historical seven-issue-blocked delivery/data-race head. Current GitHub head
+  `a23b194fb72aed51941d9cb1c288cbc7eb2f66a0` remains draft, unmerged and
+  undeployed and awaits fresh independent review. No review-clean or
+  cutover-ready claim is made. Require an exact-head independent review-clean
+  result before following the [producer cutover
   sequence](../runbooks/n8n-operations.md#website-producer-cutover-safety):
   actual WordPress/Fluent Forms producer T1–T4, atomic mode switch with no
   dual-write, seven-day reconciliation and rollback proof; MM-18 retirement
@@ -215,11 +216,13 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   executions and no proven dependency; webhook and lead-write nodes are
   disabled. Active version `644416d5-7f7f-4fa0-b02f-a8c787752617` is retained;
   current draft is `37817f58-e6fb-4876-a076-497ab776413c`, with `active=false`
-  and `active_version_id=null`. Reactivation/replacement requires named
-  accountable owner Ivan, explicit owner approval, authentication, schema
-  validation, rate control and stable deduplication. Production and manual
-  probes for both workflows have `execution_id=null`; the post-freeze execution
-  count is zero. Already-inactive MM-10 `39CAjeKcZD64VM25` and MM-29
+  and `active_version_id=null`. The prior active version and version history
+  remain retained as rollback evidence against the containment draft.
+  Reactivation/replacement requires named accountable owner Ivan, explicit owner
+  approval, authentication, schema validation, rate control and stable
+  deduplication. Production and manual probes for both workflows have
+  `execution_id=null`; the post-freeze execution count is zero. Already-inactive
+  MM-10 `39CAjeKcZD64VM25` and MM-29
   `at9H54krWF9ULdtT` retain drafts
   `22776538-c4eb-4ea3-98e8-eeb1de8c6ea7` and
   `1ca9a60e-9c4f-425c-980f-fedc24d85bf2`; Manual, Schedule and approval-write

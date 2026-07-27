@@ -17,15 +17,30 @@ GOOGLE_RESOURCE_PATH = re.compile(
     r"presentation/d|forms/d)/[^/]+",
     re.IGNORECASE,
 )
-GOOGLE_ID_FIELD = re.compile(
-    r"(?:^|[,{]\s*)(?:id|folder_id|document_id|sheet_id)\s*:\s*"
-    r"[\"']?[A-Za-z0-9_-]{20,}",
+GOOGLE_SCOPED_ID_FIELD = re.compile(
+    r"(?:^\s*|[,{]\s*)(?:id|drive_id|folder_id|document_id|sheet_id)\s*:\s*"
+    r"[\"']?(?P<value>[A-Za-z0-9_-]{20,})",
+    re.IGNORECASE,
+)
+GOOGLE_NAMED_ID_FIELD = re.compile(
+    r"^\s*(?:drive_id|folder_id|document_id|sheet_id)\s*:\s*"
+    r"[\"']?(?P<value>[A-Za-z0-9_-]{20,})",
     re.IGNORECASE,
 )
 SECRET_ASSIGNMENT = re.compile(
     r"\b(?:api[_ -]?key|token|secret|password|private[_ -]?key)\b"
     r"\s*(?:=|:)\s*[\"'`]?(?P<value>[^\s#,\"'`}\]]+)",
     re.IGNORECASE,
+)
+CREDENTIAL_NAME_LITERAL = re.compile(
+    r"\b(?P<name>[A-Z][A-Z0-9_-]*"
+    r"(?:TOKEN|API[_-]?KEY|SECRET|PASSWORD|PRIVATE[_-]?KEY)"
+    r"[A-Z0-9_-]*)\b"
+    r"\s+(?:(?:value|credential)\s+)?(?:is\s+)?"
+    r"(?:"
+    r"(?P<quote>[`\"'])(?P<quoted_value>[^`\"'\s]{20,})(?P=quote)"
+    r"|(?P<bare_value>[A-Za-z0-9_./+=-]{20,})"
+    r")"
 )
 LEAKED_TOKEN_LITERAL = re.compile(
     r"\b(?:leaked|compromised)\b[^\n`]{0,80}\btoken\b[^\n`]{0,20}`[^`]+`",
@@ -69,6 +84,17 @@ def allowed_placeholder(value: str) -> bool:
     )
 
 
+def allowed_resource_placeholder(value: str) -> bool:
+    normalized = value.strip().lower()
+    return (
+        normalized.startswith(("<", "$", "{{"))
+        or "example" in normalized
+        or "fingerprint" in normalized
+        or "placeholder" in normalized
+        or "redacted" in normalized
+    )
+
+
 def inspect_url(raw: str) -> list[str]:
     parsed = urlsplit(raw.rstrip(".,;"))
     violations: list[str] = []
@@ -89,6 +115,42 @@ def inspect_url(raw: str) -> list[str]:
     return violations
 
 
+def inspect_line(
+    line: str,
+    *,
+    yaml_file: bool = False,
+    in_google_drive: bool = False,
+) -> list[str]:
+    violations: list[str] = []
+
+    if yaml_file:
+        named_id = GOOGLE_NAMED_ID_FIELD.search(line)
+        if named_id and not allowed_resource_placeholder(named_id.group("value")):
+            violations.append("raw-google-resource-id")
+
+    if in_google_drive:
+        scoped_id = GOOGLE_SCOPED_ID_FIELD.search(line)
+        if scoped_id and not allowed_resource_placeholder(scoped_id.group("value")):
+            violations.append("raw-google-resource-id")
+
+    for match in URL_PATTERN.finditer(line):
+        violations.extend(inspect_url(match.group(0)))
+
+    for assignment in SECRET_ASSIGNMENT.finditer(line):
+        if not allowed_placeholder(assignment.group("value")):
+            violations.append("literal-secret-assignment")
+
+    for credential in CREDENTIAL_NAME_LITERAL.finditer(line):
+        value = credential.group("quoted_value") or credential.group("bare_value")
+        if not allowed_placeholder(value):
+            violations.append("credential-name-literal")
+
+    if LEAKED_TOKEN_LITERAL.search(line):
+        violations.append("leaked-token-literal")
+
+    return list(dict.fromkeys(violations))
+
+
 def main() -> int:
     violations: list[tuple[Path, int, str]] = []
     for path in tracked_files():
@@ -99,25 +161,20 @@ def main() -> int:
 
         relative = path.relative_to(ROOT)
         in_google_drive = False
+        yaml_file = path.suffix.lower() in {".yaml", ".yml"}
         for number, line in enumerate(lines, 1):
             if relative.as_posix() == "registry/data-stores.yaml":
                 if line == "google_drive:":
                     in_google_drive = True
                 elif in_google_drive and line and not line[0].isspace():
                     in_google_drive = False
-                if in_google_drive and GOOGLE_ID_FIELD.search(line):
-                    violations.append((relative, number, "raw-google-resource-id"))
 
-            for match in URL_PATTERN.finditer(line):
-                for rule in inspect_url(match.group(0)):
-                    violations.append((relative, number, rule))
-
-            assignment = SECRET_ASSIGNMENT.search(line)
-            if assignment and not allowed_placeholder(assignment.group("value")):
-                violations.append((relative, number, "literal-secret-assignment"))
-
-            if LEAKED_TOKEN_LITERAL.search(line):
-                violations.append((relative, number, "leaked-token-literal"))
+            for rule in inspect_line(
+                line,
+                yaml_file=yaml_file,
+                in_google_drive=in_google_drive,
+            ):
+                violations.append((relative, number, rule))
 
     if violations:
         for path, number, rule in violations:

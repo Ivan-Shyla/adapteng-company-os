@@ -23,9 +23,10 @@ services:
     status: live
     producer_pr: adapteng-website#78
     producer_historical_last_reviewed_head: b0e3a656cf6659b893810e11a15b9f515527ab79
-    producer_current_head: 1baedaf732088edcc3fa4e40892d23d42b140d7b
-    producer_status: draft-unmerged-undeployed-independent-review-blocked
-    producer_review_block: seven delivery/data-race issues; current head is not review-clean
+    producer_historical_seven_issue_blocked_head: 1baedaf732088edcc3fa4e40892d23d42b140d7b
+    producer_current_head: a23b194fb72aed51941d9cb1c288cbc7eb2f66a0
+    producer_status: draft-unmerged-undeployed-awaiting-fresh-independent-review
+    producer_review_status: current exact head pending; no review-clean or cutover-ready claim
     legacy_snapshot:
       repository: PalinaRuban/adapteng
       classification: personal-account June-2026 WordPress/Azure snapshot; no active or authoritative production role
@@ -41,13 +42,14 @@ services:
     notes: >-
       Changes under wp-content auto-deploy from main. Head
       b0e3a656cf6659b893810e11a15b9f515527ab79 is historical last-reviewed
-      evidence only. Current GitHub head
-      1baedaf732088edcc3fa4e40892d23d42b140d7b remains draft, unmerged,
-      undeployed and independently review-blocked on seven delivery/data-race
-      issues; it is not review-clean or cutover-ready. Require a new immutable
-      review-clean head plus actual WordPress/Fluent Forms producer T1-T4,
-      atomic no-dual-write cutover, seven-day reconciliation and rollback proof.
-      Model-provider legal placeholders stay unpublished.
+      evidence only. Head 1baedaf732088edcc3fa4e40892d23d42b140d7b is
+      historical seven-issue-blocked evidence for delivery/data-race defects.
+      Current GitHub head a23b194fb72aed51941d9cb1c288cbc7eb2f66a0 remains
+      draft, unmerged and undeployed and awaits fresh independent review; no
+      review-clean or cutover-ready claim is made. Require an exact-head
+      independent review-clean result plus actual WordPress/Fluent Forms
+      producer T1-T4, atomic no-dual-write cutover, seven-day reconciliation and
+      rollback proof. Model-provider legal placeholders stay unpublished.
 
   - id: postgres-adapteng-ops
     repo: adapteng-automation-platform
@@ -219,11 +221,12 @@ services:
       executions and no proven dependency; its webhook and lead-write nodes are
       disabled. Active version 644416d5-7f7f-4fa0-b02f-a8c787752617 is retained;
       current draft is 37817f58-e6fb-4876-a076-497ab776413c, with active false
-      and active_version_id null. Reactivation/replacement requires named
-      accountable owner Ivan, explicit owner approval, authentication, schema
-      validation, rate control and stable deduplication. Production and manual
-      probes for MM-Visual and MM-08 have execution_id null; the post-freeze
-      execution count is zero.
+      and active_version_id null. The prior active version and version history
+      are retained as rollback evidence against the containment draft.
+      Reactivation/replacement requires named accountable owner Ivan, explicit
+      owner approval, authentication, schema validation, rate control and stable
+      deduplication. Production and manual probes for MM-Visual and MM-08 have
+      execution_id null; the post-freeze execution count is zero.
       Already-inactive MM-10 39CAjeKcZD64VM25 and MM-29 at9H54krWF9ULdtT also
       have Manual, Schedule and approval-write nodes disabled as
       defense-in-depth, with no count effect. Their retained drafts are

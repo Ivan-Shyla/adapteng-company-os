@@ -62,16 +62,21 @@ company_os_workflows:
     status: live-active
     proven: 2026-07-25 (T1 create, T2 idempotent replay, T3 reservation conflict -> HTTP 409, T4 no-loss -> HTTP 500 -> clean retry; independent Baserow read-back, zero duplicates)
     owner: Ivan
-    consumer_pending: "website producer PR #78 remains draft, unmerged, undeployed and review-blocked; do not cut over from its current head."
+    consumer_pending: "website producer PR #78 remains draft, unmerged and undeployed; its current head awaits fresh independent review and must not be cut over."
     producer_cutover:
       producer: "adapteng-website PR #78"
       historical_last_reviewed_head: b0e3a656cf6659b893810e11a15b9f515527ab79
-      current_github_head: 1baedaf732088edcc3fa4e40892d23d42b140d7b
-      status: draft-unmerged-undeployed-independent-review-blocked
-      independent_review: { status: blocked, issue_count: 7, class: delivery-and-data-race }
-      readiness: current head is not review-clean and is not cutover-ready
+      historical_seven_issue_blocked_head: 1baedaf732088edcc3fa4e40892d23d42b140d7b
+      current_github_head: a23b194fb72aed51941d9cb1c288cbc7eb2f66a0
+      status: draft-unmerged-undeployed-awaiting-fresh-independent-review
+      independent_review:
+        current_head_status: pending
+        historical_blocked_head: 1baedaf732088edcc3fa4e40892d23d42b140d7b
+        historical_issue_count: 7
+        historical_issue_class: delivery-and-data-race
+      readiness: no review-clean or cutover-ready claim; the exact current head must receive a fresh independent review-clean result
       historical_controls_at_last_reviewed_head: [randomized producer route, header authentication, identity-only durable mode-bound outbox, legacy-default flat MM-18 compatibility, transport/5xx retry, terminal 409 and other-4xx handling]
-      remaining_evidence: [new immutable review-clean head, actual WordPress/Fluent Forms producer T1-T4, atomic no-dual-write cutover, seven-day reconciliation, rollback proof, wp-content deployment]
+      remaining_evidence: [exact-head independent review-clean result, actual WordPress/Fluent Forms producer T1-T4, atomic no-dual-write cutover, seven-day reconciliation, rollback proof, wp-content deployment]
       legacy_default: flat MM-18 remains the default until atomic cutover
       dark_mode: randomized producer route plus header authentication; values remain host-only
       outbox: durable identity-only Fluent Forms formId:entryId references bound to one delivery mode
@@ -148,6 +153,11 @@ legacy_cloud_authority_dependencies:
       production_probe: { result: rejected_before_execution_creation, execution_id: null }
       manual_probe: { result: rejected_before_execution_creation, execution_id: null }
       post_freeze_execution_count: 0
+      rollback:
+        retained: true
+        version_id: 644416d5-7f7f-4fa0-b02f-a8c787752617
+        version_history_retained: true
+        containment_draft_version_id: 37817f58-e6fb-4876-a076-497ab776413c
     accountable_owner: Ivan
     owner_approval_required: true
     replacement_gate: named accountable owner Ivan and explicit owner approval, authentication, schema validation, rate control and stable deduplication

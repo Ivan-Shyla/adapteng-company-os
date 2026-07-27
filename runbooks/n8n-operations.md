@@ -42,7 +42,8 @@ reactivate it until a founder/principal allowlist precedes every command and
 media-worker is reachable only from validated-ready output. Keep MM-08's
 webhook and lead-write nodes disabled. Reactivation/replacement requires named
 accountable owner Ivan, explicit owner approval, authentication, schema
-validation, rate control and stable deduplication.
+validation, rate control and stable deduplication. Preserve its prior active
+version and version history as rollback evidence against the containment draft.
 
 MCP exposure is a separate control plane and remains unresolved. Audited
 workflows still have **Available in MCP** enabled because the available update
@@ -78,16 +79,19 @@ model call, publication, website cutover or other live mutation.
 ## Website producer cutover safety
 
 Website PR #78 head `b0e3a656cf6659b893810e11a15b9f515527ab79` is historical
-last-reviewed evidence only. Current GitHub head
-`1baedaf732088edcc3fa4e40892d23d42b140d7b` remains **draft, unmerged,
-undeployed and independently REVIEW-BLOCKED** on seven delivery/data-race
-issues. It is not review-clean or cutover-ready.
+last-reviewed evidence only. Head
+`1baedaf732088edcc3fa4e40892d23d42b140d7b` is historical evidence of the
+seven delivery/data-race review blockers. Current GitHub head
+`a23b194fb72aed51941d9cb1c288cbc7eb2f66a0` remains **draft, unmerged and
+undeployed** and awaits fresh independent review. No review-clean or
+cutover-ready claim is made.
 
 Safe sequence:
 
-1. Keep PR #78 draft/unmerged and preserve flat MM-18 as the default. Resolve all
-   seven review issues and require a **new immutable review-clean head** before
-   considering a cutover window.
+1. Keep PR #78 draft/unmerged and preserve flat MM-18 as the default. Require a
+   fresh independent **review-clean result on the exact current head** before
+   considering a cutover window; any subsequent change invalidates that result
+   and requires another exact-head review.
 2. Keep producer routing/authentication values only in encrypted host config;
    never copy them into Git, PR text or logs.
 3. On the new review-clean head, stage self-hosted mode without dual-write.
