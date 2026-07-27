@@ -14,11 +14,15 @@ live_counts:
 cloud_pre_freeze_audit: { total: 89, active: 33, verified: 2026-07-27 }
 cloud_active_freeze_chain: "42 -> 40 -> 38 -> 37 -> 36 -> 35 -> 34 -> 33 -> 31"
 freeze_fail_closed_evidence:
-  earlier_workflows: [d1SDcRTgMqS9Zvgi, J5SpIS8Ye8JHViFi, 4D9UBruS1ZhLn1pS, o9Lj7F9WbhFSCARq, clPtSQwzze8DHEvp]
-  latest_workflows: [uBVRMTCKwnUG91kU, RAPjKSnj6EY7axtb]
-  manual_mode: rejected before execution creation
-  production: rejected before execution creation
-  latest_post_freeze_executions: none
+  earlier:
+    workflows: [d1SDcRTgMqS9Zvgi, J5SpIS8Ye8JHViFi, 4D9UBruS1ZhLn1pS, o9Lj7F9WbhFSCARq, clPtSQwzze8DHEvp]
+    production_probe: { result: rejected_before_execution_creation, execution_id: null }
+    manual_probe: { result: rejected_before_execution_creation, execution_id: null }
+  latest:
+    workflows: [uBVRMTCKwnUG91kU, RAPjKSnj6EY7axtb]
+    production_probe: { result: rejected_before_execution_creation, execution_id: null }
+    manual_probe: { result: rejected_before_execution_creation, execution_id: null }
+    post_freeze_execution_count: 0
   conclusion: fail-closed freeze verified in both modes
 
 systemic_mcp_exposure:
@@ -58,16 +62,18 @@ company_os_workflows:
     status: live-active
     proven: 2026-07-25 (T1 create, T2 idempotent replay, T3 reservation conflict -> HTTP 409, T4 no-loss -> HTTP 500 -> clean retry; independent Baserow read-back, zero duplicates)
     owner: Ivan
-    consumer_pending: "website producer (adapteng-website PR #78) remains draft/unmerged/undeployed; point it at this webhook only during the approved cutover."
+    consumer_pending: "website producer PR #78 remains draft, unmerged, undeployed and review-blocked; do not cut over from its current head."
     producer_cutover:
       producer: "adapteng-website PR #78"
-      reviewed_head: b0e3a656cf6659b893810e11a15b9f515527ab79
-      compatibility: WEB-002 producer controls implemented in reviewed draft
-      status: draft-unmerged-undeployed-cutover-unproven
-      implemented_controls: [randomized /webhook/web002-lead-<8 lowercase hex> allowlist, X-Webhook-Token, identity-only durable mode-bound outbox, legacy-default flat MM-18 compatibility, transport/5xx retry, terminal 409 and other-4xx handling]
-      remaining_evidence: [actual WordPress/Fluent Forms producer T1-T4, atomic no-dual-write cutover, seven-day reconciliation, rollback proof, wp-content deployment]
+      historical_last_reviewed_head: b0e3a656cf6659b893810e11a15b9f515527ab79
+      current_github_head: 1baedaf732088edcc3fa4e40892d23d42b140d7b
+      status: draft-unmerged-undeployed-independent-review-blocked
+      independent_review: { status: blocked, issue_count: 7, class: delivery-and-data-race }
+      readiness: current head is not review-clean and is not cutover-ready
+      historical_controls_at_last_reviewed_head: [randomized producer route, header authentication, identity-only durable mode-bound outbox, legacy-default flat MM-18 compatibility, transport/5xx retry, terminal 409 and other-4xx handling]
+      remaining_evidence: [new immutable review-clean head, actual WordPress/Fluent Forms producer T1-T4, atomic no-dual-write cutover, seven-day reconciliation, rollback proof, wp-content deployment]
       legacy_default: flat MM-18 remains the default until atomic cutover
-      dark_mode: "allowlisted https://n8n.adapteng.com/webhook/web002-lead-<8 lowercase hex> plus X-Webhook-Token"
+      dark_mode: randomized producer route plus header authentication; values remain host-only
       outbox: durable identity-only Fluent Forms formId:entryId references bound to one delivery mode
       response_policy: { "2xx": ack, "5xx_or_transport": retry, "409": terminal-identity-review, "other_4xx": terminal-config-validation }
       canary: actual WordPress/Fluent Forms producer T1-T4 not yet proven
@@ -96,7 +102,7 @@ deferred_or_gated_workflows:
       dual-write. Retire MM-18 only after actual WordPress T1-T4, atomic flag
       cutover and seven-day reconciliation.
     freeze_decision: do not freeze now; recent successful webhooks prove this is the current website lead path
-    cutover_gate: reviewed randomized-path/header-auth WEB-002 producer cutover proven atomically
+    cutover_gate: new immutable review-clean WEB-002 producer head plus actual producer T1-T4, atomic no-dual-write cutover and rollback proof
 
 non_authority_cloud_safety_freezes:
   - id: d1SDcRTgMqS9Zvgi
@@ -116,9 +122,15 @@ legacy_cloud_authority_dependencies:
     status: inactive-safety-freeze
     dependency: legacy personal 00_Case_Uploads
     risk: published Telegram route lacked a principal allowlist and reached media-worker before a disconnected marker/schema/ready branch
-    freeze: old published version retained for audit; Manual, Telegram and worker nodes disabled; workflow unpublished
-    probes: manual/draft and production rejected without an execution id
-    post_freeze_executions: none
+    freeze: old published version retained for audit/rollback; Manual, Telegram and worker nodes disabled; workflow unpublished
+    containment_evidence:
+      previous_published_version_id: dda7f039-764c-449d-9f0e-4c8badb44919
+      current_draft_version_id: 3093a3bf-0567-4cb3-9956-56020dc4713c
+      active: false
+      active_version_id: null
+      production_probe: { result: rejected_before_execution_creation, execution_id: null }
+      manual_probe: { result: rejected_before_execution_creation, execution_id: null }
+      post_freeze_execution_count: 0
     reactivation_gate: founder/principal allowlist precedes every command and media-worker is reachable only from validated-ready output
     cutover: replace with governed corporate intake; do not reactivate before the gate
   - id: RAPjKSnj6EY7axtb
@@ -128,9 +140,17 @@ legacy_cloud_authority_dependencies:
     execution_history: zero executions
     proven_dependency: none
     freeze: webhook and lead-write nodes disabled; workflow unpublished
-    probes: manual/draft and production rejected without an execution id
-    post_freeze_executions: none
-    replacement_gate: authentication, schema validation, rate limiting and stable deduplication
+    containment_evidence:
+      previous_active_version_id: 644416d5-7f7f-4fa0-b02f-a8c787752617
+      current_draft_version_id: 37817f58-e6fb-4876-a076-497ab776413c
+      active: false
+      active_version_id: null
+      production_probe: { result: rejected_before_execution_creation, execution_id: null }
+      manual_probe: { result: rejected_before_execution_creation, execution_id: null }
+      post_freeze_execution_count: 0
+    accountable_owner: Ivan
+    owner_approval_required: true
+    replacement_gate: named accountable owner Ivan and explicit owner approval, authentication, schema validation, rate control and stable deduplication
   - id: sM8lksVuYfMUeC6U
     name: MM-40
     status: inactive-safety-freeze
@@ -193,11 +213,21 @@ legacy_cloud_authority_dependencies:
     status: inactive-defense-in-depth
     active_count_effect: unchanged; already inactive
     hardening: Manual, Schedule and approval-write nodes disabled
+    containment_evidence:
+      current_draft_version_id: 22776538-c4eb-4ea3-98e8-eeb1de8c6ea7
+      active: false
+      active_version_id: null
+      history: prior versions retained
   - id: at9H54krWF9ULdtT
     name: MM-29
     status: inactive-defense-in-depth
     active_count_effect: unchanged; already inactive
     hardening: Manual, Schedule and approval-write nodes disabled
+    containment_evidence:
+      current_draft_version_id: 1ca9a60e-9c4f-425c-980f-fedc24d85bf2
+      active: false
+      active_version_id: null
+      history: prior versions retained
   - { id: T3WHl2kCkPiPOPQd, name: MM-30, dependency: "deterministic draft builder", status: inactive }
 
 harden_before_freeze:

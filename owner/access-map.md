@@ -6,8 +6,8 @@ these, follow `runbooks/secret-rotation.md`.
 
 | Credential (name) | Lives in | Held by | Used by | Rotation status |
 |---|---|---|---|---|
-| `BASEROW_API_TOKEN` (Company Operations) | Coolify env variable | Ivan | baserow-adapter | Rotated 2026-07-25; **old leaked token revoked at source 2026-07-26** (no longer authenticates) |
-| `temporary-test-cleanup-2026-07-26` (Baserow token) | Revoked at Baserow | Ivan | one-off synthetic-row cleanup (done 2026-07-26) | **Revoked and independently returns 401** |
+| `baserow-company-os-primary` (fingerprint redacted) | Provider + runtime secret store | Ivan | baserow-adapter | **COMPROMISED** - literal value remains in Git history; owner revoke/rotate and old-value failure verification pending |
+| Baserow temporary cleanup token (name/fingerprint redacted) | Provider | Ivan | one-off synthetic-row cleanup (done 2026-07-26) | Revocation evidence retained; no literal reference in Git |
 | `ADAPTER_SERVICE_TOKEN` (internal bearer) | Coolify env variable | Ivan | governed n8n → adapter | Rotated post-canary 2026-07-25 |
 | `X-Webhook-Token` (n8n webhook header) | n8n `httpHeaderAuth` credential | Ivan | AUT-001, WEB-002 webhooks | Current |
 | `X-N8N-API-KEY` (n8n public API key) | n8n instance; owner-held | Ivan | workflow build/ops | Current; expires per JWT `exp` |
@@ -29,5 +29,6 @@ these, follow `runbooks/secret-rotation.md`.
 ## Reference-by-name pattern
 
 Consumers read secrets at runtime, e.g. Coolify:
-`BASEROW_API_TOKEN={{environment.BASEROW_API_TOKEN}}`. The repo references the
-**name** `BASEROW_API_TOKEN`; the value is only ever in Coolify.
+`BASEROW_API_TOKEN={{environment.BASEROW_API_TOKEN}}`. Current tracked files
+reference only the **name** `BASEROW_API_TOKEN`; a historical literal remains
+compromised until the owner completes rotation and old-value failure proof.

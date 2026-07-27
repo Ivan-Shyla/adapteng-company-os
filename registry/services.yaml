@@ -22,8 +22,10 @@ services:
     depends_on: [Cloudways WordPress/PHP/MySQL, Fluent Forms, Slim SEO, Zoho SMTP]
     status: live
     producer_pr: adapteng-website#78
-    producer_reviewed_head: b0e3a656cf6659b893810e11a15b9f515527ab79
-    producer_status: draft-unmerged-undeployed-cutover-unproven
+    producer_historical_last_reviewed_head: b0e3a656cf6659b893810e11a15b9f515527ab79
+    producer_current_head: 1baedaf732088edcc3fa4e40892d23d42b140d7b
+    producer_status: draft-unmerged-undeployed-independent-review-blocked
+    producer_review_block: seven delivery/data-race issues; current head is not review-clean
     legacy_snapshot:
       repository: PalinaRuban/adapteng
       classification: personal-account June-2026 WordPress/Azure snapshot; no active or authoritative production role
@@ -37,16 +39,15 @@ services:
       archive_gate: fresh encrypted current CMS/database/media export plus company ownership transfer
     owner: Ivan
     notes: >-
-      Changes under wp-content auto-deploy from main. Reviewed PR #78 draft head
-      b0e3a656cf6659b893810e11a15b9f515527ab79 implements the randomized
-      /webhook/web002-lead-<8 lowercase hex> allowlist, X-Webhook-Token,
-      identity-only durable mode-bound outbox, legacy-default flat MM-18
-      compatibility, transport/5xx retry, 409 terminal identity review and
-      other-4xx terminal configuration/validation handling. It remains draft,
-      unmerged and undeployed. Actual WordPress/Fluent Forms producer T1-T4,
-      atomic no-dual-write cutover, seven-day reconciliation, rollback proof and
-      MM-18 retirement remain unproven. Model-provider legal placeholders stay
-      unpublished.
+      Changes under wp-content auto-deploy from main. Head
+      b0e3a656cf6659b893810e11a15b9f515527ab79 is historical last-reviewed
+      evidence only. Current GitHub head
+      1baedaf732088edcc3fa4e40892d23d42b140d7b remains draft, unmerged,
+      undeployed and independently review-blocked on seven delivery/data-race
+      issues; it is not review-clean or cutover-ready. Require a new immutable
+      review-clean head plus actual WordPress/Fluent Forms producer T1-T4,
+      atomic no-dual-write cutover, seven-day reconciliation and rollback proof.
+      Model-provider legal placeholders stay unpublished.
 
   - id: postgres-adapteng-ops
     repo: adapteng-automation-platform
@@ -196,8 +197,11 @@ services:
       rows and updated 0; MM-05 execution 15216 found 0 approved drafts.
       MM-Visual-Evidence-Intake uBVRMTCKwnUG91kU is now unpublished because its
       Telegram route lacked a principal allowlist and could reach media-worker
-      before validated-ready output. Its old published version is retained for
-      audit; Manual, Telegram and worker nodes are disabled. Read-only audit
+      before validated-ready output. Published version
+      dda7f039-764c-449d-9f0e-4c8badb44919 is retained for audit/rollback;
+      current draft is 3093a3bf-0567-4cb3-9956-56020dc4713c, with active false
+      and active_version_id null. Manual, Telegram and worker nodes are disabled.
+      Read-only audit
       Q2PmbE2VDffRl1iT found 179 synthetic Approval_Log rows; archived cleanup
       workflow a3luyFSBH9xRELDW matched 179 in dry-run 15548, deleted exactly
       ids 1-179 in live execution 15549, and matched 0 in verification 15550.
@@ -213,22 +217,30 @@ services:
       reject before execution creation. MM-08 RAPjKSnj6EY7axtb is also
       unpublished: it was an unauthenticated public write ingress with zero
       executions and no proven dependency; its webhook and lead-write nodes are
-      disabled. Manual/draft and production probes for MM-Visual and MM-08
-      rejected without an execution id, and no post-freeze executions appeared.
+      disabled. Active version 644416d5-7f7f-4fa0-b02f-a8c787752617 is retained;
+      current draft is 37817f58-e6fb-4876-a076-497ab776413c, with active false
+      and active_version_id null. Reactivation/replacement requires named
+      accountable owner Ivan, explicit owner approval, authentication, schema
+      validation, rate control and stable deduplication. Production and manual
+      probes for MM-Visual and MM-08 have execution_id null; the post-freeze
+      execution count is zero.
       Already-inactive MM-10 39CAjeKcZD64VM25 and MM-29 at9H54krWF9ULdtT also
       have Manual, Schedule and approval-write nodes disabled as
-      defense-in-depth, with no count effect. Systemic MCP exposure remains
+      defense-in-depth, with no count effect. Their retained drafts are
+      22776538-c4eb-4ea3-98e8-eeb1de8c6ea7 and
+      1ca9a60e-9c4f-425c-980f-fedc24d85bf2; both remain inactive and prior
+      history is retained. Systemic MCP exposure remains
       unresolved: audited workflows still have Available in MCP enabled because
       the workflow update API rejected that unsupported field. Instance-level
       MCP plus per-workflow availability and an authenticated user exposes
       supported workflows; disabling availability does not stop normal triggers.
-      Keep MM-18 active until the reviewed randomized-path/header-auth WEB-002
-      producer cutover is atomically proven. Before further freezes, harden
-      EC-02 principal access, MM-20/MM-24 approval/dependency/idempotency, MM-07
-      redacted allowlist logging and JM-09 suppression publication with error
-      bindings preserved. This registry update performed no payload/credential
-      review, model call, publication, website cutover or live mutation
-      (ARCHITECTURE.md §6.3).
+      Keep MM-18 active until a new immutable review-clean WEB-002 producer head
+      plus actual producer T1-T4, atomic no-dual-write cutover and rollback proof
+      are complete. Before further freezes, harden EC-02 principal access,
+      MM-20/MM-24 approval/dependency/idempotency, MM-07 redacted allowlist
+      logging and JM-09 suppression publication with error bindings preserved.
+      This registry update performed no payload/credential review, model call,
+      publication, website cutover or live mutation (ARCHITECTURE.md §6.3).
 
   - id: baserow-self-hosted
     repo: adapteng-automation-platform (deploy/coolify)

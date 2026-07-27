@@ -6,7 +6,7 @@
   интерфейс, хранилище, автоматизации, AI-контур и план 30/60/90 дней.
 
 **Рабочие поверхности:** [Baserow Company Operations](https://baserow.adapteng.com)
-для статусов/решений и [Shared Drive AdaptEng Company](https://drive.google.com/drive/folders/0AC0RFKG8iI-TUk9PVA)
+для статусов/решений и [Shared Drive AdaptEng Company](runbooks/company-drive.md#governed-folder-aliases)
 для файлов. Новые материалы компании не загружать в личный My Drive; точные
 папки указаны в [`runbooks/company-drive.md`](runbooks/company-drive.md).
 

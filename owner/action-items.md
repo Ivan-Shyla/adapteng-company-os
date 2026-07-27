@@ -10,9 +10,14 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
 
 ## 🔴 Security — do first
 
-- [x] **Revoke the leaked Baserow token `acJgo3…`.** ✅ **DONE 2026-07-26** — owner
-  revoked it at source (Baserow → API tokens). It no longer authenticates.
-- [x] **Revoke the temporary cleanup token `temporary-test-cleanup-2026-07-26`.**
+- [ ] **URGENT - revoke and rotate the compromised Baserow API token**
+  (`baserow-company-os-primary`; fingerprint redacted). Its literal value
+  was committed to Git history and must be treated as compromised. Owner
+  only: revoke it at the provider, issue and install a least-privilege
+  replacement, then verify the old value fails. Current tracked files are
+  sanitized, but rotation is not complete or evidenced; do not rewrite history.
+- [x] **Revoke the temporary Baserow cleanup token** (secret
+  name/fingerprint redacted).
   ✅ **DONE 2026-07-26** — independent API verification now returns HTTP 401.
 - [ ] **Rotate the self-hosted n8n public API management key after launch work.**
   It was supplied through chat for the governed workflow build. Revoke it in
@@ -30,11 +35,11 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   normal webhook, schedule, manual or internal triggers.
 - [ ] **Harden live paths before any further freeze decision.** Do not freeze
   MM-18 while recent successful webhooks prove it is the current website lead
-  path; retain it until the reviewed randomized-path/header-auth WEB-002
-  producer cutover is proven atomically. Add an EC-02 principal allowlist before
-  models; repair MM-20/MM-24 approval, dependency and idempotency controls; make
-  MM-07 allowlist logging redacted; and publish JM-09's suppression fix while
-  preserving error bindings.
+  path; retain it until a new immutable review-clean WEB-002 producer head plus
+  actual producer T1-T4, atomic no-dual-write cutover and rollback proof are
+  complete. Add an EC-02 principal allowlist before models; repair MM-20/MM-24
+  approval, dependency and idempotency controls; make MM-07 allowlist logging
+  redacted; and publish JM-09's suppression fix while preserving error bindings.
 - [ ] **Enable minimal solo-safe `main` protection in repository Settings/Rules.**
   Re-verified 2026-07-27: `main` is **unprotected** in
   `Ivan-Shyla/adapteng-company-os`, `adapteng-automation-platform`,
@@ -131,19 +136,17 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   blocker above. Then one measured, inactive EU Vertex
   `gemini-3.1-flash-lite` call may run through the canonical gateway. Never
   reactivate or route around frozen direct-model workflow MM-22.
-- [ ] **Website producer (website PR #78)** stays draft/held. Reviewed draft head
-  `b0e3a656cf6659b893810e11a15b9f515527ab79` implements the randomized
-  `/webhook/web002-lead-<8 lowercase hex>` allowlist, `X-Webhook-Token`,
-  identity-only durable mode-bound outbox, legacy-default flat MM-18
-  compatibility, transport/5xx retry, 409 terminal identity review and
-  other-4xx terminal configuration/validation handling. It remains unmerged and
-  undeployed; merge auto-deploys `wp-content/**`. Follow the [producer cutover
+- [ ] **Website producer (website PR #78)** stays draft/held. Head
+  `b0e3a656cf6659b893810e11a15b9f515527ab79` is historical last-reviewed
+  evidence only. Current GitHub head
+  `1baedaf732088edcc3fa4e40892d23d42b140d7b` remains draft, unmerged,
+  undeployed and independently **REVIEW-BLOCKED** on seven delivery/data-race
+  issues; it is not review-clean or cutover-ready. Require remediation and a
+  new immutable review-clean head before following the [producer cutover
   sequence](../runbooks/n8n-operations.md#website-producer-cutover-safety):
-  encrypted host-only URL/token config; actual WordPress/Fluent Forms producer
-  T1–T4; atomic mode switch with no dual-write; seven-day reconciliation and
-  rollback proof; MM-18 retirement last. Repository tests do not prove producer
-  T1–T4 or the cutover window. Keep model-provider legal placeholders
-  unpublished.
+  actual WordPress/Fluent Forms producer T1–T4, atomic mode switch with no
+  dual-write, seven-day reconciliation and rollback proof; MM-18 retirement
+  last. Keep model-provider legal placeholders unpublished.
 - [ ] **self-hosted n8n cutover:** repoint the Coolify source from branch
   `palinaruban-repo-status-review` to `main`, verify auto-deploy, then complete
   the inactive shadow. n8n Cloud remains the authority for MM/LM/JM/EC until
@@ -201,18 +204,27 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   creation; the five earlier freezes are verified fail-closed.
   MM-Visual-Evidence-Intake `uBVRMTCKwnUG91kU` is now unpublished because its
   Telegram route lacked a principal allowlist and could reach media-worker
-  before validated-ready output. Its old published version is retained for
-  audit; Manual, Telegram and worker nodes are disabled. Never reactivate it
-  until a founder/principal allowlist precedes every command and media-worker is
-  reachable only from validated-ready output. MM-08 `RAPjKSnj6EY7axtb` is also
+  before validated-ready output. Published version
+  `dda7f039-764c-449d-9f0e-4c8badb44919` is retained for audit/rollback; current
+  draft is `3093a3bf-0567-4cb3-9956-56020dc4713c`, with `active=false` and
+  `active_version_id=null`. Manual, Telegram and worker nodes are disabled.
+  Never reactivate it until a founder/principal allowlist precedes every command
+  and media-worker is reachable only from validated-ready output. MM-08
+  `RAPjKSnj6EY7axtb` is also
   unpublished because it was an unauthenticated public write ingress with zero
   executions and no proven dependency; webhook and lead-write nodes are
-  disabled, and any replacement needs authentication, schema validation, rate
-  limiting and stable deduplication. Manual/draft and production probes for
-  both workflows rejected without an execution ID, and no post-freeze
-  executions appeared. Already-inactive MM-10 `39CAjeKcZD64VM25` and MM-29
-  `at9H54krWF9ULdtT` also have Manual, Schedule and approval-write nodes disabled
-  as defense-in-depth, with no active-count effect. Historical WordPress pages
+  disabled. Active version `644416d5-7f7f-4fa0-b02f-a8c787752617` is retained;
+  current draft is `37817f58-e6fb-4876-a076-497ab776413c`, with `active=false`
+  and `active_version_id=null`. Reactivation/replacement requires named
+  accountable owner Ivan, explicit owner approval, authentication, schema
+  validation, rate control and stable deduplication. Production and manual
+  probes for both workflows have `execution_id=null`; the post-freeze execution
+  count is zero. Already-inactive MM-10 `39CAjeKcZD64VM25` and MM-29
+  `at9H54krWF9ULdtT` retain drafts
+  `22776538-c4eb-4ea3-98e8-eeb1de8c6ea7` and
+  `1ca9a60e-9c4f-425c-980f-fedc24d85bf2`; Manual, Schedule and approval-write
+  nodes are disabled as defense-in-depth, both remain inactive, and prior
+  history is retained. Historical WordPress pages
   878/880/882/884/891 are already in Trash, related n8n rows are
   quarantined and page 891 cache/public access was verified closed. Unattached
   public media IDs 886–889 and 893–896 were also removed and verified 404; the
@@ -264,8 +276,9 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   fail-closed retry semantics.
 - Baserow Company OS schema provisioned live (8 tables / 107 fields / 10 views);
   read-only table-id binding captured on `main`.
-- Leaked Baserow token revoked at source; 14 synthetic proof rows deleted and
-  verified (2026-07-26).
+- Fourteen synthetic Baserow proof rows deleted and verified (2026-07-26).
+  Compromised token remediation is reopened under Security because a literal
+  value remains in Git history; no rotation completion is claimed.
 - Google service account provisioned with Drive domain-wide delegation; actual
   runtime refs are `GOOGLE_SERVICE_ACCOUNT_JSON_B64` and
   `GOOGLE_WORKSPACE_DELEGATED_USER`. This proves credential supply, not file

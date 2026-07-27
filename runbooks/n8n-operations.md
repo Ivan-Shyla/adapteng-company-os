@@ -23,19 +23,26 @@ not change n8n Cloud. The supplied 2026-07-27 live evidence is:
 - a fresh audit reconfirmed 89 non-archived / 33 active;
 - reversible freeze-now actions produced 89 non-archived / 31 active /
   58 inactive, with chain `42 → 40 → 38 → 37 → 36 → 35 → 34 → 33 → 31`;
-- MM-Visual-Evidence-Intake `uBVRMTCKwnUG91kU` and MM-08
-  `RAPjKSnj6EY7axtb` are unpublished and reject manual/draft and production
-  probes without creating an execution; no post-freeze executions appeared;
+- MM-Visual-Evidence-Intake `uBVRMTCKwnUG91kU` preserves published version
+  `dda7f039-764c-449d-9f0e-4c8badb44919` in contained draft
+  `3093a3bf-0567-4cb3-9956-56020dc4713c`; MM-08 `RAPjKSnj6EY7axtb`
+  preserves active version `644416d5-7f7f-4fa0-b02f-a8c787752617` in contained
+  draft `37817f58-e6fb-4876-a076-497ab776413c`. Both are `active=false` with
+  `active_version_id=null`; production and manual probes have
+  `execution_id=null`, and the post-freeze execution count is zero;
 - already-inactive MM-10 `39CAjeKcZD64VM25` and MM-29
-  `at9H54krWF9ULdtT` received defense-in-depth node disabling with no count
-  effect.
+  `at9H54krWF9ULdtT` retain drafts
+  `22776538-c4eb-4ea3-98e8-eeb1de8c6ea7` and
+  `1ca9a60e-9c4f-425c-980f-fedc24d85bf2`; they received defense-in-depth node
+  disabling with no count effect and prior history remains retained.
 
 Keep the two latest freezes reversible. Retain MM-Visual's old published version
 for audit and keep its Manual, Telegram and worker nodes disabled. Do not
 reactivate it until a founder/principal allowlist precedes every command and
 media-worker is reachable only from validated-ready output. Keep MM-08's
-webhook and lead-write nodes disabled; replace it only with authentication,
-schema validation, rate limiting and stable deduplication.
+webhook and lead-write nodes disabled. Reactivation/replacement requires named
+accountable owner Ivan, explicit owner approval, authentication, schema
+validation, rate control and stable deduplication.
 
 MCP exposure is a separate control plane and remains unresolved. Audited
 workflows still have **Available in MCP** enabled because the available update
@@ -58,34 +65,33 @@ Owner closure sequence:
    `registry/workflows.yaml` and `ARCHITECTURE.md`.
 
 Do not freeze MM-18 while recent successful webhooks prove it is the current
-website lead path. Retain it until the reviewed randomized-path/header-auth
-WEB-002 producer cutover is proven atomically. Before any further freeze
-decision, add the EC-02 principal allowlist before models; repair MM-20/MM-24
-approval, dependency and idempotency controls; make MM-07 allowlist logging
-redacted; and publish JM-09's suppression fix while preserving error bindings.
+website lead path. Retain it until a new immutable review-clean WEB-002 producer
+head plus actual producer T1-T4, atomic no-dual-write cutover and rollback proof
+are complete. Before any further freeze decision, add the EC-02 principal
+allowlist before models; repair MM-20/MM-24 approval, dependency and idempotency
+controls; make MM-07 allowlist logging redacted; and publish JM-09's suppression
+fix while preserving error bindings.
 
 The containment status update itself performs no payload or credential review,
 model call, publication, website cutover or other live mutation.
 
 ## Website producer cutover safety
 
-At reviewed draft head `b0e3a656cf6659b893810e11a15b9f515527ab79`,
-website PR #78 implements the randomized
-`/webhook/web002-lead-<8 lowercase hex>` allowlist, `X-Webhook-Token`,
-identity-only durable mode-bound outbox, legacy-default flat MM-18
-compatibility, transport/5xx retry, 409 terminal identity review and other-4xx
-terminal configuration/validation handling. It remains **draft, unmerged and
-undeployed**. Merging auto-deploys `wp-content/**`; repository tests do not prove
-actual WordPress/Fluent Forms producer T1–T4 or a seven-day cutover.
+Website PR #78 head `b0e3a656cf6659b893810e11a15b9f515527ab79` is historical
+last-reviewed evidence only. Current GitHub head
+`1baedaf732088edcc3fa4e40892d23d42b140d7b` remains **draft, unmerged,
+undeployed and independently REVIEW-BLOCKED** on seven delivery/data-race
+issues. It is not review-clean or cutover-ready.
 
 Safe sequence:
 
-1. Keep PR #78 draft/unmerged until an approved cutover window. Preserve the
-   existing flat MM-18 mode as the default.
-2. Store the real randomized WEB-002 URL and token only as encrypted host config;
-   verify the exact allowlisted path shape without copying the secret slug into
-   Git, PR text or logs.
-3. Stage the implemented self-hosted mode without dual-write. Confirm the outbox
+1. Keep PR #78 draft/unmerged and preserve flat MM-18 as the default. Resolve all
+   seven review issues and require a **new immutable review-clean head** before
+   considering a cutover window.
+2. Keep producer routing/authentication values only in encrypted host config;
+   never copy them into Git, PR text or logs.
+3. On the new review-clean head, stage self-hosted mode without dual-write.
+   Confirm the outbox
    persists only `formId:entryId`, remains bound to one delivery mode, and
    rebuilds payloads from the canonical Fluent Forms row.
 4. Verify the implemented response policy: 2xx acknowledges; transport/5xx
@@ -99,8 +105,8 @@ Safe sequence:
    WEB-002.
 7. Reconcile Fluent Forms entry references against Postgres/Baserow outcomes for
    seven days.
-8. Retire MM-18 last, only after the reconciliation window is clean and rollback
-   is proven.
+8. Prove rollback, then retire MM-18 last only after the reconciliation window
+   is clean.
 
 Keep all model-provider legal placeholders unpublished throughout this cutover.
 
