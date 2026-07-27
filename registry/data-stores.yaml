@@ -67,7 +67,7 @@ google_drive:
     current_main_mismatch: code expects GOOGLE_SERVICE_ACCOUNT_JSON / GOOGLE_WORKSPACE_ADMIN
     target_live_wiring: PR-A typed library/client/replay/config/dispatch first; PR-B internal HTTP only after review
     legacy: n8n Cloud OAuth + old media-worker service account still bind current media/content workflows to personal My Drive
-  cutover: base structure complete; approved-source copy has not run; PR-A/PR-B, controlled copy, workflow rewiring and owner recovery/break-glass acceptance remain pending
+  cutover: base structure complete; implementation/review is in progress; no controlled copy has begun; PR-A/PR-B, workflow rewiring and owner recovery/break-glass acceptance remain pending
   operating_guide: runbooks/company-drive.md
 
 precedence_notes:

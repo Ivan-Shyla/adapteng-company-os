@@ -51,7 +51,7 @@ external_saas:
     vertex_availability: GA; supported in EU multi-region
     vertex_location: eu
     vertex_endpoint: https://aiplatform.eu.rep.googleapis.com
-    status: credentials provided 2026-07-26; no reviewed safe Drive PR-A/PR-B or live copy; Vertex AI User role/endpoint access not yet evidenced
+    status: credentials provided 2026-07-26; Drive implementation/review in progress, no controlled copy begun; Vertex AI User role/endpoint access not yet evidenced
   - name: GitHub
     role: code, contracts, architecture, evidence
     actions_budget: USD 10/month, hard stop enabled

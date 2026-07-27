@@ -45,17 +45,19 @@ company_os_workflows:
     status: live-active
     proven: 2026-07-25 (T1 create, T2 idempotent replay, T3 reservation conflict -> HTTP 409, T4 no-loss -> HTTP 500 -> clean retry; independent Baserow read-back, zero duplicates)
     owner: Ivan
-    consumer_pending: "website producer (adapteng-website PR #78) is held; point it at this webhook when unheld."
+    consumer_pending: "website producer (adapteng-website PR #78) remains draft/unmerged/undeployed; point it at this webhook only during the approved cutover."
     producer_cutover:
       producer: "adapteng-website PR #78"
-      compatibility: WEB-002-compatible body in principle
-      status: held-transport-unsafe
-      current_gaps: [old n8n Cloud allowlist only, no host-only X-Webhook-Token, no durable retry, no 409 dead-letter, no producer E2E, wp-content auto-deploy on merge]
-      legacy_default: preserve flat MM-18 behind a host-only flag
-      dark_mode: allowlisted self-hosted WEB-002 URL plus host-only token/header auth
-      outbox: Fluent Forms entry references only
-      response_policy: { "2xx": ack, "5xx_or_transport": retry, "409": dead-letter/manual-review, "other_4xx": config-alert }
-      canary: actual WordPress producer T1-T4
+      reviewed_head: b0e3a656cf6659b893810e11a15b9f515527ab79
+      compatibility: WEB-002 producer controls implemented in reviewed draft
+      status: draft-unmerged-undeployed-cutover-unproven
+      implemented_controls: [randomized /webhook/web002-lead-<8 lowercase hex> allowlist, X-Webhook-Token, identity-only durable mode-bound outbox, legacy-default flat MM-18 compatibility, transport/5xx retry, terminal 409 and other-4xx handling]
+      remaining_evidence: [actual WordPress/Fluent Forms producer T1-T4, atomic no-dual-write cutover, seven-day reconciliation, rollback proof, wp-content deployment]
+      legacy_default: flat MM-18 remains the default until atomic cutover
+      dark_mode: "allowlisted https://n8n.adapteng.com/webhook/web002-lead-<8 lowercase hex> plus X-Webhook-Token"
+      outbox: durable identity-only Fluent Forms formId:entryId references bound to one delivery mode
+      response_policy: { "2xx": ack, "5xx_or_transport": retry, "409": terminal-identity-review, "other_4xx": terminal-config-validation }
+      canary: actual WordPress/Fluent Forms producer T1-T4 not yet proven
       cutover: atomic flag switch; no dual-write
       reconciliation: seven days before retirement
       retirement: MM-18 last

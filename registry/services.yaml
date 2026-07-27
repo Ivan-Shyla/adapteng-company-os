@@ -22,7 +22,8 @@ services:
     depends_on: [Cloudways WordPress/PHP/MySQL, Fluent Forms, Slim SEO, Zoho SMTP]
     status: live
     producer_pr: adapteng-website#78
-    producer_status: held-transport-unsafe
+    producer_reviewed_head: b0e3a656cf6659b893810e11a15b9f515527ab79
+    producer_status: draft-unmerged-undeployed-cutover-unproven
     legacy_snapshot:
       repository: PalinaRuban/adapteng
       classification: personal-account June-2026 WordPress/Azure snapshot; no active or authoritative production role
@@ -36,15 +37,16 @@ services:
       archive_gate: fresh encrypted current CMS/database/media export plus company ownership transfer
     owner: Ivan
     notes: >-
-      Changes under wp-content auto-deploy from main. PR #78's body fits WEB-002
-      in principle, but current transport has only the old n8n Cloud allowlist:
-      no host-only X-Webhook-Token, durable retry, 409 dead-letter or producer
-      E2E. Preserve flat MM-18 as the host-only legacy default. Add dark WEB-002
-      URL/token allowlist + auth and a Fluent Forms entry-ref-only outbox. Treat
-      2xx as ack, 5xx/transport as retry, 409 as dead-letter/manual review and
-      other 4xx as config alert. Require actual WordPress T1-T4, atomic
-      no-dual-write flag cutover, seven-day reconciliation and MM-18 retirement
-      last. Model-provider legal placeholders stay unpublished.
+      Changes under wp-content auto-deploy from main. Reviewed PR #78 draft head
+      b0e3a656cf6659b893810e11a15b9f515527ab79 implements the randomized
+      /webhook/web002-lead-<8 lowercase hex> allowlist, X-Webhook-Token,
+      identity-only durable mode-bound outbox, legacy-default flat MM-18
+      compatibility, transport/5xx retry, 409 terminal identity review and
+      other-4xx terminal configuration/validation handling. It remains draft,
+      unmerged and undeployed. Actual WordPress/Fluent Forms producer T1-T4,
+      atomic no-dual-write cutover, seven-day reconciliation, rollback proof and
+      MM-18 retirement remain unproven. Model-provider legal placeholders stay
+      unpublished.
 
   - id: postgres-adapteng-ops
     repo: adapteng-automation-platform
@@ -136,11 +138,11 @@ services:
       or deterministic partial-failure replay. Existing code expects
       GOOGLE_SERVICE_ACCOUNT_JSON / GOOGLE_WORKSPACE_ADMIN, while the actual
       runtime contract is GOOGLE_SERVICE_ACCOUNT_JSON_B64 /
-      GOOGLE_WORKSPACE_DELEGATED_USER. No reviewed safe PR-A/PR-B and no live
-      copy exists. PR-A must provide the typed allowlisted copy/pending-artifact
-      library, Google client, deterministic partial-failure replay, actual env
-      config and dispatch/CLI. PR-B may add authenticated internal HTTP only
-      after PR-A review.
+      GOOGLE_WORKSPACE_DELEGATED_USER. Implementation/review is in progress; no
+      controlled copy has begun. PR-A must provide the typed allowlisted
+      copy/pending-artifact library, Google client, deterministic partial-failure
+      replay, actual env config and dispatch/CLI. PR-B may add authenticated
+      internal HTTP only after PR-A review.
 
   - id: adapteng-baserow-schema
     repo: adapteng-automation-platform

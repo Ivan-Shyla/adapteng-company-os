@@ -80,9 +80,9 @@ folder smoke does not prove any of those capabilities.
 
 Current repository code also expects `GOOGLE_SERVICE_ACCOUNT_JSON` plus
 `GOOGLE_WORKSPACE_ADMIN`; the actual runtime contract is
-`GOOGLE_SERVICE_ACCOUNT_JSON_B64` plus `GOOGLE_WORKSPACE_DELEGATED_USER`. No
-reviewed safe PR-A/PR-B and no live company file copy exists. Open implementation
-attempts are not deployment/readiness evidence.
+`GOOGLE_SERVICE_ACCOUNT_JSON_B64` plus `GOOGLE_WORKSPACE_DELEGATED_USER`.
+Implementation/review is in progress; **no controlled copy has begun**. Open
+implementation attempts are not deployment/readiness evidence.
 
 Delivery is strictly ordered:
 

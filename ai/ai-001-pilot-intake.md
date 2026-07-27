@@ -37,11 +37,11 @@ path, canonical AI Gateway and measured evaluation below.
 The owner authorized use of the existing `CASE-2026-001` material and allowed a
 provisional presentation/style choice. The legacy source was inventoried
 read-only: one intake marker, one case note, four HEIC images and two MOV videos.
-The original remains untouched; a governed copy to the company Shared Drive is
-in progress. A later live Sheet record conflicts with the repository redaction
-record, so all six media files and any CASE publication remain blocked until a
-human reconciles them. The evidence-bounded deterministic text draft remains an
-internal draft.
+The original remains untouched. Governed Drive implementation/review is in
+progress; **no controlled copy has begun**. A later live Sheet record conflicts
+with the repository redaction record, so all six media files and any CASE
+publication remain blocked until a human reconciles them. The evidence-bounded
+deterministic text draft remains an internal draft.
 
 ### Approved source-bounded claims
 
