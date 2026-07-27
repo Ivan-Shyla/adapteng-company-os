@@ -6,6 +6,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass
 from heapq import heappop, heappush
@@ -68,109 +69,200 @@ CREDENTIAL_DASH_TRANSLATION = str.maketrans(
         "\uff0d": "-",
     }
 )
-HORIZONTAL_SPACE = frozenset(" \t\f\v")
+HORIZONTAL_SPACE = frozenset(" \t")
+LINE_TERMINATORS = frozenset("\r\n\f\v")
 POST_QUOTE_SKIPPABLE = HORIZONTAL_SPACE | frozenset(")]}\u201d\u2019")
 OPENING_WRAPPERS = frozenset("([{")
 CONTINUATION_PUNCTUATION = frozenset(",:-\u2010\u2011\u2012\u2013\u2014\u2015")
-# Finite common-modern-English coordinating, subordinating, and relative linkers
-# retain credential scope; ordinary lowercase predicates can still start a sentence.
-COORDINATING_CONTINUATION_WORDS = frozenset(
-    {"and", "but", "for", "nor", "or", "so", "yet"}
+IDENTIFIER_JOIN_CONTROLS = frozenset({"\u200c", "\u200d"})
+IDENTIFIER_CONTINUATION_CATEGORY_PREFIXES = frozenset({"L", "M", "N"})
+IDENTIFIER_CONTINUATION_CATEGORIES = frozenset({"Cf", "Pc"})
+
+
+@dataclass(frozen=True)
+class ContinuationLinkerCategory:
+    name: str
+    source: str
+    linkers: tuple[str, ...]
+
+
+# Only this reviewed finite catalog keeps credential scope open; treating every
+# lowercase predicate as a linker would merge otherwise independent sentences.
+# It is also the sole source for matcher and positive-test generation.
+CONTINUATION_LINKER_CATALOG = (
+    ContinuationLinkerCategory(
+        "coordinating",
+        "standard coordinating conjunctions",
+        ("and", "but", "for", "nor", "or", "so", "yet"),
+    ),
+    ContinuationLinkerCategory(
+        "subordinating-single",
+        "common single-token subordinating conjunctions",
+        (
+            "after",
+            "although",
+            "as",
+            "because",
+            "before",
+            "except",
+            "if",
+            "lest",
+            "once",
+            "provided",
+            "providing",
+            "since",
+            "than",
+            "though",
+            "till",
+            "unless",
+            "until",
+            "when",
+            "whenever",
+            "whereas",
+            "whether",
+            "while",
+        ),
+    ),
+    ContinuationLinkerCategory(
+        "relative",
+        "common relative and connective forms",
+        (
+            "that",
+            "what",
+            "whatever",
+            "where",
+            "whereby",
+            "wherein",
+            "whereupon",
+            "wherever",
+            "which",
+            "whichever",
+            "who",
+            "whoever",
+            "whom",
+            "whomever",
+            "whose",
+        ),
+    ),
+    ContinuationLinkerCategory(
+        "additional-linking",
+        "bounded additive and sequential linkers",
+        ("plus", "then", "with"),
+    ),
+    ContinuationLinkerCategory(
+        "as-family",
+        "common as-led subordinators",
+        (
+            "as far as",
+            "as if",
+            "as long as",
+            "as much as",
+            "as soon as",
+            "as though",
+        ),
+    ),
+    ContinuationLinkerCategory(
+        "participial-condition",
+        "common participial condition linkers",
+        (
+            "assuming that",
+            "considering that",
+            "given that",
+            "supposing that",
+        ),
+    ),
+    ContinuationLinkerCategory(
+        "even-family",
+        "complete common even-led temporal and concessive family",
+        (
+            "even after",
+            "even as",
+            "even before",
+            "even if",
+            "even though",
+            "even when",
+            "even while",
+        ),
+    ),
+    ContinuationLinkerCategory(
+        "exception-condition",
+        "bounded exception and condition phrases",
+        ("except that", "provided that", "providing that"),
+    ),
+    ContinuationLinkerCategory(
+        "condition-time",
+        "common condition and time multiword subordinators",
+        (
+            "by the time",
+            "in case",
+            "in order that",
+            "in the event that",
+            "now that",
+            "on condition that",
+            "on the condition that",
+            "only if",
+        ),
+    ),
+    ContinuationLinkerCategory(
+        "formal-causal",
+        "bounded formal causal linkers",
+        ("inasmuch as", "insofar as"),
+    ),
+    ContinuationLinkerCategory(
+        "just-temporal",
+        "complete common just-led temporal family",
+        ("just after", "just as", "just before", "just when"),
+    ),
+    ContinuationLinkerCategory(
+        "no-matter-interrogative",
+        "complete no-matter interrogative family",
+        (
+            "no matter how",
+            "no matter what",
+            "no matter when",
+            "no matter where",
+            "no matter whether",
+            "no matter which",
+            "no matter who",
+            "no matter whom",
+            "no matter whose",
+            "no matter why",
+        ),
+    ),
+    ContinuationLinkerCategory(
+        "comparison-purpose",
+        "bounded comparison and purpose linkers",
+        ("rather than", "so that"),
+    ),
+    ContinuationLinkerCategory(
+        "whether-alternative",
+        "bounded whether alternative phrase",
+        ("whether or not",),
+    ),
 )
-SUBORDINATING_CONTINUATION_WORDS = frozenset(
-    {
-        "after",
-        "although",
-        "as",
-        "because",
-        "before",
-        "except",
-        "if",
-        "lest",
-        "once",
-        "provided",
-        "providing",
-        "since",
-        "than",
-        "though",
-        "till",
-        "unless",
-        "until",
-        "when",
-        "whenever",
-        "whereas",
-        "whether",
-        "while",
-    }
+CONTINUATION_LINKERS = tuple(
+    linker
+    for category in CONTINUATION_LINKER_CATALOG
+    for linker in category.linkers
 )
-RELATIVE_CONTINUATION_WORDS = frozenset(
-    {
-        "that",
-        "what",
-        "whatever",
-        "where",
-        "wherever",
-        "which",
-        "whichever",
-        "who",
-        "whoever",
-        "whom",
-        "whomever",
-        "whose",
-        "whereby",
-        "wherein",
-        "whereupon",
-    }
+if len(CONTINUATION_LINKERS) != len(set(CONTINUATION_LINKERS)):
+    raise ValueError("continuation linker catalog contains duplicates")
+CONTINUATION_WORDS = frozenset(
+    linker for linker in CONTINUATION_LINKERS if " " not in linker
 )
-ADDITIONAL_LINKING_WORDS = frozenset(
-    {"plus", "then", "with"}
-)
-MULTIWORD_CONTINUATION_STARTERS = (
-    "as if",
-    "as long as",
-    "as soon as",
-    "as though",
-    "assuming that",
-    "considering that",
-    "even if",
-    "even though",
-    "even when",
-    "except that",
-    "given that",
-    "in case",
-    "in order that",
-    "inasmuch as",
-    "insofar as",
-    "just as",
-    "no matter how",
-    "no matter what",
-    "no matter when",
-    "no matter where",
-    "no matter whether",
-    "no matter which",
-    "no matter who",
-    "no matter why",
-    "now that",
-    "on condition that",
-    "on the condition that",
-    "only if",
-    "provided that",
-    "providing that",
-    "rather than",
-    "so that",
-    "supposing that",
-    "whether or not",
-)
-CONTINUATION_WORDS = (
-    COORDINATING_CONTINUATION_WORDS
-    | SUBORDINATING_CONTINUATION_WORDS
-    | RELATIVE_CONTINUATION_WORDS
-    | ADDITIONAL_LINKING_WORDS
+MULTIWORD_CONTINUATION_STARTERS = tuple(
+    linker for linker in CONTINUATION_LINKERS if " " in linker
 )
 MULTIWORD_CONTINUATION_PARTS = tuple(
-    tuple(phrase.split())
-    for phrase in MULTIWORD_CONTINUATION_STARTERS
+    tuple(phrase.split()) for phrase in MULTIWORD_CONTINUATION_STARTERS
 )
+_multiword_by_first: dict[str, list[tuple[str, ...]]] = {}
+for _parts in MULTIWORD_CONTINUATION_PARTS:
+    _multiword_by_first.setdefault(_parts[0], []).append(_parts)
+MULTIWORD_CONTINUATION_BY_FIRST = {
+    first: tuple(parts)
+    for first, parts in _multiword_by_first.items()
+}
 LEAKED_TOKEN_LITERAL = re.compile(
     r"\b(?:leaked|compromised)\b[^\n`]{0,80}\btoken\b[^\n`]{0,20}`[^`]+`",
     re.IGNORECASE,
@@ -271,6 +363,13 @@ class NextQuotedContext:
     post_category: str
     post_token: str
     remaining_tail_start: int
+
+
+@dataclass(frozen=True)
+class MultiwordContinuationMatch:
+    end: int | None
+    examined_end: int
+    malformed_prefix: bool
 
 
 @dataclass(frozen=True)
@@ -449,7 +548,7 @@ def collect_quote_views(
     newline_prefix = [0] * (len(text) + 1)
     for index, character in enumerate(text):
         newline_prefix[index + 1] = newline_prefix[index] + int(
-            character in "\r\n"
+            character in LINE_TERMINATORS
         )
 
     evidence_candidates: list[QuotedSpan] = []
@@ -461,7 +560,7 @@ def collect_quote_views(
             for index, character in enumerate(text):
                 if metrics is not None:
                     metrics.characters_scanned += 1
-                if character in "\r\n":
+                if character in LINE_TERMINATORS:
                     previous = None
                     primary_opener = None
                     continue
@@ -501,7 +600,7 @@ def collect_quote_views(
         for index, character in enumerate(text):
             if metrics is not None:
                 metrics.characters_scanned += 1
-            if character in "\r\n":
+            if character in LINE_TERMINATORS:
                 openers = []
                 continue
             if character == spec.opener and can_open_delimiter(text, index, spec):
@@ -579,8 +678,66 @@ def markdown_marker_run_length(text: str, index: int) -> int:
     return end - index
 
 
-def is_identifier_character(character: str) -> bool:
-    return character.isalnum() or character == "_"
+def is_identifier_continuation(character: str) -> bool:
+    if not character:
+        return False
+    category = unicodedata.category(character)
+    # Keep invisible controls, marks, and connectors attached to a token so a
+    # glued Unicode form cannot be truncated into an approved ASCII linker.
+    return (
+        character == "-"
+        or character in IDENTIFIER_JOIN_CONTROLS
+        or category[0] in IDENTIFIER_CONTINUATION_CATEGORY_PREFIXES
+        or category in IDENTIFIER_CONTINUATION_CATEGORIES
+    )
+
+
+def normalize_ascii_linker_word(word: str) -> str | None:
+    if not word or any(
+        not ("A" <= character <= "Z" or "a" <= character <= "z")
+        for character in word
+    ):
+        return None
+    return word.lower()
+
+
+def ascii_linker_projection(word: str) -> str:
+    return "".join(
+        character.lower()
+        for character in word
+        if "A" <= character <= "Z" or "a" <= character <= "z"
+    )
+
+
+def is_malformed_candidate_token(actual: str, expected: str) -> bool:
+    folded = actual.casefold()
+    projection = ascii_linker_projection(folded)
+    compatibility_projection = ascii_linker_projection(
+        unicodedata.normalize("NFKC", actual).casefold()
+    )
+    if any(ord(character) > 127 for character in actual):
+        return (
+            expected in projection
+            or expected in compatibility_projection
+        )
+    if (
+        len(projection) == len(expected) + 1
+        and (
+            projection.startswith(expected)
+            or projection.endswith(expected)
+        )
+    ):
+        return True
+    lowered = actual.lower()
+    return (
+        lowered.startswith(expected)
+        and len(lowered) > len(expected)
+        and not lowered[len(expected)].isalpha()
+    ) or (
+        lowered.endswith(expected)
+        and len(lowered) > len(expected)
+        and not lowered[-len(expected) - 1].isalpha()
+    )
 
 
 # Markdown markers justify a sentence boundary only when they are detached from
@@ -600,7 +757,7 @@ def wrapper_has_valid_opening_flank(
         (
             not previous
             or previous in "*_"
-            or not is_identifier_character(previous)
+            or not is_identifier_continuation(previous)
         )
         and following_index < len(text)
         and not text[following_index].isspace()
@@ -622,7 +779,7 @@ def wrapper_has_valid_closing_flank(
         and (
             following_index >= len(text)
             or text[following_index] in "*_"
-            or not is_identifier_character(text[following_index])
+            or not is_identifier_continuation(text[following_index])
         )
     )
 
@@ -636,11 +793,12 @@ def classify_content_leading(text: str, span: QuotedSpan) -> str:
         return "uppercase-or-digit"
     if character.islower():
         end = index + 1
-        while end < span.content_end and (
-            text[end].isalnum() or text[end] in "_-"
+        while (
+            end < span.content_end
+            and is_identifier_continuation(text[end])
         ):
             end += 1
-        word = text[index:end].casefold()
+        word = normalize_ascii_linker_word(text[index:end])
         return "conjunction" if word in CONTINUATION_WORDS else "lowercase"
     if character in CONTINUATION_PUNCTUATION:
         return "continuation-punctuation"
@@ -656,41 +814,102 @@ def classify_post_quote_context(
         return index, "end", ""
 
     character = text[index]
-    if character in "\r\n":
+    if character in LINE_TERMINATORS:
         return index, "newline", character
     if character in CLAUSE_TERMINATORS:
         return index, "terminal-punctuation", character
     if character in CONTINUATION_PUNCTUATION:
         return index, "continuation-punctuation", character
-    if character in WRAPPER_MARKERS:
-        return index, "unbalanced-wrapper", character
-    if character.isalnum():
+    if is_identifier_continuation(character):
         end, context_word = read_context_word(text, index)
-        phrase_end = match_multiword_continuation(
+        phrase_match = scan_multiword_continuation(
             text,
             end,
             context_word,
         )
+        normalized_word = normalize_ascii_linker_word(context_word)
         category = (
             "continuation-word"
             if (
-                context_word.casefold() in CONTINUATION_WORDS
-                or phrase_end is not None
+                phrase_match.end is not None
+                or (
+                    normalized_word in CONTINUATION_WORDS
+                    and not phrase_match.malformed_prefix
+                )
             )
             else "word"
         )
-        token_end = phrase_end if phrase_end is not None else end
+        token_end = (
+            phrase_match.end
+            or (
+                phrase_match.examined_end
+                if phrase_match.malformed_prefix
+                else end
+            )
+        )
         return index, category, text[index:token_end]
+    if character in WRAPPER_MARKERS:
+        return index, "unbalanced-wrapper", character
     return index, "other", character
 
 
 def read_context_word(text: str, index: int) -> tuple[int, str]:
     end = index + 1
-    while end < len(text) and (
-        text[end].isalnum() or text[end] in "_-"
-    ):
+    while end < len(text) and is_identifier_continuation(text[end]):
         end += 1
     return end, text[index:end]
+
+
+def scan_multiword_continuation(
+    text: str,
+    first_end: int,
+    first_word: str,
+) -> MultiwordContinuationMatch:
+    first_normalized = normalize_ascii_linker_word(first_word)
+    candidates = MULTIWORD_CONTINUATION_BY_FIRST.get(
+        first_normalized,
+        (),
+    )
+    examined_end = first_end
+    malformed_prefix = False
+    for parts in candidates:
+        cursor = first_end
+        matched_parts = 1
+        for expected in parts[1:]:
+            if cursor >= len(text) or text[cursor] not in HORIZONTAL_SPACE:
+                if matched_parts > 1:
+                    malformed_prefix = True
+                break
+            cursor = skip_characters(text, cursor, HORIZONTAL_SPACE)
+            if (
+                cursor >= len(text)
+                or not is_identifier_continuation(text[cursor])
+            ):
+                if matched_parts > 1:
+                    malformed_prefix = True
+                break
+            cursor, actual = read_context_word(text, cursor)
+            examined_end = max(examined_end, cursor)
+            actual_normalized = normalize_ascii_linker_word(actual)
+            if actual_normalized != expected:
+                if (
+                    matched_parts > 1
+                    or is_malformed_candidate_token(actual, expected)
+                ):
+                    malformed_prefix = True
+                break
+            matched_parts += 1
+        else:
+            return MultiwordContinuationMatch(
+                end=cursor,
+                examined_end=cursor,
+                malformed_prefix=False,
+            )
+    return MultiwordContinuationMatch(
+        end=None,
+        examined_end=examined_end,
+        malformed_prefix=malformed_prefix,
+    )
 
 
 def match_multiword_continuation(
@@ -698,23 +917,11 @@ def match_multiword_continuation(
     first_end: int,
     first_word: str,
 ) -> int | None:
-    first_normalized = first_word.casefold()
-    for parts in MULTIWORD_CONTINUATION_PARTS:
-        if parts[0] != first_normalized:
-            continue
-        cursor = first_end
-        for expected in parts[1:]:
-            if cursor >= len(text) or text[cursor] not in HORIZONTAL_SPACE:
-                break
-            cursor = skip_characters(text, cursor, HORIZONTAL_SPACE)
-            if cursor >= len(text) or not text[cursor].isalnum():
-                break
-            cursor, actual = read_context_word(text, cursor)
-            if actual.casefold() != expected:
-                break
-        else:
-            return cursor
-    return None
+    return scan_multiword_continuation(
+        text,
+        first_end,
+        first_word,
+    ).end
 
 
 def parse_next_quoted_context(
@@ -794,7 +1001,9 @@ def direct_quote_context_is_terminal(text: str, span: QuotedSpan) -> bool:
     if context_index >= len(text):
         return True
     character = text[context_index]
-    if character in "\r\n;" or character in SENTENCE_FINAL_PUNCTUATION:
+    if character in LINE_TERMINATORS or character == ";" or (
+        character in SENTENCE_FINAL_PUNCTUATION
+    ):
         return True
     if character in CONTINUATION_PUNCTUATION:
         return False
@@ -851,7 +1060,7 @@ def build_clause_bounds(
         if metrics is not None:
             metrics.characters_scanned += 1
         character = text[index]
-        if character in "\r\n":
+        if character in LINE_TERMINATORS:
             next_index = index + 1
             if (
                 character == "\r"
