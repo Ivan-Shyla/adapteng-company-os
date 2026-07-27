@@ -123,7 +123,14 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
 - [ ] **Legacy approval/publish forensic reconciliation:** treat `Approval_Log`,
   `Content_Drafts` and `Publish_Plan` as non-canonical legacy state. Reconcile
   lineage, stale smoke rows and any surviving decisions/plans before archive or
-  canonical migration 003 approval/outbox cutover.
+  canonical migration 003 approval/outbox cutover. Read-only workflow
+  `Q2PmbE2VDffRl1iT` execution `15547` found 179 `Approval_Log` rows, all
+  synthetic `APPROVE` smoke (177 `TYPE` self-loop + 2 `TEST123`, all
+  2026-06-12); 19 `Content_Drafts`, all pending (18 `pending_approval` + 1
+  `pending_manual_review`), zero approved/package-ready; and 0 `Publish_Plan`.
+  No current real draft was promoted. Preserve the audit evidence, reconcile
+  draft lineage, treat all 179 approval rows as cleanup candidates, then archive
+  the one-time read-only workflow.
 - [ ] **Media intake:** approve snapshot/rollback, import the backward-compatible
   consumer first, canary one real case, then redeploy the marketing worker.
 - [ ] **CASE-2026-001 media review:** repository metadata says redaction resolved,
