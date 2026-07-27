@@ -148,10 +148,13 @@ services:
       rows and updated 0; MM-05 execution 15216 found 0 approved drafts.
       Workflow uBVRMTCKwnUG91kU remains active in its founder-chat-allowlisted
       media sanitize/log version; only its unpublished /approve -> MM21-24 draft
-      path was disabled, so the active count did not change. Reconcile legacy
-      Approval_Log, Content_Drafts and Publish_Plan before archive or canonical
-      migration 003 cutover. Remaining legacy authority requires staged,
-      evidence-based cutover (ARCHITECTURE.md §6.4).
+      path was disabled, so the active count did not change. Read-only audit
+      Q2PmbE2VDffRl1iT found 179 synthetic Approval_Log rows; archived cleanup
+      workflow a3luyFSBH9xRELDW matched 179 in dry-run 15548, deleted exactly
+      ids 1-179 in live execution 15549, and matched 0 in verification 15550.
+      Q2PmbE2VDffRl1iT is also archived. Content_Drafts remains 19 pending and
+      Publish_Plan remains empty; both were untouched and require staged,
+      evidence-based migration 003 cutover (ARCHITECTURE.md §6.4).
 
   - id: baserow-self-hosted
     repo: adapteng-automation-platform (deploy/coolify)

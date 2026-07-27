@@ -128,9 +128,13 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   synthetic `APPROVE` smoke (177 `TYPE` self-loop + 2 `TEST123`, all
   2026-06-12); 19 `Content_Drafts`, all pending (18 `pending_approval` + 1
   `pending_manual_review`), zero approved/package-ready; and 0 `Publish_Plan`.
-  No current real draft was promoted. Preserve the audit evidence, reconcile
-  draft lineage, treat all 179 approval rows as cleanup candidates, then archive
-  the one-time read-only workflow.
+  No current real draft was promoted. Temporary workflow `a3luyFSBH9xRELDW`
+  dry-run `15548` matched exactly the 179 `TYPE`/`TEST123` smoke rows; live
+  execution `15549` deleted exactly row ids 1–179; verification `15550` matched
+  0. Both `a3luyFSBH9xRELDW` and read-only `Q2PmbE2VDffRl1iT` are archived.
+  `Content_Drafts` remains 19 pending and `Publish_Plan` remains 0; both were
+  untouched. Approval cleanup is complete; reconcile the remaining draft
+  lineage before canonical migration 003 cutover.
 - [ ] **Media intake:** approve snapshot/rollback, import the backward-compatible
   consumer first, canary one real case, then redeploy the marketing worker.
 - [ ] **CASE-2026-001 media review:** repository metadata says redaction resolved,

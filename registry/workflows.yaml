@@ -132,9 +132,10 @@ legacy_cloud_authority_dependencies:
 legacy_approval_publish_state:
   artifacts: [Approval_Log, Content_Drafts, Publish_Plan]
   classification: forensic-reconciliation-required
-  disposition: reconcile before archive or canonical migration 003 cutover
-  latest_audit: Q2PmbE2VDffRl1iT execution 15547 (one-time read-only; archive pending)
-  cleanup_candidate: all 179 Approval_Log rows are synthetic APPROVE smoke
+  disposition: Approval_Log cleanup complete; reconcile untouched pending drafts before canonical migration 003 cutover
+  latest_audit: Q2PmbE2VDffRl1iT execution 15547 (one-time read-only; archived)
+  approval_log_cleanup: a3luyFSBH9xRELDW dry-run 15548 matched 179; live 15549 deleted ids 1-179; verify 15550 matched 0; workflow archived
+  untouched_state: Content_Drafts 19 pending (18 pending_approval, 1 pending_manual_review); Publish_Plan 0
   promotion_result: no current real draft promoted
 
 safety_evidence:
@@ -150,11 +151,12 @@ safety_evidence:
     evidence: "15211 exact deletion of WordPress media 886-889 and 893-896; every media REST/original-file URL -> 404; source Drive HEIC files untouched"
   - id: Q2PmbE2VDffRl1iT
     name: SAFETY-2026-07-27 Legacy Approval State Audit
-    status: completed-read-only-archive-pending
+    status: archived-completed-read-only
+    excluded_from_live_counts: true
     execution: 15547
     approval_log:
       rows: 179
-      classification: synthetic APPROVE smoke; cleanup candidate
+      classification: synthetic APPROVE smoke; cleanup completed and verified
       breakdown: { TYPE_self_loop: 177, TEST123: 2 }
       date: "2026-06-12"
     content_drafts:
@@ -165,7 +167,19 @@ safety_evidence:
     publish_plan: { rows: 0 }
     conclusion: no current real draft was promoted
     freeze_rationale: synthetic/unauthenticated approval state must not feed direct status sync or non-idempotent publish-plan creation
-    disposition: retain evidence, reconcile draft lineage, clean synthetic approval rows, then archive this read-only workflow
+    disposition: archived after evidence retention
+  - id: a3luyFSBH9xRELDW
+    name: SAFETY-2026-07-27 Synthetic Approval Cleanup
+    status: archived-completed
+    temporary: true
+    excluded_from_live_counts: true
+    dry_run: execution 15548 matched exactly 179 TYPE/TEST123 smoke rows
+    live_cleanup: execution 15549 deleted exactly 179 row ids 1-179
+    verification: execution 15550 matched 0
+    untouched:
+      content_drafts: 19 pending (18 pending_approval, 1 pending_manual_review)
+      publish_plan: 0
+    conclusion: synthetic Approval_Log cleanup complete; no current real draft promoted
 
 cutover_truth:
   self_hosted_active_count: 2
