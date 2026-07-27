@@ -12,6 +12,11 @@ live_counts:
   self_hosted: { total: 2, active: 2, drift: none }
   cloud: { total: 89, active: 33, repo_exports: 82, live_only: 14, repo_only: 7 }
 cloud_active_freeze_chain: "42 -> 40 (MM-40/MM-41) -> 38 (MM-42/MM-43) -> 37 (d1SDcRTgMqS9Zvgi) -> 36 (J5SpIS8Ye8JHViFi) -> 35 (4D9UBruS1ZhLn1pS) -> 34 (o9Lj7F9WbhFSCARq) -> 33 (clPtSQwzze8DHEvp)"
+freeze_fail_closed_evidence:
+  workflows: [d1SDcRTgMqS9Zvgi, J5SpIS8Ye8JHViFi, 4D9UBruS1ZhLn1pS, o9Lj7F9WbhFSCARq, clPtSQwzze8DHEvp]
+  manual_mode: rejected before execution creation
+  production: rejected before execution creation
+  conclusion: fail-closed freeze verified in both modes
 
 canonical_full_index: adapteng-automation-platform/n8n/workflow-index.json  # 82 repository exports; live drift above must be reconciled
 

@@ -118,7 +118,9 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   Workflow triggers and model are disabled; it is unpublished and production
   execution is rejected. Prior active version `72869463`, freeze draft
   `28a7ef72` and six historical runs/data are preserved. Do not reactivate the
-  direct-model path.
+  direct-model path. For the gateway, mail router, approval sync and plan
+  builder plus MM-22, manual-mode and production probes reject before execution
+  creation; the five freezes are verified fail-closed.
   `uBVRMTCKwnUG91kU` remains active in its founder-chat-allowlisted media
   sanitize/log version; only the unpublished `/approve → MM21-24` draft path was
   disabled, so do not subtract it from the active count. Historical WordPress

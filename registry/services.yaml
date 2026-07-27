@@ -159,7 +159,10 @@ services:
       ledger/caps, AG-008 and governed Company Drive. Its Manual/Execute Workflow
       triggers and model are disabled; it is unpublished and production
       execution is rejected. Prior active 72869463, freeze draft 28a7ef72 and
-      six historical runs/data are preserved (ARCHITECTURE.md §6.4).
+      six historical runs/data are preserved. Manual-mode and production probes
+      for the gateway, mail router, approval sync, plan builder and MM-22 all
+      reject before execution creation, verifying fail-closed freezes
+      (ARCHITECTURE.md §6.4).
 
   - id: baserow-self-hosted
     repo: adapteng-automation-platform (deploy/coolify)
