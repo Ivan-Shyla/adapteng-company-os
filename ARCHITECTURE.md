@@ -791,11 +791,11 @@ submissions and backups never move into Company OS.
 
 Repository baseline — `adapteng-automation-platform/n8n/workflow-index.json`
 (82 exports after the latest ratified additions). It is currently **not** a
-complete live source of truth: a direct n8n Cloud API check on 2026-07-26 found
-89 workflows / 38 active, with 14 live-only and 7 repo-only entries. The
-pre-freeze baseline was 42 active; MM-40/MM-41 and their WordPress/social
-downstream MM-42/MM-43 were then unpublished after a safety review. This drift
-must be reconciled before cutover.
+complete live source of truth: a direct n8n Cloud API check on 2026-07-27 found
+89 non-archived workflows / 37 active, with 14 live-only and 7 repo-only
+entries. The verified active-count safety-freeze chain is **42 → 40**
+(MM-40/MM-41) **→ 38** (MM-42/MM-43) **→ 37** (`d1SDcRTgMqS9Zvgi`, Claude n8n
+MCP Gateway). This drift must be reconciled before cutover.
 
 Historical execution evidence showed that the legacy chain had created WordPress
 pages 878, 880, 882, 884 and 891; page 891 had reached `publish` without the
@@ -811,11 +811,20 @@ files remain untouched in Drive. Completed media-remediation workflow
 `VZPWhwGDol0h1ECt` is sealed and archived. Both safety workflows are excluded
 from the 89 non-archived workflow count.
 
+The final freeze covered live-only workflow `d1SDcRTgMqS9Zvgi` (Claude n8n MCP
+Gateway), which is not Company OS authority and had no execution after
+2026-07-10. Its HTTP method was fixed to GET, but the AI could choose any n8n API
+GET path and responses had no endpoint allowlist or redaction, so execution
+payloads/PII could be disclosed to external Claude. This is a **broad-read
+confidentiality/exfiltration risk, not arbitrary write**. Previous active version
+`51f02adb` is retained; draft `de142f7b` has the MCP trigger disabled; the
+workflow is unpublished and production execution is rejected.
+
 | Домен | Группа | Repo exports / live active | Принадлежность | Правило |
 |---|---|---:|---|---|
 | Company workflows | MM / LM | 46 / 20 active in Cloud | AdaptEng business | Подключается к Company OS (§5): Baserow/Drive/agent |
 | Personal workflows | JM / EC | 35 / 17 active in Cloud | Личные/отдельные автоматизации Ивана | Не company scope; изолированы от company данных |
-| Utility / gateway | EXP / gateway | 1 repo baseline; 1 active live-only gateway | Utility | classify explicitly; never silently becomes company authority |
+| Utility / gateway | EXP / gateway | 1 repo baseline; 0 active (1 live-only gateway frozen) | Utility | classify explicitly; never silently becomes company authority |
 
 Только company-домены **Marketing Machine / Lead Monitor** относятся к
 промышленной бизнес-автоматизации AdaptEng, и именно их §5 подключает к Baserow,
@@ -1359,7 +1368,7 @@ lead contract + repository identity → migration 004 live plan/restore gate
 
 ## 11. Current status
 
-| Component | Verified status on 2026-07-26 | Next milestone / constraint |
+| Component | Verified status through 2026-07-27 | Next milestone / constraint |
 |---|---|---|
 | Overall stage | **Operational foundation + controlled migration.** Company-owned Baserow, Shared Drive, Postgres, internal adapter and two governed self-hosted workflows are live. The daily content/media path and business AI are not yet cut over. | Finish corporate Drive copy/write path, migrate one MM workflow at a time, create first corporate draft, then run the inactive AI pilot. |
 | Company Workspace / Drive | Business Standard active (~€13.80/month public reference; invoice/VAT authoritative). `AdaptEng Company` Shared Drive and all eight canonical folders are organization-owned, live and re-verified by sanctioned dry run. Direct links and upload rules: `runbooks/company-drive.md`. | Full personal-account exit is **not complete**: current MM workflows and media-worker still use legacy personal bindings. Owner must verify Manager/recovery/break-glass access. |
@@ -1368,7 +1377,7 @@ lead contract + repository identity → migration 004 live plan/restore gate
 | Postgres `adapteng_ops` | Live. Migration **001** (stable ID allocator) and **004** (lead identity reservation) are applied and used. Repository implementations for 002/003/005/006 are merged. | 002 run-ledger, 003 approval/outbox, 005 AI gateway and 006 integrity remain unapplied; each needs backup + real consumer. A generic hash-only business-ID reservation is being built for non-lead case/content/document retries. |
 | Governed Baserow adapter | Live internal-only on Coolify (`adapteng-baserow-adapter:8080`), bearer-authenticated and field-ownership proven; no public FQDN. Explicit-`business_id` upserts and WEB-002's migration-004 reservation path are replay-safe. A bare COUNTER create with omitted `business_id` intentionally allocates a new ID on every call and must not be retried automatically. | Land/test generic hash-only reservation, then fresh backup + additive migration + adapter redeploy before automated case/content/document creation. Rotate the owner Coolify API token after launch work ends. |
 | self-hosted n8n | Healthy on `n8n.adapteng.com`; exactly two active governed workflows: AUT-001 Systems Registry and WEB-002 Lead Intake. Both call the internal adapter; WEB-002 passed create/replay/conflict/no-loss E2E. | Live Coolify source still points at `palinaruban-repo-status-review`, not `main`; repoint and verify auto-deploy before wider migration. |
-| n8n Cloud | Still authoritative for most Marketing Machine/Lead Monitor flows and personal JM/EC. Direct API verification after the safety freeze: **89 workflows / 38 active** versus 82 repository exports (14 live-only, 7 repo-only; pre-freeze baseline 42 active). MM-40 contained fabricated fallback/parser facts; version `f753e544` removed them and no-input execution `15197` failed before model. MM-40/MM-41 and downstream MM-42/MM-43 are unpublished with every entry trigger disabled; production execution probes reject them before a run. Historical pages 878/880/882/884/891 are in Trash, related rows are quarantined, cache purge run `30228283077` succeeded and page 891 now returns 404. Eight unattached public JPEG derivatives (media 886–889, 893–896) were then removed in execution `15211`; every REST/file URL returns 404 and Drive originals remain. Version history and archived remediation evidence remain. | Reconcile/export/sanitize inventory first. Keep MM-40..MM-43 frozen; replace them with authenticated corporate Drive/Baserow intake and the governed AI Gateway. Do not big-bang: snapshot → inactive self-hosted shadow → compare → canary → disable cloud twin → 7-day observation. Personal JM/EC require separate credentials/store/budget. |
+| n8n Cloud | Still authoritative for most Marketing Machine/Lead Monitor flows and personal JM/EC. Direct API verification after the safety freeze: **89 non-archived / 37 active** versus 82 repository exports; drift remains 14 live-only / 7 repo-only. The active-count freeze chain is **42 → 40 → 38 → 37**. MM-40 contained fabricated fallback/parser facts; version `f753e544` removed them and no-input execution `15197` failed before model. MM-40/MM-41 and downstream MM-42/MM-43 are unpublished with every entry trigger disabled; production execution probes reject them before a run. Live-only `d1SDcRTgMqS9Zvgi` (Claude n8n MCP Gateway) was not Company OS authority and had no execution after 2026-07-10. Although fixed to HTTP GET, it let AI select any n8n API GET path without endpoint allowlisting or response redaction, creating broad-read confidentiality/exfiltration risk to external Claude, not arbitrary-write risk. Active version `51f02adb` is retained; draft `de142f7b` disables the MCP trigger; the workflow is unpublished and production execution is rejected. Historical pages 878/880/882/884/891 are in Trash, related rows are quarantined, cache purge run `30228283077` succeeded and page 891 now returns 404. Eight unattached public JPEG derivatives (media 886–889, 893–896) were then removed in execution `15211`; every REST/file URL returns 404 and Drive originals remain. Version history and archived remediation evidence remain. | Reconcile/export/sanitize inventory first. Keep MM-40..MM-43 and `d1SDcRTgMqS9Zvgi` frozen; never connect the gateway to Company OS. Replace legacy business paths with authenticated corporate Drive/Baserow intake and the governed AI Gateway. Do not big-bang: snapshot → inactive self-hosted shadow → compare → canary → disable cloud twin → 7-day observation. Personal JM/EC require separate credentials/store/budget. |
 | Website | `adapteng.com` live on Cloudways. Governed producer PR remains held to avoid an unsafe automatic live deploy before consumer/cutover gates. | Map producer to WEB-002 only after origin auth, retention, HTTP 409, reconciliation, inactive shadow and rollback proofs. |
 | Media/content | `mm-media-worker` is live/HTTP-healthy, but uses old SA `media-worker@adapteng.iam.gserviceaccount.com`; active MM-01/MM-Visual and the worker still point to personal Drive, while frozen MM-41/MM-42 preserve legacy references only. The legacy chain historically created n8n/WordPress drafts and two duplicate sets of four public CASE-2026-001 JPEGs; pages are contained and all eight public derivatives are now deleted/404, with Drive originals untouched. No canonical corporate Drive draft exists yet. CASE-2026-001 metadata conflicts: Git says redaction resolved, later live Sheet says `needs_redaction_review`; media publication remains blocked. | Deploy the governed Drive bridge with `adapteng-ai-operator`, copy the source without deleting it, reconcile human media/redaction status, then rewire and canary the media/content path. |
 | AI agent | Code-change mode is actively delivering repository work. Business-artifact schemas/envelope/eval and deterministic AI-001 skill are merged, but a production audit reproduced incomplete task-envelope admission, optional external-action safety, accepted approval-like fields and local cap overrun; AG-008 hardening is in progress. Canonical AI Gateway/migration 005 are repo-only; no live model call. EU Vertex `gemini-3.1-flash-lite` non-global price rechecked at $0.275/M input and $1.65/M output (~$0.0121 representative draft). | Land AG-008; corporate source/draft path; AG-007 acceptance; verify Vertex IAM plus ZDR/cache-off/FX; deploy canonical gateway and run inactive measured call. Hard caps stay €0.10/call, €1/day, €10/month. |

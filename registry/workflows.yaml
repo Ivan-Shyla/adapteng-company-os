@@ -1,15 +1,17 @@
 # AdaptEng Company OS — Workflow Registry
-# Scope: ONLY the n8n workflows that are part of Company OS live operation.
+# Scope: Company OS live operation plus explicit safety/cutover pointers.
+# Non-authority workflows are marked and must never silently become Company OS.
 # The repository baseline index currently contains 82 workflow exports:
 #   adapteng-automation-platform/n8n/workflow-index.json  (repository baseline)
 # Personal domains (Job Monitor / English Coach) are out of Company scope (ARCHITECTURE.md §6.3).
 # No secrets: webhook paths and tokens are marked, not printed.
 version: 1
-updated: 2026-07-26
-last_verified_live: 2026-07-26
+updated: 2026-07-27
+last_verified_live: 2026-07-27
 live_counts:
   self_hosted: { total: 2, active: 2, drift: none }
-  cloud: { total: 89, active: 38, repo_exports: 82, live_only: 14, repo_only: 7 }
+  cloud: { total: 89, active: 37, repo_exports: 82, live_only: 14, repo_only: 7 }
+cloud_active_freeze_chain: "42 -> 40 (MM-40/MM-41) -> 38 (MM-42/MM-43) -> 37 (d1SDcRTgMqS9Zvgi)"
 
 canonical_full_index: adapteng-automation-platform/n8n/workflow-index.json  # 82 repository exports; live drift above must be reconciled
 
@@ -55,6 +57,16 @@ deferred_or_gated_workflows:
   - name: MM-18 website lead form intake (n8n Cloud)
     status: cloud-authority
     notes: Existing Marketing Machine lead workflow on n8n Cloud; WEB-002 is the governed self-hosted successor path.
+
+non_authority_cloud_safety_freezes:
+  - id: d1SDcRTgMqS9Zvgi
+    name: Claude n8n MCP Gateway
+    status: inactive-safety-freeze
+    authority: none; never Company OS authority
+    last_execution: no execution after 2026-07-10
+    transport: fixed HTTP GET
+    risk: broad-read confidentiality/exfiltration to external Claude because AI could select any n8n API GET path and responses had no endpoint allowlist or redaction; not arbitrary write
+    freeze: "previous active version 51f02adb retained; draft de142f7b has MCP trigger disabled; workflow unpublished; production execution rejected"
 
 legacy_cloud_authority_dependencies:
   # Pointers only; the 82 repository exports remain in automation-platform.
@@ -103,7 +115,7 @@ safety_evidence:
 cutover_truth:
   self_hosted_active_count: 2
   cloud_total_count: 89
-  cloud_active_count: 38
+  cloud_active_count: 37
   cloud_company_authority: Marketing Machine and Lead Monitor content/lead workflows
   personal_domains_on_cloud: [Job Monitor, English Coach]
   inventory_drift: 14 live-only / 7 repo-only versus 82 repository exports

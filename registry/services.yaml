@@ -9,7 +9,7 @@
 #   repo-merged-not-live     - code merged to main, no live deploy/wiring yet
 #   planned                  - designed, not built
 version: 1
-updated: 2026-07-26
+updated: 2026-07-27
 
 services:
   - id: adapteng-website
@@ -136,7 +136,7 @@ services:
     role: Current authority for legacy Marketing Machine/Lead Monitor and personal JM/EC workflows.
     status: live
     owner: Ivan
-    notes: Live API verified 89 non-archived workflows / 38 active on 2026-07-26 versus 82 repository exports (14 live-only, 7 repo-only). MM-40/MM-41 and downstream MM-42/MM-43 are unpublished with all entry triggers disabled after versioned snapshots and exact legacy-artifact remediation; authority otherwise remains until staged, evidence-based cutover (ARCHITECTURE.md §6.4).
+    notes: Live API verified 89 non-archived workflows / 37 active on 2026-07-27 versus 82 repository exports; drift remains 14 live-only / 7 repo-only. The active safety-freeze chain is 42 -> 40 (MM-40/MM-41) -> 38 (MM-42/MM-43) -> 37 (d1SDcRTgMqS9Zvgi Claude n8n MCP Gateway). The gateway is not Company OS authority and had no execution after 2026-07-10; fixed GET without endpoint allowlisting or response redaction created broad-read confidentiality/exfiltration risk to external Claude, not arbitrary-write risk. Prior active version 51f02adb is retained, draft de142f7b disables the MCP trigger, the workflow is unpublished, and production execution is rejected. Legacy business authority otherwise remains until staged, evidence-based cutover (ARCHITECTURE.md §6.4).
 
   - id: baserow-self-hosted
     repo: adapteng-automation-platform (deploy/coolify)

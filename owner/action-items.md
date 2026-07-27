@@ -90,16 +90,26 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   proven by a service account.
 - [ ] **Personal JM/EC isolation:** verify live credential/store identity;
   the `ISO-1` waiver expires **2026-08-08**.
-- [ ] **n8n Cloud inventory drift:** live API now reports 89 workflows / 38
-  active versus 82 repository exports (14 live-only, 7 repo-only). Export,
+- [ ] **n8n Cloud inventory drift:** live API now reports 89 non-archived
+  workflows / 37 active versus 82 repository exports; drift remains 14
+  live-only / 7 repo-only. The active safety-freeze chain is **42 → 40 → 38 →
+  37**. Export,
   sanitize, classify and reconcile before claiming the repository index is
   authoritative; do not bulk-import/activate during this cleanup. MM-40 through
   MM-43 were deliberately unpublished with all entry triggers disabled; do not
   reactivate their direct-model/public-form/WordPress/social path during
-  reconciliation. Historical WordPress pages 878/880/882/884/891 are already
-  in Trash, related n8n rows are quarantined and page 891 cache/public access
-  was verified closed. Unattached public media IDs 886–889 and 893–896 were
-  also removed and verified 404; the source Drive HEIC files remain untouched.
+  reconciliation. Live-only `d1SDcRTgMqS9Zvgi` (Claude n8n MCP Gateway) is not
+  Company OS authority and had no execution after 2026-07-10. Its fixed GET
+  method still allowed AI-selected n8n API read paths without endpoint
+  allowlisting or response redaction: broad-read confidentiality/exfiltration
+  risk to external Claude, **not arbitrary write**. Prior active version
+  `51f02adb` is retained; draft `de142f7b` disables the MCP trigger; it is
+  unpublished and production execution is rejected. Do not reactivate or
+  connect it to Company OS. Historical WordPress pages 878/880/882/884/891 are
+  already in Trash, related n8n rows are quarantined and page 891 cache/public
+  access was verified closed. Unattached public media IDs 886–889 and 893–896
+  were also removed and verified 404; the source Drive HEIC files remain
+  untouched.
 - [ ] **Media intake:** approve snapshot/rollback, import the backward-compatible
   consumer first, canary one real case, then redeploy the marketing worker.
 - [ ] **CASE-2026-001 media review:** repository metadata says redaction resolved,
