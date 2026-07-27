@@ -54,7 +54,12 @@ services:
     source_of_truth_for: id allocation + lead identity reservation
     status: live
     owner: Ivan
-    notes: Migrations 001 and 004 are applied and used; 002/003/005/006 remain unapplied. Fresh backup exists, restore drill remains open.
+    notes: >-
+      Migrations 001 and 004 are applied and used; 002/003/005/006 remain
+      repo-only and unapplied. Migration 007 source_identity_reservation is
+      repo-only in open automation-platform PR #80
+      (6c8d7830461ba5dcfcd261330f89c30d9b5d8c62) and unapplied. Fresh backup
+      exists; restore drill remains open.
 
   - id: adapteng-baserow-adapter
     repo: adapteng-automation-platform
@@ -147,7 +152,7 @@ services:
     credential_identity: media-worker@adapteng.iam.gserviceaccount.com (project adapteng; legacy GDRIVE_SA_JSON)
     status: live-legacy-binding
     owner: Ivan
-    notes: Runtime still uses the old service account/personal-Drive path. The backward-compatible governed consumer is merged but not imported, and the worker has not been redeployed with the new company service account.
+    notes: Runtime still uses the old service account/personal-Drive path. Media implementation remains split among this live worker, n8n Cloud MM workflows and the backward-compatible governed consumer, which is merged but not imported. The worker has not been redeployed with the new company service account.
 
   - id: n8n-self-hosted
     repo: adapteng-automation-platform (deploy/coolify)
@@ -158,7 +163,7 @@ services:
     source_of_truth_for: Company OS governed workflows (AUT-001, WEB-002)
     status: live-partial-authority
     owner: Ivan
-    notes: Hosts exactly two active governed workflows (AUT-001 and WEB-002). Coolify still deploys from branch palinaruban-repo-status-review; repoint to main is an owner action. n8n Cloud remains the authority for MM/LM/JM/EC domains until staged cutover.
+    notes: Hosts exactly two active governed workflows (AUT-001 and WEB-002). Coolify still deploys from branch palinaruban-repo-status-review; repoint to main is an owner action. Workflow-to-credential binding isolation and second-admin continuity are not yet evidenced. n8n Cloud remains the authority for MM/LM/JM/EC domains until staged cutover.
 
   - id: n8n-cloud
     repo: n/a (SaaS)

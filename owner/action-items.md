@@ -20,6 +20,17 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   and keep the replacement in the password manager/runtime secret store — not
   Git or chat. Existing encrypted workflow credentials/webhooks do not depend
   on this management key, so rotation should not interrupt AUT-001/WEB-002.
+- [ ] **Prove GitHub ownership/protection and isolate deploy credentials.** Core
+  repositories remain under the personal `Ivan-Shyla` namespace; company
+  ownership and `main` branch-protection enforcement are not yet evidenced.
+  Inventory deploy-key bindings by non-secret identifier, replace the shared
+  deploy key with per-repository/service least-privilege credentials, and prove
+  required review/protection without interrupting current deployments.
+- [ ] **Prove workflow credential isolation and second-admin continuity.** Record
+  the workflow→credential binding map by credential ID/name only — never values
+  — and verify company versus personal domain separation and least privilege.
+  Nominate and test a second administrator/break-glass operator so runtime
+  recovery does not depend on one personal account.
 - [ ] **Contain and archive legacy `PalinaRuban/adapteng`.** Treat it only as a
   personal-account June-2026 WordPress/Azure snapshot — not active Company OS,
   authoritative production or rollback. The live public site is on the separate
@@ -107,8 +118,11 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
 - [ ] **Restore drill:** restore an `adapteng_ops` backup into a scratch target
   and prove readability (§13 DoD). Backup last verified 2026-07-25 13:31.
 - [ ] **Migrations not live:** 002 (run ledger), 003 (approval/outbox), 005 (AI
-  gateway), 006 (integrity) — apply only with backup + a real consumer
-  (`runbooks/apply-migration.md`).
+  gateway), 006 (integrity) and 007 (source-identity reservation) are repo-only
+  and unapplied. Migration 007 is currently in open automation-platform PR #80
+  (`6c8d7830461ba5dcfcd261330f89c30d9b5d8c62`). Apply only after review, fresh
+  backup and a real consumer (`runbooks/apply-migration.md`); 007 also requires
+  adapter redeploy.
 - [ ] **Baserow off-host export/restore** completion; **Google Workspace**
   Manager/recovery acceptance.
 - [ ] **Workspace recovery/break-glass acceptance:** verify Ivan is Manager of
@@ -170,16 +184,23 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   `Content_Drafts` remains 19 pending and `Publish_Plan` remains 0; both were
   untouched. Approval cleanup is complete; reconcile the remaining draft
   lineage before canonical migration 003 cutover.
-- [ ] **Media intake:** approve snapshot/rollback, import the backward-compatible
-  consumer first, canary one real case, then redeploy the marketing worker.
+- [ ] **Media intake:** implementation remains split among the live
+  `adapteng-marketing` worker, n8n Cloud MM workflows and the governed consumer,
+  which is merged but not imported. Name the canonical implementation/owner,
+  approve snapshot/rollback, import the backward-compatible consumer first,
+  canary one real case, then redeploy the marketing worker.
 - [ ] **CASE-2026-001 media review:** repository metadata says redaction resolved,
   but a later live Sheet record says `needs_redaction_review` with a visible
   coordinate risk. Treat all six media files as blocked from publication until
   a human reconciles the live status and confirms EXIF/GPS/visual redaction.
 - [ ] **Rotate the Coolify API token** post-launch.
-- [ ] **Record actual invoices/renewals** for Hetzner, Cloudways, n8n Cloud,
-  Zoho, GoDaddy and Workspace. Public list prices are planning evidence; invoices
-  are the cost source of truth.
+- [ ] **Record vendor commercial baselines** for Hetzner, Cloudways, n8n Cloud,
+  Zoho, GoDaddy and Workspace: actual base cost, renewal/cancellation date,
+  account owner and SLA/support terms. Public list prices are planning evidence;
+  invoices are the cost source of truth.
+- [ ] **Clean up stale pull requests deliberately.** Classify each open PR as
+  current work, retained evidence or superseded draft; close stale and explicit
+  `DO NOT MERGE` branches with a reason, without merging merely to reduce count.
 - [ ] **GitHub Actions** monthly budget is $10 hard-stop — mind it when queueing
   CI-heavy work.
 
