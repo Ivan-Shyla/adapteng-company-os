@@ -98,7 +98,8 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   reactivate their direct-model/public-form/WordPress/social path during
   reconciliation. Historical WordPress pages 878/880/882/884/891 are already
   in Trash, related n8n rows are quarantined and page 891 cache/public access
-  was verified closed.
+  was verified closed. Unattached public media IDs 886–889 and 893–896 were
+  also removed and verified 404; the source Drive HEIC files remain untouched.
 - [ ] **Media intake:** approve snapshot/rollback, import the backward-compatible
   consumer first, canary one real case, then redeploy the marketing worker.
 - [ ] **CASE-2026-001 media review:** repository metadata says redaction resolved,

@@ -94,6 +94,11 @@ safety_evidence:
     status: archived-completed
     excluded_from_live_counts: true
     evidence: "15199 status probe; 15200 page 891 -> Trash + row 8 quarantine; 15201 rows 3/4/5/7 quarantine; Cloudways purge run 30228283077; exact public URLs -> 404"
+  - id: VZPWhwGDol0h1ECt
+    name: SAFETY-2026-07-27 Unapproved Media Removal
+    status: archived-completed
+    excluded_from_live_counts: true
+    evidence: "15211 exact deletion of WordPress media 886-889 and 893-896; every media REST/original-file URL -> 404; source Drive HEIC files untouched"
 
 cutover_truth:
   self_hosted_active_count: 2
