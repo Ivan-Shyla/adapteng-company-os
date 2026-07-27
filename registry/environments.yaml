@@ -1,0 +1,69 @@
+# AdaptEng Company OS — Environment Registry
+# Production hosts, domains, platform and budgets. NO secrets — names/hostnames/ids only.
+version: 1
+updated: 2026-07-26
+
+platform:
+  compute: Hetzner (EU region) — single self-hosted host
+  orchestrator: Coolify (self-hosted PaaS on Hetzner)
+  container_network: coolify (internal; services reach each other by alias, no public exposure)
+  policy: upgrade the existing host only after 7 days of measured CPU/RAM/disk pressure (ARCHITECTURE.md §9)
+
+domains:
+  - host: n8n.adapteng.com
+    service: n8n-self-hosted
+    tls: Let's Encrypt (valid to 2026-10-23)
+    exposure: public UI/API + header-authenticated webhooks
+  - host: baserow.adapteng.com
+    service: baserow-self-hosted
+    dns: A 37.27.213.220
+    tls: Let's Encrypt (valid to 2026-10-23)
+    exposure: public UI (login-gated)
+  - host: adapteng-baserow-adapter:8080
+    service: adapteng-baserow-adapter
+    exposure: INTERNAL ONLY (coolify network alias; no public URL — verified 503 externally)
+
+external_saas:
+  - name: n8n Cloud
+    role: current authority for legacy MM/LM/JM/EC workflows; AUT-001 and WEB-002 already run on self-hosted n8n
+    cost: paid/account-specific; record invoice before decommission decision
+  - name: Cloudways WordPress
+    role: live website + published content (adapteng-website)
+    cost: paid/account-specific; record invoice
+  - name: GoDaddy
+    role: domain + DNS
+    cost: paid/account-specific; record invoice/renewal
+  - name: Zoho
+    role: mail / SMTP (no Gmail migration)
+    cost: paid/account-specific; record invoice/plan
+  - name: Google Workspace (Business Standard)
+    role: company documents + Shared Drive
+    public_price_reference: ~EUR 13.80/user/month on annual commitment, excluding VAT (rechecked 2026-07-26)
+    actual_cost_rule: invoice/VAT is authoritative
+  - name: Google Cloud (Vertex AI + Drive API)
+    project: adapteng-workspace-automation
+    service_account: adapteng-ai-operator@adapteng-workspace-automation.iam.gserviceaccount.com
+    delegation: domain-wide; scope https://www.googleapis.com/auth/drive (delegated to owner primary Workspace user)
+    credential_ref: GOOGLE_SERVICE_ACCOUNT_JSON_B64  # Coolify runtime secret; value NEVER in repo
+    role: Drive read/write via DWD now; intended ai-gateway identity only after Vertex IAM/ADC permission is independently verified
+    status: provided 2026-07-26; governed Drive bridge in build; Vertex AI User role/endpoint access not yet evidenced
+  - name: GitHub
+    role: code, contracts, architecture, evidence
+    actions_budget: USD 10/month, hard stop enabled
+
+budgets:
+  ai_runtime_cap_eur_month: 10        # business_artifact runtime only (gateway drafts/classify/extract)
+  ai_per_call_cap_eur: 0.10
+  ai_per_day_cap_eur: 1
+  dev_model_budget: owner subscription (code_change mode) — OUTSIDE the EUR 10 runtime cap
+  evidenced_new_recurring_eur_month: 13.80  # Google Workspace; AI cap is fail-closed, not spend
+  planned_not_purchased:
+    - Hetzner Storage Box BX11 (~EUR 3.20/month) — backup/object storage, not yet purchased
+
+regions_and_residency:
+  data_residency: EU (compute in EU; AI model access via EU Vertex multi-region only — see ai/model-choices.md)
+
+software_fee_classification:
+  n8n_community_self_hosted: EUR 0 software fee; Hetzner infrastructure paid
+  baserow_self_hosted_community: EUR 0 software fee; Hetzner infrastructure paid
+  coolify_self_hosted: no incremental software fee evidenced; infrastructure paid

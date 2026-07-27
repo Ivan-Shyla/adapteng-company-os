@@ -1,0 +1,166 @@
+# AdaptEng Company OS — Service Registry
+# Index only. No secrets, no PII, no code copies. Secret VALUES live in Coolify /
+# provider consoles and are referenced by name. Canonical status: ARCHITECTURE.md §11.
+# status vocabulary:
+#   live                     - running in production and proven
+#   infra-live-not-cutover   - infrastructure runs, but not yet the authority
+#   live-partial-authority   - production workload runs here, but other domains remain on a legacy authority
+#   live-legacy-binding      - production service is up but still uses a credential/data binding scheduled for cutover
+#   repo-merged-not-live     - code merged to main, no live deploy/wiring yet
+#   planned                  - designed, not built
+version: 1
+updated: 2026-07-26
+
+services:
+  - id: adapteng-website
+    repo: adapteng-website
+    path: wp-content/themes/adapteng + wp-content/plugins/adapteng-core
+    role: Public website, Fluent Forms lead capture and published content.
+    runtime: Cloudways WordPress
+    endpoint: https://adapteng.com
+    source_of_truth_for: published website content + persisted Fluent Forms entries
+    depends_on: [Cloudways WordPress/PHP/MySQL, Fluent Forms, Slim SEO, Zoho SMTP]
+    status: live
+    owner: Ivan
+    notes: Changes under wp-content auto-deploy from main. Draft PR #78 remains held; payload fits WEB-002 in principle but self-hosted URL/header auth, durable retry, 409 dead-letter and producer E2E are still being hardened.
+
+  - id: postgres-adapteng-ops
+    repo: adapteng-automation-platform
+    path: database/migrations
+    role: Internal operational truth for stable IDs, lead reservations and future run/approval/cost ledgers.
+    runtime: Coolify PostgreSQL 16, internal-only
+    source_of_truth_for: id allocation + lead identity reservation
+    status: live
+    owner: Ivan
+    notes: Migrations 001 and 004 are applied and used; 002/003/005/006 remain unapplied. Fresh backup exists, restore drill remains open.
+
+  - id: adapteng-baserow-adapter
+    repo: adapteng-automation-platform
+    path: services/adapteng-baserow-adapter
+    role: Governed write path into Baserow Company Operations (allocates AE-* business ids and enforces field ownership).
+    runtime: Coolify (Hetzner), internal-only
+    endpoint_internal: http://adapteng-baserow-adapter:8080  # /v1/upsert, /healthz
+    public_endpoint: none (public URL removed after canary; verified 503)
+    coolify_app_uuid: rrzq6gk3qpjfwuphvj1vsfzq
+    auth: internal bearer (ADAPTER_SERVICE_TOKEN), rotated post-canary
+    source_of_truth_for: none (writes into Baserow; authority stays Baserow/Postgres)
+    depends_on: [postgres-adapteng-ops (id allocator, migration 001), baserow-company-operations]
+    status: live
+    owner: Ivan
+    notes: >-
+      Migration 001 applied on first boot via RUN_MIGRATIONS_ON_START, then the
+      flag returned to false. Proven live by AUT-001 + WEB-002. Replay is safe
+      with an explicit business_id and through WEB-002's migration-004 lead
+      reservation. Bare COUNTER creates with business_id omitted allocate a new
+      ID on each call; generic hash-only reservation is in build before
+      automated case/content/document writes.
+
+  - id: ai-gateway
+    repo: adapteng-automation-platform
+    path: services/ai-gateway
+    role: Provider-pluggable model adapter (EU Vertex canonical). First op is a schema-valid, side-effect-free draft.
+    runtime: Coolify (target); not deployed
+    source_of_truth_for: none
+    depends_on: [postgres-adapteng-ops (migration 005 ai_gateway), approval-outbox]
+    status: repo-merged-not-live
+    owner: Ivan
+    notes: PR #71 merged. Migration 005 NOT live-applied. GCP project/SA provided 2026-07-26 (adapteng-workspace-automation, key in Coolify GOOGLE_SERVICE_ACCOUNT_JSON_B64); still needs deploy + real EU Vertex client wiring + FX config. See ai/model-choices.md and decisions/ (ADR-0010 in automation-platform).
+
+  - id: integrity-reconciler
+    repo: adapteng-automation-platform
+    path: services/integrity-reconciler
+    role: Read-only, offline, all-or-nothing drift detection across Postgres/Baserow/Drive vs an expected projection manifest. PII-minimized findings.
+    runtime: offline CLI (no live schedule by design)
+    source_of_truth_for: none (never writes; findings require human review)
+    depends_on: [postgres-adapteng-ops (migration 006 integrity schema)]
+    status: repo-merged-not-live
+    owner: Ivan
+    notes: PR #74 merged. ADR-0011 defers live schedule, Finding->Action adapter, n8n workflow, live manifest wiring and deployed credentials to future approved PRs; writes are forbidden forever. Drive service-account creds provided 2026-07-26 (deploy-time unblocked); live run still ADR-0011/approved-PR gated. See owner/action-items.md.
+
+  - id: adapteng-run-ledger
+    repo: adapteng-automation-platform
+    path: services/adapteng-run-ledger
+    role: Idempotent task/run/outcome ledger in adapteng_ops (agent run adapter, AG-004).
+    runtime: library/service
+    source_of_truth_for: run/outcome ledger (Postgres)
+    depends_on: [postgres-adapteng-ops (migration 002 run_ledger)]
+    status: repo-merged-not-live
+    owner: Ivan
+    notes: PR #65 merged; live wiring open.
+
+  - id: adapteng-drive-adapter
+    repo: adapteng-automation-platform
+    path: services/adapteng-drive-adapter
+    role: Google Drive read/pending-write adapter (metadata-first; evidence/documents).
+    runtime: service
+    source_of_truth_for: none (Drive is the document/evidence authority)
+    status: repo-merged-not-live
+    owner: Ivan
+    notes: Google service-account provided 2026-07-26 (adapteng-ai-operator, Drive scope, domain-wide delegation; key in Coolify GOOGLE_SERVICE_ACCOUNT_JSON_B64). Deploy-time unblocked; not yet deployed/wired live.
+
+  - id: adapteng-baserow-schema
+    repo: adapteng-automation-platform
+    path: services/adapteng-baserow-schema
+    role: Idempotent Company OS schema provisioner for Baserow (create-or-get).
+    runtime: dispatch-only GitHub workflow
+    source_of_truth_for: Baserow Company OS schema shape (8 tables / 107 fields / 10 views)
+    status: live  # schema provisioned live; provisioner itself is dispatch-only
+    owner: Ivan
+    notes: Provisioned live via automation-platform PR #76. Read-only table-id binding captured on main (PR #77). See registry/data-stores.yaml.
+
+  - id: adapteng-media-worker
+    repo: adapteng-marketing
+    path: services/adapteng-media-worker
+    role: Live marketing media/content intake and normalization worker.
+    runtime: Coolify (Hetzner)
+    endpoint: https://media-worker.adapteng.com
+    health: HTTP 200 verified 2026-07-26
+    credential_identity: media-worker@adapteng.iam.gserviceaccount.com (project adapteng; legacy GDRIVE_SA_JSON)
+    status: live-legacy-binding
+    owner: Ivan
+    notes: Runtime still uses the old service account/personal-Drive path. The backward-compatible governed consumer is merged but not imported, and the worker has not been redeployed with the new company service account.
+
+  - id: n8n-self-hosted
+    repo: adapteng-automation-platform (deploy/coolify)
+    role: Target automation runtime for Company OS governed workflows.
+    runtime: Coolify (Hetzner)
+    endpoint: https://n8n.adapteng.com
+    tls: Let's Encrypt, valid to 2026-10-23
+    source_of_truth_for: Company OS governed workflows (AUT-001, WEB-002)
+    status: live-partial-authority
+    owner: Ivan
+    notes: Hosts exactly two active governed workflows (AUT-001 and WEB-002). Coolify still deploys from branch palinaruban-repo-status-review; repoint to main is an owner action. n8n Cloud remains the authority for MM/LM/JM/EC domains until staged cutover.
+
+  - id: n8n-cloud
+    repo: n/a (SaaS)
+    role: Current authority for legacy Marketing Machine/Lead Monitor and personal JM/EC workflows.
+    status: live
+    owner: Ivan
+    notes: Live API verified 89 non-archived workflows / 38 active on 2026-07-26 versus 82 repository exports (14 live-only, 7 repo-only). MM-40/MM-41 and downstream MM-42/MM-43 are unpublished with all entry triggers disabled after versioned snapshots and exact legacy-artifact remediation; authority otherwise remains until staged, evidence-based cutover (ARCHITECTURE.md §6.4).
+
+  - id: baserow-self-hosted
+    repo: adapteng-automation-platform (deploy/coolify)
+    role: Human Company OS interface (single work surface).
+    runtime: Coolify (Hetzner)
+    endpoint: https://baserow.adapteng.com
+    dns: A 37.27.213.220
+    tls: Let's Encrypt, valid to 2026-10-23
+    source_of_truth_for: structured human collaboration (Company Operations database)
+    status: live
+    owner: Ivan
+    notes: Off-host export/restore still to be completed by owner.
+
+  - id: ai-dev-loop-control-plane
+    repo: ai-dev-loop-control-plane
+    role: Generic agent admission/execution/evidence/validation/review lifecycle (code mode + business-artifact mode). This is "our AI agent".
+    runtime: container (Coolify acceptance proven AG-006)
+    source_of_truth_for: agent run lifecycle + evidence envelope
+    status: repo-merged-not-live
+    owner: Ivan
+    notes: >-
+      Business-artifact contracts + AG-003 envelope integrity are merged, but a
+      2026-07-26 production-readiness audit blocked live use: completion must
+      enforce the task envelope/no-external-action fields and the local
+      in-memory gateway must not be used as the persistent budget authority.
+      Hardening PR in progress; canonical live model path remains
+      automation-platform ai-gateway.

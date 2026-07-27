@@ -1,0 +1,110 @@
+# AdaptEng Company OS — Workflow Registry
+# Scope: ONLY the n8n workflows that are part of Company OS live operation.
+# The repository baseline index currently contains 82 workflow exports:
+#   adapteng-automation-platform/n8n/workflow-index.json  (repository baseline)
+# Personal domains (Job Monitor / English Coach) are out of Company scope (ARCHITECTURE.md §6.3).
+# No secrets: webhook paths and tokens are marked, not printed.
+version: 1
+updated: 2026-07-26
+last_verified_live: 2026-07-26
+live_counts:
+  self_hosted: { total: 2, active: 2, drift: none }
+  cloud: { total: 89, active: 38, repo_exports: 82, live_only: 14, repo_only: 7 }
+
+canonical_full_index: adapteng-automation-platform/n8n/workflow-index.json  # 82 repository exports; live drift above must be reconciled
+
+company_os_workflows:
+  - id: NsWG1hD8VmIRRwCv
+    name: AUT-001 Systems Registry (governed upsert)
+    runtime: self-hosted n8n (n8n.adapteng.com)
+    trigger: webhook (header-authenticated, X-Webhook-Token; path secret)
+    calls: adapteng-baserow-adapter (internal http://adapteng-baserow-adapter:8080/v1/upsert)
+    writes: Baserow Systems_Automations (table 849), governed by field ownership
+    governance: idempotent upsert; skipped_human_owned protects human fields (e.g. health)
+    status: live-active
+    proven: 2026-07-25 (created AE-SYS-baserow-adapter, idempotent governed re-run, pure-internal, verified 503 on public)
+    owner: Ivan
+
+  - id: 05ytz5If9kHUOYuA
+    name: WEB-002 Lead Intake (governed)
+    runtime: self-hosted n8n (n8n.adapteng.com)
+    trigger: webhook (header-authenticated, X-Webhook-Token; path secret)
+    input_contract: lead.created v1 (source/consent/language/service/correlation id)
+    pipeline: Validate -> reserve_lead_identity (Postgres) -> FetchRid -> build payloads -> 4x governed upsert (Organization, Person, Opportunity, one-day Action) -> Respond200
+    idempotency: business_id derived from a stable Postgres reservation (public.lead_identity_reservation); retry-safe
+    fail_closed: per-node error outputs route to Respond500 (HTTP 500) so a producer retries instead of silently losing a lead
+    calls: adapteng-baserow-adapter (internal)
+    writes: Baserow Organizations 842 / People 843 / Opportunities 844 / Actions 846
+    status: live-active
+    proven: 2026-07-25 (T1 create, T2 idempotent replay, T3 reservation conflict -> HTTP 409, T4 no-loss -> HTTP 500 -> clean retry; independent Baserow read-back, zero duplicates)
+    owner: Ivan
+    consumer_pending: website producer (automation-platform PR #78) is held; point it at this webhook when unheld.
+
+  - id: 5f501c9b-f912-4a92-b822-ec57259c440c
+    name: Weekly Company OS status
+    runtime: app scheduled workflow (not n8n)
+    trigger: schedule (Mondays 09:00 local)
+    effect: evidence-only refresh of this repo's status PR; NEVER mutates live systems; never auto-merges
+    status: enabled (first scheduled run pending)
+    owner: Ivan
+
+deferred_or_gated_workflows:
+  - name: INT-001 integrity reconcile schedule
+    status: deferred-by-ADR-0011
+    notes: No live schedule / no n8n workflow by design until a future approved PR. See registry/services.yaml integrity-reconciler.
+  - name: MM-18 website lead form intake (n8n Cloud)
+    status: cloud-authority
+    notes: Existing Marketing Machine lead workflow on n8n Cloud; WEB-002 is the governed self-hosted successor path.
+
+legacy_cloud_authority_dependencies:
+  # Pointers only; the 82 repository exports remain in automation-platform.
+  - { id: fTJVvxC0hviQy0im, name: MM-01, dependency: "legacy personal 01_Inbox", cutover: pending }
+  - { id: uBVRMTCKwnUG91kU, name: MM-Visual-Evidence-Intake, dependency: "legacy personal 00_Case_Uploads", cutover: pending }
+  - id: sM8lksVuYfMUeC6U
+    name: MM-40
+    status: inactive-safety-freeze
+    dependency: direct GPT-5 Mini draft generation
+    live_safety_fix: "version f753e544: fabricated sample/parser facts removed; no-input execution 15197 failed before model"
+    freeze: "unpublished; Manual Start + Execute Workflow Trigger disabled (draft 72c56b5e); execution API rejects it before a run; version history retained"
+    cutover: replace with governed AI Gateway; never reactivate as Company OS AI authority
+  - id: z2dYx1mvy9rXOsLY
+    name: MM-41
+    status: inactive-safety-freeze
+    dependency: public n8n form + legacy personal 00_Case_Uploads + MM-40/MM-42/MM-43 chain
+    freeze: "unpublished; Case Intake Form trigger disabled (draft 07d25f5f); execution API rejects it before a run; rollback version eeb3a3f3 retained"
+    cutover: replace with authenticated corporate Drive/Baserow intake; do not reactivate the public legacy form
+  - id: ZKxNt2F9LyRiwQZH
+    name: MM-42
+    status: inactive-safety-freeze
+    dependency: legacy personal 00_Case_Uploads + WordPress draft
+    freeze: "unpublished; Manual Start + Execute Workflow Trigger disabled (draft d2cc59d1); production execution rejects it before a run; prior active version 117c995c retained"
+    remediation: "historical WordPress pages 878/880/882/884/891 are in Trash; related Case_Content rows are blocked/quarantined; page 891 cache purged and public URLs return 404"
+    cutover: replace with corporate Drive/Baserow draft path; do not reactivate
+  - id: l2mvHcqbkaKhGiAr
+    name: MM-43
+    status: inactive-safety-freeze
+    dependency: legacy case package + Telegram social-review path
+    freeze: "unpublished; Manual Test + weekly Schedule + Execute Workflow Trigger disabled (draft fa4c5385); production execution rejects it before a run; prior active version 45f38d25 retained"
+    cutover: replace with approved corporate content snapshot; do not reactivate
+  - { id: T3WHl2kCkPiPOPQd, name: MM-30, dependency: "deterministic draft builder", status: inactive }
+
+safety_evidence:
+  - id: QMqxSBRhaIfzYNTy
+    name: SAFETY-2026-07-26 Legacy Draft Quarantine
+    status: archived-completed
+    excluded_from_live_counts: true
+    evidence: "15199 status probe; 15200 page 891 -> Trash + row 8 quarantine; 15201 rows 3/4/5/7 quarantine; Cloudways purge run 30228283077; exact public URLs -> 404"
+  - id: VZPWhwGDol0h1ECt
+    name: SAFETY-2026-07-27 Unapproved Media Removal
+    status: archived-completed
+    excluded_from_live_counts: true
+    evidence: "15211 exact deletion of WordPress media 886-889 and 893-896; every media REST/original-file URL -> 404; source Drive HEIC files untouched"
+
+cutover_truth:
+  self_hosted_active_count: 2
+  cloud_total_count: 89
+  cloud_active_count: 38
+  cloud_company_authority: Marketing Machine and Lead Monitor content/lead workflows
+  personal_domains_on_cloud: [Job Monitor, English Coach]
+  inventory_drift: 14 live-only / 7 repo-only versus 82 repository exports
+  rule: one inactive shadow and controlled canary at a time; never big-bang
