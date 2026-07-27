@@ -71,7 +71,10 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
             "whenever",
             "where",
             "whereas",
+            "whereby",
             "wherever",
+            "wherein",
+            "whereupon",
             "whether",
             "which",
             "whichever",
@@ -88,14 +91,31 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
     STANDARD_MULTIWORD_CONTINUATIONS = (
         "as if",
         "as long as",
+        "as soon as",
+        "as though",
         "assuming that",
         "considering that",
         "even if",
         "even though",
+        "even when",
         "except that",
         "given that",
         "in case",
+        "in order that",
+        "inasmuch as",
+        "insofar as",
+        "just as",
+        "no matter how",
+        "no matter what",
+        "no matter when",
+        "no matter where",
+        "no matter whether",
+        "no matter which",
+        "no matter who",
+        "no matter why",
         "now that",
+        "on condition that",
+        "on the condition that",
         "only if",
         "provided that",
         "providing that",
@@ -103,6 +123,14 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
         "so that",
         "supposing that",
         "whether or not",
+    )
+    REPRODUCED_BOUNDED_LINKERS = (
+        "even when",
+        "just as",
+        "in order that",
+        "on condition that",
+        "whereby",
+        "wherein",
     )
 
     def assert_single_clause_violation(
@@ -686,6 +714,168 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                             unsafe_value,
                         )
 
+    def test_reproduced_bounded_linker_full_matrix(self) -> None:
+        next_value = "Synthetic-reproduced-linker-label-1234567890"
+        unsafe_value = "synthetic-reproduced-linker-unsafe-1234567890"
+        spacings = ("", " ", "\t")
+        cases = 0
+        for linker_index, linker in enumerate(
+            self.REPRODUCED_BOUNDED_LINKERS
+        ):
+            for first_index, (
+                first_name,
+                first_opening,
+                first_closing,
+            ) in enumerate(self.QUOTE_PAIRS):
+                for punctuation_index, punctuation in enumerate(".?!"):
+                    for next_index, (
+                        next_name,
+                        next_opening,
+                        next_closing,
+                    ) in enumerate(self.QUOTE_PAIRS):
+                        for wrapper_index, (
+                            wrapper_name,
+                            wrapper_opening,
+                            wrapper_closing,
+                        ) in enumerate(self.NEXT_CONTEXT_WRAPPERS):
+                            for spacing_index, spacing in enumerate(spacings):
+                                variant = (
+                                    linker_index
+                                    + first_index
+                                    + punctuation_index
+                                    + next_index
+                                    + wrapper_index
+                                    + spacing_index
+                                ) % 3
+                                rendered_linker = (
+                                    linker
+                                    if variant == 0
+                                    else (
+                                        linker.upper().replace(" ", "\t")
+                                        if variant == 1
+                                        else linker.title().replace(" ", "  ")
+                                    )
+                                )
+                                tail_spacing = spacings[
+                                    (spacing_index + 1) % len(spacings)
+                                ]
+                                with self.subTest(
+                                    linker=linker,
+                                    first=first_name,
+                                    punctuation=punctuation,
+                                    next=next_name,
+                                    wrapper=wrapper_name,
+                                    spacing=repr(spacing),
+                                    variant=variant,
+                                ):
+                                    line = (
+                                        "The cleanup token "
+                                        + first_opening
+                                        + "[REDACTED]"
+                                        + punctuation
+                                        + first_closing
+                                        + spacing
+                                        + wrapper_opening
+                                        + next_opening
+                                        + next_value
+                                        + next_closing
+                                        + wrapper_closing
+                                        + tail_spacing
+                                        + rendered_linker
+                                        + " later records `"
+                                        + unsafe_value
+                                        + "`"
+                                    )
+                                    self.assert_single_clause_violation(
+                                        line,
+                                        unsafe_value,
+                                    )
+                                    cases += 1
+        self.assertEqual(
+            len(self.REPRODUCED_BOUNDED_LINKERS)
+            * len(self.QUOTE_PAIRS)
+            * 3
+            * len(self.QUOTE_PAIRS)
+            * len(self.NEXT_CONTEXT_WRAPPERS)
+            * len(spacings),
+            cases,
+        )
+
+    def test_reproduced_linker_partial_forms_stay_standalone(self) -> None:
+        malformed_by_linker = {
+            "even when": ("even", "evenwhen", "even whenever", "xeven when"),
+            "just as": ("just", "justas", "just asx", "xjust as"),
+            "in order that": (
+                "in",
+                "in order",
+                "inorderthat",
+                "in order thatx",
+                "xin order that",
+            ),
+            "on condition that": (
+                "on",
+                "on condition",
+                "onconditionthat",
+                "on condition thatx",
+                "xon condition that",
+            ),
+            "whereby": ("xwhereby", "wherebyx", "whereby-extra"),
+            "wherein": ("xwherein", "whereinx", "wherein-extra"),
+        }
+        next_value = "Synthetic-partial-linker-subject-1234567890"
+        unsafe_value = "synthetic-partial-linker-label-1234567890"
+        for linker, malformed_forms in malformed_by_linker.items():
+            for malformed in malformed_forms:
+                for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
+                    for (
+                        wrapper_name,
+                        wrapper_opening,
+                        wrapper_closing,
+                    ) in self.NEXT_CONTEXT_WRAPPERS:
+                        with self.subTest(
+                            linker=linker,
+                            malformed=malformed,
+                            next=next_name,
+                            wrapper=wrapper_name,
+                        ):
+                            prefix = 'The cleanup token "[REDACTED]."'
+                            line = (
+                                prefix
+                                + " "
+                                + wrapper_opening
+                                + next_opening
+                                + next_value
+                                + next_closing
+                                + wrapper_closing
+                                + " "
+                                + malformed.title()
+                                + " production applies. `"
+                                + unsafe_value
+                                + "`"
+                            )
+                            self.assert_boundary_after(line, prefix)
+
+    def test_multiword_linkers_do_not_cross_newlines(self) -> None:
+        next_value = "Synthetic-newline-linker-subject-1234567890"
+        for linker in (
+            "even when",
+            "just as",
+            "in order that",
+            "on condition that",
+        ):
+            malformed = linker.replace(" ", "\n", 1)
+            prefix = 'The cleanup token "[REDACTED]."'
+            line = (
+                prefix
+                + ' "'
+                + next_value
+                + '" '
+                + malformed
+                + " production applies."
+            )
+            with self.subTest(linker=linker):
+                self.assert_boundary_after(line, prefix)
+
     def test_multiword_first_words_require_the_complete_phrase(self) -> None:
         first_words = sorted(
             {
@@ -701,7 +891,12 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                 "even",
                 "given",
                 "in",
+                "inasmuch",
+                "insofar",
+                "just",
+                "no",
                 "now",
+                "on",
                 "only",
                 "rather",
                 "supposing",
@@ -1031,6 +1226,96 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                                         + suffix
                                     )
                                     self.assert_boundary_after(line, prefix)
+
+    def test_overlong_markdown_marker_runs_are_conservative(self) -> None:
+        next_value = "Synthetic-overlong-marker-label-1234567890"
+        unsafe_value = "synthetic-overlong-marker-unsafe-1234567890"
+        flanks = (
+            ("detached", "", ""),
+            ("identifier-prefix", "x", ""),
+            ("identifier-suffix", "", "tail"),
+        )
+        cases = 0
+        for first_name, first_opening, first_closing in self.QUOTE_PAIRS:
+            for punctuation in ".?!":
+                for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
+                    for marker in ("*", "_"):
+                        for run_length in (3, 4, 5, 7):
+                            marker_run = marker * run_length
+                            for flank_name, prefix_flank, suffix_flank in flanks:
+                                with self.subTest(
+                                    first=first_name,
+                                    punctuation=punctuation,
+                                    next=next_name,
+                                    marker=marker,
+                                    run_length=run_length,
+                                    flank=flank_name,
+                                ):
+                                    line = (
+                                        "The cleanup token "
+                                        + first_opening
+                                        + "[REDACTED]"
+                                        + punctuation
+                                        + first_closing
+                                        + " "
+                                        + prefix_flank
+                                        + marker_run
+                                        + next_opening
+                                        + next_value
+                                        + next_closing
+                                        + marker_run
+                                        + suffix_flank
+                                        + " and later `"
+                                        + unsafe_value
+                                        + "` remains"
+                                    )
+                                    self.assert_single_clause_violation(
+                                        line,
+                                        unsafe_value,
+                                    )
+                                    cases += 1
+        self.assertEqual(5 * 3 * 5 * 2 * 4 * len(flanks), cases)
+
+    def test_distinct_markdown_marker_runs_can_nest(self) -> None:
+        next_value = "Synthetic-distinct-marker-label-1234567890"
+        distinct_pairs = tuple(
+            (outer, inner)
+            for outer in self.EMPHASIS_WRAPPERS
+            for inner in self.EMPHASIS_WRAPPERS
+            if outer[1][0] != inner[1][0]
+        )
+        self.assertEqual(8, len(distinct_pairs))
+        for first_name, first_opening, first_closing in self.QUOTE_PAIRS:
+            for punctuation in ".?!":
+                for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
+                    for outer, inner in distinct_pairs:
+                        with self.subTest(
+                            first=first_name,
+                            punctuation=punctuation,
+                            next=next_name,
+                            outer=outer[0],
+                            inner=inner[0],
+                        ):
+                            prefix = (
+                                "The cleanup token "
+                                + first_opening
+                                + "[REDACTED]"
+                                + punctuation
+                                + first_closing
+                            )
+                            line = (
+                                prefix
+                                + " "
+                                + outer[1]
+                                + inner[1]
+                                + next_opening
+                                + next_value
+                                + next_closing
+                                + inner[2]
+                                + outer[2]
+                                + " remains."
+                            )
+                            self.assert_boundary_after(line, prefix)
 
     def test_nested_simple_and_emphasis_wrapper_contexts(self) -> None:
         next_value = "Synthetic-nested-wrapper-label-1234567890"

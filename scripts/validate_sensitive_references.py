@@ -72,8 +72,8 @@ HORIZONTAL_SPACE = frozenset(" \t\f\v")
 POST_QUOTE_SKIPPABLE = HORIZONTAL_SPACE | frozenset(")]}\u201d\u2019")
 OPENING_WRAPPERS = frozenset("([{")
 CONTINUATION_PUNCTUATION = frozenset(",:-\u2010\u2011\u2012\u2013\u2014\u2015")
-# Keep this bounded to standard linking forms: these words conservatively retain
-# credential scope, while ordinary lowercase predicates can still start a sentence.
+# Finite common-modern-English coordinating, subordinating, and relative linkers
+# retain credential scope; ordinary lowercase predicates can still start a sentence.
 COORDINATING_CONTINUATION_WORDS = frozenset(
     {"and", "but", "for", "nor", "or", "so", "yet"}
 )
@@ -117,6 +117,9 @@ RELATIVE_CONTINUATION_WORDS = frozenset(
         "whom",
         "whomever",
         "whose",
+        "whereby",
+        "wherein",
+        "whereupon",
     }
 )
 ADDITIONAL_LINKING_WORDS = frozenset(
@@ -125,14 +128,31 @@ ADDITIONAL_LINKING_WORDS = frozenset(
 MULTIWORD_CONTINUATION_STARTERS = (
     "as if",
     "as long as",
+    "as soon as",
+    "as though",
     "assuming that",
     "considering that",
     "even if",
     "even though",
+    "even when",
     "except that",
     "given that",
     "in case",
+    "in order that",
+    "inasmuch as",
+    "insofar as",
+    "just as",
+    "no matter how",
+    "no matter what",
+    "no matter when",
+    "no matter where",
+    "no matter whether",
+    "no matter which",
+    "no matter who",
+    "no matter why",
     "now that",
+    "on condition that",
+    "on the condition that",
     "only if",
     "provided that",
     "providing that",
@@ -523,10 +543,40 @@ def skip_characters(text: str, index: int, characters: frozenset[str]) -> int:
 
 
 def wrapper_at(text: str, index: int) -> WrapperSpec | None:
+    if index < len(text) and text[index] in "*_":
+        run_length = markdown_marker_run_length(text, index)
+        if run_length not in {1, 2}:
+            return None
+        marker = text[index]
+        expected = marker * run_length
+        return next(
+            (
+                wrapper
+                for wrapper in NEXT_QUOTE_WRAPPERS
+                if wrapper.markdown_emphasis
+                and wrapper.opener == expected
+            ),
+            None,
+        )
     for wrapper in NEXT_QUOTE_WRAPPERS:
-        if text.startswith(wrapper.opener, index):
+        if (
+            not wrapper.markdown_emphasis
+            and text.startswith(wrapper.opener, index)
+        ):
             return wrapper
     return None
+
+
+def markdown_marker_run_length(text: str, index: int) -> int:
+    marker = text[index]
+    if marker not in "*_" or (
+        index > 0 and text[index - 1] == marker
+    ):
+        return 0
+    end = index + 1
+    while end < len(text) and text[end] == marker:
+        end += 1
+    return end - index
 
 
 def is_identifier_character(character: str) -> bool:
@@ -542,10 +592,16 @@ def wrapper_has_valid_opening_flank(
 ) -> bool:
     if not wrapper.markdown_emphasis:
         return True
+    if markdown_marker_run_length(text, index) != len(wrapper.closer):
+        return False
     previous = text[index - 1] if index else ""
     following_index = index + len(wrapper.opener)
     return (
-        (not previous or not is_identifier_character(previous))
+        (
+            not previous
+            or previous in "*_"
+            or not is_identifier_character(previous)
+        )
         and following_index < len(text)
         and not text[following_index].isspace()
     )
@@ -565,6 +621,7 @@ def wrapper_has_valid_closing_flank(
         and not previous.isspace()
         and (
             following_index >= len(text)
+            or text[following_index] in "*_"
             or not is_identifier_character(text[following_index])
         )
     )
