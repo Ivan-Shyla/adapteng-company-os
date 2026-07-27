@@ -22,6 +22,43 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
         ("typographic-double", "\u201c", "\u201d"),
         ("typographic-single", "\u2018", "\u2019"),
     )
+    SIMPLE_WRAPPERS = (
+        ("none", "", ""),
+        ("parentheses", "(", ")"),
+        ("brackets", "[", "]"),
+        ("braces", "{", "}"),
+    )
+    EMPHASIS_WRAPPERS = (
+        ("strong-asterisk", "**", "**"),
+        ("strong-underscore", "__", "__"),
+        ("emphasis-asterisk", "*", "*"),
+        ("emphasis-underscore", "_", "_"),
+    )
+
+    def assert_single_clause_violation(
+        self,
+        line: str,
+        expected_literal: str,
+    ) -> None:
+        self.assertEqual(
+            [(0, len(line))],
+            [(clause.start, clause.end) for clause in scan_clauses(line)],
+        )
+        self.assertIn(
+            expected_literal,
+            list(credential_prose_literals(line)),
+        )
+        self.assertIn("credential-prose-literal", inspect_line(line))
+
+    def assert_boundary_after(
+        self,
+        line: str,
+        prefix: str,
+    ) -> None:
+        clauses = scan_clauses(line)
+        self.assertGreaterEqual(len(clauses), 2)
+        self.assertEqual(len(prefix), clauses[0].end)
+        self.assertEqual([], inspect_line(line))
 
     def test_rejects_indented_yaml_google_id(self) -> None:
         line = "  folder_" + "id: " + ("A" * 24)
@@ -330,38 +367,42 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
             "Synthetic-next-sentence-label-1234567890",
             "7-synthetic-next-sentence-label-1234567890",
         )
-        wrappers = (("", ""), ("(", ")"), ("[", "]"), ("{", "}"))
         for first_name, first_opening, first_closing in self.QUOTE_PAIRS:
             for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
-                for spacing in ("", " ", "\t"):
-                    for wrapper_opening, wrapper_closing in wrappers:
-                        for value in next_sentence_values:
-                            with self.subTest(
-                                first=first_name,
-                                next=next_name,
-                                spacing=repr(spacing),
-                                wrapper=wrapper_opening,
-                                value=value[0],
-                            ):
-                                prefix = (
-                                    "The cleanup token "
-                                    + first_opening
-                                    + "[REDACTED]."
-                                    + first_closing
-                                )
-                                line = (
-                                    prefix
-                                    + spacing
-                                    + wrapper_opening
-                                    + next_opening
-                                    + value
-                                    + next_closing
-                                    + wrapper_closing
-                                    + " remains."
-                                )
-                                clauses = scan_clauses(line)
-                                self.assertEqual(len(prefix), clauses[0].end)
-                                self.assertEqual([], inspect_line(line))
+                for punctuation in ".?!":
+                    for spacing in ("", " ", "\t"):
+                        for (
+                            wrapper_name,
+                            wrapper_opening,
+                            wrapper_closing,
+                        ) in self.SIMPLE_WRAPPERS:
+                            for value in next_sentence_values:
+                                with self.subTest(
+                                    first=first_name,
+                                    next=next_name,
+                                    punctuation=punctuation,
+                                    spacing=repr(spacing),
+                                    wrapper=wrapper_name,
+                                    value=value[0],
+                                ):
+                                    prefix = (
+                                        "The cleanup token "
+                                        + first_opening
+                                        + "[REDACTED]"
+                                        + punctuation
+                                        + first_closing
+                                    )
+                                    line = (
+                                        prefix
+                                        + spacing
+                                        + wrapper_opening
+                                        + next_opening
+                                        + value
+                                        + next_closing
+                                        + wrapper_closing
+                                        + " remains."
+                                    )
+                                    self.assert_boundary_after(line, prefix)
 
     def test_quoted_next_context_continuation_cross_product(self) -> None:
         continuation_values = (
@@ -401,6 +442,253 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                                 "credential-prose-literal",
                                 inspect_line(line),
                             )
+
+    def test_quoted_uppercase_next_literal_continuation_matrix(self) -> None:
+        next_value = "Synthetic-uppercase-audit-label-1234567890"
+        unsafe_value = "synthetic-later-unsafe-value-1234567890"
+        tails = (
+            ("comma", ", which later records "),
+            ("colon", ": explanation later records "),
+            ("lowercase", " which later records "),
+            ("conjunction", " and later records "),
+        )
+        for first_name, first_opening, first_closing in self.QUOTE_PAIRS:
+            for punctuation in ".?!":
+                for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
+                    for spacing in ("", " ", "\t"):
+                        for (
+                            wrapper_name,
+                            wrapper_opening,
+                            wrapper_closing,
+                        ) in self.SIMPLE_WRAPPERS:
+                            for tail_name, tail in tails:
+                                with self.subTest(
+                                    first=first_name,
+                                    punctuation=punctuation,
+                                    next=next_name,
+                                    spacing=repr(spacing),
+                                    wrapper=wrapper_name,
+                                    tail=tail_name,
+                                ):
+                                    line = (
+                                        "The cleanup token "
+                                        + first_opening
+                                        + "[REDACTED]"
+                                        + punctuation
+                                        + first_closing
+                                        + spacing
+                                        + wrapper_opening
+                                        + next_opening
+                                        + next_value
+                                        + next_closing
+                                        + wrapper_closing
+                                        + tail
+                                        + "`"
+                                        + unsafe_value
+                                        + "` remains"
+                                    )
+                                    self.assert_single_clause_violation(
+                                        line,
+                                        unsafe_value,
+                                    )
+
+    def test_balanced_emphasis_next_sentence_matrix(self) -> None:
+        next_value = "Synthetic-emphasized-next-sentence-1234567890"
+        for first_name, first_opening, first_closing in self.QUOTE_PAIRS:
+            for punctuation in ".?!":
+                for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
+                    for (
+                        emphasis_name,
+                        emphasis_opening,
+                        emphasis_closing,
+                    ) in self.EMPHASIS_WRAPPERS:
+                        with self.subTest(
+                            first=first_name,
+                            punctuation=punctuation,
+                            next=next_name,
+                            emphasis=emphasis_name,
+                        ):
+                            prefix = (
+                                "The cleanup token "
+                                + first_opening
+                                + "[REDACTED]"
+                                + punctuation
+                                + first_closing
+                            )
+                            line = (
+                                prefix
+                                + " "
+                                + emphasis_opening
+                                + next_opening
+                                + next_value
+                                + next_closing
+                                + emphasis_closing
+                                + " remains."
+                            )
+                            self.assert_boundary_after(line, prefix)
+
+    def test_balanced_emphasis_continuation_matrix(self) -> None:
+        next_value = "Synthetic-emphasized-audit-label-1234567890"
+        unsafe_value = "synthetic-emphasized-unsafe-value-1234567890"
+        tails = (
+            ("comma", ", which later records "),
+            ("colon", ": explanation later records "),
+            ("lowercase", " which later records "),
+            ("conjunction", " and later records "),
+        )
+        for first_name, first_opening, first_closing in self.QUOTE_PAIRS:
+            for punctuation in ".?!":
+                for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
+                    for (
+                        emphasis_name,
+                        emphasis_opening,
+                        emphasis_closing,
+                    ) in self.EMPHASIS_WRAPPERS:
+                        for tail_name, tail in tails:
+                            with self.subTest(
+                                first=first_name,
+                                punctuation=punctuation,
+                                next=next_name,
+                                emphasis=emphasis_name,
+                                tail=tail_name,
+                            ):
+                                line = (
+                                    "The cleanup token "
+                                    + first_opening
+                                    + "[REDACTED]"
+                                    + punctuation
+                                    + first_closing
+                                    + " "
+                                    + emphasis_opening
+                                    + next_opening
+                                    + next_value
+                                    + next_closing
+                                    + emphasis_closing
+                                    + tail
+                                    + "`"
+                                    + unsafe_value
+                                    + "` remains"
+                                )
+                                self.assert_single_clause_violation(
+                                    line,
+                                    unsafe_value,
+                                )
+
+    def test_unbalanced_and_mismatched_emphasis_are_not_skipped(self) -> None:
+        next_value = "Synthetic-unbalanced-audit-label-1234567890"
+        unsafe_value = "synthetic-unbalanced-unsafe-value-1234567890"
+        for first_name, first_opening, first_closing in self.QUOTE_PAIRS:
+            for punctuation in ".?!":
+                for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
+                    for index, (
+                        emphasis_name,
+                        emphasis_opening,
+                        emphasis_closing,
+                    ) in enumerate(self.EMPHASIS_WRAPPERS):
+                        mismatched_closing = self.EMPHASIS_WRAPPERS[
+                            (index + 1) % len(self.EMPHASIS_WRAPPERS)
+                        ][2]
+                        overrun_closing = (
+                            emphasis_closing + emphasis_closing[-1]
+                        )
+                        for kind, closing in (
+                            ("unbalanced", ""),
+                            ("mismatched", mismatched_closing),
+                            ("overrun", overrun_closing),
+                        ):
+                            with self.subTest(
+                                first=first_name,
+                                punctuation=punctuation,
+                                next=next_name,
+                                emphasis=emphasis_name,
+                                kind=kind,
+                            ):
+                                line = (
+                                    "The cleanup token "
+                                    + first_opening
+                                    + "[REDACTED]"
+                                    + punctuation
+                                    + first_closing
+                                    + " "
+                                    + emphasis_opening
+                                    + next_opening
+                                    + next_value
+                                    + next_closing
+                                    + closing
+                                    + " remains and later `"
+                                    + unsafe_value
+                                    + "` is recorded"
+                                )
+                                self.assert_single_clause_violation(
+                                    line,
+                                    unsafe_value,
+                                )
+
+    def test_nested_simple_and_emphasis_wrapper_contexts(self) -> None:
+        next_value = "Synthetic-nested-wrapper-label-1234567890"
+        unsafe_value = "synthetic-nested-wrapper-unsafe-1234567890"
+        for (
+            simple_name,
+            simple_opening,
+            simple_closing,
+        ) in self.SIMPLE_WRAPPERS[1:]:
+            for (
+                emphasis_name,
+                emphasis_opening,
+                emphasis_closing,
+            ) in self.EMPHASIS_WRAPPERS:
+                wrappers = (
+                    (
+                        "simple-outer",
+                        simple_opening + emphasis_opening,
+                        emphasis_closing + simple_closing,
+                    ),
+                    (
+                        "emphasis-outer",
+                        emphasis_opening + simple_opening,
+                        simple_closing + emphasis_closing,
+                    ),
+                )
+                for order, opening, closing in wrappers:
+                    with self.subTest(
+                        simple=simple_name,
+                        emphasis=emphasis_name,
+                        order=order,
+                        kind="standalone",
+                    ):
+                        prefix = 'The cleanup token "[REDACTED]."'
+                        line = (
+                            prefix
+                            + " "
+                            + opening
+                            + '"'
+                            + next_value
+                            + '"'
+                            + closing
+                            + " remains."
+                        )
+                        self.assert_boundary_after(line, prefix)
+                    with self.subTest(
+                        simple=simple_name,
+                        emphasis=emphasis_name,
+                        order=order,
+                        kind="continuation",
+                    ):
+                        line = (
+                            'The cleanup token "[REDACTED]." '
+                            + opening
+                            + '"'
+                            + next_value
+                            + '"'
+                            + closing
+                            + ", which later records `"
+                            + unsafe_value
+                            + "`"
+                        )
+                        self.assert_single_clause_violation(
+                            line,
+                            unsafe_value,
+                        )
 
     def test_recovery_spans_do_not_mask_outside_terminators(self) -> None:
         value = "synthetic-lowercase-next-label-1234567890"
@@ -710,6 +998,38 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
 
         for previous, current in zip(operation_counts, operation_counts[1:]):
             self.assertLessEqual(current, (2.1 * previous) + 32)
+
+    def test_structured_next_context_scaling_is_linear(self) -> None:
+        operation_counts = []
+        for size in (32, 64, 128, 256):
+            line = " ".join(
+                'cleanup token "[REDACTED]." '
+                + '"Synthetic-context-label-'
+                + f"{index:08d}"
+                + '", which later records `synthetic-context-secret-'
+                + f"{index:08d}"
+                + "`"
+                for index in range(size)
+            )
+            metrics = ParserMetrics()
+            values = list(credential_prose_literals(line, metrics))
+            self.assertEqual(3 * size, len(values))
+            self.assertEqual(
+                size,
+                sum(
+                    value.startswith("synthetic-context-secret-")
+                    for value in values
+                ),
+            )
+            self.assertLessEqual(metrics.context_steps, (160 * size) + 16)
+            self.assertLessEqual(
+                metrics.total_operations,
+                (10 * len(line)) + (180 * size),
+            )
+            operation_counts.append(metrics.total_operations)
+
+        for previous, current in zip(operation_counts, operation_counts[1:]):
+            self.assertLessEqual(current, (2.1 * previous) + 64)
 
     def test_rejects_literal_secret_assignment(self) -> None:
         line = "api_" + "key = " + "synthetic-secret-value-1234567890"

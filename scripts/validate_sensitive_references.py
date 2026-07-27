@@ -68,9 +68,33 @@ CREDENTIAL_DASH_TRANSLATION = str.maketrans(
         "\uff0d": "-",
     }
 )
-POST_QUOTE_SKIPPABLE = frozenset(" \t\f\v)]}\u201d\u2019")
+HORIZONTAL_SPACE = frozenset(" \t\f\v")
+POST_QUOTE_SKIPPABLE = HORIZONTAL_SPACE | frozenset(")]}\u201d\u2019")
 OPENING_WRAPPERS = frozenset("([{")
 CONTINUATION_PUNCTUATION = frozenset(",:-\u2010\u2011\u2012\u2013\u2014\u2015")
+CONTINUATION_WORDS = frozenset(
+    {
+        "and",
+        "as",
+        "because",
+        "but",
+        "nor",
+        "or",
+        "plus",
+        "so",
+        "that",
+        "then",
+        "when",
+        "where",
+        "which",
+        "while",
+        "who",
+        "whom",
+        "whose",
+        "with",
+        "yet",
+    }
+)
 LEAKED_TOKEN_LITERAL = re.compile(
     r"\b(?:leaked|compromised)\b[^\n`]{0,80}\btoken\b[^\n`]{0,20}`[^`]+`",
     re.IGNORECASE,
@@ -122,6 +146,13 @@ class DelimiterSpec:
         return self.opener == self.closer
 
 
+@dataclass(frozen=True)
+class WrapperSpec:
+    name: str
+    opener: str
+    closer: str
+
+
 DELIMITER_SPECS = (
     DelimiterSpec("backtick", "`", "`", True, 0),
     DelimiterSpec("ascii-double", '"', '"', True, 1),
@@ -129,11 +160,16 @@ DELIMITER_SPECS = (
     DelimiterSpec("typographic-double", "\u201c", "\u201d", False, 3),
     DelimiterSpec("typographic-single", "\u2018", "\u2019", False, 4),
 )
-NEXT_CONTEXT_SKIPPABLE = (
-    POST_QUOTE_SKIPPABLE
-    | OPENING_WRAPPERS
-    | frozenset(spec.opener for spec in DELIMITER_SPECS)
+NEXT_QUOTE_WRAPPERS = (
+    WrapperSpec("strong-asterisk", "**", "**"),
+    WrapperSpec("strong-underscore", "__", "__"),
+    WrapperSpec("parentheses", "(", ")"),
+    WrapperSpec("brackets", "[", "]"),
+    WrapperSpec("braces", "{", "}"),
+    WrapperSpec("emphasis-asterisk", "*", "*"),
+    WrapperSpec("emphasis-underscore", "_", "_"),
 )
+WRAPPER_MARKERS = frozenset("*_()[]{}")
 
 
 @dataclass(frozen=True)
@@ -144,6 +180,19 @@ class QuotedSpan:
     content_end: int
     delimiter: str
     priority: int
+
+
+@dataclass(frozen=True)
+class NextQuotedContext:
+    opening_wrappers: tuple[str, ...]
+    quoted_span: QuotedSpan
+    content_leading: str
+    closing_wrappers: tuple[str, ...]
+    closing_end: int
+    post_index: int
+    post_category: str
+    post_token: str
+    remaining_tail_start: int
 
 
 @dataclass(frozen=True)
@@ -165,6 +214,7 @@ class ParserMetrics:
     boundary_checks: int = 0
     keyword_matches: int = 0
     association_steps: int = 0
+    context_steps: int = 0
 
     @property
     def total_operations(self) -> int:
@@ -173,6 +223,7 @@ class ParserMetrics:
             + self.boundary_checks
             + self.keyword_matches
             + self.association_steps
+            + self.context_steps
         )
 
 
@@ -407,24 +458,136 @@ def merge_intervals(
     return tuple((start, end) for start, end in merged)
 
 
-def build_next_context(text: str) -> list[int]:
-    next_context = [len(text)] * (len(text) + 1)
-    next_index = len(text)
-    for index in range(len(text) - 1, -1, -1):
-        if text[index] in NEXT_CONTEXT_SKIPPABLE:
-            next_context[index] = next_index
-        else:
-            next_index = index
-            next_context[index] = index
-    return next_context
+def skip_characters(text: str, index: int, characters: frozenset[str]) -> int:
+    while index < len(text) and text[index] in characters:
+        index += 1
+    return index
 
 
-def is_terminal_quote_context(
+def wrapper_at(text: str, index: int) -> WrapperSpec | None:
+    for wrapper in NEXT_QUOTE_WRAPPERS:
+        if text.startswith(wrapper.opener, index):
+            return wrapper
+    return None
+
+
+def classify_content_leading(text: str, span: QuotedSpan) -> str:
+    index = skip_characters(text, span.content_start, HORIZONTAL_SPACE)
+    if index >= span.content_end:
+        return "empty"
+    character = text[index]
+    if character.isupper() or character.isdigit():
+        return "uppercase-or-digit"
+    if character.islower():
+        end = index + 1
+        while end < span.content_end and (
+            text[end].isalnum() or text[end] in "_-"
+        ):
+            end += 1
+        word = text[index:end].casefold()
+        return "conjunction" if word in CONTINUATION_WORDS else "lowercase"
+    if character in CONTINUATION_PUNCTUATION:
+        return "continuation-punctuation"
+    return "other"
+
+
+def classify_post_quote_context(
     text: str,
-    span: QuotedSpan,
-    next_context: list[int],
-) -> bool:
-    context_index = next_context[span.end]
+    index: int,
+) -> tuple[int, str, str]:
+    index = skip_characters(text, index, HORIZONTAL_SPACE)
+    if index >= len(text):
+        return index, "end", ""
+
+    character = text[index]
+    if character in "\r\n":
+        return index, "newline", character
+    if character in CLAUSE_TERMINATORS:
+        return index, "terminal-punctuation", character
+    if character in CONTINUATION_PUNCTUATION:
+        return index, "continuation-punctuation", character
+    if character in WRAPPER_MARKERS:
+        return index, "unbalanced-wrapper", character
+    if character.isalnum():
+        end = index + 1
+        while end < len(text) and (
+            text[end].isalnum() or text[end] in "_-"
+        ):
+            end += 1
+        context_word = text[index:end]
+        category = (
+            "continuation-word"
+            if context_word.casefold() in CONTINUATION_WORDS
+            else "word"
+        )
+        return index, category, context_word
+    return index, "other", character
+
+
+def parse_next_quoted_context(
+    text: str,
+    current_span: QuotedSpan,
+    next_span: QuotedSpan | None,
+    metrics: ParserMetrics | None,
+) -> NextQuotedContext | None:
+    if next_span is None:
+        return None
+
+    if metrics is not None:
+        metrics.context_steps += next_span.end - current_span.end
+    index = skip_characters(text, current_span.end, HORIZONTAL_SPACE)
+    wrappers: list[WrapperSpec] = []
+    while index < next_span.start:
+        wrapper = wrapper_at(text, index)
+        if wrapper is None:
+            return None
+        wrappers.append(wrapper)
+        index += len(wrapper.opener)
+    if index != next_span.start:
+        return None
+
+    closing_end = next_span.end
+    closing_wrappers: list[str] = []
+    for wrapper in reversed(wrappers):
+        if not text.startswith(wrapper.closer, closing_end):
+            return None
+        closing_wrappers.append(wrapper.name)
+        closing_end += len(wrapper.closer)
+    if closing_end < len(text) and text[closing_end] in WRAPPER_MARKERS:
+        return None
+
+    post_index, post_category, post_token = classify_post_quote_context(
+        text,
+        closing_end,
+    )
+    if metrics is not None:
+        metrics.context_steps += (
+            post_index - closing_end + max(1, len(post_token))
+        )
+    return NextQuotedContext(
+        opening_wrappers=tuple(wrapper.name for wrapper in wrappers),
+        quoted_span=next_span,
+        content_leading=classify_content_leading(text, next_span),
+        closing_wrappers=tuple(closing_wrappers),
+        closing_end=closing_end,
+        post_index=post_index,
+        post_category=post_category,
+        post_token=post_token,
+        remaining_tail_start=post_index,
+    )
+
+
+def direct_quote_context_is_terminal(text: str, span: QuotedSpan) -> bool:
+    context_index = skip_characters(text, span.end, POST_QUOTE_SKIPPABLE)
+    while (
+        context_index < len(text)
+        and text[context_index] in OPENING_WRAPPERS
+    ):
+        context_index = skip_characters(
+            text,
+            context_index + 1,
+            HORIZONTAL_SPACE,
+        )
     if context_index >= len(text):
         return True
     character = text[context_index]
@@ -433,6 +596,30 @@ def is_terminal_quote_context(
     if character in CONTINUATION_PUNCTUATION:
         return False
     return character.isupper() or character.isdigit()
+
+
+def is_terminal_quote_context(
+    text: str,
+    span: QuotedSpan,
+    next_span: QuotedSpan | None,
+    metrics: ParserMetrics | None,
+) -> bool:
+    next_context = parse_next_quoted_context(
+        text,
+        span,
+        next_span,
+        metrics,
+    )
+    if next_context is None:
+        return direct_quote_context_is_terminal(text, span)
+    if next_context.content_leading != "uppercase-or-digit":
+        return False
+    return next_context.post_category in {
+        "end",
+        "newline",
+        "terminal-punctuation",
+        "word",
+    }
 
 
 def build_clause_bounds(
@@ -479,16 +666,20 @@ def build_clause_bounds(
             boundaries.add((index + 1, index + 1))
         index += 1
 
-    next_context = build_next_context(text)
-    for span in primary_spans:
+    for span_index, span in enumerate(primary_spans):
         if metrics is not None:
             metrics.boundary_checks += 1
         punctuation_index = span.content_end - 1
+        next_span = (
+            primary_spans[span_index + 1]
+            if span_index + 1 < len(primary_spans)
+            else None
+        )
         if (
             punctuation_index >= span.content_start
             and text[punctuation_index] in SENTENCE_FINAL_PUNCTUATION
             and not escaped[punctuation_index]
-            and is_terminal_quote_context(text, span, next_context)
+            and is_terminal_quote_context(text, span, next_span, metrics)
         ):
             boundaries.add((span.end, span.end))
 
