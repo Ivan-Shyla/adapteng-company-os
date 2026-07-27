@@ -12,12 +12,17 @@ assistant. It separates two firsts that must not be conflated:
    live model-backed Company Drive proof. Reuse does not authorize
    republication.
 
-No live model call has run. A 2026-07-26 production-readiness audit found
-completion-path admission/external-action and local budget-gate defects in the
-control plane. A separate hardening PR must land before one **measured,
-inactive** proof on EU Vertex `gemini-3.1-flash-lite`: **drafts only**, written as
-`pending/draft` into Baserow `Content_Items` (848) through the governed adapter.
-It can **never publish or send**, and a human stays the only approver.
+No live model call has run; readiness is **REJECT_LIVE**. Control-plane main
+`affe6ea1e4d522be0df0641e98a08e20a84549ae` contains deterministic
+AG-001/002/003/006/007 only, with no business worker, real provider or Drive
+runtime. The audit reproduced an optional/unvalidated envelope, completion
+accepting missing `no_external_action` plus synthetic `approval_id`, and the
+in-memory `ModelGateway` allowing actual cost above cap and negative remaining
+budget. AG-008 owns deterministic fixes; automation-platform must still provide
+the persistent business runtime. Only after both layers are accepted may one
+**measured, inactive** EU Vertex `gemini-3.1-flash-lite` proof create a
+`pending/draft` through the governed adapter. It can **never publish or send**,
+and a human stays the only approver.
 
 Why this and not more: AI attaches to the already-governed spine (see
 `insertion-points.md`). The CASE contract below governs deterministic case
@@ -127,6 +132,12 @@ Broader program inputs are not blockers for this first controlled draft:
 
 - Input is exactly public package `ART-2026-001`/`SRC-2026-001`; no CASE media,
   client data or unreconciled source enters the call.
+- AG-008 closes the envelope, `no_external_action`, synthetic approval and
+  over-cap/negative-budget bypasses deterministically.
+- Persistent Postgres cost reservation/reconciliation is the budget authority;
+  the in-memory `ModelGateway` is never used as production authority.
+- The real EU Vertex adapter, Drive adapters, orchestration, canonical approval
+  composition and deployment are wired and proven in automation-platform.
 - ZDR / no-training on EU Vertex; response cache off; FX config for the €-cap.
 - Per-call ≤ €0.10, per-day ≤ €1, runtime ≤ €10/month — **fail-closed**, not
   best-effort (`environments.yaml` budgets).
@@ -137,9 +148,10 @@ Broader program inputs are not blockers for this first controlled draft:
 ## What I do once the gates pass
 
 1. Verify Vertex IAM/ADC access for the intended runtime identity (the provided
-   SA currently has evidenced Drive DWD scope, not evidenced Vertex permission),
-   wire the canonical `ai-gateway`, apply migration 005 **with a backup**, and
-   smoke-test with **no business data**.
+   SA currently has evidenced Drive DWD scope, not evidenced Vertex permission);
+   deploy the canonical Postgres cost authority, EU Vertex/Drive adapters,
+   orchestration and approval composition; apply migration 005 **with a
+   backup**; and smoke-test with **no business data**.
 2. Run one measured, inactive `ART-2026-001`/`SRC-2026-001` proof and record its
    model, cost, evidence and pending/draft Company Drive artifact.
 3. Run an **AI-002 shadow eval** on the ratified acceptance set (~20 cases) and

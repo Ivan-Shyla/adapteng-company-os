@@ -20,21 +20,29 @@ external/high-impact actions.
   `Content_Items` (848) via the governed adapter. The first approval-gated
   action is `external_draft.create`, limited to pending/draft state — it can
   **never publish or send**.
-- **Gate:** ratified claims/style/sources; `AG-007` quality proof; control-plane
-  production admission/no-external-action hardening; canonical Postgres-backed
-  gateway (never the local in-memory test seam); privacy (ZDR), cache-off, Vertex
-  IAM and FX gates. See `owner/action-items.md`.
-- **Status:** `AI-001` merged (marketing PR #19, deterministic, 106 tests);
-  **no real model call yet**. Exact public package `ART-2026-001`, using source
+- **Gate:** ratified claims/style/sources; `AG-007` quality proof; AG-008
+  envelope/no-external-action/cost hardening; persistent Postgres cost
+  reservation/reconciliation; real EU Vertex and Drive adapters; orchestration,
+  canonical approval and deployment; privacy (ZDR), cache-off, Vertex IAM and FX.
+  Never use the local in-memory test seam as budget authority. See
+  `owner/action-items.md`.
+- **Status:** **REJECT_LIVE.** At control-plane main
+  `affe6ea1e4d522be0df0641e98a08e20a84549ae`, deterministic
+  AG-001/002/003/006/007 are present but no business worker, real provider or
+  Drive runtime exists. The reproduced P0s are optional/unvalidated envelope,
+  completion accepting missing `no_external_action` plus synthetic `approval_id`,
+  and over-cap actual cost driving the in-memory budget negative. AG-008 owns
+  deterministic fixes; automation-platform owns the persistent runtime.
+  `AI-001` is merged (marketing PR #19, deterministic, 106 tests), but **no real
+  model call has run**. Exact public package `ART-2026-001`, using source
   set `SRC-2026-001`, is selected for the first live model-backed Company Drive
   proof; its prior approval/publication does not authorize republication.
   `CASE-2026-001` is separately the first governed raw-source/case migration and
   evidence-bounded deterministic draft, with media/publication blocked pending
   live Sheet-vs-Git reconciliation. The 2026-07-26 production audit blocks the
-  proof until the completion path validates the full task envelope, requires
-  `no_external_action`, rejects approval/publish fields, and cannot overspend
-  the cap. The proof must enter through the canonical gateway and AG-008 and
-  must never use frozen direct-model workflow MM-22.
+  proof until both deterministic and persistent runtime blockers close. The
+  proof must enter through the canonical gateway and AG-008 and must never use
+  frozen direct-model workflow MM-22.
 
 ## 2. Lead triage / enrichment on WEB-002 — SECOND
 

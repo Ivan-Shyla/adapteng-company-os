@@ -963,7 +963,7 @@ bounded task
 
 Этот режим используется сразу для реализации всего backlog Company OS.
 
-#### `business_artifact` — contracts merged, production gate blocked
+#### `business_artifact` — contracts merged, **REJECT_LIVE**
 
 ```text
 BusinessTaskEnvelope
@@ -980,13 +980,20 @@ BusinessTaskEnvelope
 
 Business task не создаёт Git branch и не считается завершённым по Git diff.
 
-A read-only production audit on 2026-07-26 found that the current completion
-path can accept a partial/unvalidated task envelope, does not structurally
-require `no_external_action`, can accept approval-like fields, and the local
-in-memory model-gateway seam can reconcile actual cost above its cap. These are
-P0 deterministic defects, not live-provider configuration. The local gateway
-must never be the production budget authority; the canonical Postgres-backed
-`automation-platform/ai-gateway` remains the only planned live path.
+Read-only production audit verdict: **REJECT_LIVE**. Control-plane main
+`affe6ea1e4d522be0df0641e98a08e20a84549ae` contains deterministic
+AG-001/002/003/006/007 contracts and acceptance only — no business worker, real
+provider or Drive runtime. Reproduced P0 bypasses: the task envelope is optional
+and can be unvalidated; completion accepted missing `no_external_action` plus a
+synthetic `approval_id`; and the in-memory `ModelGateway` allowed actual cost
+above the cap and drove the remaining budget negative.
+
+AG-008 owns those deterministic fixes. It does not provide a live business
+runtime: `adapteng-automation-platform` must still deploy and wire persistent
+Postgres cost reservation/reconciliation, a real EU Vertex adapter, Drive
+adapters, orchestration, canonical approval and deployment. Until all of that is
+accepted, Company OS has repository components, **not deployed/working business
+AI**.
 
 ### 7.3 Business artifact building blocks
 
@@ -999,7 +1006,7 @@ must never be the production budget authority; the canonical Postgres-backed
 | `AG-005` | Baserow/Drive action adapters | Only pending/draft writes; no direct approve/publish |
 | `AG-006` | Linux container acceptance | Same critical gates pass on Coolify runtime |
 | `AG-007` | Business eval harness | Synthetic security set + approved representative quality set |
-| `AG-008` | Production admission/action/cost hardening | Completion validates the full task envelope; draft artifacts require human review + `no_external_action`; approval/publish/send fields fail; local cost never goes negative; live budget authority remains canonical Postgres gateway. **Open — hardening PR in progress after 2026-07-26 audit.** |
+| `AG-008` | Production admission/action/cost hardening | Completion validates the full task envelope; draft artifacts require human review + `no_external_action`; synthetic `approval_id` and approval/publish/send fields fail; actual cost cannot exceed the cap or drive budget negative. **Open — AG-008 owns deterministic fixes after the REJECT_LIVE audit; it does not supply the persistent business runtime.** |
 
 Generic agent lifecycle остаётся в control-plane. Domain schemas/prompts остаются
 в marketing/website/automation repositories. Approval decision записывается
@@ -1033,6 +1040,11 @@ composition with the canonical approval adapter (its `VerificationRequest`
 still lacks the token and token consumption currently lives in `decide`), a
 concrete pending writer, Coolify/Traefik/secrets/FX configuration and pricing
 recheck. `external_draft_dispatcher` remains `None`.
+
+The automation platform must also make persistent Postgres cost
+reservation/reconciliation authoritative and deploy the EU Vertex adapter,
+Drive adapters, orchestration and approval composition. Deterministic
+control-plane fixes alone cannot change the **REJECT_LIVE** verdict.
 
 Gate-0 decision dated 2026-07-25 selects the first **paid pilot candidate**, not
 a deployed/default model:
@@ -1432,7 +1444,7 @@ lead contract + repository identity → migration 004 live plan/restore gate
 | Website | `adapteng.com` live on Cloudways. Governed producer PR remains held to avoid an unsafe automatic live deploy before consumer/cutover gates. | Map producer to WEB-002 only after origin auth, retention, HTTP 409, reconciliation, inactive shadow and rollback proofs. |
 | Media/content | `mm-media-worker` is live/HTTP-healthy, but uses old SA `media-worker@adapteng.iam.gserviceaccount.com`; active MM-01/MM-Visual and the worker still point to personal Drive, while frozen MM-41/MM-42 preserve legacy references only. The legacy chain historically created n8n/WordPress drafts and two duplicate sets of four public CASE-2026-001 JPEGs; pages are contained and all eight public derivatives are now deleted/404, with Drive originals untouched. No canonical corporate Drive draft exists yet. CASE-2026-001 metadata conflicts: Git says redaction resolved, later live Sheet says `needs_redaction_review`; media publication remains blocked. | Deploy the governed Drive bridge with `adapteng-ai-operator`, copy the source without deleting it, reconcile human media/redaction status, then rewire and canary the media/content path. |
 | Public perimeter regression | Fresh read-only 2026-07-27 checks: Baserow `/login` 200; unauthenticated table-842 rows API 401; self-hosted n8n `/healthz` 200; media-worker `/healthz` 200; website root 200. WordPress media REST IDs 886–889 and 893–896 remain 404; exact REST requests for pages 878/880/882/884/891 return non-public 401 (trash/private), consistent with the prior public-URL 404 evidence. **No recurrence.** | Keep anonymous API access denied and rerun the perimeter checks after perimeter-affecting deploys; investigate any regression before cutover. |
-| AI agent | Code-change mode is actively delivering repository work. Business-artifact schemas/envelope/eval and deterministic AI-001 skill are merged, but a production audit reproduced incomplete task-envelope admission, optional external-action safety, accepted approval-like fields and local cap overrun; AG-008 hardening is in progress. Canonical AI Gateway/migration 005 are repo-only; no live model call. The exact first model-backed proof input is now `ART-2026-001`/`SRC-2026-001`, separate from the blocked CASE media path. EU Vertex `gemini-3.1-flash-lite` non-global price rechecked at $0.275/M input and $1.65/M output (~$0.0121 representative draft). | Land AG-008; finish the governed Drive path; ratify `AG-007`; verify Vertex IAM plus ZDR/cache-off/FX; deploy the canonical gateway and run the exact inactive measured proof. Hard caps stay €0.10/call, €1/day, €10/month. |
+| AI agent | **REJECT_LIVE.** Code-change mode is delivering repository work, but control-plane main `affe6ea1e4d522be0df0641e98a08e20a84549ae` has deterministic AG-001/002/003/006/007 only — no business worker, real provider or Drive runtime. The audit reproduced an optional/unvalidated task envelope, completion accepting missing `no_external_action` plus synthetic `approval_id`, and an in-memory `ModelGateway` allowing actual cost above cap and negative remaining budget. AG-008 owns deterministic fixes; canonical AI Gateway/migration 005 remain repo-only and no live model call occurred. Exact proof input `ART-2026-001`/`SRC-2026-001` remains selected and separate from the blocked CASE media path. | Do not present this as deployed/working AI. Land AG-008, then deploy persistent Postgres cost reservation/reconciliation, the EU Vertex adapter, Drive adapters, orchestration, canonical approval and runtime; ratify `AG-007` and privacy/cache/FX before the exact inactive proof. Hard caps stay €0.10/call, €1/day, €10/month. |
 | Kraken (external initiative) | **SEPARATE ACTIVE SCOPE.** Read-only audit of active repository HEAD `8160ed85cabe0d20c5ddc4def5c818c3f7a845c3`: healthy 24/7 dry-run, but **NO-GO — edge rejected / OOS not validated**. Canonical status is `AI_HANDOFF.md` plus `CURRENT_STATUS.md`; README status is stale. | Track only the external link, status and risk posture under the §6.2 boundary. No Company OS integration or live action. |
 | Backup/security | Fresh `adapteng_ops` backup exists (2026-07-25 13:31, 35.21 KB, Coolify + owner copy). Baserow token incidents and synthetic rows are closed. | Prove restore in scratch; complete Workspace recovery/MFA; rotate the chat-exposed n8n management key and Coolify API token after launch work; record actual service invoices. |
 | Costs | Self-hosted n8n Community, Baserow Community and current Coolify add €0 software fee; Hetzner infrastructure is paid. Workspace is paid. Cloudways, n8n Cloud, Zoho, GoDaddy and Hetzner are paid/account-specific. AI is pay-as-you-go but has made no runtime call. | Record actual invoices/renewals; public list prices are not accounting truth. Storage Box BX11 remains planned, not evidenced as purchased. |

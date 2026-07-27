@@ -14,6 +14,8 @@ models are **fallback-only**, allowed only after equal quality **and** an
 approved EU data-processing configuration.
 
 This matches Gate-0 (2026-07-25) and ADR-0010 (AI Gateway = EU Vertex canonical).
+It is a model selection, not runtime readiness: the current business-AI verdict
+is **REJECT_LIVE**.
 
 ## Verified prices (per 1M tokens, 2026-07)
 
@@ -46,21 +48,28 @@ Reference workload: **20k input + 4k output** (a draft).
 | `gemini-3.1-flash-lite` | $0.0055 | $0.0066 | **≈ $0.0121** | ~825 |
 | `gemini-2.5-flash-lite` | $0.0020 | $0.0016 | **≈ $0.0036** | ~2,700 |
 
-\* Illustrative, USD≈EUR at parity for sizing only; the live gateway uses an
-explicit operator-configured FX rate with `as_of` and fails closed if missing
-or stale. Well under the **€0.10/call** cap either way. Batch API (−50% on
-tokens) is available but not assumed.
+\* Illustrative, USD≈EUR at parity for sizing only; any future live gateway must
+use an explicit operator-configured FX rate with `as_of` and fail closed if it
+is missing or stale. Well under the **€0.10/call** cap either way. Batch API
+(−50% on tokens) is available but not assumed.
 
 ## Gates before the first real call (all required)
 
-1. Zero-data-retention-compatible Vertex config **verified**.
-2. Real EU Vertex client + GCP service account wired into `ai-gateway`.
-3. Explicit FX rate + `as_of` configured; caps active (€0.10 / €1 / €10);
-   project cache **disabled**; no grounding / no request-response logging.
-4. `AG-007` / `AI-001` quality, citation and safety proof accepted by the owner.
+1. AG-008 closes the optional/unvalidated-envelope,
+   missing-`no_external_action`/synthetic-approval and over-cap/negative-budget
+   P0 bypasses.
+2. Persistent Postgres cost reservation/reconciliation is deployed as the
+   authority; the in-memory `ModelGateway` is never production authority.
+3. Real EU Vertex client + GCP service account are wired into `ai-gateway`.
+4. Drive adapters, orchestration, canonical approval and deployment are proven.
+5. Zero-data-retention-compatible Vertex config is verified; explicit FX rate +
+   `as_of` are configured; caps are active (€0.10 / €1 / €10); project cache is
+   **disabled**; no grounding / no request-response logging.
+6. `AG-007` / `AI-001` quality, citation and safety proof is accepted by the
+   owner.
 
-Until all four hold, the gateway stays repo-merged-not-live and every task
-routes to `pending` rather than calling a model.
+Until all six hold, the gateway stays repo-merged-not-live and no business task
+may call a model; any pre-gate artifact remains deterministic and pending-only.
 
 ## Sources (2026-07)
 
