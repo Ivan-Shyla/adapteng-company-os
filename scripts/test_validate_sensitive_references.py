@@ -6,6 +6,8 @@ from __future__ import annotations
 import unittest
 
 from scripts.validate_sensitive_references import (
+    CONTINUATION_WORDS,
+    MULTIWORD_CONTINUATION_STARTERS,
     ParserMetrics,
     credential_prose_literals,
     inspect_line,
@@ -33,6 +35,74 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
         ("strong-underscore", "__", "__"),
         ("emphasis-asterisk", "*", "*"),
         ("emphasis-underscore", "_", "_"),
+    )
+    NEXT_CONTEXT_WRAPPERS = SIMPLE_WRAPPERS + EMPHASIS_WRAPPERS
+    STANDARD_CONTINUATION_WORDS = frozenset(
+        {
+            "after",
+            "although",
+            "and",
+            "as",
+            "because",
+            "before",
+            "but",
+            "except",
+            "for",
+            "if",
+            "lest",
+            "nor",
+            "once",
+            "or",
+            "plus",
+            "provided",
+            "providing",
+            "since",
+            "so",
+            "than",
+            "that",
+            "then",
+            "though",
+            "till",
+            "unless",
+            "until",
+            "what",
+            "whatever",
+            "when",
+            "whenever",
+            "where",
+            "whereas",
+            "wherever",
+            "whether",
+            "which",
+            "whichever",
+            "while",
+            "who",
+            "whoever",
+            "whom",
+            "whomever",
+            "whose",
+            "with",
+            "yet",
+        }
+    )
+    STANDARD_MULTIWORD_CONTINUATIONS = (
+        "as if",
+        "as long as",
+        "assuming that",
+        "considering that",
+        "even if",
+        "even though",
+        "except that",
+        "given that",
+        "in case",
+        "now that",
+        "only if",
+        "provided that",
+        "providing that",
+        "rather than",
+        "so that",
+        "supposing that",
+        "whether or not",
     )
 
     def assert_single_clause_violation(
@@ -492,6 +562,219 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                                         unsafe_value,
                                     )
 
+    def test_standard_continuation_word_matrix(self) -> None:
+        self.assertEqual(
+            self.STANDARD_CONTINUATION_WORDS,
+            CONTINUATION_WORDS,
+        )
+        next_value = "Synthetic-standard-link-label-1234567890"
+        unsafe_value = "synthetic-standard-link-unsafe-1234567890"
+        variants = (
+            lambda word: " " + word + " later records ",
+            lambda word: "\t" + word.upper() + ", later records ",
+            lambda word: "  " + word.title() + ": later records ",
+        )
+        cases = 0
+        for word_index, word in enumerate(sorted(CONTINUATION_WORDS)):
+            for first_index, (
+                first_name,
+                first_opening,
+                first_closing,
+            ) in enumerate(self.QUOTE_PAIRS):
+                for punctuation_index, punctuation in enumerate(".?!"):
+                    for next_index, (
+                        next_name,
+                        next_opening,
+                        next_closing,
+                    ) in enumerate(self.QUOTE_PAIRS):
+                        for wrapper_index, (
+                            wrapper_name,
+                            wrapper_opening,
+                            wrapper_closing,
+                        ) in enumerate(self.NEXT_CONTEXT_WRAPPERS):
+                            variant_index = (
+                                word_index
+                                + first_index
+                                + punctuation_index
+                                + next_index
+                                + wrapper_index
+                            ) % len(variants)
+                            tail = variants[variant_index](word)
+                            with self.subTest(
+                                word=word,
+                                first=first_name,
+                                punctuation=punctuation,
+                                next=next_name,
+                                wrapper=wrapper_name,
+                                variant=variant_index,
+                            ):
+                                line = (
+                                    "The cleanup token "
+                                    + first_opening
+                                    + "[REDACTED]"
+                                    + punctuation
+                                    + first_closing
+                                    + " "
+                                    + wrapper_opening
+                                    + next_opening
+                                    + next_value
+                                    + next_closing
+                                    + wrapper_closing
+                                    + tail
+                                    + "`"
+                                    + unsafe_value
+                                    + "` remains"
+                                )
+                                self.assert_single_clause_violation(
+                                    line,
+                                    unsafe_value,
+                                )
+                                cases += 1
+        self.assertEqual(
+            len(CONTINUATION_WORDS)
+            * len(self.QUOTE_PAIRS)
+            * 3
+            * len(self.QUOTE_PAIRS)
+            * len(self.NEXT_CONTEXT_WRAPPERS),
+            cases,
+        )
+
+    def test_standard_multiword_continuation_starters(self) -> None:
+        self.assertEqual(
+            self.STANDARD_MULTIWORD_CONTINUATIONS,
+            MULTIWORD_CONTINUATION_STARTERS,
+        )
+        next_value = "Synthetic-multiword-link-label-1234567890"
+        unsafe_value = "synthetic-multiword-link-unsafe-1234567890"
+        variants = (
+            lambda phrase: phrase,
+            lambda phrase: phrase.upper().replace(" ", "\t"),
+            lambda phrase: phrase.title().replace(" ", "  "),
+        )
+        for phrase_index, phrase in enumerate(
+            MULTIWORD_CONTINUATION_STARTERS
+        ):
+            for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
+                for (
+                    wrapper_name,
+                    wrapper_opening,
+                    wrapper_closing,
+                ) in self.NEXT_CONTEXT_WRAPPERS:
+                    variant_index = phrase_index % len(variants)
+                    rendered_phrase = variants[variant_index](phrase)
+                    with self.subTest(
+                        phrase=phrase,
+                        next=next_name,
+                        wrapper=wrapper_name,
+                        variant=variant_index,
+                    ):
+                        line = (
+                            'The cleanup token "[REDACTED]." '
+                            + wrapper_opening
+                            + next_opening
+                            + next_value
+                            + next_closing
+                            + wrapper_closing
+                            + " "
+                            + rendered_phrase
+                            + " later records `"
+                            + unsafe_value
+                            + "`"
+                        )
+                        self.assert_single_clause_violation(
+                            line,
+                            unsafe_value,
+                        )
+
+    def test_multiword_first_words_require_the_complete_phrase(self) -> None:
+        first_words = sorted(
+            {
+                phrase.partition(" ")[0]
+                for phrase in MULTIWORD_CONTINUATION_STARTERS
+            }
+            - CONTINUATION_WORDS
+        )
+        self.assertEqual(
+            [
+                "assuming",
+                "considering",
+                "even",
+                "given",
+                "in",
+                "now",
+                "only",
+                "rather",
+                "supposing",
+            ],
+            first_words,
+        )
+        next_value = "Synthetic-bare-first-word-subject-1234567890"
+        for first_word in first_words:
+            for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
+                for (
+                    wrapper_name,
+                    wrapper_opening,
+                    wrapper_closing,
+                ) in self.NEXT_CONTEXT_WRAPPERS:
+                    with self.subTest(
+                        first_word=first_word,
+                        next=next_name,
+                        wrapper=wrapper_name,
+                    ):
+                        prefix = 'The cleanup token "[REDACTED]."'
+                        line = (
+                            prefix
+                            + " "
+                            + wrapper_opening
+                            + next_opening
+                            + next_value
+                            + next_closing
+                            + wrapper_closing
+                            + " "
+                            + first_word.title()
+                            + " production applies."
+                        )
+                        self.assert_boundary_after(line, prefix)
+
+    def test_generic_predicate_remains_a_standalone_control(self) -> None:
+        next_value = "Synthetic-generic-subject-label-1234567890"
+        for predicate in ("describes", "documents", "remains", "reports"):
+            for first_name, first_opening, first_closing in self.QUOTE_PAIRS:
+                for punctuation in ".?!":
+                    for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
+                        for (
+                            wrapper_name,
+                            wrapper_opening,
+                            wrapper_closing,
+                        ) in self.NEXT_CONTEXT_WRAPPERS:
+                            with self.subTest(
+                                predicate=predicate,
+                                first=first_name,
+                                punctuation=punctuation,
+                                next=next_name,
+                                wrapper=wrapper_name,
+                            ):
+                                prefix = (
+                                    "The cleanup token "
+                                    + first_opening
+                                    + "[REDACTED]"
+                                    + punctuation
+                                    + first_closing
+                                )
+                                line = (
+                                    prefix
+                                    + " "
+                                    + wrapper_opening
+                                    + next_opening
+                                    + next_value
+                                    + next_closing
+                                    + wrapper_closing
+                                    + " "
+                                    + predicate
+                                    + "."
+                                )
+                                self.assert_boundary_after(line, prefix)
+
     def test_balanced_emphasis_next_sentence_matrix(self) -> None:
         next_value = "Synthetic-emphasized-next-sentence-1234567890"
         for first_name, first_opening, first_closing in self.QUOTE_PAIRS:
@@ -623,6 +906,131 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                                     line,
                                     unsafe_value,
                                 )
+
+    def test_markdown_emphasis_identifier_suffix_is_conservative(self) -> None:
+        next_value = "Synthetic-intraword-suffix-label-1234567890"
+        unsafe_value = "synthetic-intraword-suffix-unsafe-1234567890"
+        for first_name, first_opening, first_closing in self.QUOTE_PAIRS:
+            for punctuation in ".?!":
+                for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
+                    for (
+                        emphasis_name,
+                        emphasis_opening,
+                        emphasis_closing,
+                    ) in self.EMPHASIS_WRAPPERS:
+                        for suffix in ("7tail", "_tail", "tail"):
+                            with self.subTest(
+                                first=first_name,
+                                punctuation=punctuation,
+                                next=next_name,
+                                emphasis=emphasis_name,
+                                suffix=suffix,
+                            ):
+                                line = (
+                                    "The cleanup token "
+                                    + first_opening
+                                    + "[REDACTED]"
+                                    + punctuation
+                                    + first_closing
+                                    + " "
+                                    + emphasis_opening
+                                    + next_opening
+                                    + next_value
+                                    + next_closing
+                                    + emphasis_closing
+                                    + suffix
+                                    + " and later `"
+                                    + unsafe_value
+                                    + "` remains"
+                                )
+                                self.assert_single_clause_violation(
+                                    line,
+                                    unsafe_value,
+                                )
+
+    def test_markdown_emphasis_identifier_prefix_is_conservative(self) -> None:
+        next_value = "Synthetic-intraword-prefix-label-1234567890"
+        unsafe_value = "synthetic-intraword-prefix-unsafe-1234567890"
+        for first_name, first_opening, first_closing in self.QUOTE_PAIRS:
+            for punctuation in ".?!":
+                for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
+                    for (
+                        emphasis_name,
+                        emphasis_opening,
+                        emphasis_closing,
+                    ) in self.EMPHASIS_WRAPPERS:
+                        for identifier_prefix in ("7", "_", "x"):
+                            with self.subTest(
+                                first=first_name,
+                                punctuation=punctuation,
+                                next=next_name,
+                                emphasis=emphasis_name,
+                                prefix=identifier_prefix,
+                            ):
+                                line = (
+                                    "The cleanup token "
+                                    + first_opening
+                                    + "[REDACTED]"
+                                    + punctuation
+                                    + first_closing
+                                    + " "
+                                    + identifier_prefix
+                                    + emphasis_opening
+                                    + next_opening
+                                    + next_value
+                                    + next_closing
+                                    + emphasis_closing
+                                    + " remains and later `"
+                                    + unsafe_value
+                                    + "` is recorded"
+                                )
+                                self.assert_single_clause_violation(
+                                    line,
+                                    unsafe_value,
+                                )
+
+    def test_markdown_emphasis_valid_flanking_matrix(self) -> None:
+        next_value = "Synthetic-valid-flanking-label-1234567890"
+        for first_name, first_opening, first_closing in self.QUOTE_PAIRS:
+            for punctuation in ".?!":
+                for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
+                    for (
+                        emphasis_name,
+                        emphasis_opening,
+                        emphasis_closing,
+                    ) in self.EMPHASIS_WRAPPERS:
+                        for spacing in ("", " ", "\t"):
+                            for suffix_name, suffix in (
+                                ("end", ""),
+                                ("punctuation", "."),
+                                ("whitespace", " remains."),
+                            ):
+                                with self.subTest(
+                                    first=first_name,
+                                    punctuation=punctuation,
+                                    next=next_name,
+                                    emphasis=emphasis_name,
+                                    spacing=repr(spacing),
+                                    suffix=suffix_name,
+                                ):
+                                    prefix = (
+                                        "The cleanup token "
+                                        + first_opening
+                                        + "[REDACTED]"
+                                        + punctuation
+                                        + first_closing
+                                    )
+                                    line = (
+                                        prefix
+                                        + spacing
+                                        + emphasis_opening
+                                        + next_opening
+                                        + next_value
+                                        + next_closing
+                                        + emphasis_closing
+                                        + suffix
+                                    )
+                                    self.assert_boundary_after(line, prefix)
 
     def test_nested_simple_and_emphasis_wrapper_contexts(self) -> None:
         next_value = "Synthetic-nested-wrapper-label-1234567890"

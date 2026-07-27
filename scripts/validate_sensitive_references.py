@@ -72,28 +72,84 @@ HORIZONTAL_SPACE = frozenset(" \t\f\v")
 POST_QUOTE_SKIPPABLE = HORIZONTAL_SPACE | frozenset(")]}\u201d\u2019")
 OPENING_WRAPPERS = frozenset("([{")
 CONTINUATION_PUNCTUATION = frozenset(",:-\u2010\u2011\u2012\u2013\u2014\u2015")
-CONTINUATION_WORDS = frozenset(
+# Keep this bounded to standard linking forms: these words conservatively retain
+# credential scope, while ordinary lowercase predicates can still start a sentence.
+COORDINATING_CONTINUATION_WORDS = frozenset(
+    {"and", "but", "for", "nor", "or", "so", "yet"}
+)
+SUBORDINATING_CONTINUATION_WORDS = frozenset(
     {
-        "and",
+        "after",
+        "although",
         "as",
         "because",
-        "but",
-        "nor",
-        "or",
-        "plus",
-        "so",
-        "that",
-        "then",
+        "before",
+        "except",
+        "if",
+        "lest",
+        "once",
+        "provided",
+        "providing",
+        "since",
+        "than",
+        "though",
+        "till",
+        "unless",
+        "until",
         "when",
-        "where",
-        "which",
+        "whenever",
+        "whereas",
+        "whether",
         "while",
-        "who",
-        "whom",
-        "whose",
-        "with",
-        "yet",
     }
+)
+RELATIVE_CONTINUATION_WORDS = frozenset(
+    {
+        "that",
+        "what",
+        "whatever",
+        "where",
+        "wherever",
+        "which",
+        "whichever",
+        "who",
+        "whoever",
+        "whom",
+        "whomever",
+        "whose",
+    }
+)
+ADDITIONAL_LINKING_WORDS = frozenset(
+    {"plus", "then", "with"}
+)
+MULTIWORD_CONTINUATION_STARTERS = (
+    "as if",
+    "as long as",
+    "assuming that",
+    "considering that",
+    "even if",
+    "even though",
+    "except that",
+    "given that",
+    "in case",
+    "now that",
+    "only if",
+    "provided that",
+    "providing that",
+    "rather than",
+    "so that",
+    "supposing that",
+    "whether or not",
+)
+CONTINUATION_WORDS = (
+    COORDINATING_CONTINUATION_WORDS
+    | SUBORDINATING_CONTINUATION_WORDS
+    | RELATIVE_CONTINUATION_WORDS
+    | ADDITIONAL_LINKING_WORDS
+)
+MULTIWORD_CONTINUATION_PARTS = tuple(
+    tuple(phrase.split())
+    for phrase in MULTIWORD_CONTINUATION_STARTERS
 )
 LEAKED_TOKEN_LITERAL = re.compile(
     r"\b(?:leaked|compromised)\b[^\n`]{0,80}\btoken\b[^\n`]{0,20}`[^`]+`",
@@ -151,6 +207,7 @@ class WrapperSpec:
     name: str
     opener: str
     closer: str
+    markdown_emphasis: bool = False
 
 
 DELIMITER_SPECS = (
@@ -161,15 +218,16 @@ DELIMITER_SPECS = (
     DelimiterSpec("typographic-single", "\u2018", "\u2019", False, 4),
 )
 NEXT_QUOTE_WRAPPERS = (
-    WrapperSpec("strong-asterisk", "**", "**"),
-    WrapperSpec("strong-underscore", "__", "__"),
+    WrapperSpec("strong-asterisk", "**", "**", True),
+    WrapperSpec("strong-underscore", "__", "__", True),
     WrapperSpec("parentheses", "(", ")"),
     WrapperSpec("brackets", "[", "]"),
     WrapperSpec("braces", "{", "}"),
-    WrapperSpec("emphasis-asterisk", "*", "*"),
-    WrapperSpec("emphasis-underscore", "_", "_"),
+    WrapperSpec("emphasis-asterisk", "*", "*", True),
+    WrapperSpec("emphasis-underscore", "_", "_", True),
 )
 WRAPPER_MARKERS = frozenset("*_()[]{}")
+OPENING_WRAPPER_MARKERS = frozenset("*_([{")
 
 
 @dataclass(frozen=True)
@@ -471,6 +529,47 @@ def wrapper_at(text: str, index: int) -> WrapperSpec | None:
     return None
 
 
+def is_identifier_character(character: str) -> bool:
+    return character.isalnum() or character == "_"
+
+
+# Markdown markers justify a sentence boundary only when they are detached from
+# identifier text. Ambiguous intraword markers keep the credential clause open.
+def wrapper_has_valid_opening_flank(
+    text: str,
+    index: int,
+    wrapper: WrapperSpec,
+) -> bool:
+    if not wrapper.markdown_emphasis:
+        return True
+    previous = text[index - 1] if index else ""
+    following_index = index + len(wrapper.opener)
+    return (
+        (not previous or not is_identifier_character(previous))
+        and following_index < len(text)
+        and not text[following_index].isspace()
+    )
+
+
+def wrapper_has_valid_closing_flank(
+    text: str,
+    index: int,
+    wrapper: WrapperSpec,
+) -> bool:
+    if not wrapper.markdown_emphasis:
+        return True
+    previous = text[index - 1] if index else ""
+    following_index = index + len(wrapper.closer)
+    return (
+        bool(previous)
+        and not previous.isspace()
+        and (
+            following_index >= len(text)
+            or not is_identifier_character(text[following_index])
+        )
+    )
+
+
 def classify_content_leading(text: str, span: QuotedSpan) -> str:
     index = skip_characters(text, span.content_start, HORIZONTAL_SPACE)
     if index >= span.content_end:
@@ -509,19 +608,56 @@ def classify_post_quote_context(
     if character in WRAPPER_MARKERS:
         return index, "unbalanced-wrapper", character
     if character.isalnum():
-        end = index + 1
-        while end < len(text) and (
-            text[end].isalnum() or text[end] in "_-"
-        ):
-            end += 1
-        context_word = text[index:end]
+        end, context_word = read_context_word(text, index)
+        phrase_end = match_multiword_continuation(
+            text,
+            end,
+            context_word,
+        )
         category = (
             "continuation-word"
-            if context_word.casefold() in CONTINUATION_WORDS
+            if (
+                context_word.casefold() in CONTINUATION_WORDS
+                or phrase_end is not None
+            )
             else "word"
         )
-        return index, category, context_word
+        token_end = phrase_end if phrase_end is not None else end
+        return index, category, text[index:token_end]
     return index, "other", character
+
+
+def read_context_word(text: str, index: int) -> tuple[int, str]:
+    end = index + 1
+    while end < len(text) and (
+        text[end].isalnum() or text[end] in "_-"
+    ):
+        end += 1
+    return end, text[index:end]
+
+
+def match_multiword_continuation(
+    text: str,
+    first_end: int,
+    first_word: str,
+) -> int | None:
+    first_normalized = first_word.casefold()
+    for parts in MULTIWORD_CONTINUATION_PARTS:
+        if parts[0] != first_normalized:
+            continue
+        cursor = first_end
+        for expected in parts[1:]:
+            if cursor >= len(text) or text[cursor] not in HORIZONTAL_SPACE:
+                break
+            cursor = skip_characters(text, cursor, HORIZONTAL_SPACE)
+            if cursor >= len(text) or not text[cursor].isalnum():
+                break
+            cursor, actual = read_context_word(text, cursor)
+            if actual.casefold() != expected:
+                break
+        else:
+            return cursor
+    return None
 
 
 def parse_next_quoted_context(
@@ -539,7 +675,10 @@ def parse_next_quoted_context(
     wrappers: list[WrapperSpec] = []
     while index < next_span.start:
         wrapper = wrapper_at(text, index)
-        if wrapper is None:
+        if (
+            wrapper is None
+            or not wrapper_has_valid_opening_flank(text, index, wrapper)
+        ):
             return None
         wrappers.append(wrapper)
         index += len(wrapper.opener)
@@ -549,7 +688,14 @@ def parse_next_quoted_context(
     closing_end = next_span.end
     closing_wrappers: list[str] = []
     for wrapper in reversed(wrappers):
-        if not text.startswith(wrapper.closer, closing_end):
+        if (
+            not text.startswith(wrapper.closer, closing_end)
+            or not wrapper_has_valid_closing_flank(
+                text,
+                closing_end,
+                wrapper,
+            )
+        ):
             return None
         closing_wrappers.append(wrapper.name)
         closing_end += len(wrapper.closer)
@@ -611,6 +757,14 @@ def is_terminal_quote_context(
         metrics,
     )
     if next_context is None:
+        # A wrapper-like run that failed exact parsing/flanking is ambiguous.
+        # Keeping the clause open is the security-conservative outcome.
+        if (
+            next_span is not None
+            and next_span.start > span.end
+            and text[next_span.start - 1] in OPENING_WRAPPER_MARKERS
+        ):
+            return False
         return direct_quote_context_is_terminal(text, span)
     if next_context.content_leading != "uppercase-or-digit":
         return False
