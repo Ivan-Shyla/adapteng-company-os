@@ -90,12 +90,15 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   proven by a service account.
 - [ ] **Personal JM/EC isolation:** verify live credential/store identity;
   the `ISO-1` waiver expires **2026-08-08**.
-- [ ] **n8n Cloud inventory drift:** live API now reports 89 workflows / 40
+- [ ] **n8n Cloud inventory drift:** live API now reports 89 workflows / 38
   active versus 82 repository exports (14 live-only, 7 repo-only). Export,
   sanitize, classify and reconcile before claiming the repository index is
-  authoritative; do not bulk-import/activate during this cleanup. MM-40 and
-  MM-41 were deliberately unpublished as a safety freeze; do not reactivate
-  their direct-model/public-form path during reconciliation.
+  authoritative; do not bulk-import/activate during this cleanup. MM-40 through
+  MM-43 were deliberately unpublished with all entry triggers disabled; do not
+  reactivate their direct-model/public-form/WordPress/social path during
+  reconciliation. Historical WordPress pages 878/880/882/884/891 are already
+  in Trash, related n8n rows are quarantined and page 891 cache/public access
+  was verified closed.
 - [ ] **Media intake:** approve snapshot/rollback, import the backward-compatible
   consumer first, canary one real case, then redeploy the marketing worker.
 - [ ] **CASE-2026-001 media review:** repository metadata says redaction resolved,

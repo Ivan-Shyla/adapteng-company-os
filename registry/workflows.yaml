@@ -9,7 +9,7 @@ updated: 2026-07-26
 last_verified_live: 2026-07-26
 live_counts:
   self_hosted: { total: 2, active: 2, drift: none }
-  cloud: { total: 89, active: 40, repo_exports: 82, live_only: 14, repo_only: 7 }
+  cloud: { total: 89, active: 38, repo_exports: 82, live_only: 14, repo_only: 7 }
 
 canonical_full_index: adapteng-automation-platform/n8n/workflow-index.json  # 82 repository exports; live drift above must be reconciled
 
@@ -73,14 +73,32 @@ legacy_cloud_authority_dependencies:
     dependency: public n8n form + legacy personal 00_Case_Uploads + MM-40/MM-42/MM-43 chain
     freeze: "unpublished; Case Intake Form trigger disabled (draft 07d25f5f); execution API rejects it before a run; rollback version eeb3a3f3 retained"
     cutover: replace with authenticated corporate Drive/Baserow intake; do not reactivate the public legacy form
-  - { id: ZKxNt2F9LyRiwQZH, name: MM-42, dependency: "legacy personal 00_Case_Uploads + WordPress draft", cutover: pending }
-  - { id: l2mvHcqbkaKhGiAr, name: MM-43, dependency: "legacy case package + social draft path", cutover: pending }
+  - id: ZKxNt2F9LyRiwQZH
+    name: MM-42
+    status: inactive-safety-freeze
+    dependency: legacy personal 00_Case_Uploads + WordPress draft
+    freeze: "unpublished; Manual Start + Execute Workflow Trigger disabled (draft d2cc59d1); production execution rejects it before a run; prior active version 117c995c retained"
+    remediation: "historical WordPress pages 878/880/882/884/891 are in Trash; related Case_Content rows are blocked/quarantined; page 891 cache purged and public URLs return 404"
+    cutover: replace with corporate Drive/Baserow draft path; do not reactivate
+  - id: l2mvHcqbkaKhGiAr
+    name: MM-43
+    status: inactive-safety-freeze
+    dependency: legacy case package + Telegram social-review path
+    freeze: "unpublished; Manual Test + weekly Schedule + Execute Workflow Trigger disabled (draft fa4c5385); production execution rejects it before a run; prior active version 45f38d25 retained"
+    cutover: replace with approved corporate content snapshot; do not reactivate
   - { id: T3WHl2kCkPiPOPQd, name: MM-30, dependency: "deterministic draft builder", status: inactive }
+
+safety_evidence:
+  - id: QMqxSBRhaIfzYNTy
+    name: SAFETY-2026-07-26 Legacy Draft Quarantine
+    status: archived-completed
+    excluded_from_live_counts: true
+    evidence: "15199 status probe; 15200 page 891 -> Trash + row 8 quarantine; 15201 rows 3/4/5/7 quarantine; Cloudways purge run 30228283077; exact public URLs -> 404"
 
 cutover_truth:
   self_hosted_active_count: 2
   cloud_total_count: 89
-  cloud_active_count: 40
+  cloud_active_count: 38
   cloud_company_authority: Marketing Machine and Lead Monitor content/lead workflows
   personal_domains_on_cloud: [Job Monitor, English Coach]
   inventory_drift: 14 live-only / 7 repo-only versus 82 repository exports

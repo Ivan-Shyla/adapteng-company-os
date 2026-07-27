@@ -664,10 +664,12 @@ Raw media и client-confidential evidence не передаются модели
 и explicit approval.
 
 **As-built transition state (2026-07-26):** the corporate folders exist, but the
-active n8n Cloud MM-01/MM-Visual/MM-41/MM-42 path and the live media-worker still
-read legacy personal Drive bindings. They remain preserved until the governed
-service-account copy, inactive shadow, controlled canary and rollback proof
-complete. New company uploads go only to the corporate Shared Drive.
+active n8n Cloud MM-01/MM-Visual path and the live media-worker still read legacy
+personal Drive bindings. The now-frozen MM-41/MM-42 definitions also retain those
+legacy references, but all of their entry triggers are disabled and they are
+unpublished. Preserve the source until the governed service-account copy, inactive
+shadow, controlled canary and rollback proof complete. New company uploads go only
+to the corporate Shared Drive.
 
 ### 5.4 Article automation
 
@@ -775,14 +777,22 @@ submissions and backups never move into Company OS.
 Repository baseline — `adapteng-automation-platform/n8n/workflow-index.json`
 (82 exports after the latest ratified additions). It is currently **not** a
 complete live source of truth: a direct n8n Cloud API check on 2026-07-26 found
-89 workflows / 40 active, with 14 live-only and 7 repo-only entries. The
-pre-freeze baseline was 42 active; MM-40/MM-41 were then unpublished after a
-safety review. This drift
+89 workflows / 38 active, with 14 live-only and 7 repo-only entries. The
+pre-freeze baseline was 42 active; MM-40/MM-41 and their WordPress/social
+downstream MM-42/MM-43 were then unpublished after a safety review. This drift
 must be reconciled before cutover.
+
+Historical execution evidence showed that the legacy chain had created WordPress
+pages 878, 880, 882, 884 and 891; page 891 had reached `publish` without the
+current approval/media gates. All five pages are now in WordPress Trash, their
+`Case_Content` rows are `blocked`/`quarantined`, Cloudways cache purge run
+`30228283077` succeeded, and both the pretty permalink and `?page_id=891` return
+HTTP 404. Completed remediation workflow `QMqxSBRhaIfzYNTy` is sealed and
+archived; it is excluded from the 89 non-archived workflow count.
 
 | Домен | Группа | Repo exports / live active | Принадлежность | Правило |
 |---|---|---:|---|---|
-| Company workflows | MM / LM | 46 / 22 active in Cloud | AdaptEng business | Подключается к Company OS (§5): Baserow/Drive/agent |
+| Company workflows | MM / LM | 46 / 20 active in Cloud | AdaptEng business | Подключается к Company OS (§5): Baserow/Drive/agent |
 | Personal workflows | JM / EC | 35 / 17 active in Cloud | Личные/отдельные автоматизации Ивана | Не company scope; изолированы от company данных |
 | Utility / gateway | EXP / gateway | 1 repo baseline; 1 active live-only gateway | Utility | classify explicitly; never silently becomes company authority |
 
@@ -1337,9 +1347,9 @@ lead contract + repository identity → migration 004 live plan/restore gate
 | Postgres `adapteng_ops` | Live. Migration **001** (stable ID allocator) and **004** (lead identity reservation) are applied and used. Repository implementations for 002/003/005/006 are merged. | 002 run-ledger, 003 approval/outbox, 005 AI gateway and 006 integrity remain unapplied; each needs backup + real consumer. A generic hash-only business-ID reservation is being built for non-lead case/content/document retries. |
 | Governed Baserow adapter | Live internal-only on Coolify (`adapteng-baserow-adapter:8080`), bearer-authenticated and field-ownership proven; no public FQDN. Explicit-`business_id` upserts and WEB-002's migration-004 reservation path are replay-safe. A bare COUNTER create with omitted `business_id` intentionally allocates a new ID on every call and must not be retried automatically. | Land/test generic hash-only reservation, then fresh backup + additive migration + adapter redeploy before automated case/content/document creation. Rotate the owner Coolify API token after launch work ends. |
 | self-hosted n8n | Healthy on `n8n.adapteng.com`; exactly two active governed workflows: AUT-001 Systems Registry and WEB-002 Lead Intake. Both call the internal adapter; WEB-002 passed create/replay/conflict/no-loss E2E. | Live Coolify source still points at `palinaruban-repo-status-review`, not `main`; repoint and verify auto-deploy before wider migration. |
-| n8n Cloud | Still authoritative for most Marketing Machine/Lead Monitor flows and personal JM/EC. Direct API verification after the safety freeze: **89 workflows / 40 active** versus 82 repository exports (14 live-only, 7 repo-only; pre-freeze baseline 42 active). MM-40 contained fabricated fallback/parser facts; version `f753e544` removed them and no-input execution `15197` failed before model. MM-40 and its public-form orchestrator MM-41 were then unpublished and their trigger nodes disabled; both execution-API probes are rejected before a run. Version history/data remain, but the direct GPT-5 Mini → WordPress entry path cannot run. | Reconcile/export/sanitize inventory first. Keep MM-40/MM-41 frozen; replace them with authenticated corporate Drive/Baserow intake and the governed AI Gateway. Do not big-bang: snapshot → inactive self-hosted shadow → compare → canary → disable cloud twin → 7-day observation. Personal JM/EC require separate credentials/store/budget. |
+| n8n Cloud | Still authoritative for most Marketing Machine/Lead Monitor flows and personal JM/EC. Direct API verification after the safety freeze: **89 workflows / 38 active** versus 82 repository exports (14 live-only, 7 repo-only; pre-freeze baseline 42 active). MM-40 contained fabricated fallback/parser facts; version `f753e544` removed them and no-input execution `15197` failed before model. MM-40/MM-41 and downstream MM-42/MM-43 are unpublished with every entry trigger disabled; production execution probes reject them before a run. Historical pages 878/880/882/884/891 are in Trash, related rows are quarantined, cache purge run `30228283077` succeeded and page 891 now returns 404. Version history and archived remediation evidence remain. | Reconcile/export/sanitize inventory first. Keep MM-40..MM-43 frozen; replace them with authenticated corporate Drive/Baserow intake and the governed AI Gateway. Do not big-bang: snapshot → inactive self-hosted shadow → compare → canary → disable cloud twin → 7-day observation. Personal JM/EC require separate credentials/store/budget. |
 | Website | `adapteng.com` live on Cloudways. Governed producer PR remains held to avoid an unsafe automatic live deploy before consumer/cutover gates. | Map producer to WEB-002 only after origin auth, retention, HTTP 409, reconciliation, inactive shadow and rollback proofs. |
-| Media/content | `mm-media-worker` is live/HTTP-healthy, but uses old SA `media-worker@adapteng.iam.gserviceaccount.com`; MM-01/MM-Visual/MM-41/MM-42 still point to personal Drive. Existing pipeline can create n8n/WordPress drafts but not a canonical corporate Drive draft. CASE-2026-001 metadata conflicts: Git says redaction resolved, later live Sheet says `needs_redaction_review`; media publication remains blocked. | Deploy the governed Drive bridge with `adapteng-ai-operator`, copy the source without deleting it, reconcile human media/redaction status, then rewire and canary the media/content path. |
+| Media/content | `mm-media-worker` is live/HTTP-healthy, but uses old SA `media-worker@adapteng.iam.gserviceaccount.com`; active MM-01/MM-Visual and the worker still point to personal Drive, while frozen MM-41/MM-42 preserve legacy references only. The legacy chain historically created n8n/WordPress drafts but is now contained; no canonical corporate Drive draft exists yet. CASE-2026-001 metadata conflicts: Git says redaction resolved, later live Sheet says `needs_redaction_review`; media publication remains blocked. | Deploy the governed Drive bridge with `adapteng-ai-operator`, copy the source without deleting it, reconcile human media/redaction status, then rewire and canary the media/content path. |
 | AI agent | Code-change mode is actively delivering repository work. Business-artifact schemas/envelope/eval and deterministic AI-001 skill are merged, but a production audit reproduced incomplete task-envelope admission, optional external-action safety, accepted approval-like fields and local cap overrun; AG-008 hardening is in progress. Canonical AI Gateway/migration 005 are repo-only; no live model call. EU Vertex `gemini-3.1-flash-lite` non-global price rechecked at $0.275/M input and $1.65/M output (~$0.0121 representative draft). | Land AG-008; corporate source/draft path; AG-007 acceptance; verify Vertex IAM plus ZDR/cache-off/FX; deploy canonical gateway and run inactive measured call. Hard caps stay €0.10/call, €1/day, €10/month. |
 | Backup/security | Fresh `adapteng_ops` backup exists (2026-07-25 13:31, 35.21 KB, Coolify + owner copy). Baserow token incidents and synthetic rows are closed. | Prove restore in scratch; complete Workspace recovery/MFA; rotate the chat-exposed n8n management key and Coolify API token after launch work; record actual service invoices. |
 | Costs | Self-hosted n8n Community, Baserow Community and current Coolify add €0 software fee; Hetzner infrastructure is paid. Workspace is paid. Cloudways, n8n Cloud, Zoho, GoDaddy and Hetzner are paid/account-specific. AI is pay-as-you-go but has made no runtime call. | Record actual invoices/renewals; public list prices are not accounting truth. Storage Box BX11 remains planned, not evidenced as purchased. |
