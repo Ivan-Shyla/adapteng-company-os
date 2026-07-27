@@ -20,6 +20,21 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   and keep the replacement in the password manager/runtime secret store — not
   Git or chat. Existing encrypted workflow credentials/webhooks do not depend
   on this management key, so rotation should not interrupt AUT-001/WEB-002.
+- [ ] **Close systemic n8n MCP exposure.** Audited workflows still have
+  **Available in MCP** enabled because the available workflow-update API
+  rejected that unsupported field; no availability changed. Instance-level MCP
+  plus per-workflow availability and an authenticated user exposes supported
+  workflows. Disable instance-level MCP globally or change per-workflow
+  availability through a supported UI/API, then verify the effective exposure
+  is an explicit allowlist only. Turning **Available in MCP** off does not stop
+  normal webhook, schedule, manual or internal triggers.
+- [ ] **Harden live paths before any further freeze decision.** Do not freeze
+  MM-18 while recent successful webhooks prove it is the current website lead
+  path; retain it until the reviewed randomized-path/header-auth WEB-002
+  producer cutover is proven atomically. Add an EC-02 principal allowlist before
+  models; repair MM-20/MM-24 approval, dependency and idempotency controls; make
+  MM-07 allowlist logging redacted; and publish JM-09's suppression fix while
+  preserving error bindings.
 - [ ] **Enable minimal solo-safe `main` protection in repository Settings/Rules.**
   Re-verified 2026-07-27: `main` is **unprotected** in
   `Ivan-Shyla/adapteng-company-os`, `adapteng-automation-platform`,
@@ -152,10 +167,11 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   proven by a service account.
 - [ ] **Personal JM/EC isolation:** verify live credential/store identity;
   the `ISO-1` waiver expires **2026-08-08**.
-- [ ] **n8n Cloud inventory drift:** live API now reports 89 non-archived
-  workflows / 33 active versus 82 repository exports; drift remains 14
-  live-only / 7 repo-only. The active safety-freeze chain is **42 → 40 → 38 →
-  37 → 36 → 35 → 34 → 33**. Export,
+- [ ] **n8n Cloud inventory drift:** a fresh live audit reconfirmed
+  89 non-archived workflows / 33 active; reversible freeze-now actions then
+  produced **89 non-archived / 31 active / 58 inactive** versus 82 repository
+  exports. Drift remains 14 live-only / 7 repo-only. The active safety-freeze
+  chain is **42 → 40 → 38 → 37 → 36 → 35 → 34 → 33 → 31**. Export,
   sanitize, classify and reconcile before claiming the repository index is
   authoritative; do not bulk-import/activate during this cleanup. MM-40 through
   MM-43 were deliberately unpublished with all entry triggers disabled; do not
@@ -182,11 +198,22 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   `28a7ef72` and six historical runs/data are preserved. Do not reactivate the
   direct-model path. For the gateway, mail router, approval sync and plan
   builder plus MM-22, manual-mode and production probes reject before execution
-  creation; the five freezes are verified fail-closed.
-  `uBVRMTCKwnUG91kU` remains active in its founder-chat-allowlisted media
-  sanitize/log version; only the unpublished `/approve → MM21-24` draft path was
-  disabled, so do not subtract it from the active count. Historical WordPress
-  pages 878/880/882/884/891 are already in Trash, related n8n rows are
+  creation; the five earlier freezes are verified fail-closed.
+  MM-Visual-Evidence-Intake `uBVRMTCKwnUG91kU` is now unpublished because its
+  Telegram route lacked a principal allowlist and could reach media-worker
+  before validated-ready output. Its old published version is retained for
+  audit; Manual, Telegram and worker nodes are disabled. Never reactivate it
+  until a founder/principal allowlist precedes every command and media-worker is
+  reachable only from validated-ready output. MM-08 `RAPjKSnj6EY7axtb` is also
+  unpublished because it was an unauthenticated public write ingress with zero
+  executions and no proven dependency; webhook and lead-write nodes are
+  disabled, and any replacement needs authentication, schema validation, rate
+  limiting and stable deduplication. Manual/draft and production probes for
+  both workflows rejected without an execution ID, and no post-freeze
+  executions appeared. Already-inactive MM-10 `39CAjeKcZD64VM25` and MM-29
+  `at9H54krWF9ULdtT` also have Manual, Schedule and approval-write nodes disabled
+  as defense-in-depth, with no active-count effect. Historical WordPress pages
+  878/880/882/884/891 are already in Trash, related n8n rows are
   quarantined and page 891 cache/public access was verified closed. Unattached
   public media IDs 886–889 and 893–896 were also removed and verified 404; the
   source Drive HEIC files remain untouched.

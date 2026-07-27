@@ -183,18 +183,21 @@ services:
     status: live
     owner: Ivan
     notes: >-
-      Live API verified 89 non-archived workflows / 33 active on 2026-07-27
-      versus 82 repository exports; drift remains 14 live-only / 7 repo-only.
-      The safety-freeze chain is 42 -> 40 -> 38 -> 37 -> 36 -> 35 -> 34 -> 33.
+      A fresh live audit reconfirmed 89 non-archived workflows / 33 active on
+      2026-07-27. Reversible freeze-now actions then produced 89 non-archived /
+      31 active / 58 inactive versus 82 repository exports; drift remains
+      14 live-only / 7 repo-only. The safety-freeze chain is
+      42 -> 40 -> 38 -> 37 -> 36 -> 35 -> 34 -> 33 -> 31.
       Gateway d1SDcRTgMqS9Zvgi remains frozen for broad-read
       confidentiality/exfiltration risk to external Claude, not arbitrary write.
       MM-ZH-02 J5SpIS8Ye8JHViFi, MM-04 4D9UBruS1ZhLn1pS and MM-05
       o9Lj7F9WbhFSCARq are also trigger-disabled, unpublished and rejected for
       production execution. MM-04 execution 15214 read 30 stale smoke approval
       rows and updated 0; MM-05 execution 15216 found 0 approved drafts.
-      Workflow uBVRMTCKwnUG91kU remains active in its founder-chat-allowlisted
-      media sanitize/log version; only its unpublished /approve -> MM21-24 draft
-      path was disabled, so the active count did not change. Read-only audit
+      MM-Visual-Evidence-Intake uBVRMTCKwnUG91kU is now unpublished because its
+      Telegram route lacked a principal allowlist and could reach media-worker
+      before validated-ready output. Its old published version is retained for
+      audit; Manual, Telegram and worker nodes are disabled. Read-only audit
       Q2PmbE2VDffRl1iT found 179 synthetic Approval_Log rows; archived cleanup
       workflow a3luyFSBH9xRELDW matched 179 in dry-run 15548, deleted exactly
       ids 1-179 in live execution 15549, and matched 0 in verification 15550.
@@ -207,8 +210,25 @@ services:
       execution is rejected. Prior active 72869463, freeze draft 28a7ef72 and
       six historical runs/data are preserved. Manual-mode and production probes
       for the gateway, mail router, approval sync, plan builder and MM-22 all
-      reject before execution creation, verifying fail-closed freezes
-      (ARCHITECTURE.md §6.4).
+      reject before execution creation. MM-08 RAPjKSnj6EY7axtb is also
+      unpublished: it was an unauthenticated public write ingress with zero
+      executions and no proven dependency; its webhook and lead-write nodes are
+      disabled. Manual/draft and production probes for MM-Visual and MM-08
+      rejected without an execution id, and no post-freeze executions appeared.
+      Already-inactive MM-10 39CAjeKcZD64VM25 and MM-29 at9H54krWF9ULdtT also
+      have Manual, Schedule and approval-write nodes disabled as
+      defense-in-depth, with no count effect. Systemic MCP exposure remains
+      unresolved: audited workflows still have Available in MCP enabled because
+      the workflow update API rejected that unsupported field. Instance-level
+      MCP plus per-workflow availability and an authenticated user exposes
+      supported workflows; disabling availability does not stop normal triggers.
+      Keep MM-18 active until the reviewed randomized-path/header-auth WEB-002
+      producer cutover is atomically proven. Before further freezes, harden
+      EC-02 principal access, MM-20/MM-24 approval/dependency/idempotency, MM-07
+      redacted allowlist logging and JM-09 suppression publication with error
+      bindings preserved. This registry update performed no payload/credential
+      review, model call, publication, website cutover or live mutation
+      (ARCHITECTURE.md §6.3).
 
   - id: baserow-self-hosted
     repo: adapteng-automation-platform (deploy/coolify)
