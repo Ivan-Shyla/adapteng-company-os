@@ -20,12 +20,22 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   and keep the replacement in the password manager/runtime secret store — not
   Git or chat. Existing encrypted workflow credentials/webhooks do not depend
   on this management key, so rotation should not interrupt AUT-001/WEB-002.
-- [ ] **Prove GitHub ownership/protection and isolate deploy credentials.** Core
-  repositories remain under the personal `Ivan-Shyla` namespace; company
-  ownership and `main` branch-protection enforcement are not yet evidenced.
-  Inventory deploy-key bindings by non-secret identifier, replace the shared
-  deploy key with per-repository/service least-privilege credentials, and prove
-  required review/protection without interrupting current deployments.
+- [ ] **Enable minimal solo-safe `main` protection in repository Settings/Rules.**
+  Re-verified 2026-07-27: `main` is **unprotected** in
+  `Ivan-Shyla/adapteng-company-os`, `adapteng-automation-platform`,
+  `ai-dev-loop-control-plane`, `adapteng-marketing`, `adapteng-website` and
+  legacy `PalinaRuban/adapteng`. The active repositories remain under the
+  personal `Ivan-Shyla` namespace; company ownership is not yet evidenced. An
+  administration-API attempt to apply the minimal contract to Company OS
+  returned 404; **no setting changed and protection is not enabled**. In the
+  five active repositories, require a pull request with 0 required approvals,
+  require conversation resolution and linear history, block force-push and
+  deletion, and pin no required checks yet. Apply the same contract to the
+  legacy repository only after containment.
+- [ ] **Isolate the shared deploy key.** Inventory deploy-key bindings by
+  non-secret identifier, replace the shared key with per-repository/service
+  least-privilege credentials, and prove deploy/rollback continuity without
+  interrupting current deployments.
 - [ ] **Prove workflow credential isolation and second-admin continuity.** Record
   the workflow→credential binding map by credential ID/name only — never values
   — and verify company versus personal domain separation and least privilege.
