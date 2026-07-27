@@ -325,6 +325,144 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                         )
                         self.assertEqual([], inspect_line(line))
 
+    def test_quoted_next_sentence_opener_boundary_cross_product(self) -> None:
+        next_sentence_values = (
+            "Synthetic-next-sentence-label-1234567890",
+            "7-synthetic-next-sentence-label-1234567890",
+        )
+        wrappers = (("", ""), ("(", ")"), ("[", "]"), ("{", "}"))
+        for first_name, first_opening, first_closing in self.QUOTE_PAIRS:
+            for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
+                for spacing in ("", " ", "\t"):
+                    for wrapper_opening, wrapper_closing in wrappers:
+                        for value in next_sentence_values:
+                            with self.subTest(
+                                first=first_name,
+                                next=next_name,
+                                spacing=repr(spacing),
+                                wrapper=wrapper_opening,
+                                value=value[0],
+                            ):
+                                prefix = (
+                                    "The cleanup token "
+                                    + first_opening
+                                    + "[REDACTED]."
+                                    + first_closing
+                                )
+                                line = (
+                                    prefix
+                                    + spacing
+                                    + wrapper_opening
+                                    + next_opening
+                                    + value
+                                    + next_closing
+                                    + wrapper_closing
+                                    + " remains."
+                                )
+                                clauses = scan_clauses(line)
+                                self.assertEqual(len(prefix), clauses[0].end)
+                                self.assertEqual([], inspect_line(line))
+
+    def test_quoted_next_context_continuation_cross_product(self) -> None:
+        continuation_values = (
+            "synthetic-lowercase-continuation-1234567890",
+            "and-synthetic-conjunction-continuation-1234567890",
+            ",synthetic-comma-continuation-1234567890",
+        )
+        for first_name, first_opening, first_closing in self.QUOTE_PAIRS:
+            for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
+                for spacing in ("", " ", "\t"):
+                    for value in continuation_values:
+                        with self.subTest(
+                            first=first_name,
+                            next=next_name,
+                            spacing=repr(spacing),
+                            value=value[0],
+                        ):
+                            line = (
+                                "The cleanup token "
+                                + first_opening
+                                + "[REDACTED]."
+                                + first_closing
+                                + spacing
+                                + next_opening
+                                + value
+                                + next_closing
+                                + " remains"
+                            )
+                            self.assertEqual(
+                                [(0, len(line))],
+                                [
+                                    (clause.start, clause.end)
+                                    for clause in scan_clauses(line)
+                                ],
+                            )
+                            self.assertIn(
+                                "credential-prose-literal",
+                                inspect_line(line),
+                            )
+
+    def test_recovery_spans_do_not_mask_outside_terminators(self) -> None:
+        value = "synthetic-lowercase-next-label-1234567890"
+        for name, opening, closing in self.QUOTE_PAIRS:
+            for punctuation in ".?!;":
+                for separator in (
+                    punctuation,
+                    punctuation + " ",
+                    " " + punctuation + " ",
+                    "\t" + punctuation + "\t",
+                ):
+                    with self.subTest(
+                        name=name,
+                        punctuation=punctuation,
+                        separator=repr(separator),
+                    ):
+                        prefix = (
+                            "The cleanup token "
+                            + opening
+                            + "[REDACTED]"
+                            + closing
+                        )
+                        line = (
+                            prefix
+                            + separator
+                            + opening
+                            + value
+                            + closing
+                            + " remains"
+                        )
+                        punctuation_end = (
+                            len(prefix) + separator.index(punctuation) + 1
+                        )
+                        clauses = scan_clauses(line)
+                        self.assertEqual(punctuation_end, clauses[0].end)
+                        self.assertEqual([], inspect_line(line))
+
+    def test_primary_quote_coverage_preserves_internal_terminators(self) -> None:
+        for name, opening, closing in self.QUOTE_PAIRS:
+            for punctuation in ".?!;":
+                with self.subTest(name=name, punctuation=punctuation):
+                    value = (
+                        "synthetic"
+                        + punctuation
+                        + "internal-primary-value-1234567890"
+                    )
+                    line = (
+                        "The cleanup token "
+                        + opening
+                        + value
+                        + closing
+                        + " remains"
+                    )
+                    self.assertEqual(
+                        [(0, len(line))],
+                        [
+                            (clause.start, clause.end)
+                            for clause in scan_clauses(line)
+                        ],
+                    )
+                    self.assertIn("credential-prose-literal", inspect_line(line))
+
     def test_quote_terminal_segment_end_matrix(self) -> None:
         suffixes = ("", "   ", " The next sentence starts here.")
         for name, opening, closing in self.QUOTE_PAIRS:

@@ -129,6 +129,11 @@ DELIMITER_SPECS = (
     DelimiterSpec("typographic-double", "\u201c", "\u201d", False, 3),
     DelimiterSpec("typographic-single", "\u2018", "\u2019", False, 4),
 )
+NEXT_CONTEXT_SKIPPABLE = (
+    POST_QUOTE_SKIPPABLE
+    | OPENING_WRAPPERS
+    | frozenset(spec.opener for spec in DELIMITER_SPECS)
+)
 
 
 @dataclass(frozen=True)
@@ -139,6 +144,12 @@ class QuotedSpan:
     content_end: int
     delimiter: str
     priority: int
+
+
+@dataclass(frozen=True)
+class QuoteViews:
+    primary_spans: tuple[QuotedSpan, ...]
+    evidence_spans: tuple[QuotedSpan, ...]
 
 
 @dataclass(frozen=True)
@@ -261,27 +272,69 @@ def make_quoted_span(
     )
 
 
-def collect_quote_spans(
+def deduplicate_quote_spans(
+    candidates: list[QuotedSpan],
+) -> tuple[QuotedSpan, ...]:
+    by_bounds: dict[tuple[int, int], QuotedSpan] = {}
+    for span in candidates:
+        key = (span.start, span.end)
+        current = by_bounds.get(key)
+        if current is None or span.priority < current.priority:
+            by_bounds[key] = span
+    return tuple(
+        sorted(
+            by_bounds.values(),
+            key=lambda span: (
+                span.start,
+                span.end - span.start,
+                span.priority,
+            ),
+        )
+    )
+
+
+def select_primary_quote_spans(
+    candidates: list[QuotedSpan],
+) -> tuple[QuotedSpan, ...]:
+    primary: list[QuotedSpan] = []
+    for span in sorted(
+        deduplicate_quote_spans(candidates),
+        key=lambda candidate: (
+            candidate.start,
+            -candidate.end,
+            candidate.priority,
+        ),
+    ):
+        if primary and span.start < primary[-1].end:
+            continue
+        primary.append(span)
+    return tuple(primary)
+
+
+def collect_quote_views(
     text: str,
     escaped: list[bool],
     metrics: ParserMetrics | None = None,
-) -> tuple[QuotedSpan, ...]:
-    """Collect independent spans; exact overlaps use delimiter priority."""
+) -> QuoteViews:
+    """Collect primary segmentation spans and independent evidence spans."""
     newline_prefix = [0] * (len(text) + 1)
     for index, character in enumerate(text):
         newline_prefix[index + 1] = newline_prefix[index] + int(
             character in "\r\n"
         )
 
-    candidates: list[QuotedSpan] = []
+    evidence_candidates: list[QuotedSpan] = []
+    primary_candidates: list[QuotedSpan] = []
     for spec in DELIMITER_SPECS:
         if spec.symmetric:
             previous: int | None = None
+            primary_opener: int | None = None
             for index, character in enumerate(text):
                 if metrics is not None:
                     metrics.characters_scanned += 1
                 if character in "\r\n":
                     previous = None
+                    primary_opener = None
                     continue
                 if character != spec.opener:
                     continue
@@ -301,8 +354,18 @@ def collect_quote_spans(
                     and can_close_delimiter(text, index, spec)
                     and not has_newline(newline_prefix, previous, index + 1)
                 ):
-                    candidates.append(make_quoted_span(previous, index, spec))
+                    evidence_candidates.append(
+                        make_quoted_span(previous, index, spec)
+                    )
                 previous = index
+                if primary_opener is None:
+                    if can_open_delimiter(text, index, spec):
+                        primary_opener = index
+                elif can_close_delimiter(text, index, spec):
+                    primary_candidates.append(
+                        make_quoted_span(primary_opener, index, spec)
+                    )
+                    primary_opener = None
             continue
 
         openers: list[int] = []
@@ -322,23 +385,13 @@ def collect_quote_spans(
             ):
                 start = openers.pop()
                 if not has_newline(newline_prefix, start, index + 1):
-                    candidates.append(make_quoted_span(start, index, spec))
+                    span = make_quoted_span(start, index, spec)
+                    evidence_candidates.append(span)
+                    primary_candidates.append(span)
 
-    by_bounds: dict[tuple[int, int], QuotedSpan] = {}
-    for span in candidates:
-        key = (span.start, span.end)
-        current = by_bounds.get(key)
-        if current is None or span.priority < current.priority:
-            by_bounds[key] = span
-    return tuple(
-        sorted(
-            by_bounds.values(),
-            key=lambda span: (
-                span.start,
-                span.end - span.start,
-                span.priority,
-            ),
-        )
+    return QuoteViews(
+        primary_spans=select_primary_quote_spans(primary_candidates),
+        evidence_spans=deduplicate_quote_spans(evidence_candidates),
     )
 
 
@@ -358,7 +411,7 @@ def build_next_context(text: str) -> list[int]:
     next_context = [len(text)] * (len(text) + 1)
     next_index = len(text)
     for index in range(len(text) - 1, -1, -1):
-        if text[index] in POST_QUOTE_SKIPPABLE:
+        if text[index] in NEXT_CONTEXT_SKIPPABLE:
             next_context[index] = next_index
         else:
             next_index = index
@@ -379,26 +432,19 @@ def is_terminal_quote_context(
         return True
     if character in CONTINUATION_PUNCTUATION:
         return False
-    if character in OPENING_WRAPPERS:
-        context_index = next_context[context_index + 1]
-        if context_index >= len(text):
-            return True
-        character = text[context_index]
-        if character in "\r\n;" or character in SENTENCE_FINAL_PUNCTUATION:
-            return True
     return character.isupper() or character.isdigit()
 
 
 def build_clause_bounds(
     text: str,
-    spans: tuple[QuotedSpan, ...],
+    primary_spans: tuple[QuotedSpan, ...],
     escaped: list[bool],
     metrics: ParserMetrics | None,
 ) -> tuple[tuple[int, int], ...]:
-    """Classify boundaries from span coverage and post-quote context."""
+    """Classify boundaries only from deterministic primary quote coverage."""
     covered = merge_intervals(
         (span.content_start, span.content_end)
-        for span in spans
+        for span in primary_spans
     )
     boundaries: set[tuple[int, int]] = set()
     covered_index = 0
@@ -434,7 +480,7 @@ def build_clause_bounds(
         index += 1
 
     next_context = build_next_context(text)
-    for span in spans:
+    for span in primary_spans:
         if metrics is not None:
             metrics.boundary_checks += 1
         punctuation_index = span.content_end - 1
@@ -497,9 +543,17 @@ def scan_clauses(
 ) -> tuple[ClauseSegment, ...]:
     """Collect spans, classify boundaries, and assign spans to clauses."""
     escaped = build_escape_flags(text, metrics)
-    spans = collect_quote_spans(text, escaped, metrics)
-    clause_bounds = build_clause_bounds(text, spans, escaped, metrics)
-    return assign_spans_to_clauses(clause_bounds, spans)
+    quote_views = collect_quote_views(text, escaped, metrics)
+    clause_bounds = build_clause_bounds(
+        text,
+        quote_views.primary_spans,
+        escaped,
+        metrics,
+    )
+    return assign_spans_to_clauses(
+        clause_bounds,
+        quote_views.evidence_spans,
+    )
 
 
 def credential_prose_literals(
