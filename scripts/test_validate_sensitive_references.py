@@ -6,6 +6,7 @@ from __future__ import annotations
 import unittest
 
 from scripts.validate_sensitive_references import (
+    ParserMetrics,
     credential_prose_literals,
     inspect_line,
     inspect_url,
@@ -74,13 +75,18 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
         self.assertEqual([], inspect_line(name + "`host-only`"))
 
     def test_rejects_cleanup_token_in_normal_prose(self) -> None:
+        literal = "synthetic-cleanup-token-12345"
         line = (
             "The cleanup "
             + "token `"
-            + "synthetic-cleanup-token-12345"
+            + literal
             + "` must be rotated."
         )
         self.assertIn("credential-prose-literal", inspect_line(line))
+        self.assertEqual(
+            [literal],
+            list(credential_prose_literals(line)),
+        )
 
     def test_rejects_long_same_clause_credential_prose(self) -> None:
         literal = "synthetic-long-clause-secret-1234567890"
@@ -109,9 +115,17 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                     + " must rotate."
                 )
                 self.assertIn("credential-prose-literal", inspect_line(line))
+                self.assertEqual(
+                    [literal],
+                    list(credential_prose_literals(line)),
+                )
 
     def test_ascii_quote_escape_matrix(self) -> None:
-        for name, quote in (("ascii-double", '"'), ("ascii-single", "'")):
+        for name, quote in (
+            ("backtick", "`"),
+            ("ascii-double", '"'),
+            ("ascii-single", "'"),
+        ):
             for backslash_count in (1, 3):
                 with self.subTest(name=name, backslashes=backslash_count):
                     escaped_quote = ("\\" * backslash_count) + quote
@@ -132,7 +146,11 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                     self.assertIn("credential-prose-literal", inspect_line(line))
 
     def test_even_backslash_run_closes_ascii_quotes(self) -> None:
-        for name, quote in (("ascii-double", '"'), ("ascii-single", "'")):
+        for name, quote in (
+            ("backtick", "`"),
+            ("ascii-double", '"'),
+            ("ascii-single", "'"),
+        ):
             for backslash_count in (2, 4):
                 with self.subTest(name=name, backslashes=backslash_count):
                     first_value = "short-" + ("\\" * backslash_count)
@@ -173,6 +191,67 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
         )
         self.assertIn("credential-prose-literal", inspect_line(line))
 
+    def test_independent_nested_span_cross_product(self) -> None:
+        literal = "synthetic-nested-secret-1234567890"
+        for outer_name, outer_opening, outer_closing in self.QUOTE_PAIRS:
+            for inner_name, inner_opening, inner_closing in self.QUOTE_PAIRS:
+                with self.subTest(outer=outer_name, inner=inner_name):
+                    line = (
+                        "The cleanup token "
+                        + outer_opening
+                        + "outer prose "
+                        + inner_opening
+                        + literal
+                        + inner_closing
+                        + " outer prose"
+                        + outer_closing
+                        + " must rotate."
+                    )
+                    self.assertIn("credential-prose-literal", inspect_line(line))
+                    self.assertEqual(
+                        [literal],
+                        list(credential_prose_literals(line)),
+                    )
+
+    def test_keyword_and_literal_inside_typographic_outer_span(self) -> None:
+        literal = "synthetic-nested-keyword-secret-1234567890"
+        for outer_name, outer_opening, outer_closing in self.QUOTE_PAIRS[3:]:
+            for inner_name, inner_opening, inner_closing in self.QUOTE_PAIRS:
+                with self.subTest(outer=outer_name, inner=inner_name):
+                    line = (
+                        outer_opening
+                        + "the cleanup token uses "
+                        + inner_opening
+                        + literal
+                        + inner_closing
+                        + " before rotation"
+                        + outer_closing
+                    )
+                    self.assertEqual(
+                        [literal],
+                        list(credential_prose_literals(line)),
+                    )
+
+    def test_malformed_prefix_later_valid_span_cross_product(self) -> None:
+        literal = "synthetic-later-valid-secret-1234567890"
+        for malformed_name, malformed_opening, _ in self.QUOTE_PAIRS:
+            for valid_name, valid_opening, valid_closing in self.QUOTE_PAIRS:
+                with self.subTest(malformed=malformed_name, valid=valid_name):
+                    line = (
+                        "The cleanup token "
+                        + malformed_opening
+                        + "malformed prefix "
+                        + valid_opening
+                        + literal
+                        + valid_closing
+                        + " must rotate."
+                    )
+                    self.assertIn("credential-prose-literal", inspect_line(line))
+                    self.assertEqual(
+                        [literal],
+                        list(credential_prose_literals(line)),
+                    )
+
     def test_quote_terminal_sentence_boundary_matrix(self) -> None:
         audit_literal = "synthetic-unrelated-audit-label-1234567890"
         suffixes = (
@@ -191,6 +270,60 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                         + suffix
                     )
                     self.assertEqual([], inspect_line(line))
+
+    def test_quote_final_punctuation_continuation_matrix(self) -> None:
+        audit_literal = "synthetic-same-sentence-audit-label-1234567890"
+        continuations = (
+            " and later the audit label `" + audit_literal + "` remains.",
+            ", and later the audit label `" + audit_literal + "` remains.",
+            ") and later the audit label `" + audit_literal + "` remains.",
+            " (and later the audit label `" + audit_literal + "` remains.)",
+            " with the later audit label `" + audit_literal + "` remaining.",
+        )
+        for name, opening, closing in self.QUOTE_PAIRS:
+            for punctuation in ".?!":
+                for continuation in continuations:
+                    with self.subTest(
+                        name=name,
+                        punctuation=punctuation,
+                        continuation=continuation[:2],
+                    ):
+                        line = (
+                            "The cleanup token was "
+                            + opening
+                            + "removed"
+                            + punctuation
+                            + closing
+                            + continuation
+                        )
+                        self.assertIn("credential-prose-literal", inspect_line(line))
+
+    def test_quote_final_punctuation_true_boundary_matrix(self) -> None:
+        audit_literal = "synthetic-next-sentence-audit-label-1234567890"
+        next_contexts = (
+            " The unrelated audit label `" + audit_literal + "` remains.",
+            ") The unrelated audit label `" + audit_literal + "` remains.",
+            " (The unrelated audit label `" + audit_literal + "` remains.)",
+            "\nThe unrelated audit label `" + audit_literal + "` remains.",
+            "; The unrelated audit label `" + audit_literal + "` remains.",
+        )
+        for name, opening, closing in self.QUOTE_PAIRS:
+            for punctuation in ".?!":
+                for next_context in next_contexts:
+                    with self.subTest(
+                        name=name,
+                        punctuation=punctuation,
+                        context=repr(next_context[:2]),
+                    ):
+                        line = (
+                            "The cleanup token was "
+                            + opening
+                            + "removed"
+                            + punctuation
+                            + closing
+                            + next_context
+                        )
+                        self.assertEqual([], inspect_line(line))
 
     def test_quote_terminal_segment_end_matrix(self) -> None:
         suffixes = ("", "   ", " The next sentence starts here.")
@@ -383,6 +516,62 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
             + "` remains."
         )
         self.assertEqual([], inspect_line(line))
+
+    def test_safe_punctuated_span_with_continuation_keeps_clause(self) -> None:
+        line = (
+            "The cleanup token `[REDACTED].` and later `"
+            + "synthetic-same-sentence-audit-label-1234567890"
+            + "` must rotate."
+        )
+        self.assertIn("credential-prose-literal", inspect_line(line))
+
+    def test_keyword_span_association_order(self) -> None:
+        before = "synthetic-before-keyword-label-1234567890"
+        after_first = "synthetic-after-first-secret-1234567890"
+        after_second = "synthetic-after-second-secret-1234567890"
+        line = (
+            "`"
+            + before
+            + "` appears first, then the cleanup token uses `"
+            + after_first
+            + "`, and the password later uses `"
+            + after_second
+            + "` before rotation."
+        )
+        self.assertEqual(
+            [after_first, after_second],
+            list(credential_prose_literals(line)),
+        )
+
+    def test_keyword_inside_span_does_not_associate_later_span(self) -> None:
+        line = (
+            '"cleanup token" is only a quoted label, while `'
+            + "synthetic-unrelated-audit-label-1234567890"
+            + "` remains unrelated."
+        )
+        self.assertEqual([], inspect_line(line))
+
+    def test_parser_scaling_is_linear(self) -> None:
+        operation_counts = []
+        for size in (64, 128, 256, 512):
+            line = " ".join(
+                "cleanup token `synthetic-scale-secret-"
+                + f"{index:08d}"
+                + "`"
+                for index in range(size)
+            )
+            metrics = ParserMetrics()
+            values = list(credential_prose_literals(line, metrics))
+            self.assertEqual(size, len(values))
+            self.assertLessEqual(metrics.association_steps, (6 * size) + 8)
+            self.assertLessEqual(
+                metrics.total_operations,
+                (9 * len(line)) + (10 * size),
+            )
+            operation_counts.append(metrics.total_operations)
+
+        for previous, current in zip(operation_counts, operation_counts[1:]):
+            self.assertLessEqual(current, (2.1 * previous) + 32)
 
     def test_rejects_literal_secret_assignment(self) -> None:
         line = "api_" + "key = " + "synthetic-secret-value-1234567890"

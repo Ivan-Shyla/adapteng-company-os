@@ -8,6 +8,7 @@ import subprocess
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
+from heapq import heappop, heappush
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
@@ -54,14 +55,6 @@ CREDENTIAL_PROSE_NAME = re.compile(
 )
 CLAUSE_TERMINATORS = frozenset(".!?;")
 SENTENCE_FINAL_PUNCTUATION = frozenset(".!?")
-QUOTE_PAIRS = {
-    "`": "`",
-    '"': '"',
-    "'": "'",
-    "\u201c": "\u201d",
-    "\u2018": "\u2019",
-}
-ASCII_ESCAPE_AWARE_QUOTES = frozenset({'"', "'"})
 CREDENTIAL_DASH_TRANSLATION = str.maketrans(
     {
         "\u2010": "-",
@@ -75,6 +68,9 @@ CREDENTIAL_DASH_TRANSLATION = str.maketrans(
         "\uff0d": "-",
     }
 )
+POST_QUOTE_SKIPPABLE = frozenset(" \t\f\v)]}\u201d\u2019")
+OPENING_WRAPPERS = frozenset("([{")
+CONTINUATION_PUNCTUATION = frozenset(",:-\u2010\u2011\u2012\u2013\u2014\u2015")
 LEAKED_TOKEN_LITERAL = re.compile(
     r"\b(?:leaked|compromised)\b[^\n`]{0,80}\btoken\b[^\n`]{0,20}`[^`]+`",
     re.IGNORECASE,
@@ -114,11 +110,35 @@ SAFE_LITERAL_LABELS = {
 
 
 @dataclass(frozen=True)
+class DelimiterSpec:
+    name: str
+    opener: str
+    closer: str
+    escape_aware: bool
+    priority: int
+
+    @property
+    def symmetric(self) -> bool:
+        return self.opener == self.closer
+
+
+DELIMITER_SPECS = (
+    DelimiterSpec("backtick", "`", "`", True, 0),
+    DelimiterSpec("ascii-double", '"', '"', True, 1),
+    DelimiterSpec("ascii-single", "'", "'", True, 2),
+    DelimiterSpec("typographic-double", "\u201c", "\u201d", False, 3),
+    DelimiterSpec("typographic-single", "\u2018", "\u2019", False, 4),
+)
+
+
+@dataclass(frozen=True)
 class QuotedSpan:
     start: int
     end: int
     content_start: int
     content_end: int
+    delimiter: str
+    priority: int
 
 
 @dataclass(frozen=True)
@@ -126,6 +146,23 @@ class ClauseSegment:
     start: int
     end: int
     quoted_spans: tuple[QuotedSpan, ...]
+
+
+@dataclass
+class ParserMetrics:
+    characters_scanned: int = 0
+    boundary_checks: int = 0
+    keyword_matches: int = 0
+    association_steps: int = 0
+
+    @property
+    def total_operations(self) -> int:
+        return (
+            self.characters_scanned
+            + self.boundary_checks
+            + self.keyword_matches
+            + self.association_steps
+        )
 
 
 def tracked_files() -> list[Path]:
@@ -173,57 +210,203 @@ def allowed_resource_placeholder(value: str) -> bool:
     )
 
 
-def is_escaped(text: str, index: int) -> bool:
-    """Return whether the character at index has an odd backslash prefix."""
-    backslashes = 0
-    cursor = index - 1
-    while cursor >= 0 and text[cursor] == "\\":
-        backslashes += 1
-        cursor -= 1
-    return backslashes % 2 == 1
+def build_escape_flags(text: str, metrics: ParserMetrics | None) -> list[bool]:
+    escaped = [False] * len(text)
+    backslash_run = 0
+    for index, character in enumerate(text):
+        escaped[index] = backslash_run % 2 == 1
+        backslash_run = backslash_run + 1 if character == "\\" else 0
+        if metrics is not None:
+            metrics.characters_scanned += 1
+    return escaped
 
 
-def is_quote_opener(text: str, index: int) -> bool:
-    """Recognize a supported opener without treating apostrophes as quotes."""
-    character = text[index]
-    if character not in QUOTE_PAIRS:
-        return False
-    if character in ASCII_ESCAPE_AWARE_QUOTES and is_escaped(text, index):
-        return False
+def has_newline(prefix: list[int], start: int, end: int) -> bool:
+    return prefix[end] != prefix[start]
+
+
+def can_open_delimiter(text: str, index: int, spec: DelimiterSpec) -> bool:
     if index + 1 >= len(text) or text[index + 1].isspace():
         return False
-    if character == "'":
-        if index > 0 and text[index - 1].isalnum():
-            return False
+    if spec.opener == "'" and index > 0 and text[index - 1].isalnum():
+        return False
     return True
 
 
-def scan_clauses(text: str) -> tuple[ClauseSegment, ...]:
-    """Segment clauses and paired literals in one escape-aware pass."""
-    clauses: list[ClauseSegment] = []
-    quoted_spans: list[QuotedSpan] = []
-    clause_start = 0
-    quote_start: int | None = None
-    quote_opener: str | None = None
-    quote_closer: str | None = None
+def can_close_delimiter(text: str, index: int, spec: DelimiterSpec) -> bool:
+    if index == 0 or text[index - 1].isspace():
+        return False
+    if (
+        spec.closer == "'"
+        and index + 1 < len(text)
+        and text[index - 1].isalnum()
+        and text[index + 1].isalnum()
+    ):
+        return False
+    return True
 
-    def finish_clause(end: int, next_start: int) -> None:
-        nonlocal clause_start, quoted_spans
-        if clause_start < end:
-            clauses.append(
-                ClauseSegment(
-                    start=clause_start,
-                    end=end,
-                    quoted_spans=tuple(quoted_spans),
-                )
-            )
-        clause_start = next_start
-        quoted_spans = []
 
+def make_quoted_span(
+    start: int,
+    end: int,
+    spec: DelimiterSpec,
+) -> QuotedSpan:
+    return QuotedSpan(
+        start=start,
+        end=end + 1,
+        content_start=start + 1,
+        content_end=end,
+        delimiter=spec.name,
+        priority=spec.priority,
+    )
+
+
+def collect_quote_spans(
+    text: str,
+    escaped: list[bool],
+    metrics: ParserMetrics | None = None,
+) -> tuple[QuotedSpan, ...]:
+    """Collect independent spans; exact overlaps use delimiter priority."""
+    newline_prefix = [0] * (len(text) + 1)
+    for index, character in enumerate(text):
+        newline_prefix[index + 1] = newline_prefix[index] + int(
+            character in "\r\n"
+        )
+
+    candidates: list[QuotedSpan] = []
+    for spec in DELIMITER_SPECS:
+        if spec.symmetric:
+            previous: int | None = None
+            for index, character in enumerate(text):
+                if metrics is not None:
+                    metrics.characters_scanned += 1
+                if character in "\r\n":
+                    previous = None
+                    continue
+                if character != spec.opener:
+                    continue
+                if spec.escape_aware and escaped[index]:
+                    continue
+                if (
+                    spec.opener == "'"
+                    and index > 0
+                    and index + 1 < len(text)
+                    and text[index - 1].isalnum()
+                    and text[index + 1].isalnum()
+                ):
+                    continue
+                if (
+                    previous is not None
+                    and can_open_delimiter(text, previous, spec)
+                    and can_close_delimiter(text, index, spec)
+                    and not has_newline(newline_prefix, previous, index + 1)
+                ):
+                    candidates.append(make_quoted_span(previous, index, spec))
+                previous = index
+            continue
+
+        openers: list[int] = []
+        for index, character in enumerate(text):
+            if metrics is not None:
+                metrics.characters_scanned += 1
+            if character in "\r\n":
+                openers = []
+                continue
+            if character == spec.opener and can_open_delimiter(text, index, spec):
+                openers.append(index)
+                continue
+            if (
+                character == spec.closer
+                and can_close_delimiter(text, index, spec)
+                and openers
+            ):
+                start = openers.pop()
+                if not has_newline(newline_prefix, start, index + 1):
+                    candidates.append(make_quoted_span(start, index, spec))
+
+    by_bounds: dict[tuple[int, int], QuotedSpan] = {}
+    for span in candidates:
+        key = (span.start, span.end)
+        current = by_bounds.get(key)
+        if current is None or span.priority < current.priority:
+            by_bounds[key] = span
+    return tuple(
+        sorted(
+            by_bounds.values(),
+            key=lambda span: (
+                span.start,
+                span.end - span.start,
+                span.priority,
+            ),
+        )
+    )
+
+
+def merge_intervals(
+    intervals: Iterator[tuple[int, int]],
+) -> tuple[tuple[int, int], ...]:
+    merged: list[list[int]] = []
+    for start, end in sorted(intervals):
+        if not merged or start > merged[-1][1]:
+            merged.append([start, end])
+        else:
+            merged[-1][1] = max(merged[-1][1], end)
+    return tuple((start, end) for start, end in merged)
+
+
+def build_next_context(text: str) -> list[int]:
+    next_context = [len(text)] * (len(text) + 1)
+    next_index = len(text)
+    for index in range(len(text) - 1, -1, -1):
+        if text[index] in POST_QUOTE_SKIPPABLE:
+            next_context[index] = next_index
+        else:
+            next_index = index
+            next_context[index] = index
+    return next_context
+
+
+def is_terminal_quote_context(
+    text: str,
+    span: QuotedSpan,
+    next_context: list[int],
+) -> bool:
+    context_index = next_context[span.end]
+    if context_index >= len(text):
+        return True
+    character = text[context_index]
+    if character in "\r\n;" or character in SENTENCE_FINAL_PUNCTUATION:
+        return True
+    if character in CONTINUATION_PUNCTUATION:
+        return False
+    if character in OPENING_WRAPPERS:
+        context_index = next_context[context_index + 1]
+        if context_index >= len(text):
+            return True
+        character = text[context_index]
+        if character in "\r\n;" or character in SENTENCE_FINAL_PUNCTUATION:
+            return True
+    return character.isupper() or character.isdigit()
+
+
+def build_clause_bounds(
+    text: str,
+    spans: tuple[QuotedSpan, ...],
+    escaped: list[bool],
+    metrics: ParserMetrics | None,
+) -> tuple[tuple[int, int], ...]:
+    """Classify boundaries from span coverage and post-quote context."""
+    covered = merge_intervals(
+        (span.content_start, span.content_end)
+        for span in spans
+    )
+    boundaries: set[tuple[int, int]] = set()
+    covered_index = 0
     index = 0
     while index < len(text):
+        if metrics is not None:
+            metrics.characters_scanned += 1
         character = text[index]
-
         if character in "\r\n":
             next_index = index + 1
             if (
@@ -232,82 +415,160 @@ def scan_clauses(text: str) -> tuple[ClauseSegment, ...]:
                 and text[next_index] == "\n"
             ):
                 next_index += 1
-            finish_clause(index, next_index)
-            quote_start = None
-            quote_opener = None
-            quote_closer = None
+            boundaries.add((index, next_index))
             index = next_index
             continue
-
-        if quote_start is not None:
-            closes_quote = character == quote_closer
-            if (
-                closes_quote
-                and quote_opener in ASCII_ESCAPE_AWARE_QUOTES
-                and is_escaped(text, index)
-            ):
-                closes_quote = False
-            if closes_quote:
-                quoted_spans.append(
-                    QuotedSpan(
-                        start=quote_start,
-                        end=index + 1,
-                        content_start=quote_start + 1,
-                        content_end=index,
-                    )
-                )
-                terminal_quote = (
-                    index > quote_start + 1
-                    and text[index - 1] in SENTENCE_FINAL_PUNCTUATION
-                    and not is_escaped(text, index - 1)
-                )
-                quote_start = None
-                quote_opener = None
-                quote_closer = None
-                index += 1
-                if terminal_quote:
-                    finish_clause(index, index)
-                continue
-            index += 1
-            continue
-
-        if is_quote_opener(text, index):
-            quote_start = index
-            quote_opener = character
-            quote_closer = QUOTE_PAIRS[character]
-            index += 1
-            continue
-
-        if character in CLAUSE_TERMINATORS:
-            index += 1
-            finish_clause(index, index)
-            continue
-
+        while (
+            covered_index < len(covered)
+            and covered[covered_index][1] <= index
+        ):
+            covered_index += 1
+            if metrics is not None:
+                metrics.boundary_checks += 1
+        inside_quote = (
+            covered_index < len(covered)
+            and covered[covered_index][0] <= index < covered[covered_index][1]
+        )
+        if character in CLAUSE_TERMINATORS and not inside_quote:
+            boundaries.add((index + 1, index + 1))
         index += 1
 
-    finish_clause(len(text), len(text))
-    return tuple(clauses)
+    next_context = build_next_context(text)
+    for span in spans:
+        if metrics is not None:
+            metrics.boundary_checks += 1
+        punctuation_index = span.content_end - 1
+        if (
+            punctuation_index >= span.content_start
+            and text[punctuation_index] in SENTENCE_FINAL_PUNCTUATION
+            and not escaped[punctuation_index]
+            and is_terminal_quote_context(text, span, next_context)
+        ):
+            boundaries.add((span.end, span.end))
+
+    clause_bounds: list[tuple[int, int]] = []
+    clause_start = 0
+    for clause_end, next_start in sorted(
+        boundaries,
+        key=lambda boundary: (boundary[1], boundary[0]),
+    ):
+        if next_start <= clause_start:
+            continue
+        if clause_start < clause_end:
+            clause_bounds.append((clause_start, clause_end))
+        clause_start = next_start
+    if clause_start < len(text):
+        clause_bounds.append((clause_start, len(text)))
+    return tuple(clause_bounds)
 
 
-def credential_prose_literals(line: str) -> Iterator[str]:
-    for clause in scan_clauses(line):
+def assign_spans_to_clauses(
+    clause_bounds: tuple[tuple[int, int], ...],
+    spans: tuple[QuotedSpan, ...],
+) -> tuple[ClauseSegment, ...]:
+    span_groups: list[list[QuotedSpan]] = [
+        [] for _ in clause_bounds
+    ]
+    clause_index = 0
+    for span in spans:
+        while (
+            clause_index < len(clause_bounds)
+            and span.start >= clause_bounds[clause_index][1]
+        ):
+            clause_index += 1
+        if clause_index >= len(clause_bounds):
+            break
+        clause_start, clause_end = clause_bounds[clause_index]
+        if clause_start <= span.start and span.end <= clause_end:
+            span_groups[clause_index].append(span)
+    return tuple(
+        ClauseSegment(
+            start=start,
+            end=end,
+            quoted_spans=tuple(span_groups[index]),
+        )
+        for index, (start, end) in enumerate(clause_bounds)
+    )
+
+
+def scan_clauses(
+    text: str,
+    metrics: ParserMetrics | None = None,
+) -> tuple[ClauseSegment, ...]:
+    """Collect spans, classify boundaries, and assign spans to clauses."""
+    escaped = build_escape_flags(text, metrics)
+    spans = collect_quote_spans(text, escaped, metrics)
+    clause_bounds = build_clause_bounds(text, spans, escaped, metrics)
+    return assign_spans_to_clauses(clause_bounds, spans)
+
+
+def credential_prose_literals(
+    line: str,
+    metrics: ParserMetrics | None = None,
+) -> Iterator[str]:
+    """Associate sorted keywords and spans without opposite-list rescans."""
+    for clause in scan_clauses(line, metrics):
         clause_text = line[clause.start : clause.end]
         normalized_clause = clause_text.translate(CREDENTIAL_DASH_TRANSLATION)
-        credential_ends: list[int] = []
+        credential_scopes: list[tuple[int, int]] = []
+        containing_scope_heap: list[int] = []
+        containing_span_index = 0
         for credential in CREDENTIAL_PROSE_NAME.finditer(normalized_clause):
+            if metrics is not None:
+                metrics.keyword_matches += 1
             credential_start = clause.start + credential.start()
             credential_end = clause.start + credential.end()
-            if any(
-                span.start <= credential_start
-                and credential_end <= span.end
-                for span in clause.quoted_spans
+            while (
+                containing_span_index < len(clause.quoted_spans)
+                and clause.quoted_spans[containing_span_index].start
+                < credential_start
             ):
-                continue
-            credential_ends.append(credential_end)
+                heappush(
+                    containing_scope_heap,
+                    -clause.quoted_spans[containing_span_index].end,
+                )
+                containing_span_index += 1
+                if metrics is not None:
+                    metrics.association_steps += 1
+            if (
+                containing_scope_heap
+                and -containing_scope_heap[0] < credential_end
+            ):
+                containing_scope_heap = []
+            scope_end = (
+                -containing_scope_heap[0]
+                if containing_scope_heap
+                else clause.end
+            )
+            credential_scopes.append((credential_end, scope_end))
 
+        credential_index = 0
+        active_scope_ends: list[int] = []
+        emitted_content_bounds: set[tuple[int, int]] = set()
         for span in clause.quoted_spans:
-            if not any(end <= span.start for end in credential_ends):
+            if metrics is not None:
+                metrics.association_steps += 1
+            while (
+                credential_index < len(credential_scopes)
+                and credential_scopes[credential_index][0] <= span.start
+            ):
+                heappush(
+                    active_scope_ends,
+                    credential_scopes[credential_index][1],
+                )
+                credential_index += 1
+                if metrics is not None:
+                    metrics.association_steps += 1
+            while active_scope_ends and active_scope_ends[0] <= span.start:
+                heappop(active_scope_ends)
+                if metrics is not None:
+                    metrics.association_steps += 1
+            if not active_scope_ends:
                 continue
+            content_bounds = (span.content_start, span.content_end)
+            if content_bounds in emitted_content_bounds:
+                continue
+            emitted_content_bounds.add(content_bounds)
             value = line[span.content_start : span.content_end]
             if value and not any(character.isspace() for character in value):
                 yield value
