@@ -10,8 +10,8 @@ updated: 2026-07-27
 last_verified_live: 2026-07-27
 live_counts:
   self_hosted: { total: 2, active: 2, drift: none }
-  cloud: { total: 89, active: 37, repo_exports: 82, live_only: 14, repo_only: 7 }
-cloud_active_freeze_chain: "42 -> 40 (MM-40/MM-41) -> 38 (MM-42/MM-43) -> 37 (d1SDcRTgMqS9Zvgi)"
+  cloud: { total: 89, active: 34, repo_exports: 82, live_only: 14, repo_only: 7 }
+cloud_active_freeze_chain: "42 -> 40 (MM-40/MM-41) -> 38 (MM-42/MM-43) -> 37 (d1SDcRTgMqS9Zvgi) -> 36 (J5SpIS8Ye8JHViFi) -> 35 (4D9UBruS1ZhLn1pS) -> 34 (o9Lj7F9WbhFSCARq)"
 
 canonical_full_index: adapteng-automation-platform/n8n/workflow-index.json  # 82 repository exports; live drift above must be reconciled
 
@@ -71,7 +71,14 @@ non_authority_cloud_safety_freezes:
 legacy_cloud_authority_dependencies:
   # Pointers only; the 82 repository exports remain in automation-platform.
   - { id: fTJVvxC0hviQy0im, name: MM-01, dependency: "legacy personal 01_Inbox", cutover: pending }
-  - { id: uBVRMTCKwnUG91kU, name: MM-Visual-Evidence-Intake, dependency: "legacy personal 00_Case_Uploads", cutover: pending }
+  - id: uBVRMTCKwnUG91kU
+    name: MM-Visual-Evidence-Intake
+    status: live-active-legacy-binding
+    dependency: legacy personal 00_Case_Uploads
+    active_path: founder-chat-allowlisted media sanitize/log version remains active
+    disabled_draft_path: "/approve -> MM21-24 draft path disabled and unpublished"
+    active_count_effect: unchanged
+    cutover: pending
   - id: sM8lksVuYfMUeC6U
     name: MM-40
     status: inactive-safety-freeze
@@ -98,7 +105,34 @@ legacy_cloud_authority_dependencies:
     dependency: legacy case package + Telegram social-review path
     freeze: "unpublished; Manual Test + weekly Schedule + Execute Workflow Trigger disabled (draft fa4c5385); production execution rejects it before a run; prior active version 45f38d25 retained"
     cutover: replace with approved corporate content snapshot; do not reactivate
+  - id: J5SpIS8Ye8JHViFi
+    name: MM-ZH-02 Email Approval Router
+    status: inactive-safety-freeze
+    dependency: inbound email approval route to legacy Approval_Log
+    risk: unauthenticated approval routing from any sender based only on a subject substring
+    freeze: all entry triggers disabled; workflow unpublished; production execution rejected
+    cutover: reconcile legacy approval state; replace only through canonical migration 003 approval/outbox
+  - id: 4D9UBruS1ZhLn1pS
+    name: MM-04 Approval Status Sync
+    status: inactive-safety-freeze
+    dependency: direct scheduled Approval_Log -> Content_Drafts status synchronization
+    evidence: execution 15214 read 30 stale smoke approval rows and updated 0
+    freeze: all entry triggers disabled; workflow unpublished; production execution rejected
+    cutover: reconcile legacy approval/content state before archive or canonical migration 003 cutover
+  - id: o9Lj7F9WbhFSCARq
+    name: MM-05 Publish Plan Builder
+    status: inactive-safety-freeze
+    dependency: scheduled approved Content_Drafts -> Publish_Plan build
+    risk: non-idempotent publish-plan creation
+    evidence: execution 15216 found 0 approved drafts
+    freeze: all entry triggers disabled; workflow unpublished; production execution rejected
+    cutover: reconcile legacy draft/plan state before archive or canonical migration 003 cutover
   - { id: T3WHl2kCkPiPOPQd, name: MM-30, dependency: "deterministic draft builder", status: inactive }
+
+legacy_approval_publish_state:
+  artifacts: [Approval_Log, Content_Drafts, Publish_Plan]
+  classification: forensic-reconciliation-required
+  disposition: reconcile before archive or canonical migration 003 cutover
 
 safety_evidence:
   - id: QMqxSBRhaIfzYNTy
@@ -115,7 +149,7 @@ safety_evidence:
 cutover_truth:
   self_hosted_active_count: 2
   cloud_total_count: 89
-  cloud_active_count: 37
+  cloud_active_count: 34
   cloud_company_authority: Marketing Machine and Lead Monitor content/lead workflows
   personal_domains_on_cloud: [Job Monitor, English Coach]
   inventory_drift: 14 live-only / 7 repo-only versus 82 repository exports

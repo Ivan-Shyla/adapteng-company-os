@@ -91,9 +91,9 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
 - [ ] **Personal JM/EC isolation:** verify live credential/store identity;
   the `ISO-1` waiver expires **2026-08-08**.
 - [ ] **n8n Cloud inventory drift:** live API now reports 89 non-archived
-  workflows / 37 active versus 82 repository exports; drift remains 14
+  workflows / 34 active versus 82 repository exports; drift remains 14
   live-only / 7 repo-only. The active safety-freeze chain is **42 → 40 → 38 →
-  37**. Export,
+  37 → 36 → 35 → 34**. Export,
   sanitize, classify and reconcile before claiming the repository index is
   authoritative; do not bulk-import/activate during this cleanup. MM-40 through
   MM-43 were deliberately unpublished with all entry triggers disabled; do not
@@ -105,11 +105,25 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   risk to external Claude, **not arbitrary write**. Prior active version
   `51f02adb` is retained; draft `de142f7b` disables the MCP trigger; it is
   unpublished and production execution is rejected. Do not reactivate or
-  connect it to Company OS. Historical WordPress pages 878/880/882/884/891 are
-  already in Trash, related n8n rows are quarantined and page 891 cache/public
-  access was verified closed. Unattached public media IDs 886–889 and 893–896
-  were also removed and verified 404; the source Drive HEIC files remain
-  untouched.
+  connect it to Company OS. MM-ZH-02 `J5SpIS8Ye8JHViFi` accepted approval routes
+  from any sender using only a subject substring; scheduled MM-04
+  `4D9UBruS1ZhLn1pS` directly synchronized
+  `Approval_Log → Content_Drafts`; MM-05
+  `o9Lj7F9WbhFSCARq` built `Publish_Plan` non-idempotently on a schedule. All
+  entry triggers are disabled, all three are unpublished, and production
+  execution is rejected. MM-04 execution `15214` read 30 stale smoke approval
+  rows and updated 0; MM-05 execution `15216` found 0 approved drafts.
+  `uBVRMTCKwnUG91kU` remains active in its founder-chat-allowlisted media
+  sanitize/log version; only the unpublished `/approve → MM21-24` draft path was
+  disabled, so do not subtract it from the active count. Historical WordPress
+  pages 878/880/882/884/891 are already in Trash, related n8n rows are
+  quarantined and page 891 cache/public access was verified closed. Unattached
+  public media IDs 886–889 and 893–896 were also removed and verified 404; the
+  source Drive HEIC files remain untouched.
+- [ ] **Legacy approval/publish forensic reconciliation:** treat `Approval_Log`,
+  `Content_Drafts` and `Publish_Plan` as non-canonical legacy state. Reconcile
+  lineage, stale smoke rows and any surviving decisions/plans before archive or
+  canonical migration 003 approval/outbox cutover.
 - [ ] **Media intake:** approve snapshot/rollback, import the backward-compatible
   consumer first, canary one real case, then redeploy the marketing worker.
 - [ ] **CASE-2026-001 media review:** repository metadata says redaction resolved,
