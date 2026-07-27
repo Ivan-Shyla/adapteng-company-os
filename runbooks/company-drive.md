@@ -33,9 +33,19 @@ must not be created in a personal My Drive.
 6. Keep the originals. Processing creates copies/derived artifacts; it never
    moves or deletes the intake source.
 
-`CASE-2026-001` is the first owner-approved migration source. Its legacy folder
-contains one intake marker, one note, four HEIC images and two MOV videos. The
-source remains untouched until the governed service-account copy is verified.
+`CASE-2026-001` is the first governed raw-source/case migration and
+evidence-bounded deterministic case draft. Its legacy folder contains one intake
+marker, one note, four HEIC images and two MOV videos. The source remains
+untouched until the governed service-account copy is verified. All media and
+publication records remain blocked until a human reconciles the live Sheet
+redaction state with Git.
+
+This CASE is not the first live model proof. The planned proof uses exact,
+already-approved/published July public article-radar package `ART-2026-001` and
+approved source set `SRC-2026-001`. It may write only a new pending/draft
+artifact through the canonical Company OS gateway, AG-008 and governed Company
+Drive path; historical publication does not authorize republication. Never
+reactivate or route around frozen direct-model workflow MM-22.
 
 ## Content lifecycle
 

@@ -54,16 +54,20 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   Finding→Action adapter, the n8n workflow, live manifest wiring, and deployed
   credentials. Keep **migration 006 unapplied** until backup/restore planning.
   Nothing here should be forced by an agent.
-- [ ] **AI-001 first-pilot ratification.** `CASE-2026-001`, its bounded claims,
-  English website-article scope and provisional style are already recorded in
-  [`ai/ai-001-pilot-intake.md`](../ai/ai-001-pilot-intake.md); no blank
-  questionnaire or extra sources are required to create the first
-  `DRAFT_NOT_APPROVED`. Before a live model-assisted revision, Ivan reviews that
-  pilot contract and ratifies the `AG-007` acceptance set. Technical gates remain
-  ZDR/cache-off/FX verification plus the 2026-07-26 control-plane
-  admission/no-external-action/cost hardening. Then a measured, inactive EU
-  Vertex `gemini-3.1-flash-lite` evaluation may run; publication remains a
-  separate human decision.
+- [ ] **AI-001 exact first live model proof.** Use only the already-approved and
+  published July public article-radar package `ART-2026-001` with source set
+  `SRC-2026-001` for the first live model-backed Company Drive proof. Its prior
+  publication is evidence, not permission to republish; the proof may create only
+  a new `DRAFT_NOT_APPROVED`. `CASE-2026-001` is separately the first governed
+  raw-source/case migration and evidence-bounded deterministic case draft. Its
+  media and publication remain fail-closed until Ivan reconciles live Sheet
+  redaction state with Git. The split is recorded in
+  [`ai/ai-001-pilot-intake.md`](../ai/ai-001-pilot-intake.md). Before the proof,
+  Ivan ratifies the `AG-007` acceptance set. Technical gates remain governed
+  Company Drive writes, ZDR/cache-off/FX verification and the 2026-07-26
+  control-plane admission/no-external-action/cost hardening. Then one measured,
+  inactive EU Vertex `gemini-3.1-flash-lite` call may run through the canonical
+  gateway. Never reactivate or route around frozen direct-model workflow MM-22.
 - [ ] **Website producer (website PR #78)** stays draft/held. WEB-002 and migration
   004 are already live; remaining producer gates are exact self-hosted endpoint
   allowlisting, host-only `X-Webhook-Token`, bounded 5xx/transport retry,

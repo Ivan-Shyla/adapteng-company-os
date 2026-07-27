@@ -25,10 +25,16 @@ external/high-impact actions.
   gateway (never the local in-memory test seam); privacy (ZDR), cache-off, Vertex
   IAM and FX gates. See `owner/action-items.md`.
 - **Status:** `AI-001` merged (marketing PR #19, deterministic, 106 tests);
-  **no real model call yet**. First owner-approved source/style exists, but the
-  2026-07-26 production audit blocked live use until the completion path validates
-  the full task envelope, requires `no_external_action`, rejects approval/publish
-  fields, and cannot overspend the cap.
+  **no real model call yet**. Exact public package `ART-2026-001`, using source
+  set `SRC-2026-001`, is selected for the first live model-backed Company Drive
+  proof; its prior approval/publication does not authorize republication.
+  `CASE-2026-001` is separately the first governed raw-source/case migration and
+  evidence-bounded deterministic draft, with media/publication blocked pending
+  live Sheet-vs-Git reconciliation. The 2026-07-26 production audit blocks the
+  proof until the completion path validates the full task envelope, requires
+  `no_external_action`, rejects approval/publish fields, and cannot overspend
+  the cap. The proof must enter through the canonical gateway and AG-008 and
+  must never use frozen direct-model workflow MM-22.
 
 ## 2. Lead triage / enrichment on WEB-002 — SECOND
 
