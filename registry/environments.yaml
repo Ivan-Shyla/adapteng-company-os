@@ -1,7 +1,7 @@
 # AdaptEng Company OS — Environment Registry
 # Production hosts, domains, platform and budgets. NO secrets — names/hostnames/ids only.
 version: 1
-updated: 2026-07-26
+updated: 2026-07-27
 
 platform:
   compute: Hetzner (EU region) — single self-hosted host
@@ -46,6 +46,10 @@ external_saas:
     delegation: domain-wide; scope https://www.googleapis.com/auth/drive (delegated to owner primary Workspace user)
     credential_ref: GOOGLE_SERVICE_ACCOUNT_JSON_B64  # Coolify runtime secret; value NEVER in repo
     role: Drive read/write via DWD now; intended ai-gateway identity only after Vertex IAM/ADC permission is independently verified
+    vertex_target_model: gemini-3.1-flash-lite
+    vertex_availability: GA; supported in EU multi-region
+    vertex_location: eu
+    vertex_endpoint: https://aiplatform.eu.rep.googleapis.com
     status: provided 2026-07-26; governed Drive bridge in build; Vertex AI User role/endpoint access not yet evidenced
   - name: GitHub
     role: code, contracts, architecture, evidence
