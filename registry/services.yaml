@@ -137,9 +137,9 @@ services:
     status: live
     owner: Ivan
     notes: >-
-      Live API verified 89 non-archived workflows / 34 active on 2026-07-27
+      Live API verified 89 non-archived workflows / 33 active on 2026-07-27
       versus 82 repository exports; drift remains 14 live-only / 7 repo-only.
-      The safety-freeze chain is 42 -> 40 -> 38 -> 37 -> 36 -> 35 -> 34.
+      The safety-freeze chain is 42 -> 40 -> 38 -> 37 -> 36 -> 35 -> 34 -> 33.
       Gateway d1SDcRTgMqS9Zvgi remains frozen for broad-read
       confidentiality/exfiltration risk to external Claude, not arbitrary write.
       MM-ZH-02 J5SpIS8Ye8JHViFi, MM-04 4D9UBruS1ZhLn1pS and MM-05
@@ -154,7 +154,12 @@ services:
       ids 1-179 in live execution 15549, and matched 0 in verification 15550.
       Q2PmbE2VDffRl1iT is also archived. Content_Drafts remains 19 pending and
       Publish_Plan remains empty; both were untouched and require staged,
-      evidence-based migration 003 cutover (ARCHITECTURE.md §6.4).
+      evidence-based migration 003 cutover. Direct gpt-5-mini analyzer MM-22
+      clPtSQwzze8DHEvp is frozen because it bypassed the canonical gateway,
+      ledger/caps, AG-008 and governed Company Drive. Its Manual/Execute Workflow
+      triggers and model are disabled; it is unpublished and production
+      execution is rejected. Prior active 72869463, freeze draft 28a7ef72 and
+      six historical runs/data are preserved (ARCHITECTURE.md §6.4).
 
   - id: baserow-self-hosted
     repo: adapteng-automation-platform (deploy/coolify)

@@ -91,9 +91,9 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
 - [ ] **Personal JM/EC isolation:** verify live credential/store identity;
   the `ISO-1` waiver expires **2026-08-08**.
 - [ ] **n8n Cloud inventory drift:** live API now reports 89 non-archived
-  workflows / 34 active versus 82 repository exports; drift remains 14
+  workflows / 33 active versus 82 repository exports; drift remains 14
   live-only / 7 repo-only. The active safety-freeze chain is **42 → 40 → 38 →
-  37 → 36 → 35 → 34**. Export,
+  37 → 36 → 35 → 34 → 33**. Export,
   sanitize, classify and reconcile before claiming the repository index is
   authoritative; do not bulk-import/activate during this cleanup. MM-40 through
   MM-43 were deliberately unpublished with all entry triggers disabled; do not
@@ -113,6 +113,12 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   entry triggers are disabled, all three are unpublished, and production
   execution is rejected. MM-04 execution `15214` read 30 stale smoke approval
   rows and updated 0; MM-05 execution `15216` found 0 approved drafts.
+  MM-22 `clPtSQwzze8DHEvp` called `gpt-5-mini` directly, bypassing the canonical
+  gateway, ledger/caps, AG-008 and governed Company Drive. Its Manual and Execute
+  Workflow triggers and model are disabled; it is unpublished and production
+  execution is rejected. Prior active version `72869463`, freeze draft
+  `28a7ef72` and six historical runs/data are preserved. Do not reactivate the
+  direct-model path.
   `uBVRMTCKwnUG91kU` remains active in its founder-chat-allowlisted media
   sanitize/log version; only the unpublished `/approve → MM21-24` draft path was
   disabled, so do not subtract it from the active count. Historical WordPress
