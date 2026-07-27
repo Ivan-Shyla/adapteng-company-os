@@ -59,13 +59,15 @@ google_drive:
     - { name: 40_Content, id: 1vV163MvgmdLlYAAjZZq7KzMFw-QFTw13 }
     - { name: 50_Templates, id: 10rRpyG19cfqgPuny6PYA68lAxni4BPf1 }
     - { name: 90_Archive, id: 1SGe_5JeJmRLTrnLek6Q-ewb_jvh_qwfu }
-  status: live-provisioned-and-read-verified
+  status: live-folder-skeleton-read-verified
   last_verified: "2026-07-26 (sanctioned GitHub Actions dry run; drive + 8 folders EXISTS)"
   credentials:
-    target: adapteng-ai-operator service account via GOOGLE_SERVICE_ACCOUNT_JSON_B64
-    target_live_wiring: pending governed Drive bridge deployment
+    service_account_ref: GOOGLE_SERVICE_ACCOUNT_JSON_B64
+    delegated_user_ref: GOOGLE_WORKSPACE_DELEGATED_USER
+    current_main_mismatch: code expects GOOGLE_SERVICE_ACCOUNT_JSON / GOOGLE_WORKSPACE_ADMIN
+    target_live_wiring: PR-A typed library/client/replay/config/dispatch first; PR-B internal HTTP only after review
     legacy: n8n Cloud OAuth + old media-worker service account still bind current media/content workflows to personal My Drive
-  cutover: base structure complete; approved-source copy and workflow rewiring in progress; owner recovery/break-glass acceptance pending
+  cutover: base structure complete; approved-source copy has not run; PR-A/PR-B, controlled copy, workflow rewiring and owner recovery/break-glass acceptance remain pending
   operating_guide: runbooks/company-drive.md
 
 precedence_notes:

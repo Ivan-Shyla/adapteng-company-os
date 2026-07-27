@@ -74,9 +74,20 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   (project `adapteng-workspace-automation`), domain-wide delegation for
   `https://www.googleapis.com/auth/drive`, delegated to the owner's primary
   Workspace user. Key stored as the Coolify runtime secret
-  `GOOGLE_SERVICE_ACCOUNT_JSON_B64` (value never in repo). This unblocks the
-  **deploy-time** wiring of `drive-adapter` and the INT-001 Drive reader — the
-  *live wiring itself* still rides the INT-001 approved-PR gates below.
+  `GOOGLE_SERVICE_ACCOUNT_JSON_B64`; delegated-user config is
+  `GOOGLE_WORKSPACE_DELEGATED_USER` (values never in repo). This closes
+  credential supply only. Current `main` is folder-only and still expects old
+  `GOOGLE_SERVICE_ACCOUNT_JSON` / `GOOGLE_WORKSPACE_ADMIN` names, so copy,
+  pending-artifact and replay implementation remain blocked.
+- [ ] **Drive PR-A, then PR-B — no combined bridge shortcut.** Current `main`
+  has folder/base-structure operations only: no general file/tree listing,
+  copy, pending-artifact creation or deterministic partial-failure replay.
+  No reviewed safe Drive implementation PR and no live copy exists; open
+  implementation attempts are not readiness evidence. PR-A must add the typed
+  allowlisted copy/pending-artifact library, Google client, deterministic
+  partial-failure replay, actual B64/delegated-user env config and dispatch/CLI.
+  Review PR-A first. Only then stack PR-B with the authenticated internal HTTP
+  service. Deployment and any controlled copy require separate approval.
 - [ ] **INT-001 (integrity) — approve the deferred wiring, one PR at a time.**
   ADR-0011 defers each of these to a *future approved PR*: live schedule, the
   Finding→Action adapter, the n8n workflow, live manifest wiring, and deployed
@@ -197,8 +208,9 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
 - [ ] **Media intake:** implementation remains split among the live
   `adapteng-marketing` worker, n8n Cloud MM workflows and the governed consumer,
   which is merged but not imported. Name the canonical implementation/owner,
-  approve snapshot/rollback, import the backward-compatible consumer first,
-  canary one real case, then redeploy the marketing worker.
+  complete Drive PR-A review then PR-B, approve snapshot/rollback, import the
+  backward-compatible consumer, canary one real case, then redeploy the
+  marketing worker.
 - [ ] **CASE-2026-001 media review:** repository metadata says redaction resolved,
   but a later live Sheet record says `needs_redaction_review` with a visible
   coordinate risk. Treat all six media files as blocked from publication until
@@ -227,5 +239,7 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   read-only table-id binding captured on `main`.
 - Leaked Baserow token revoked at source; 14 synthetic proof rows deleted and
   verified (2026-07-26).
-- Google service account provisioned with Drive domain-wide delegation; key held
-  in Coolify as `GOOGLE_SERVICE_ACCOUNT_JSON_B64`.
+- Google service account provisioned with Drive domain-wide delegation; actual
+  runtime refs are `GOOGLE_SERVICE_ACCOUNT_JSON_B64` and
+  `GOOGLE_WORKSPACE_DELEGATED_USER`. This proves credential supply, not file
+  copy/artifact implementation or live wiring.

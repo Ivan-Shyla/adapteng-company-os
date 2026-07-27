@@ -125,12 +125,22 @@ services:
   - id: adapteng-drive-adapter
     repo: adapteng-automation-platform
     path: services/adapteng-drive-adapter
-    role: Google Drive read/pending-write adapter (metadata-first; evidence/documents).
-    runtime: service
+    role: Folder ensure/base-structure adapter only; no file copy or pending-artifact capability.
+    runtime: repo-only library + base-structure dispatch/CLI; no deployed service
     source_of_truth_for: none (Drive is the document/evidence authority)
     status: repo-merged-not-live
     owner: Ivan
-    notes: Google service-account provided 2026-07-26 (adapteng-ai-operator, Drive scope, domain-wide delegation; key in Coolify GOOGLE_SERVICE_ACCOUNT_JSON_B64). Deploy-time unblocked; not yet deployed/wired live.
+    notes: >-
+      Current main can find/create folders and provision the base skeleton only;
+      it has no general file/tree listing, file copy, pending-artifact creation
+      or deterministic partial-failure replay. Existing code expects
+      GOOGLE_SERVICE_ACCOUNT_JSON / GOOGLE_WORKSPACE_ADMIN, while the actual
+      runtime contract is GOOGLE_SERVICE_ACCOUNT_JSON_B64 /
+      GOOGLE_WORKSPACE_DELEGATED_USER. No reviewed safe PR-A/PR-B and no live
+      copy exists. PR-A must provide the typed allowlisted copy/pending-artifact
+      library, Google client, deterministic partial-failure replay, actual env
+      config and dispatch/CLI. PR-B may add authenticated internal HTTP only
+      after PR-A review.
 
   - id: adapteng-baserow-schema
     repo: adapteng-automation-platform

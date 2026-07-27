@@ -70,6 +70,31 @@ Baserow `Content_Items` stores status, owner and links. Drive stores the actual
 file. Postgres stores run/approval/cost evidence. Git stores only schemas,
 policies and sanitized fixtures.
 
+## Automation implementation gate
+
+The adapter currently on automation-platform `main` is **folder-only**: it can
+find/create case/content folders and provision the eight-folder base structure.
+It has no general file/tree listing, file copy, pending-artifact creation or
+deterministic partial-failure replay state. The successful base-structure and
+folder smoke does not prove any of those capabilities.
+
+Current repository code also expects `GOOGLE_SERVICE_ACCOUNT_JSON` plus
+`GOOGLE_WORKSPACE_ADMIN`; the actual runtime contract is
+`GOOGLE_SERVICE_ACCOUNT_JSON_B64` plus `GOOGLE_WORKSPACE_DELEGATED_USER`. No
+reviewed safe PR-A/PR-B and no live company file copy exists. Open implementation
+attempts are not deployment/readiness evidence.
+
+Delivery is strictly ordered:
+
+1. **PR-A — library/controlled execution:** typed allowlisted copy and
+   pending-artifact operations, Google client, deterministic partial-failure
+   replay, the actual B64/delegated-user env config, and dispatch/CLI.
+2. Review and accept PR-A as a standalone non-live change.
+3. **PR-B — service:** only after that review, stack the bearer-authenticated
+   internal HTTP service on PR-A.
+4. Approve any deployment or controlled copy separately; neither PR authorizes a
+   live write.
+
 ## Transition rule
 
 The old personal Drive is **read-only migration source**, not the current
@@ -85,8 +110,9 @@ company workspace. Several n8n Cloud workflows still point at its legacy
 
 The permanent runtime credential is
 `adapteng-ai-operator@adapteng-workspace-automation.iam.gserviceaccount.com`
-through the locked Coolify secret `GOOGLE_SERVICE_ACCOUNT_JSON_B64`. Personal
-OAuth must not become the long-term write credential.
+through the locked Coolify secret `GOOGLE_SERVICE_ACCOUNT_JSON_B64`, with
+delegated-user config in `GOOGLE_WORKSPACE_DELEGATED_USER`. Personal OAuth must
+not become the long-term write credential.
 
 ## Verification after a copy
 
