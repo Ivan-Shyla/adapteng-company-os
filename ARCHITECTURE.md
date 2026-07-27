@@ -762,7 +762,22 @@ target.
 | `ai-dev-loop-control-plane` | Generic agent admission, execution, evidence, validation and review lifecycle |
 | `adapteng-marketing` | Marketing schemas, prompts/skills, media worker and content rules |
 | `adapteng-website` | WordPress theme/plugin, forms contract and Cloudways deployment |
-| `Kraken` | Isolated R&D reference; no AdaptEng business/client data |
+| [`Ivan-Shyla/Kraken`](https://github.com/Ivan-Shyla/Kraken) | Personal trading R&D / operational control tower; **SEPARATE ACTIVE SCOPE** — not Company OS runtime, legacy or archive |
+
+The Kraken boundary was audited read-only at active HEAD
+[`8160ed85cabe0d20c5ddc4def5c818c3f7a845c3`](https://github.com/Ivan-Shyla/Kraken/commit/8160ed85cabe0d20c5ddc4def5c818c3f7a845c3)
+on 2026-07-26. Company OS may record only its external initiative link, status
+and risk posture, and may selectively reuse governance patterns at the
+conceptual level. It must never connect Company OS agents, n8n, credentials,
+approval decisions, promotion/live-readiness attestations or order execution to
+Kraken; no client/company data may cross this boundary. Optional local
+Ollama/analytics stays advisory and read-only. Canonical Kraken status is
+[`AI_HANDOFF.md`](https://github.com/Ivan-Shyla/Kraken/blob/main/AI_HANDOFF.md)
+plus
+[`CURRENT_STATUS.md`](https://github.com/Ivan-Shyla/Kraken/blob/main/CURRENT_STATUS.md);
+the README status is stale and must not be mirrored. Copying code or implemented
+patterns rather than concepts requires provenance review because Kraken has no
+LICENSE.
 
 `PalinaRuban/adapteng` is historical and has no active authority. It is not a
 source for deployment, content, architecture or rollback. A 2026-07-26 audit
@@ -1357,6 +1372,7 @@ lead contract + repository identity → migration 004 live plan/restore gate
 | Website | `adapteng.com` live on Cloudways. Governed producer PR remains held to avoid an unsafe automatic live deploy before consumer/cutover gates. | Map producer to WEB-002 only after origin auth, retention, HTTP 409, reconciliation, inactive shadow and rollback proofs. |
 | Media/content | `mm-media-worker` is live/HTTP-healthy, but uses old SA `media-worker@adapteng.iam.gserviceaccount.com`; active MM-01/MM-Visual and the worker still point to personal Drive, while frozen MM-41/MM-42 preserve legacy references only. The legacy chain historically created n8n/WordPress drafts and two duplicate sets of four public CASE-2026-001 JPEGs; pages are contained and all eight public derivatives are now deleted/404, with Drive originals untouched. No canonical corporate Drive draft exists yet. CASE-2026-001 metadata conflicts: Git says redaction resolved, later live Sheet says `needs_redaction_review`; media publication remains blocked. | Deploy the governed Drive bridge with `adapteng-ai-operator`, copy the source without deleting it, reconcile human media/redaction status, then rewire and canary the media/content path. |
 | AI agent | Code-change mode is actively delivering repository work. Business-artifact schemas/envelope/eval and deterministic AI-001 skill are merged, but a production audit reproduced incomplete task-envelope admission, optional external-action safety, accepted approval-like fields and local cap overrun; AG-008 hardening is in progress. Canonical AI Gateway/migration 005 are repo-only; no live model call. EU Vertex `gemini-3.1-flash-lite` non-global price rechecked at $0.275/M input and $1.65/M output (~$0.0121 representative draft). | Land AG-008; corporate source/draft path; AG-007 acceptance; verify Vertex IAM plus ZDR/cache-off/FX; deploy canonical gateway and run inactive measured call. Hard caps stay €0.10/call, €1/day, €10/month. |
+| Kraken (external initiative) | **SEPARATE ACTIVE SCOPE.** Read-only audit of active repository HEAD `8160ed85cabe0d20c5ddc4def5c818c3f7a845c3`: healthy 24/7 dry-run, but **NO-GO — edge rejected / OOS not validated**. Canonical status is `AI_HANDOFF.md` plus `CURRENT_STATUS.md`; README status is stale. | Track only the external link, status and risk posture under the §6.2 boundary. No Company OS integration or live action. |
 | Backup/security | Fresh `adapteng_ops` backup exists (2026-07-25 13:31, 35.21 KB, Coolify + owner copy). Baserow token incidents and synthetic rows are closed. | Prove restore in scratch; complete Workspace recovery/MFA; rotate the chat-exposed n8n management key and Coolify API token after launch work; record actual service invoices. |
 | Costs | Self-hosted n8n Community, Baserow Community and current Coolify add €0 software fee; Hetzner infrastructure is paid. Workspace is paid. Cloudways, n8n Cloud, Zoho, GoDaddy and Hetzner are paid/account-specific. AI is pay-as-you-go but has made no runtime call. | Record actual invoices/renewals; public list prices are not accounting truth. Storage Box BX11 remains planned, not evidenced as purchased. |
 
