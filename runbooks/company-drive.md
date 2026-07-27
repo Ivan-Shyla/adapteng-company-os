@@ -33,9 +33,19 @@ must not be created in a personal My Drive.
 6. Keep the originals. Processing creates copies/derived artifacts; it never
    moves or deletes the intake source.
 
-`CASE-2026-001` is the first owner-approved migration source. Its legacy folder
-contains one intake marker, one note, four HEIC images and two MOV videos. The
-source remains untouched until the governed service-account copy is verified.
+`CASE-2026-001` is the first governed raw-source/case migration and
+evidence-bounded deterministic case draft. Its legacy folder contains one intake
+marker, one note, four HEIC images and two MOV videos. The source remains
+untouched until the governed service-account copy is verified. All media and
+publication records remain blocked until a human reconciles the live Sheet
+redaction state with Git.
+
+This CASE is not the first live model proof. The planned proof uses exact,
+already-approved/published July public article-radar package `ART-2026-001` and
+approved source set `SRC-2026-001`. It may write only a new pending/draft
+artifact through the canonical Company OS gateway, AG-008 and governed Company
+Drive path; historical publication does not authorize republication. Never
+reactivate or route around frozen direct-model workflow MM-22.
 
 ## Content lifecycle
 
@@ -60,6 +70,31 @@ Baserow `Content_Items` stores status, owner and links. Drive stores the actual
 file. Postgres stores run/approval/cost evidence. Git stores only schemas,
 policies and sanitized fixtures.
 
+## Automation implementation gate
+
+The adapter currently on automation-platform `main` is **folder-only**: it can
+find/create case/content folders and provision the eight-folder base structure.
+It has no general file/tree listing, file copy, pending-artifact creation or
+deterministic partial-failure replay state. The successful base-structure and
+folder smoke does not prove any of those capabilities.
+
+Current repository code also expects `GOOGLE_SERVICE_ACCOUNT_JSON` plus
+`GOOGLE_WORKSPACE_ADMIN`; the actual runtime contract is
+`GOOGLE_SERVICE_ACCOUNT_JSON_B64` plus `GOOGLE_WORKSPACE_DELEGATED_USER`.
+Implementation/review is in progress; **no controlled copy has begun**. Open
+implementation attempts are not deployment/readiness evidence.
+
+Delivery is strictly ordered:
+
+1. **PR-A — library/controlled execution:** typed allowlisted copy and
+   pending-artifact operations, Google client, deterministic partial-failure
+   replay, the actual B64/delegated-user env config, and dispatch/CLI.
+2. Review and accept PR-A as a standalone non-live change.
+3. **PR-B — service:** only after that review, stack the bearer-authenticated
+   internal HTTP service on PR-A.
+4. Approve any deployment or controlled copy separately; neither PR authorizes a
+   live write.
+
 ## Transition rule
 
 The old personal Drive is **read-only migration source**, not the current
@@ -75,8 +110,9 @@ company workspace. Several n8n Cloud workflows still point at its legacy
 
 The permanent runtime credential is
 `adapteng-ai-operator@adapteng-workspace-automation.iam.gserviceaccount.com`
-through the locked Coolify secret `GOOGLE_SERVICE_ACCOUNT_JSON_B64`. Personal
-OAuth must not become the long-term write credential.
+through the locked Coolify secret `GOOGLE_SERVICE_ACCOUNT_JSON_B64`, with
+delegated-user config in `GOOGLE_WORKSPACE_DELEGATED_USER`. Personal OAuth must
+not become the long-term write credential.
 
 ## Verification after a copy
 

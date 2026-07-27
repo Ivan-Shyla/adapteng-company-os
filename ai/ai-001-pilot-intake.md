@@ -1,28 +1,47 @@
 # AI-001 pilot intake
 
 This is the owner/content contract for the **first AI value** — the draft
-assistant. It is necessary but no longer the only live gate: a 2026-07-26
-production-readiness audit found completion-path admission/external-action and
-local budget-gate defects in the control plane. A separate hardening PR must
-land before a **measured, inactive** pilot on EU Vertex
-`gemini-3.1-flash-lite`: **drafts only**, written as `pending/draft` into Baserow
-`Content_Items` (848) through the governed adapter. It can **never publish or
-send**, and a human stays the only approver.
+assistant. It separates two firsts that must not be conflated:
+
+1. `CASE-2026-001` is the first governed raw-source/case migration and
+   evidence-bounded deterministic case draft. It is **not** the first live model
+   proof. Its media and publication are fail-closed pending live Sheet-vs-Git
+   redaction reconciliation.
+2. `ART-2026-001`, using approved public source set `SRC-2026-001`, is the exact
+   already-approved/published July article-radar package selected for the first
+   live model-backed Company Drive proof. Reuse does not authorize
+   republication.
+
+No live model call has run; readiness is **REJECT_LIVE**. Control-plane main
+`affe6ea1e4d522be0df0641e98a08e20a84549ae` contains deterministic
+AG-001/002/003/006/007 only, with no business worker, real provider or Drive
+runtime. The audit reproduced an optional/unvalidated envelope, completion
+accepting missing `no_external_action` plus synthetic `approval_id`, and the
+in-memory `ModelGateway` allowing actual cost above cap and negative remaining
+budget. AG-008 owns deterministic fixes; automation-platform must still provide
+the persistent business runtime. Only after both layers are accepted may one
+**measured, inactive** EU Vertex `gemini-3.1-flash-lite` proof create a
+`pending/draft` through the governed adapter. It can **never publish or send**,
+and a human stays the only approver.
 
 Why this and not more: AI attaches to the already-governed spine (see
-`insertion-points.md`). This file supplies the source/claims/style side of the
-first pilot; the remaining technical gates are the control-plane hardening,
-governed Drive path, canonical AI Gateway and measured evaluation below.
+`insertion-points.md`). The CASE contract below governs deterministic case
+migration/drafting; the exact public ART/SRC pair governs the live model proof.
+The remaining technical gates are control-plane hardening, the governed Drive
+path, canonical AI Gateway and measured evaluation below.
 
 ---
 
-## First owner-approved pilot (2026-07-26)
+## First governed case migration and deterministic draft (2026-07-26)
 
 The owner authorized use of the existing `CASE-2026-001` material and allowed a
 provisional presentation/style choice. The legacy source was inventoried
 read-only: one intake marker, one case note, four HEIC images and two MOV videos.
-The original remains untouched; a governed copy to the company Shared Drive is
-in progress.
+The original remains untouched. Governed Drive implementation/review is in
+progress; **no controlled copy has begun**. A later live Sheet record conflicts
+with the repository redaction record, so all six media files and any CASE
+publication remain blocked until a human reconciles them. The evidence-bounded
+deterministic text draft remains an internal draft.
 
 ### Approved source-bounded claims
 
@@ -54,7 +73,7 @@ certification, regulatory compliance, guaranteed accuracy or laboratory status.
   even though the owner approved the source set for drafting.
 - Output remains `draft`; no model/workflow may approve, publish or send it.
 
-### Acceptance/red lines for this pilot
+### Acceptance/red lines for this deterministic case draft
 
 - Every technical claim maps to the case note or an explicitly approved image.
 - Missing model numbers, readings, uncertainty values and dates remain marked
@@ -62,15 +81,32 @@ certification, regulatory compliance, guaranteed accuracy or laboratory status.
 - No client identity, personal data, GPS/EXIF, safety conclusion, legal
   compliance conclusion or performance guarantee.
 - The draft must be useful after human editing and must cost less than €0.10.
-- Publication remains an explicit owner action after source/media review.
+- Media use and publication remain blocked until the live Sheet-vs-Git
+  redaction state is reconciled; owner approval cannot bypass that evidence gap.
+
+## Exact first live model-backed Company Drive proof
+
+Use `ART-2026-001` with approved public source set `SRC-2026-001` (US EPA EMC /
+40 CFR Part 60 Appendix F, Procedure 1). This July article-radar package already
+has a source review, approved/published article draft, quality review and
+WordPress package in the marketing repository. Marketing PR #20 pins this
+selection.
+
+The package is reused only as stable public evidence for one controlled model
+proof through the governed Company Drive path. The new output remains
+`DRAFT_NOT_APPROVED`; the historical publication does not authorize
+republication. The proof uses no CASE media or client data. It must enter
+through the canonical Company OS gateway and AG-008; frozen direct-model
+workflow MM-22 must never be reactivated or bypassed.
 
 ## Ratification still required
 
-The first pilot scope is now fixed: one English website article/case draft for
-industrial plant engineering and maintenance readers, using only the bounded
-claims above. The provisional draft may be generated and stored as
-`DRAFT_NOT_APPROVED`; Ivan still performs the final source/claims/style review
-before any model-assisted revision is accepted or anything is published.
+The CASE deterministic-draft scope is fixed to one English website case draft
+for industrial plant engineering and maintenance readers, using only its
+bounded claims above. The first live model-backed proof is separately fixed to
+the public `ART-2026-001`/`SRC-2026-001` package. Ivan still ratifies the
+`AG-007` acceptance set before the model proof; every generated artifact remains
+`DRAFT_NOT_APPROVED`.
 
 Broader program inputs are not blockers for this first controlled draft:
 
@@ -94,6 +130,14 @@ Broader program inputs are not blockers for this first controlled draft:
 
 ## Gates I verify before any live model call
 
+- Input is exactly public package `ART-2026-001`/`SRC-2026-001`; no CASE media,
+  client data or unreconciled source enters the call.
+- AG-008 closes the envelope, `no_external_action`, synthetic approval and
+  over-cap/negative-budget bypasses deterministically.
+- Persistent Postgres cost reservation/reconciliation is the budget authority;
+  the in-memory `ModelGateway` is never used as production authority.
+- The real EU Vertex adapter, Drive adapters, orchestration, canonical approval
+  composition and deployment are wired and proven in automation-platform.
 - ZDR / no-training on EU Vertex; response cache off; FX config for the €-cap.
 - Per-call ≤ €0.10, per-day ≤ €1, runtime ≤ €10/month — **fail-closed**, not
   best-effort (`environments.yaml` budgets).
@@ -101,15 +145,18 @@ Broader program inputs are not blockers for this first controlled draft:
   governed adapter; never publish/send; human approves. Human-owned fields
   (e.g. `content_type`) are never overwritten.
 
-## What I do once you provide the above
+## What I do once the gates pass
 
 1. Verify Vertex IAM/ADC access for the intended runtime identity (the provided
-   SA currently has evidenced Drive DWD scope, not evidenced Vertex permission),
-   wire the canonical `ai-gateway`, apply migration 005 **with a backup**, and
-   smoke-test with **no business data**.
-2. Run an **AI-002 shadow eval** on your acceptance set (~20 cases) and report
-   quality, cost/call and time-saved — **inactive**, changing no live pipeline.
-3. Bring you an **AI-004 go/no-go** before AI ever touches live lead flow.
+   SA currently has evidenced Drive DWD scope, not evidenced Vertex permission);
+   deploy the canonical Postgres cost authority, EU Vertex/Drive adapters,
+   orchestration and approval composition; apply migration 005 **with a
+   backup**; and smoke-test with **no business data**.
+2. Run one measured, inactive `ART-2026-001`/`SRC-2026-001` proof and record its
+   model, cost, evidence and pending/draft Company Drive artifact.
+3. Run an **AI-002 shadow eval** on the ratified acceptance set (~20 cases) and
+   report quality, cost/call and time-saved — changing no live pipeline.
+4. Bring you an **AI-004 go/no-go** before AI ever touches live lead flow.
 
 This keeps the first AI strictly on low-blast-radius drafts, inside the €10 cap,
 and never inside the read-only integrity boundary (ADR-0011).

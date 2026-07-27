@@ -1,15 +1,22 @@
 # AdaptEng Company OS — Workflow Registry
-# Scope: ONLY the n8n workflows that are part of Company OS live operation.
+# Scope: Company OS live operation plus explicit safety/cutover pointers.
+# Non-authority workflows are marked and must never silently become Company OS.
 # The repository baseline index currently contains 82 workflow exports:
 #   adapteng-automation-platform/n8n/workflow-index.json  (repository baseline)
 # Personal domains (Job Monitor / English Coach) are out of Company scope (ARCHITECTURE.md §6.3).
 # No secrets: webhook paths and tokens are marked, not printed.
 version: 1
-updated: 2026-07-26
-last_verified_live: 2026-07-26
+updated: 2026-07-27
+last_verified_live: 2026-07-27
 live_counts:
   self_hosted: { total: 2, active: 2, drift: none }
-  cloud: { total: 89, active: 38, repo_exports: 82, live_only: 14, repo_only: 7 }
+  cloud: { total: 89, active: 33, repo_exports: 82, live_only: 14, repo_only: 7 }
+cloud_active_freeze_chain: "42 -> 40 (MM-40/MM-41) -> 38 (MM-42/MM-43) -> 37 (d1SDcRTgMqS9Zvgi) -> 36 (J5SpIS8Ye8JHViFi) -> 35 (4D9UBruS1ZhLn1pS) -> 34 (o9Lj7F9WbhFSCARq) -> 33 (clPtSQwzze8DHEvp)"
+freeze_fail_closed_evidence:
+  workflows: [d1SDcRTgMqS9Zvgi, J5SpIS8Ye8JHViFi, 4D9UBruS1ZhLn1pS, o9Lj7F9WbhFSCARq, clPtSQwzze8DHEvp]
+  manual_mode: rejected before execution creation
+  production: rejected before execution creation
+  conclusion: fail-closed freeze verified in both modes
 
 canonical_full_index: adapteng-automation-platform/n8n/workflow-index.json  # 82 repository exports; live drift above must be reconciled
 
@@ -38,7 +45,23 @@ company_os_workflows:
     status: live-active
     proven: 2026-07-25 (T1 create, T2 idempotent replay, T3 reservation conflict -> HTTP 409, T4 no-loss -> HTTP 500 -> clean retry; independent Baserow read-back, zero duplicates)
     owner: Ivan
-    consumer_pending: website producer (automation-platform PR #78) is held; point it at this webhook when unheld.
+    consumer_pending: "website producer (adapteng-website PR #78) remains draft/unmerged/undeployed; point it at this webhook only during the approved cutover."
+    producer_cutover:
+      producer: "adapteng-website PR #78"
+      reviewed_head: b0e3a656cf6659b893810e11a15b9f515527ab79
+      compatibility: WEB-002 producer controls implemented in reviewed draft
+      status: draft-unmerged-undeployed-cutover-unproven
+      implemented_controls: [randomized /webhook/web002-lead-<8 lowercase hex> allowlist, X-Webhook-Token, identity-only durable mode-bound outbox, legacy-default flat MM-18 compatibility, transport/5xx retry, terminal 409 and other-4xx handling]
+      remaining_evidence: [actual WordPress/Fluent Forms producer T1-T4, atomic no-dual-write cutover, seven-day reconciliation, rollback proof, wp-content deployment]
+      legacy_default: flat MM-18 remains the default until atomic cutover
+      dark_mode: "allowlisted https://n8n.adapteng.com/webhook/web002-lead-<8 lowercase hex> plus X-Webhook-Token"
+      outbox: durable identity-only Fluent Forms formId:entryId references bound to one delivery mode
+      response_policy: { "2xx": ack, "5xx_or_transport": retry, "409": terminal-identity-review, "other_4xx": terminal-config-validation }
+      canary: actual WordPress/Fluent Forms producer T1-T4 not yet proven
+      cutover: atomic flag switch; no dual-write
+      reconciliation: seven days before retirement
+      retirement: MM-18 last
+      legal_placeholders: model-provider placeholders remain unpublished
 
   - id: 5f501c9b-f912-4a92-b822-ec57259c440c
     name: Weekly Company OS status
@@ -54,12 +77,33 @@ deferred_or_gated_workflows:
     notes: No live schedule / no n8n workflow by design until a future approved PR. See registry/services.yaml integrity-reconciler.
   - name: MM-18 website lead form intake (n8n Cloud)
     status: cloud-authority
-    notes: Existing Marketing Machine lead workflow on n8n Cloud; WEB-002 is the governed self-hosted successor path.
+    notes: >-
+      Existing flat Marketing Machine lead workflow on n8n Cloud. Preserve it
+      as the host-only legacy default while PR #78's WEB-002 mode is dark; never
+      dual-write. Retire MM-18 only after actual WordPress T1-T4, atomic flag
+      cutover and seven-day reconciliation.
+
+non_authority_cloud_safety_freezes:
+  - id: d1SDcRTgMqS9Zvgi
+    name: Claude n8n MCP Gateway
+    status: inactive-safety-freeze
+    authority: none; never Company OS authority
+    last_execution: no execution after 2026-07-10
+    transport: fixed HTTP GET
+    risk: broad-read confidentiality/exfiltration to external Claude because AI could select any n8n API GET path and responses had no endpoint allowlist or redaction; not arbitrary write
+    freeze: "previous active version 51f02adb retained; draft de142f7b has MCP trigger disabled; workflow unpublished; production execution rejected"
 
 legacy_cloud_authority_dependencies:
   # Pointers only; the 82 repository exports remain in automation-platform.
   - { id: fTJVvxC0hviQy0im, name: MM-01, dependency: "legacy personal 01_Inbox", cutover: pending }
-  - { id: uBVRMTCKwnUG91kU, name: MM-Visual-Evidence-Intake, dependency: "legacy personal 00_Case_Uploads", cutover: pending }
+  - id: uBVRMTCKwnUG91kU
+    name: MM-Visual-Evidence-Intake
+    status: live-active-legacy-binding
+    dependency: legacy personal 00_Case_Uploads
+    active_path: founder-chat-allowlisted media sanitize/log version remains active
+    disabled_draft_path: "/approve -> MM21-24 draft path disabled and unpublished"
+    active_count_effect: unchanged
+    cutover: pending
   - id: sM8lksVuYfMUeC6U
     name: MM-40
     status: inactive-safety-freeze
@@ -86,7 +130,47 @@ legacy_cloud_authority_dependencies:
     dependency: legacy case package + Telegram social-review path
     freeze: "unpublished; Manual Test + weekly Schedule + Execute Workflow Trigger disabled (draft fa4c5385); production execution rejects it before a run; prior active version 45f38d25 retained"
     cutover: replace with approved corporate content snapshot; do not reactivate
+  - id: J5SpIS8Ye8JHViFi
+    name: MM-ZH-02 Email Approval Router
+    status: inactive-safety-freeze
+    dependency: inbound email approval route to legacy Approval_Log
+    risk: unauthenticated approval routing from any sender based only on a subject substring
+    freeze: all entry triggers disabled; workflow unpublished; production execution rejected
+    cutover: reconcile legacy approval state; replace only through canonical migration 003 approval/outbox
+  - id: 4D9UBruS1ZhLn1pS
+    name: MM-04 Approval Status Sync
+    status: inactive-safety-freeze
+    dependency: direct scheduled Approval_Log -> Content_Drafts status synchronization
+    evidence: execution 15214 read 30 stale smoke approval rows and updated 0
+    freeze: all entry triggers disabled; workflow unpublished; production execution rejected
+    cutover: reconcile legacy approval/content state before archive or canonical migration 003 cutover
+  - id: o9Lj7F9WbhFSCARq
+    name: MM-05 Publish Plan Builder
+    status: inactive-safety-freeze
+    dependency: scheduled approved Content_Drafts -> Publish_Plan build
+    risk: non-idempotent publish-plan creation
+    evidence: execution 15216 found 0 approved drafts
+    freeze: all entry triggers disabled; workflow unpublished; production execution rejected
+    cutover: reconcile legacy draft/plan state before archive or canonical migration 003 cutover
+  - id: clPtSQwzze8DHEvp
+    name: MM-22 Direct GPT-5 Mini Analyzer
+    status: inactive-safety-freeze
+    dependency: direct gpt-5-mini model call
+    risk: bypassed canonical gateway, ledger/caps, AG-008 controls and governed Company Drive
+    freeze: Manual and Execute Workflow triggers disabled; model disabled; workflow unpublished; production execution rejected
+    versions: prior active 72869463; freeze draft 28a7ef72
+    preserved_history: 6 historical runs and their data
+    cutover: never reactivate the direct-model path; use canonical gateway/ledger/caps, AG-008 and governed Company Drive
   - { id: T3WHl2kCkPiPOPQd, name: MM-30, dependency: "deterministic draft builder", status: inactive }
+
+legacy_approval_publish_state:
+  artifacts: [Approval_Log, Content_Drafts, Publish_Plan]
+  classification: forensic-reconciliation-required
+  disposition: Approval_Log cleanup complete; reconcile untouched pending drafts before canonical migration 003 cutover
+  latest_audit: Q2PmbE2VDffRl1iT execution 15547 (one-time read-only; archived)
+  approval_log_cleanup: a3luyFSBH9xRELDW dry-run 15548 matched 179; live 15549 deleted ids 1-179; verify 15550 matched 0; workflow archived
+  untouched_state: Content_Drafts 19 pending (18 pending_approval, 1 pending_manual_review); Publish_Plan 0
+  promotion_result: no current real draft promoted
 
 safety_evidence:
   - id: QMqxSBRhaIfzYNTy
@@ -99,11 +183,42 @@ safety_evidence:
     status: archived-completed
     excluded_from_live_counts: true
     evidence: "15211 exact deletion of WordPress media 886-889 and 893-896; every media REST/original-file URL -> 404; source Drive HEIC files untouched"
+  - id: Q2PmbE2VDffRl1iT
+    name: SAFETY-2026-07-27 Legacy Approval State Audit
+    status: archived-completed-read-only
+    excluded_from_live_counts: true
+    execution: 15547
+    approval_log:
+      rows: 179
+      classification: synthetic APPROVE smoke; cleanup completed and verified
+      breakdown: { TYPE_self_loop: 177, TEST123: 2 }
+      date: "2026-06-12"
+    content_drafts:
+      rows: 19
+      statuses: { pending_approval: 18, pending_manual_review: 1 }
+      approved: 0
+      package_ready: 0
+    publish_plan: { rows: 0 }
+    conclusion: no current real draft was promoted
+    freeze_rationale: synthetic/unauthenticated approval state must not feed direct status sync or non-idempotent publish-plan creation
+    disposition: archived after evidence retention
+  - id: a3luyFSBH9xRELDW
+    name: SAFETY-2026-07-27 Synthetic Approval Cleanup
+    status: archived-completed
+    temporary: true
+    excluded_from_live_counts: true
+    dry_run: execution 15548 matched exactly 179 TYPE/TEST123 smoke rows
+    live_cleanup: execution 15549 deleted exactly 179 row ids 1-179
+    verification: execution 15550 matched 0
+    untouched:
+      content_drafts: 19 pending (18 pending_approval, 1 pending_manual_review)
+      publish_plan: 0
+    conclusion: synthetic Approval_Log cleanup complete; no current real draft promoted
 
 cutover_truth:
   self_hosted_active_count: 2
   cloud_total_count: 89
-  cloud_active_count: 38
+  cloud_active_count: 33
   cloud_company_authority: Marketing Machine and Lead Monitor content/lead workflows
   personal_domains_on_cloud: [Job Monitor, English Coach]
   inventory_drift: 14 live-only / 7 repo-only versus 82 repository exports

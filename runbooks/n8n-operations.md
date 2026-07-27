@@ -14,6 +14,43 @@ the public API. Proven building AUT-001 (`NsWG1hD8VmIRRwCv`) and WEB-002
 - The workflow must **fail closed**: a downstream error must return a non-2xx
   so the producer retries, never an empty 200 (see "The 200-on-error trap").
 
+## Website producer cutover safety
+
+At reviewed draft head `b0e3a656cf6659b893810e11a15b9f515527ab79`,
+website PR #78 implements the randomized
+`/webhook/web002-lead-<8 lowercase hex>` allowlist, `X-Webhook-Token`,
+identity-only durable mode-bound outbox, legacy-default flat MM-18
+compatibility, transport/5xx retry, 409 terminal identity review and other-4xx
+terminal configuration/validation handling. It remains **draft, unmerged and
+undeployed**. Merging auto-deploys `wp-content/**`; repository tests do not prove
+actual WordPress/Fluent Forms producer T1–T4 or a seven-day cutover.
+
+Safe sequence:
+
+1. Keep PR #78 draft/unmerged until an approved cutover window. Preserve the
+   existing flat MM-18 mode as the default.
+2. Store the real randomized WEB-002 URL and token only as encrypted host config;
+   verify the exact allowlisted path shape without copying the secret slug into
+   Git, PR text or logs.
+3. Stage the implemented self-hosted mode without dual-write. Confirm the outbox
+   persists only `formId:entryId`, remains bound to one delivery mode, and
+   rebuilds payloads from the canonical Fluent Forms row.
+4. Verify the implemented response policy: 2xx acknowledges; transport/5xx
+   retries durably; 409 is terminal identity review; every other 4xx is terminal
+   configuration/validation failure.
+5. Run T1–T4 from the **actual WordPress/Fluent Forms producer**, not a direct
+   webhook client: T1 new lead/2xx ack, T2 exact replay/idempotency, T3 conflict/
+   409 dead-letter, T4 injected 5xx or transport failure followed by a clean
+   retry with no loss or duplicate.
+6. Switch the host-only mode flag atomically. Never dual-write to MM-18 and
+   WEB-002.
+7. Reconcile Fluent Forms entry references against Postgres/Baserow outcomes for
+   seven days.
+8. Retire MM-18 last, only after the reconciliation window is clean and rollback
+   is proven.
+
+Keep all model-provider legal placeholders unpublished throughout this cutover.
+
 ## Access
 
 - Base URL: `https://n8n.adapteng.com/api/v1`

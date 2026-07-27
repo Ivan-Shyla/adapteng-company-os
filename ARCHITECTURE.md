@@ -133,9 +133,13 @@ AdaptEng не заявляет:
 - Full departure from personal Drive is **not complete**: current MM
   media/content workflows still reference legacy personal folders, and the live
   media-worker still uses its old service account. `CASE-2026-001` was
-  inventoried read-only as the first owner-approved copy source; corporate copy
-  and workflow rewiring are in progress. Owner Manager/recovery and break-glass
-  acceptance remain open.
+  inventoried read-only as the first governed raw-source/case migration and
+  evidence-bounded deterministic case draft; its media and publication remain
+  blocked pending live Sheet-vs-Git reconciliation. No corporate file copy has
+  run: the current Drive adapter is folder-only, and copy/artifact/replay
+  implementation plus workflow rewiring remain blocked behind the two-layer
+  review sequence below. Owner Manager/recovery and break-glass acceptance
+  remain open.
 - DNS resolves and both Baserow and n8n serve trusted Let's Encrypt TLS behind
   Traefik (certificates issued 2026-07-25, valid to 2026-10-23); the first admin
   is created and the Company OS schema is provisioned live (workspace AdaptEng OS
@@ -762,25 +766,52 @@ target.
 | `ai-dev-loop-control-plane` | Generic agent admission, execution, evidence, validation and review lifecycle |
 | `adapteng-marketing` | Marketing schemas, prompts/skills, media worker and content rules |
 | `adapteng-website` | WordPress theme/plugin, forms contract and Cloudways deployment |
-| `Kraken` | Isolated R&D reference; no AdaptEng business/client data |
+| [`PalinaRuban/adapteng`](https://github.com/PalinaRuban/adapteng) | **LEGACY NON-AUTHORITATIVE SNAPSHOT** — personal-account June-2026 WordPress/Azure copy; not active Company OS, production source or rollback |
+| [`Ivan-Shyla/Kraken`](https://github.com/Ivan-Shyla/Kraken) | Personal trading R&D / operational control tower; **SEPARATE ACTIVE SCOPE** — not Company OS runtime, legacy or archive |
 
-`PalinaRuban/adapteng` is historical and has no active authority. It is not a
-source for deployment, content, architecture or rollback. A 2026-07-26 audit
-classified it as a June 2026 WordPress/Azure snapshot: retain only custom-theme
-and brand provenance, extract authoritative copy from the current live CMS,
-rotate the tracked WordPress/Azure/SMTP credentials at source, disable stale
-deployment automation, then archive it. WordPress core/plugins, secrets,
-submissions and backups never move into Company OS.
+The Kraken boundary was audited read-only at active HEAD
+[`8160ed85cabe0d20c5ddc4def5c818c3f7a845c3`](https://github.com/Ivan-Shyla/Kraken/commit/8160ed85cabe0d20c5ddc4def5c818c3f7a845c3)
+on 2026-07-26. Company OS may record only its external initiative link, status
+and risk posture, and may selectively reuse governance patterns at the
+conceptual level. It must never connect Company OS agents, n8n, credentials,
+approval decisions, promotion/live-readiness attestations or order execution to
+Kraken; no client/company data may cross this boundary. Optional local
+Ollama/analytics stays advisory and read-only. Canonical Kraken status is
+[`AI_HANDOFF.md`](https://github.com/Ivan-Shyla/Kraken/blob/main/AI_HANDOFF.md)
+plus
+[`CURRENT_STATUS.md`](https://github.com/Ivan-Shyla/Kraken/blob/main/CURRENT_STATUS.md);
+the README status is stale and must not be mirrored. Copying code or implemented
+patterns rather than concepts requires provenance review because Kraken has no
+LICENSE.
+
+`PalinaRuban/adapteng` is a personal-account June-2026 WordPress/Azure snapshot
+with no active authority. It is not active Company OS and is not a production,
+content, architecture or rollback source. The public site runs on a separate
+nginx/Cloudways path; the legacy Azure hostname no longer resolves and its last
+deployment workflow failed.
+
+Retain only the custom theme, brand/license provenance and historical runbook.
+Migrate structured, approved business knowledge from the current live
+CMS/database; exclude WordPress core, plugins, runtime, credentials and PII.
+The tracked `wp-config.php` contains database settings and auth salts, while a
+stale repository publish-profile secret/workflow and a Zoho app password in the
+database/export require provider-side rotation. A separate containment PR will
+remove the currently tracked `wp-config.php` and deploy workflow and add
+archive/rotation guardrails; do **not** rewrite history yet. Archive only after a
+fresh encrypted export of the current CMS, database and media plus company
+ownership transfer.
 
 ### 6.3 Домены автоматизаций и их принадлежность
 
 Repository baseline — `adapteng-automation-platform/n8n/workflow-index.json`
 (82 exports after the latest ratified additions). It is currently **not** a
-complete live source of truth: a direct n8n Cloud API check on 2026-07-26 found
-89 workflows / 38 active, with 14 live-only and 7 repo-only entries. The
-pre-freeze baseline was 42 active; MM-40/MM-41 and their WordPress/social
-downstream MM-42/MM-43 were then unpublished after a safety review. This drift
-must be reconciled before cutover.
+complete live source of truth: a direct n8n Cloud API check on 2026-07-27 found
+89 non-archived workflows / 33 active, with 14 live-only and 7 repo-only
+entries. The verified active-count safety-freeze chain is **42 → 40**
+(MM-40/MM-41) **→ 38** (MM-42/MM-43) **→ 37** (`d1SDcRTgMqS9Zvgi`, Claude n8n
+MCP Gateway) **→ 36** (`J5SpIS8Ye8JHViFi`, MM-ZH-02) **→ 35**
+(`4D9UBruS1ZhLn1pS`, MM-04) **→ 34** (`o9Lj7F9WbhFSCARq`, MM-05) **→ 33**
+(`clPtSQwzze8DHEvp`, MM-22). This drift must be reconciled before cutover.
 
 Historical execution evidence showed that the legacy chain had created WordPress
 pages 878, 880, 882, 884 and 891; page 891 had reached `publish` without the
@@ -796,11 +827,62 @@ files remain untouched in Drive. Completed media-remediation workflow
 `VZPWhwGDol0h1ECt` is sealed and archived. Both safety workflows are excluded
 from the 89 non-archived workflow count.
 
+The gateway freeze covered live-only workflow `d1SDcRTgMqS9Zvgi` (Claude n8n
+MCP Gateway), which is not Company OS authority and had no execution after
+2026-07-10. Its HTTP method was fixed to GET, but the AI could choose any n8n API
+GET path and responses had no endpoint allowlist or redaction, so execution
+payloads/PII could be disclosed to external Claude. This is a **broad-read
+confidentiality/exfiltration risk, not arbitrary write**. Previous active version
+`51f02adb` is retained; draft `de142f7b` has the MCP trigger disabled; the
+workflow is unpublished and production execution is rejected.
+
+Three further legacy approval/publish workflows are frozen. MM-ZH-02
+`J5SpIS8Ye8JHViFi` accepted an approval route from any email sender based only on
+a subject substring. MM-04 `4D9UBruS1ZhLn1pS` directly synchronized
+`Approval_Log` into `Content_Drafts`; latest execution `15214` read 30 stale
+smoke approval rows but updated 0. MM-05 `o9Lj7F9WbhFSCARq` was a scheduled,
+non-idempotent `Publish_Plan` builder; execution `15216` found 0 approved drafts.
+All entry triggers are disabled, all three workflows are unpublished, and
+production execution is rejected. Treat legacy `Approval_Log`, `Content_Drafts`
+and `Publish_Plan` as **forensic-reconciliation-required** before archive or
+canonical migration 003 cutover.
+
+Direct `gpt-5-mini` analyzer MM-22 `clPtSQwzze8DHEvp` is also frozen because it
+bypassed the canonical gateway, ledger/caps, AG-008 controls and governed
+Company Drive. Its Manual and Execute Workflow triggers and model node are
+disabled; it is unpublished and production execution is rejected. Prior active
+version `72869463` and freeze draft `28a7ef72` are retained, together with six
+historical runs and their data.
+
+Manual-mode and production probes for all five newly frozen workflows
+(`d1SDcRTgMqS9Zvgi`, `J5SpIS8Ye8JHViFi`, `4D9UBruS1ZhLn1pS`,
+`o9Lj7F9WbhFSCARq`, `clPtSQwzze8DHEvp`) reject before creating an execution.
+This verifies the freeze is fail-closed in both modes.
+
+A one-time read-only audit by workflow `Q2PmbE2VDffRl1iT` (execution `15547`)
+found 179 `Approval_Log` rows, all synthetic `APPROVE` smoke:
+177 `TYPE` self-loop rows plus 2 `TEST123` rows, all dated 2026-06-12.
+`Content_Drafts` has 19 rows, all pending (18 `pending_approval`, 1
+`pending_manual_review`), with zero approved or package-ready. `Publish_Plan`
+has 0 rows. Temporary cleanup workflow `a3luyFSBH9xRELDW` dry-run `15548`
+matched exactly those 179 `TYPE`/`TEST123` smoke rows; live execution `15549`
+deleted exactly 179 row ids 1–179; verification `15550` matched 0. The 19 pending
+`Content_Drafts` and empty `Publish_Plan` were untouched. No current real draft
+was promoted. Both the cleanup workflow and read-only audit workflow are
+archived. This evidence reinforces the freeze: synthetic/unauthenticated
+approval state must not feed the direct status sync or non-idempotent plan
+builder; remaining draft lineage still requires reconciliation before migration
+003 cutover.
+
+Workflow `uBVRMTCKwnUG91kU` remains active only in its founder-chat-allowlisted
+media sanitize/log version. Its unpublished `/approve → MM21-24` draft path was
+disabled; that draft-only change does not reduce the active count.
+
 | Домен | Группа | Repo exports / live active | Принадлежность | Правило |
 |---|---|---:|---|---|
-| Company workflows | MM / LM | 46 / 20 active in Cloud | AdaptEng business | Подключается к Company OS (§5): Baserow/Drive/agent |
+| Company workflows | MM / LM | 46 / 16 active in Cloud | AdaptEng business | Подключается к Company OS (§5): Baserow/Drive/agent |
 | Personal workflows | JM / EC | 35 / 17 active in Cloud | Личные/отдельные автоматизации Ивана | Не company scope; изолированы от company данных |
-| Utility / gateway | EXP / gateway | 1 repo baseline; 1 active live-only gateway | Utility | classify explicitly; never silently becomes company authority |
+| Utility / gateway | EXP / gateway | 1 repo baseline; 0 active (1 live-only gateway frozen) | Utility | classify explicitly; never silently becomes company authority |
 
 Только company-домены **Marketing Machine / Lead Monitor** относятся к
 промышленной бизнес-автоматизации AdaptEng, и именно их §5 подключает к Baserow,
@@ -893,7 +975,7 @@ bounded task
 
 Этот режим используется сразу для реализации всего backlog Company OS.
 
-#### `business_artifact` — contracts merged, production gate blocked
+#### `business_artifact` — contracts merged, **REJECT_LIVE**
 
 ```text
 BusinessTaskEnvelope
@@ -910,13 +992,20 @@ BusinessTaskEnvelope
 
 Business task не создаёт Git branch и не считается завершённым по Git diff.
 
-A read-only production audit on 2026-07-26 found that the current completion
-path can accept a partial/unvalidated task envelope, does not structurally
-require `no_external_action`, can accept approval-like fields, and the local
-in-memory model-gateway seam can reconcile actual cost above its cap. These are
-P0 deterministic defects, not live-provider configuration. The local gateway
-must never be the production budget authority; the canonical Postgres-backed
-`automation-platform/ai-gateway` remains the only planned live path.
+Read-only production audit verdict: **REJECT_LIVE**. Control-plane main
+`affe6ea1e4d522be0df0641e98a08e20a84549ae` contains deterministic
+AG-001/002/003/006/007 contracts and acceptance only — no business worker, real
+provider or Drive runtime. Reproduced P0 bypasses: the task envelope is optional
+and can be unvalidated; completion accepted missing `no_external_action` plus a
+synthetic `approval_id`; and the in-memory `ModelGateway` allowed actual cost
+above the cap and drove the remaining budget negative.
+
+AG-008 owns those deterministic fixes. It does not provide a live business
+runtime: `adapteng-automation-platform` must still deploy and wire persistent
+Postgres cost reservation/reconciliation, a real EU Vertex adapter, Drive
+adapters, orchestration, canonical approval and deployment. Until all of that is
+accepted, Company OS has repository components, **not deployed/working business
+AI**.
 
 ### 7.3 Business artifact building blocks
 
@@ -929,7 +1018,7 @@ must never be the production budget authority; the canonical Postgres-backed
 | `AG-005` | Baserow/Drive action adapters | Only pending/draft writes; no direct approve/publish |
 | `AG-006` | Linux container acceptance | Same critical gates pass on Coolify runtime |
 | `AG-007` | Business eval harness | Synthetic security set + approved representative quality set |
-| `AG-008` | Production admission/action/cost hardening | Completion validates the full task envelope; draft artifacts require human review + `no_external_action`; approval/publish/send fields fail; local cost never goes negative; live budget authority remains canonical Postgres gateway. **Open — hardening PR in progress after 2026-07-26 audit.** |
+| `AG-008` | Production admission/action/cost hardening | Completion validates the full task envelope; draft artifacts require human review + `no_external_action`; synthetic `approval_id` and approval/publish/send fields fail; actual cost cannot exceed the cap or drive budget negative. **Open — AG-008 owns deterministic fixes after the REJECT_LIVE audit; it does not supply the persistent business runtime.** |
 
 Generic agent lifecycle остаётся в control-plane. Domain schemas/prompts остаются
 в marketing/website/automation repositories. Approval decision записывается
@@ -964,12 +1053,18 @@ still lacks the token and token consumption currently lives in `decide`), a
 concrete pending writer, Coolify/Traefik/secrets/FX configuration and pricing
 recheck. `external_draft_dispatcher` remains `None`.
 
-Gate-0 decision dated 2026-07-25 selects the first **paid pilot candidate**, not
-a deployed/default model:
+The automation platform must also make persistent Postgres cost
+reservation/reconciliation authoritative and deploy the EU Vertex adapter,
+Drive adapters, orchestration and approval composition. Deterministic
+control-plane fixes alone cannot change the **REJECT_LIVE** verdict.
 
-| Candidate | Endpoint/residency | Input / cached / output per 1M tokens | Representative call |
+Gate-0 decision dated 2026-07-25 selects the first **paid pilot candidate**, not
+a deployed/default model. Availability and prices were re-verified from official
+Google documentation on 2026-07-27:
+
+| Candidate | Availability / endpoint | Standard non-global rates per 1M tokens | Representative call |
 |---|---|---:|---:|
-| Vertex AI `gemini-3.1-flash-lite` | EU multi-region only: `https://aiplatform.eu.rep.googleapis.com` | $0.275 / $0.0275 / $1.65 | 20k input + 4k output ≈ $0.0121 before FX |
+| Vertex AI `gemini-3.1-flash-lite` | **GA**; EU multi-region; location `eu`; `https://aiplatform.eu.rep.googleapis.com` | $0.275 text/image/video input; $0.55 audio input; $0.0275 cached text input; $1.65 text output/reasoning | 20k text input + 4k text output = $0.0121 before FX |
 
 The candidate remains contingent on ratified `AG-007`/`AI-001` quality,
 citation and safety proof. Gateway requirements:
@@ -1238,7 +1333,7 @@ Official references used for this decision:
 | `COS-002` | Google Drive | Create `AdaptEng Company` structure | Organization owns Shared Drive; Ivan has Manager/admin access and tested recovery; folders match §4. **Live-provisioned and re-verified:** sanctioned provisioning created the drive/eight folders; a 2026-07-26 dry run reported the drive and every folder `EXISTS`. Only owner Manager/recovery/break-glass acceptance remains open. |
 | `SEC-001` | Accounts | Password manager, MFA and recovery inventory | Every critical system has status/owner/recovery |
 | `OPS-001` | Hetzner/Coolify | Record 7-day resource baseline | CPU/RAM/disk/swap known |
-| `OPS-002` | n8n | Create Drive service account credential | Test file created/deleted in approved folder. **Controlled live smoke passed:** automation-platform PR #69 (`ff5ccc0cbd84870e455173ff83865ccd9a47f623`) used approved `01_Inbox`; create/reuse/subfolder reuse/owned cleanup/missing verification passed (61 tests, 1 production-unsafe base-structure skip). New SA `adapteng-ai-operator@adapteng-workspace-automation.iam.gserviceaccount.com` and locked Coolify secret are provided; permanent governed HTTP bridge deployment is in progress. |
+| `OPS-002` | n8n | Create Drive service account credential | Credential/folder access is proven; file copy is not. **Controlled folder smoke passed:** automation-platform PR #69 (`ff5ccc0cbd84870e455173ff83865ccd9a47f623`) used approved `01_Inbox`; folder create/reuse/subfolder reuse/owned cleanup/missing verification passed (61 tests, 1 production-unsafe base-structure skip). It did not prove file/tree listing, copy, pending-artifact creation or partial-failure replay. The SA and locked Coolify B64/delegated-user config are provided, but no accepted Drive implementation PR or live copy exists. |
 
 ### 10.2 Days 4–14: one-person interface
 
@@ -1256,8 +1351,8 @@ Official references used for this decision:
 
 | ID | Repository/system | Work | Definition of done |
 |---|---|---|---|
-| `MKT-001` | marketing + automation | Connect live case media intake to `Content_Items` and Drive folders | One sanitized case reaches draft review. **Compatibility foundation merged:** marketing main `d7e87897c066e1aad1114b61f15f40a7c73903ee` contains PR #11's canonical package correction; automation-platform PR #75 (`e74e0896a848716af9fc425e4f29840ba3cfc715`) adds the sanitized inactive/MCP-disabled consumer export, canonical 25-field mapping and no-blank Sheet branches. The live worker is healthy but still uses the old SA/personal Drive. `CASE-2026-001` is inventoried as the first approved source; governed company-Drive copy is in progress. |
-| `MKT-002` | marketing + automation | Connect article flow to `Content_Items` and Drive | One article draft appears in company Drive. **Pilot source/style ready:** `CASE-2026-001` and bounded claims/red-lines are recorded in `ai/ai-001-pilot-intake.md`; draft creation waits only for the governed corporate copy/write path. |
+| `MKT-001` | marketing + automation | Connect live case media intake to `Content_Items` and Drive folders | One reconciled, sanitized case reaches draft review. **Compatibility foundation merged:** marketing main `d7e87897c066e1aad1114b61f15f40a7c73903ee` contains PR #11's canonical package correction; automation-platform PR #75 (`e74e0896a848716af9fc425e4f29840ba3cfc715`) adds the sanitized inactive/MCP-disabled consumer export, canonical 25-field mapping and no-blank Sheet branches. The live worker is healthy but still uses the old SA/personal Drive. `CASE-2026-001` is the first governed raw-source/case migration and evidence-bounded deterministic case draft. Governed Drive implementation/review is in progress; **no controlled copy has begun**, and all media/publication remain fail-closed pending live Sheet-vs-Git reconciliation. |
+| `MKT-002` | marketing + automation | Connect article flow to `Content_Items` and Drive | The planned first live model-backed Company Drive proof will create one new pending/draft from exact July public article-radar package `ART-2026-001`, using approved source set `SRC-2026-001`. Marketing PR #20 pins the source review, approved/published article draft, quality review and WordPress package. Reuse is proof input only and does not authorize republication. The call must enter through the canonical Company OS gateway and AG-008 and must never use frozen direct-model workflow MM-22. |
 | `MKT-003` | marketing + Drive | Define limited-access approved folders, snapshot hash and publish receipt | Approved/published status cannot be set by model or draft credential |
 | `N8N-001` | DNS/Coolify | Finish self-hosted n8n access | TLS/health/UI verified; exactly two governed workflows (AUT-001, WEB-002) are active and proven. **Repository governance merged:** automation-platform PR #58 (`a9f60f9bc12f3bc51d7956a48f1a3ef039d56cb7`) added hard-fail secret/deploy validation, ADR-0009 and as-built/recovery Coolify docs. Remaining: repoint live Coolify source from `palinaruban-repo-status-review` to `main`, verify auto-deploy, then shadow/cut over MM workflows. |
 | `N8N-002` | automation-platform | Ratify workflow inventory and classify domain | Company (MM) vs personal (JM/EC) separated; each workflow is keep/merge/archive/delete; personal isolated from company data. **Taxonomy ratified:** automation-platform PR #60 (`af36d3a`); the `SEC-002` repository guard is merged, while live credential/store isolation remains open. |
@@ -1280,7 +1375,7 @@ Official references used for this decision:
 
 | ID | Repository/system | Work | Definition of done |
 |---|---|---|---|
-| `AI-001` | marketing/control-plane | Content & Case Draft skill | Inputs/outputs follow schemas. **Repository implementation merged:** marketing PR #19 (`5b9af0e`), deterministic draft-only behavior with 106 tests. The owner approved `CASE-2026-001` as the first source and delegated provisional style; bounded claims/red-lines are recorded. Remaining live gates: corporate source copy, `AG-007` ratification, EU Vertex privacy/cache/FX proof, gateway deployment and measured inactive call. |
+| `AI-001` | marketing/control-plane | Content & Case Draft skill | Inputs/outputs follow schemas. **Repository implementation merged:** marketing PR #19 (`5b9af0e`), deterministic draft-only behavior with 106 tests. The two firsts are explicit: `CASE-2026-001` is the first governed raw-source/case migration plus evidence-bounded deterministic case draft, not the live model proof; exact public package `ART-2026-001` using `SRC-2026-001` is selected for the first live model-backed Company Drive proof. CASE media/publication remain blocked pending live Sheet-vs-Git reconciliation. Remaining live gates: governed Company Drive write path, `AG-007` ratification, EU Vertex privacy/cache/FX proof, gateway deployment and measured inactive call. |
 | `AI-002` | automation-platform | 20-case shadow eval | Pilot gates in §7.5 measured |
 | `AI-003` | Baserow | Review/outcome capture | Accept/edit/reject and time saved recorded |
 | `AI-004` | Owner | Go/no-go | Continue only if useful and within cost |
@@ -1289,7 +1384,7 @@ Official references used for this decision:
 
 | ID | Repository/system | Work | Definition of done |
 |---|---|---|---|
-| `WEB-001` | website + automation | Versioned `lead.created` contract | Source, consent, language, service and correlation ID. **Draft only:** website PR #78 remains held because merge auto-deploys the producer; it is not live. |
+| `WEB-001` | website + automation | Versioned `lead.created` contract | Source, consent, language, service and correlation ID. **Repository controls implemented; cutover held:** reviewed website PR #78 draft head `b0e3a656cf6659b893810e11a15b9f515527ab79` implements the randomized `/webhook/web002-lead-<8 lowercase hex>` allowlist, `X-Webhook-Token`, identity-only durable mode-bound outbox, legacy-default flat MM-18 compatibility, transport/5xx retry, and terminal 409/other-4xx handling. It remains draft, unmerged and undeployed. Merge auto-deploys `wp-content/**`; actual producer T1–T4 and seven-day cutover/reconciliation evidence are not proven. |
 | `WEB-002` | website + Baserow | Form → Opportunity → one-day Action | Three synthetic leads, no loss/duplicate. **Repository identity merged:** automation-platform PR #70 (`cc5e5e7bb41e1b0605f781482e17e163d7015fcf`) adds migration 004 and PII-minimized `form_id:submission_id`/`sitelead_wp_*` reservation; first call reserves, exact retry duplicates, either-key collision conflicts. PostgreSQL 16 CI passed 7/7, including 32 concurrent calls with exactly one reservation. **LIVE PROVEN 2026-07-25 (governed lead-intake pipeline):** migration 004 applied to live `adapteng_ops` (`public.lead_identity_reservation` + `reserve_lead_identity(...)`), and a self-hosted EU n8n workflow (`05ytz5If9kHUOYuA`, header-authenticated webhook, **active, pure-internal**) turns a `lead.created` webhook into a governed Organization → Person → Opportunity → one-day-follow-up Action upsert through the internal adapter, made retry-safe by reserving a stable `business_id` from the reservation authority. Four synthetic end-to-end tests passed with independent Baserow read-back: **T1** create (4 entities `created=true`); **T2** exact replay idempotent (identical stable ids, all `created=false`, zero duplicates); **T3** the reservation function returns `conflict` for a valid-but-inconsistent `(submission, canonical)` pair (routed to HTTP 409; malformed canonicals rejected earlier); **T4** no-loss — an injected mid-chain write failure now returns **HTTP 500** so the producer retries, and the retry completes exactly the missing entities (`opportunity`/`action` `created=true`) without re-creating org/person, every synthetic id appearing exactly once in Baserow. A pre-existing n8n defect was caught and fixed en route: with `responseMode=responseNode`, a node error before the Respond node returned an empty **HTTP 200** (silent lead loss); explicit per-node error outputs to a `Respond500` node restore fail-closed retry semantics. |
 | `INT-001` | automation-platform | Read-only integrity/reconcile check governed by **ADR-0011** | Compares Baserow↔Postgres↔Drive and emits deterministic **read-only** findings — **no writes, no `Action` creation, no live schedule ever** in the merged foundation. Turning a finding into an `Action`, the live schedule, the n8n workflow, live manifest wiring and deployed credentials are each deferred to a **separate approved PR**; never pilot-blocking. **Read-only foundation merged:** automation-platform PR #74 (`05d3fa4483634051dd39c19a98fe922835e1b1ec`) adds migration 006, fail-closed source snapshots and deterministic findings. Migration 006 is not live-applied; live sources, schedule and `Action` creation remain owner/approved-PR gated, and no AI/write path exists. |
 | `N8N-004` | automation-platform | Cut over selected content workflow | Cloud twin disabled; seven-day evidence |
@@ -1310,7 +1405,11 @@ Official references used for this decision:
 
 ```text
 Workspace (active) → Shared Drive/eight folders live + re-verified
-                   → company SA supplied → governed Drive bridge/copy
+                   → company SA + actual B64/delegated-user config supplied
+                   → PR-A typed copy/artifact library + Google client
+                   → deterministic partial-failure replay + dispatch/CLI
+                   → PR-A review → PR-B authenticated internal HTTP service
+                   → separately approved controlled copy
                    → rewire MM workflows → owner recovery/break-glass acceptance
 
 Baserow service (healthy) → DNS/TLS/admin (done) → schema live run (done)
@@ -1322,7 +1421,12 @@ SEC-002 repository guard (merged) → verify live credentials/stores + remediate
 
 self-hosted n8n DNS/TLS → inactive shadow → content cutover → lead cutover
 
-agent repository work → first approved source/provisional config → corporate copy
+CASE governed raw-source migration/deterministic draft → Drive implementation/review
+                                                      → controlled copy (not begun)
+                                                      → Sheet-vs-Git reconciliation
+                                                      → sanitized draft review
+
+agent repository work → exact ART-2026-001/SRC-2026-001 public proof contract
                       → AG-007/privacy/FX gates → inactive A0/A1 shadow
                       → measured eval → live pilot
 
@@ -1337,28 +1441,41 @@ lead contract + repository identity → migration 004 live plan/restore gate
                                     → duplicate/conflict HTTP 409 mapping
                                     → durable crash-after-reservation reconciliation
                                     → inactive self-hosted shadow + synthetic E2E
-                                    → import/activate consumer → merge producer PR #78
+                                    → reviewed producer draft preserves flat MM-18 default
+                                    → randomized WEB-002 allowlist + X-Webhook-Token
+                                    → identity-only durable mode-bound outbox + HTTP policy
+                                    → keep draft/unmerged/undeployed
+                                    → actual WordPress T1–T4 canary
+                                    → atomic flag cutover, no dual-write
+                                    → seven-day reconciliation → retire MM-18 last
 ```
 
 ---
 
 ## 11. Current status
 
-| Component | Verified status on 2026-07-26 | Next milestone / constraint |
+| Component | Verified status through 2026-07-27 | Next milestone / constraint |
 |---|---|---|
-| Overall stage | **Operational foundation + controlled migration.** Company-owned Baserow, Shared Drive, Postgres, internal adapter and two governed self-hosted workflows are live. The daily content/media path and business AI are not yet cut over. | Finish corporate Drive copy/write path, migrate one MM workflow at a time, create first corporate draft, then run the inactive AI pilot. |
+| Overall stage | **Operational foundation + controlled migration.** Company-owned Baserow, the Shared Drive folder skeleton, Postgres, internal Baserow adapter and two governed self-hosted workflows are live. No governed Drive file copy/artifact runtime or business AI is live. | Build/review Drive PR-A, then stack PR-B; only afterward approve controlled copy/artifact execution. Run the exact `ART-2026-001`/`SRC-2026-001` inactive model proof after every remaining gate; migrate `CASE-2026-001` on its separate governed lane without unblocking media/publication. |
 | Company Workspace / Drive | Business Standard active (~€13.80/month public reference; invoice/VAT authoritative). `AdaptEng Company` Shared Drive and all eight canonical folders are organization-owned, live and re-verified by sanctioned dry run. Direct links and upload rules: `runbooks/company-drive.md`. | Full personal-account exit is **not complete**: current MM workflows and media-worker still use legacy personal bindings. Owner must verify Manager/recovery/break-glass access. |
-| First approved source | `CASE-2026-001` inventoried read-only: intake marker, case note, 4 HEIC images, 2 MOV videos. Owner authorized source use; original untouched. Bounded claims/style/red-lines are in `ai/ai-001-pilot-intake.md`. | Copy through the new company SA into corporate `00_Case_Uploads`; verify replay/no duplicates; create content-group folders and a draft in corporate `40_Content`. Create Baserow case/content/evidence pointers only through a replay-safe reserved business ID. |
+| Drive implementation | Current `adapteng-drive-adapter` on `main` only lists/finds and creates folders/base structure. It has no general file/tree listing, file copy, pending-artifact creation or deterministic partial-failure replay state. Its repository env names (`GOOGLE_SERVICE_ACCOUNT_JSON` / `GOOGLE_WORKSPACE_ADMIN`) differ from the actual runtime contract (`GOOGLE_SERVICE_ACCOUNT_JSON_B64` / `GOOGLE_WORKSPACE_DELEGATED_USER`). Implementation/review is in progress; **no controlled copy has begun**. Open implementation attempts are not readiness evidence. | **PR-A:** typed allowlisted copy/pending-artifact library, Google client, deterministic partial-failure replay, actual env config and dispatch/CLI. Review PR-A first. **PR-B:** stack the authenticated internal HTTP service only after PR-A acceptance. No deployment or copy before separate approval. |
+| First governed raw-source migration | `CASE-2026-001` inventoried read-only: intake marker, case note, 4 HEIC images and 2 MOV videos. Its role is the first governed raw-source/case migration plus evidence-bounded deterministic case draft, **not** the first live model proof. The original is untouched; all media and publication remain fail-closed pending live Sheet-vs-Git reconciliation. Bounded claims/style/red-lines are in `ai/ai-001-pilot-intake.md`. | Complete and review Drive PR-A; stack PR-B only afterward. Then separately approve one controlled company-SA copy into corporate `00_Case_Uploads`, verify deterministic replay/no duplicates, and create Baserow/Drive pointers only through a reserved business ID. Do not promote media or publication records until human reconciliation. |
+| First live model-backed Company Drive proof | **Selected, not yet run:** exact already-approved/published July public article-radar package `ART-2026-001`, using `SRC-2026-001` (US EPA EMC / 40 CFR Part 60 Appendix F, Procedure 1). Marketing PR #20 pins the package. Its reuse supplies bounded public evidence only; it does not authorize republication. Company OS still has no live model call. | After `AG-007`, AG-008, privacy/cache/FX, canonical gateway/ledger/caps and governed Drive gates, run one measured inactive call that writes only a new pending/draft artifact and records model/cost/evidence. Never reactivate or route around frozen MM-22. |
 | Baserow | Healthy over trusted TLS; `AdaptEng OS / Company Operations` live (8 tables, 107 fields, 10 views). Internal governed adapter live. Leaked token revoked; 14 synthetic proof rows deleted; temporary cleanup token revoked and verified 401. | Off-host export/restore drill; keep token least-privilege and runtime-only. |
-| Postgres `adapteng_ops` | Live. Migration **001** (stable ID allocator) and **004** (lead identity reservation) are applied and used. Repository implementations for 002/003/005/006 are merged. | 002 run-ledger, 003 approval/outbox, 005 AI gateway and 006 integrity remain unapplied; each needs backup + real consumer. A generic hash-only business-ID reservation is being built for non-lead case/content/document retries. |
-| Governed Baserow adapter | Live internal-only on Coolify (`adapteng-baserow-adapter:8080`), bearer-authenticated and field-ownership proven; no public FQDN. Explicit-`business_id` upserts and WEB-002's migration-004 reservation path are replay-safe. A bare COUNTER create with omitted `business_id` intentionally allocates a new ID on every call and must not be retried automatically. | Land/test generic hash-only reservation, then fresh backup + additive migration + adapter redeploy before automated case/content/document creation. Rotate the owner Coolify API token after launch work ends. |
+| Postgres `adapteng_ops` | Live. Migration **001** (stable ID allocator) and **004** (lead identity reservation) are applied and used. Repository-only implementations for 002/003/005/006 are merged but unapplied. Migration **007** (`source_identity_reservation`) is repo-only in open automation-platform PR #80 (`6c8d7830461ba5dcfcd261330f89c30d9b5d8c62`) and is also unapplied. | Apply 002 run-ledger, 003 approval/outbox, 005 AI gateway, 006 integrity and 007 source-identity reservation only after review, fresh backup and a real consumer; 007 additionally requires adapter redeploy. Until then, automated non-lead case/content/document retries must not omit a stable reserved business ID. |
+| Platform governance evidence | Current live authority remains the evidence in this table: Company Shared Drive and the Baserow skeleton are live; migrations 001/004 are applied; the internal adapter plus AUT-001/WEB-002 are live and proven; n8n Cloud is 89 non-archived / 33 active. A repository-only audit does not override that live evidence. | Still open: GitHub controls below; workflow-to-credential binding isolation and second-admin continuity; base vendor cost/renewal/SLA evidence; media implementation consolidation; and live rollout of repo-only migrations 002/003/005/006/007. |
+| GitHub repository controls | Re-verified 2026-07-27: `main` is **unprotected** in `Ivan-Shyla/adapteng-company-os`, `adapteng-automation-platform`, `ai-dev-loop-control-plane`, `adapteng-marketing`, `adapteng-website` and legacy `PalinaRuban/adapteng`. The five active repositories remain in a personal namespace; company ownership is not evidenced. A minimal protection attempt for Company OS through the GitHub administration API returned 404; **no settings changed and protection is not enabled**. | In each active repository's Settings/Rules, require a PR with 0 required approvals, conversation resolution and linear history; block force-push and deletion; pin no required checks yet. Apply to the five active repositories now and to legacy only after containment. Separately isolate the shared deploy key and deliberately close stale PRs. |
+| Governed Baserow adapter | Live internal-only on Coolify (`adapteng-baserow-adapter:8080`), bearer-authenticated and field-ownership proven; no public FQDN. Explicit-`business_id` upserts and WEB-002's migration-004 reservation path are replay-safe. A bare COUNTER create with omitted `business_id` intentionally allocates a new ID on every call and must not be retried automatically. | Review/merge PR #80, then take a fresh backup, apply migration 007 and redeploy the adapter before automated case/content/document creation. Rotate the owner Coolify API token after launch work ends. |
 | self-hosted n8n | Healthy on `n8n.adapteng.com`; exactly two active governed workflows: AUT-001 Systems Registry and WEB-002 Lead Intake. Both call the internal adapter; WEB-002 passed create/replay/conflict/no-loss E2E. | Live Coolify source still points at `palinaruban-repo-status-review`, not `main`; repoint and verify auto-deploy before wider migration. |
-| n8n Cloud | Still authoritative for most Marketing Machine/Lead Monitor flows and personal JM/EC. Direct API verification after the safety freeze: **89 workflows / 38 active** versus 82 repository exports (14 live-only, 7 repo-only; pre-freeze baseline 42 active). MM-40 contained fabricated fallback/parser facts; version `f753e544` removed them and no-input execution `15197` failed before model. MM-40/MM-41 and downstream MM-42/MM-43 are unpublished with every entry trigger disabled; production execution probes reject them before a run. Historical pages 878/880/882/884/891 are in Trash, related rows are quarantined, cache purge run `30228283077` succeeded and page 891 now returns 404. Eight unattached public JPEG derivatives (media 886–889, 893–896) were then removed in execution `15211`; every REST/file URL returns 404 and Drive originals remain. Version history and archived remediation evidence remain. | Reconcile/export/sanitize inventory first. Keep MM-40..MM-43 frozen; replace them with authenticated corporate Drive/Baserow intake and the governed AI Gateway. Do not big-bang: snapshot → inactive self-hosted shadow → compare → canary → disable cloud twin → 7-day observation. Personal JM/EC require separate credentials/store/budget. |
-| Website | `adapteng.com` live on Cloudways. Governed producer PR remains held to avoid an unsafe automatic live deploy before consumer/cutover gates. | Map producer to WEB-002 only after origin auth, retention, HTTP 409, reconciliation, inactive shadow and rollback proofs. |
-| Media/content | `mm-media-worker` is live/HTTP-healthy, but uses old SA `media-worker@adapteng.iam.gserviceaccount.com`; active MM-01/MM-Visual and the worker still point to personal Drive, while frozen MM-41/MM-42 preserve legacy references only. The legacy chain historically created n8n/WordPress drafts and two duplicate sets of four public CASE-2026-001 JPEGs; pages are contained and all eight public derivatives are now deleted/404, with Drive originals untouched. No canonical corporate Drive draft exists yet. CASE-2026-001 metadata conflicts: Git says redaction resolved, later live Sheet says `needs_redaction_review`; media publication remains blocked. | Deploy the governed Drive bridge with `adapteng-ai-operator`, copy the source without deleting it, reconcile human media/redaction status, then rewire and canary the media/content path. |
-| AI agent | Code-change mode is actively delivering repository work. Business-artifact schemas/envelope/eval and deterministic AI-001 skill are merged, but a production audit reproduced incomplete task-envelope admission, optional external-action safety, accepted approval-like fields and local cap overrun; AG-008 hardening is in progress. Canonical AI Gateway/migration 005 are repo-only; no live model call. EU Vertex `gemini-3.1-flash-lite` non-global price rechecked at $0.275/M input and $1.65/M output (~$0.0121 representative draft). | Land AG-008; corporate source/draft path; AG-007 acceptance; verify Vertex IAM plus ZDR/cache-off/FX; deploy canonical gateway and run inactive measured call. Hard caps stay €0.10/call, €1/day, €10/month. |
+| n8n Cloud | Still authoritative for most Marketing Machine/Lead Monitor flows and personal JM/EC. Direct API verification after the safety freeze: **89 non-archived / 33 active** versus 82 repository exports; drift remains 14 live-only / 7 repo-only. The active-count freeze chain is **42 → 40 → 38 → 37 → 36 → 35 → 34 → 33**. MM-40..MM-43 and live-only `d1SDcRTgMqS9Zvgi` remain unpublished/trigger-disabled; the gateway remains classified as broad-read confidentiality/exfiltration risk to external Claude, not arbitrary write. Additional frozen workflows are unauthenticated email approval router MM-ZH-02 `J5SpIS8Ye8JHViFi`, direct `Approval_Log → Content_Drafts` sync MM-04 `4D9UBruS1ZhLn1pS`, non-idempotent `Publish_Plan` builder MM-05 `o9Lj7F9WbhFSCARq`, and direct `gpt-5-mini` analyzer MM-22 `clPtSQwzze8DHEvp`. MM-22 bypassed the canonical gateway, ledger/caps, AG-008 and governed Company Drive; its Manual/Execute Workflow triggers and model are disabled, it is unpublished, and production execution is rejected. Prior active version `72869463`, freeze draft `28a7ef72` and six historical runs/data are preserved. Manual-mode and production probes for all five newly frozen workflows reject before execution creation, verifying fail-closed behavior. MM-04 execution `15214` read 30 stale smoke approval rows and updated 0; MM-05 execution `15216` found 0 approved drafts. Read-only audit `Q2PmbE2VDffRl1iT` execution `15547` found 179/179 synthetic `Approval_Log` smoke rows, 19/19 `Content_Drafts` still pending, and 0 `Publish_Plan`; no current real draft was promoted. Temporary cleanup workflow `a3luyFSBH9xRELDW` then matched 179 in dry-run `15548`, deleted exactly ids 1–179 in `15549`, and matched 0 in verification `15550`. Both evidence workflows are archived; the 19 pending drafts and empty plan were untouched. `uBVRMTCKwnUG91kU` remains active in its founder-chat-allowlisted media sanitize/log version; only its unpublished `/approve → MM21-24` draft path was disabled, with no active-count change. Historical pages 878/880/882/884/891 remain non-public and public media 886–889/893–896 remain removed, with Drive originals intact. | Keep all frozen paths inactive; never reactivate MM-22 outside the canonical gateway/ledger/caps, AG-008 and governed Company Drive. `Approval_Log` synthetic cleanup is complete and verified; reconcile the untouched 19 pending `Content_Drafts` before canonical migration 003 cutover. Continue one inactive shadow and controlled canary at a time; personal JM/EC require separate credentials/store/budget. |
+| Website | `adapteng.com` is live on Cloudways. At reviewed draft head `b0e3a656cf6659b893810e11a15b9f515527ab79`, website PR #78 implements a randomized `/webhook/web002-lead-<8 lowercase hex>` allowlist, `X-Webhook-Token`, identity-only durable mode-bound outbox, legacy-default flat MM-18 compatibility, transport/5xx retry, 409 terminal identity review and other-4xx terminal configuration/validation handling. The PR remains **draft, unmerged and undeployed**; merge auto-deploys `wp-content/**`. Model-provider legal placeholders remain unpublished. | Keep it draft until an approved window. Store the real URL/token only as encrypted host config, run actual WordPress/Fluent Forms producer T1–T4, atomically switch mode with no dual-write, reconcile for seven days, prove rollback, then retire MM-18 last. Repository tests are not producer/cutover evidence. |
+| Legacy website repository | `PalinaRuban/adapteng` is a personal-account June-2026 WordPress/Azure snapshot: **not active Company OS, not authoritative production and not rollback**. The public site is on the separate nginx/Cloudways path; the legacy Azure hostname no longer resolves and its last workflow failed. Tracked `wp-config.php` exposes DB settings/auth salts; stale repository deployment secret/workflow and the Zoho app password in DB/export require rotation. | Use a separate containment PR to remove tracked `wp-config.php`/deploy workflow and add archive/rotation guards; no history rewrite yet. Retain only theme + brand/license provenance + historical runbook, migrate approved structured knowledge from the live CMS/database, exclude core/plugins/runtime/credentials/PII, and archive only after a fresh encrypted CMS/database/media export and company ownership transfer. |
+| Media/content | `mm-media-worker` is live/HTTP-healthy, but uses old SA `media-worker@adapteng.iam.gserviceaccount.com`; active MM-01/MM-Visual and the worker still point to personal Drive, while frozen MM-41/MM-42 preserve legacy references only. Implementation remains split among the live `adapteng-marketing` worker, n8n Cloud MM workflows and the merged-but-unimported governed consumer. The legacy chain historically created n8n/WordPress drafts and two duplicate sets of four public CASE-2026-001 JPEGs; pages are contained and all eight public derivatives are now deleted/404, with Drive originals untouched. No canonical corporate Drive draft or governed live copy exists. CASE-2026-001 metadata conflicts: Git says redaction resolved, later live Sheet says `needs_redaction_review`; media publication remains blocked. | Name the canonical implementation/owner; review Drive PR-A, then stack PR-B; import the governed consumer; separately approve one source-preserving copy; reconcile human media/redaction status; then rewire and canary the media/content path. |
+| Public perimeter regression | Fresh read-only 2026-07-27 checks: Baserow `/login` 200; unauthenticated table-842 rows API 401; self-hosted n8n `/healthz` 200; media-worker `/healthz` 200; website root 200. WordPress media REST IDs 886–889 and 893–896 remain 404; exact REST requests for pages 878/880/882/884/891 return non-public 401 (trash/private), consistent with the prior public-URL 404 evidence. **No recurrence.** | Keep anonymous API access denied and rerun the perimeter checks after perimeter-affecting deploys; investigate any regression before cutover. |
+| AI agent | **REJECT_LIVE.** Code-change mode is delivering repository work, but control-plane main `affe6ea1e4d522be0df0641e98a08e20a84549ae` has deterministic AG-001/002/003/006/007 only — no business worker, real provider or Drive runtime. The audit reproduced an optional/unvalidated task envelope, completion accepting missing `no_external_action` plus synthetic `approval_id`, and an in-memory `ModelGateway` allowing actual cost above cap and negative remaining budget. AG-008 owns deterministic fixes; canonical AI Gateway/migration 005 remain repo-only and no live model call occurred. Exact proof input `ART-2026-001`/`SRC-2026-001` remains selected and separate from the blocked CASE media path. Official Google docs re-verified `gemini-3.1-flash-lite` as GA in EU multi-region (`eu`, `https://aiplatform.eu.rep.googleapis.com`); Standard non-global rates are $0.275/M text-image-video input, $0.55/M audio input, $0.0275/M cached text input and $1.65/M text output/reasoning ($0.0121 for the 20k+4k reference before FX). | Do not present this as deployed/working AI. Land AG-008, then deploy persistent Postgres cost reservation/reconciliation, the EU Vertex adapter, Drive adapters, orchestration, canonical approval and runtime; ratify `AG-007`, verify Vertex IAM/live endpoint access plus ZDR/cache-off/FX, and keep hard caps at €0.10/call, €1/day and €10/month before the exact inactive proof. |
+| Kraken (external initiative) | **SEPARATE ACTIVE SCOPE.** Read-only audit of active repository HEAD `8160ed85cabe0d20c5ddc4def5c818c3f7a845c3`: healthy 24/7 dry-run, but **NO-GO — edge rejected / OOS not validated**. Canonical status is `AI_HANDOFF.md` plus `CURRENT_STATUS.md`; README status is stale. | Track only the external link, status and risk posture under the §6.2 boundary. No Company OS integration or live action. |
 | Backup/security | Fresh `adapteng_ops` backup exists (2026-07-25 13:31, 35.21 KB, Coolify + owner copy). Baserow token incidents and synthetic rows are closed. | Prove restore in scratch; complete Workspace recovery/MFA; rotate the chat-exposed n8n management key and Coolify API token after launch work; record actual service invoices. |
-| Costs | Self-hosted n8n Community, Baserow Community and current Coolify add €0 software fee; Hetzner infrastructure is paid. Workspace is paid. Cloudways, n8n Cloud, Zoho, GoDaddy and Hetzner are paid/account-specific. AI is pay-as-you-go but has made no runtime call. | Record actual invoices/renewals; public list prices are not accounting truth. Storage Box BX11 remains planned, not evidenced as purchased. |
+| Costs | Self-hosted n8n Community, Baserow Community and current Coolify add €0 software fee; Hetzner infrastructure is paid. Workspace is paid. Cloudways, n8n Cloud, Zoho, GoDaddy and Hetzner are paid/account-specific. AI is pay-as-you-go but has made no runtime call. Actual base cost, renewal/cancellation dates and SLA/support terms are not yet evidenced across the vendor set. | Record invoices, renewal/cancellation dates and SLA/support terms; public list prices are not accounting truth. Storage Box BX11 remains planned, not evidenced as purchased. |
 
 The §13 foundation Definition of Done is not met: the company Drive itself is
 ready, but personal-Drive workflow cutover, first corporate draft, business AI
