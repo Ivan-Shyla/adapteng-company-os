@@ -23,6 +23,17 @@ services:
     status: live
     producer_pr: adapteng-website#78
     producer_status: held-transport-unsafe
+    legacy_snapshot:
+      repository: PalinaRuban/adapteng
+      classification: personal-account June-2026 WordPress/Azure snapshot; no active or authoritative production role
+      active_public_path: separate nginx/Cloudways deployment
+      runtime_evidence: legacy Azure hostname no longer resolves; last deployment workflow failed
+      retain: [custom theme, brand/license provenance, historical runbook]
+      migrate_from_live: structured approved business knowledge from current CMS/database
+      exclude: [WordPress core, plugins, runtime, credentials, PII]
+      security_gap: tracked wp-config.php has DB settings/auth salts; stale repository publish-profile secret/workflow and Zoho app password in DB/export require rotation
+      containment: separate PR removes tracked wp-config.php/deploy workflow and adds archive/rotation guardrails; no history rewrite yet
+      archive_gate: fresh encrypted current CMS/database/media export plus company ownership transfer
     owner: Ivan
     notes: >-
       Changes under wp-content auto-deploy from main. PR #78's body fits WEB-002

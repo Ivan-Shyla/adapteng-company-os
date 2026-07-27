@@ -20,13 +20,20 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   and keep the replacement in the password manager/runtime secret store — not
   Git or chat. Existing encrypted workflow credentials/webhooks do not depend
   on this management key, so rotation should not interrupt AUT-001/WEB-002.
-- [ ] **Retire credentials in legacy `PalinaRuban/adapteng`.** The historical
-  WordPress snapshot tracks `wp-config.php` with database settings/salts and a
-  stale Azure deployment workflow references a publish-profile secret. Confirm
-  production no longer depends on them, rotate DB credentials/WordPress salts/
-  Zoho app password/Azure profile at the providers, remove repository secrets,
-  disable the stale workflow, then archive the repo. A normal commit cannot
-  revoke values already present in Git history.
+- [ ] **Contain and archive legacy `PalinaRuban/adapteng`.** Treat it only as a
+  personal-account June-2026 WordPress/Azure snapshot — not active Company OS,
+  authoritative production or rollback. The live public site is on the separate
+  nginx/Cloudways path; the legacy Azure hostname no longer resolves and its
+  last workflow failed. Rotate DB credentials, WordPress auth salts, the stale
+  repository/Azure publish-profile secret and the Zoho app password present in
+  the DB/export at their providers. Use a **separate containment PR** to remove
+  the currently tracked `wp-config.php` and deploy workflow and add
+  archive/rotation guardrails; do **not** rewrite Git history yet. Retain only
+  the custom theme, brand/license provenance and historical runbook. Migrate
+  structured approved business knowledge from the current live CMS/database;
+  exclude WordPress core/plugins/runtime/credentials/PII. Archive only after a
+  fresh encrypted current CMS/database/media export and company ownership
+  transfer.
 
 ## 🟠 Data hygiene — synthetic test rows
 
