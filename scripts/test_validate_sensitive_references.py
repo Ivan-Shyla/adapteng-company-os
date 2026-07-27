@@ -62,10 +62,10 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
 
     def test_rejects_cleanup_token_in_normal_prose(self) -> None:
         line = (
-            "A normal sentence records the cleanup "
+            "The cleanup "
             + "token `"
-            + "synthetic-prose-secret-1234567890"
-            + "` for owner rotation."
+            + "synthetic-cleanup-token-12345"
+            + "` must be rotated."
         )
         self.assertIn("credential-prose-literal", inspect_line(line))
 
@@ -116,6 +116,7 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
     def test_allows_safe_credential_prose_references(self) -> None:
         safe_values = (
             "[REDACTED]",
+            "<from-secret-manager>",
             "[REDACTED-CREDENTIAL-VALUE]",
             "redacted-token-placeholder",
             "sha256:fingerprint-redacted",
