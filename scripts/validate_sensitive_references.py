@@ -7,9 +7,11 @@ import re
 import subprocess
 import sys
 import unicodedata
+from bisect import bisect_right
 from collections.abc import Iterator
 from dataclasses import dataclass
 from heapq import heappop, heappush
+from itertools import chain
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
@@ -78,6 +80,12 @@ IDENTIFIER_JOIN_CONTROLS = frozenset({"\u200c", "\u200d"})
 IDENTIFIER_CONTINUATION_CATEGORY_PREFIXES = frozenset({"L", "M", "N"})
 IDENTIFIER_CONTINUATION_CATEGORIES = frozenset({"Cf", "Pc"})
 MIN_SENSITIVE_LITERAL_LENGTH = 20
+APOSTROPHE_CONTRACTION_SUFFIXES = frozenset(
+    {"all", "am", "clock", "d", "ll", "m", "re", "s", "t", "ve"}
+)
+LEADING_APOSTROPHE_CONTRACTIONS = frozenset(
+    {"bout", "cause", "em", "round", "til", "till", "tis", "twas"}
+)
 
 
 @dataclass(frozen=True)
@@ -224,7 +232,6 @@ CONTINUATION_LINKER_CATALOG = (
             "on condition that",
             "on the condition that",
             "on the understanding that",
-            "only if",
             "the first time",
             "the instant",
             "the last time",
@@ -232,6 +239,28 @@ CONTINUATION_LINKER_CATALOG = (
             "the moment",
             "the next time",
             "the second",
+        ),
+    ),
+    ContinuationLinkerCategory(
+        "only-family",
+        "reviewed finite restrictive cause, condition, and time family",
+        (
+            "only after",
+            "only as long as",
+            "only because",
+            "only before",
+            "only if",
+            "only in case",
+            "only once",
+            "only provided that",
+            "only providing that",
+            "only since",
+            "only so long as",
+            "only until",
+            "only when",
+            "only whenever",
+            "only where",
+            "only while",
         ),
     ),
     ContinuationLinkerCategory(
@@ -245,15 +274,23 @@ CONTINUATION_LINKER_CATALOG = (
         ("inasmuch as", "insofar as"),
     ),
     ContinuationLinkerCategory(
-        "just-temporal",
-        "supported common just-led temporal family",
-        ("just after", "just as", "just before", "just when"),
+        "just-family",
+        "reviewed finite just-led cause and temporal family",
+        (
+            "just after",
+            "just as",
+            "just because",
+            "just before",
+            "just when",
+            "just while",
+        ),
     ),
     ContinuationLinkerCategory(
         "no-matter-interrogative",
         "complete no-matter interrogative family",
         (
             "no matter how",
+            "no matter if",
             "no matter what",
             "no matter when",
             "no matter where",
@@ -263,6 +300,15 @@ CONTINUATION_LINKER_CATALOG = (
             "no matter whom",
             "no matter whose",
             "no matter why",
+        ),
+    ),
+    ContinuationLinkerCategory(
+        "formal-concession",
+        "reviewed finite notwithstanding concessive family",
+        (
+            "notwithstanding",
+            "notwithstanding that",
+            "notwithstanding the fact that",
         ),
     ),
     ContinuationLinkerCategory(
@@ -411,7 +457,9 @@ class MultiwordContinuationMatch:
 @dataclass(frozen=True)
 class QuoteViews:
     primary_spans: tuple[QuotedSpan, ...]
+    primary_coverage: tuple[tuple[int, int], ...]
     evidence_spans: tuple[QuotedSpan, ...]
+    evidence_coverage: tuple[tuple[int, int], ...]
 
 
 @dataclass(frozen=True)
@@ -516,6 +564,41 @@ def is_intraword_apostrophe(text: str, index: int) -> bool:
     )
 
 
+def is_apostrophe_morphology_opener(text: str, index: int) -> bool:
+    """Recognize finite common morphology only when it could bridge a clause."""
+    suffix_end = index + 1
+    while (
+        suffix_end < len(text)
+        and is_identifier_continuation(text[suffix_end])
+    ):
+        suffix_end += 1
+    suffix = normalize_ascii_linker_word(text[index + 1 : suffix_end])
+    if is_intraword_apostrophe(text, index):
+        return suffix in APOSTROPHE_CONTRACTION_SUFFIXES
+    preceding = text[index - 1] if index else ""
+    return (
+        (not preceding or not is_identifier_continuation(preceding))
+        and suffix in LEADING_APOSTROPHE_CONTRACTIONS
+    )
+
+
+def is_trailing_possessive_apostrophe(text: str, index: int) -> bool:
+    if (
+        index < 2
+        or text[index - 1].casefold() != "s"
+        or not is_apostrophe_identifier_edge(text[index - 2])
+    ):
+        return False
+    following = text[index + 1] if index + 1 < len(text) else ""
+    return (
+        not following
+        or following.isspace()
+        or following in CLAUSE_TERMINATORS
+        or following in CONTINUATION_PUNCTUATION
+        or following in ")]}"
+    )
+
+
 def can_open_delimiter(text: str, index: int, spec: DelimiterSpec) -> bool:
     if index + 1 >= len(text) or text[index + 1].isspace():
         return False
@@ -553,6 +636,19 @@ def make_quoted_span(
         content_end=end,
         delimiter=spec.name,
         priority=spec.priority,
+    )
+
+
+def is_punctuation_bridge_span(text: str, span: QuotedSpan) -> bool:
+    bridge_characters = (
+        CLAUSE_TERMINATORS
+        | CONTINUATION_PUNCTUATION
+        | HORIZONTAL_SPACE
+    )
+    content = text[span.content_start : span.content_end]
+    return bool(content) and all(
+        character in bridge_characters
+        for character in content
     )
 
 
@@ -595,14 +691,72 @@ def select_primary_quote_spans(
     return tuple(primary)
 
 
+def select_single_quote_primary_spans(
+    ordinary: list[QuotedSpan],
+    attached: list[QuotedSpan],
+    attached_evidence_bounds: set[tuple[int, int]],
+) -> tuple[QuotedSpan, ...]:
+    """Give each unescaped apostrophe one deterministic primary role."""
+    candidates = sorted(
+        deduplicate_quote_spans([*ordinary, *attached]),
+        key=lambda span: (span.end, span.start),
+    )
+    if not candidates:
+        return ()
+    ordinary_bounds = {(span.start, span.end) for span in ordinary}
+    ends = [span.end for span in candidates]
+    predecessors = [
+        bisect_right(ends, span.start, 0, index) - 1
+        for index, span in enumerate(candidates)
+    ]
+    scores: list[tuple[int, int, int]] = [(0, 0, 0)]
+    take: list[bool] = [False] * len(candidates)
+    for index, span in enumerate(candidates):
+        bounds = (span.start, span.end)
+        previous_score = scores[predecessors[index] + 1]
+        include = (
+            previous_score[0]
+            + int(bounds in attached_evidence_bounds),
+            previous_score[1] + int(bounds in ordinary_bounds),
+            previous_score[2] + span.content_end - span.content_start,
+        )
+        exclude = scores[index]
+        choose = include > exclude
+        take[index] = choose
+        scores.append(include if choose else exclude)
+
+    selected: list[QuotedSpan] = []
+    index = len(candidates) - 1
+    while index >= 0:
+        if take[index] and scores[index + 1] != scores[index]:
+            selected.append(candidates[index])
+            index = predecessors[index]
+        else:
+            index -= 1
+    return tuple(sorted(selected, key=lambda span: (span.start, span.end)))
+
+
 def collect_quote_views(
     text: str,
     escaped: list[bool],
     metrics: ParserMetrics | None = None,
 ) -> QuoteViews:
     """Collect primary segmentation spans and independent evidence spans."""
+    delimiter_characters = frozenset(
+        character
+        for spec in DELIMITER_SPECS
+        for character in (spec.opener, spec.closer)
+    )
+    escape_aware_delimiter_characters = frozenset(
+        character
+        for spec in DELIMITER_SPECS
+        if spec.escape_aware
+        for character in (spec.opener, spec.closer)
+    )
     newline_prefix = [0] * (len(text) + 1)
     whitespace_prefix = [0] * (len(text) + 1)
+    terminator_prefix = [0] * (len(text) + 1)
+    invalid_single_delimiter_prefix = [0] * (len(text) + 1)
     single_quote_positions: list[int] = []
     for index, character in enumerate(text):
         newline_prefix[index + 1] = newline_prefix[index] + int(
@@ -611,11 +765,26 @@ def collect_quote_views(
         whitespace_prefix[index + 1] = whitespace_prefix[index] + int(
             character.isspace()
         )
+        terminator_prefix[index + 1] = terminator_prefix[index] + int(
+            character in CLAUSE_TERMINATORS
+        )
+        invalid_single_delimiter_prefix[index + 1] = (
+            invalid_single_delimiter_prefix[index]
+            + int(
+                character in delimiter_characters
+                and not (
+                    character in escape_aware_delimiter_characters
+                    and escaped[index]
+                )
+            )
+        )
         if character == "'" and not escaped[index]:
             single_quote_positions.append(index)
 
     evidence_candidates: list[QuotedSpan] = []
     primary_candidates: list[QuotedSpan] = []
+    symmetric_primary_openers: set[tuple[str, int]] = set()
+    symmetric_primary_closers: set[tuple[str, int]] = set()
     for spec in DELIMITER_SPECS:
         if spec.symmetric:
             previous: int | None = None
@@ -633,7 +802,11 @@ def collect_quote_views(
                     continue
                 if (
                     spec.opener == "'"
-                    and is_intraword_apostrophe(text, index)
+                    and (
+                        is_intraword_apostrophe(text, index)
+                        or is_trailing_possessive_apostrophe(text, index)
+                        or is_apostrophe_morphology_opener(text, index)
+                    )
                 ):
                     continue
                 if (
@@ -641,6 +814,11 @@ def collect_quote_views(
                     and can_open_delimiter(text, previous, spec)
                     and can_close_delimiter(text, index, spec)
                     and not has_newline(newline_prefix, previous, index + 1)
+                    and (
+                        spec.opener != "'"
+                        or invalid_single_delimiter_prefix[index]
+                        == invalid_single_delimiter_prefix[previous + 1]
+                    )
                 ):
                     evidence_candidates.append(
                         make_quoted_span(previous, index, spec)
@@ -649,11 +827,31 @@ def collect_quote_views(
                 if primary_opener is None:
                     if can_open_delimiter(text, index, spec):
                         primary_opener = index
+                        symmetric_primary_openers.add((spec.name, index))
                 elif can_close_delimiter(text, index, spec):
-                    primary_candidates.append(
-                        make_quoted_span(primary_opener, index, spec)
+                    valid_primary = (
+                        spec.opener != "'"
+                        or invalid_single_delimiter_prefix[index]
+                        == invalid_single_delimiter_prefix[
+                            primary_opener + 1
+                        ]
                     )
-                    primary_opener = None
+                    if valid_primary:
+                        symmetric_primary_closers.add((spec.name, index))
+                        primary_candidates.append(
+                            make_quoted_span(primary_opener, index, spec)
+                        )
+                        primary_opener = None
+                    else:
+                        primary_opener = (
+                            index
+                            if can_open_delimiter(text, index, spec)
+                            else None
+                        )
+                        if primary_opener is not None:
+                            symmetric_primary_openers.add(
+                                (spec.name, primary_opener)
+                            )
             continue
 
         openers: list[int] = []
@@ -677,60 +875,96 @@ def collect_quote_views(
                     evidence_candidates.append(span)
                     primary_candidates.append(span)
 
+    ordinary_primary_candidates = tuple(primary_candidates)
+    symmetric_delimiters = frozenset(
+        spec.name for spec in DELIMITER_SPECS if spec.symmetric
+    )
+    ordinary_openers = symmetric_primary_openers
+    ordinary_closers = symmetric_primary_closers
+    evidence_candidates = [
+        span
+        for span in evidence_candidates
+        if not (
+            span.delimiter in symmetric_delimiters
+            and (span.delimiter, span.start) in ordinary_closers
+            and (
+                span.delimiter,
+                span.end - 1,
+            )
+            in ordinary_openers
+        )
+    ]
+
     single_quote_spec = DELIMITER_SPECS[2]
     ordinary_single_openers = {
-        span.start
-        for span in primary_candidates
-        if span.delimiter == single_quote_spec.name
+        index
+        for delimiter, index in ordinary_openers
+        if delimiter == single_quote_spec.name
     }
     ordinary_single_closers = {
-        span.end - 1
-        for span in primary_candidates
-        if span.delimiter == single_quote_spec.name
+        index
+        for delimiter, index in ordinary_closers
+        if delimiter == single_quote_spec.name
     }
-    delimiter_characters = frozenset(
-        character
-        for spec in DELIMITER_SPECS
-        for character in (spec.opener, spec.closer)
-    )
+    independent_single_primary = [
+        span
+        for span in evidence_candidates
+        if (
+            span.delimiter == single_quote_spec.name
+            and not is_punctuation_bridge_span(text, span)
+        )
+    ]
     attached_primary_candidates: list[QuotedSpan] = []
+    attached_evidence_bounds: set[tuple[int, int]] = set()
     for opening, closing in zip(
         single_quote_positions,
         single_quote_positions[1:],
     ):
-        if (
-            closing <= opening + 1
-            or whitespace_prefix[closing] != whitespace_prefix[opening + 1]
-        ):
+        if closing <= opening + 1:
             continue
         opening_attached = (
             opening > 0
             and is_apostrophe_identifier_edge(text[opening - 1])
+            and opening + 1 < closing
+            and not text[opening + 1].isspace()
         )
         closing_attached = (
             closing + 1 < len(text)
             and is_apostrophe_identifier_edge(text[closing + 1])
+            and closing > opening + 1
+            and not text[closing - 1].isspace()
         )
-        if not (opening_attached or closing_attached):
-            continue
+        opening_morphology = is_apostrophe_morphology_opener(
+            text,
+            opening,
+        )
         content = text[opening + 1 : closing]
-        if len(content) < MIN_SENSITIVE_LITERAL_LENGTH:
-            continue
         if (
             opening in ordinary_single_closers
             and closing in ordinary_single_openers
         ):
             continue
-        if content and all(
-            character in WRAPPER_MARKERS
-            for character in content
+        if (
+            invalid_single_delimiter_prefix[closing]
+            != invalid_single_delimiter_prefix[opening + 1]
         ):
             continue
-        if any(
-            character in delimiter_characters
-            for character in content
-        ):
-            continue
+        morphology_bridge = (
+            is_trailing_possessive_apostrophe(text, opening)
+            or opening_morphology
+            or (
+                (
+                    is_intraword_apostrophe(text, opening)
+                    or is_trailing_possessive_apostrophe(text, opening)
+                )
+                and (
+                    is_intraword_apostrophe(text, closing)
+                    or is_trailing_possessive_apostrophe(text, closing)
+                )
+                and terminator_prefix[closing]
+                != terminator_prefix[opening + 1]
+            )
+        )
         if not (
             opening_attached
             or can_open_delimiter(text, opening, single_quote_spec)
@@ -742,65 +976,67 @@ def collect_quote_views(
         ):
             continue
         span = make_quoted_span(opening, closing, single_quote_spec)
+        evidence_eligible = (
+            whitespace_prefix[closing] == whitespace_prefix[opening + 1]
+            and len(content) >= MIN_SENSITIVE_LITERAL_LENGTH
+        )
+        # Pairing controls clause segmentation even when the content is too
+        # short or contains whitespace to qualify as literal evidence.
+        if not morphology_bridge or evidence_eligible:
+            attached_primary_candidates.append(span)
+        if not evidence_eligible:
+            continue
         evidence_candidates.append(span)
-        attached_primary_candidates.append(span)
+        attached_evidence_bounds.add((span.start, span.end))
 
-    merged_attached_primary: list[QuotedSpan] = []
-    for span in attached_primary_candidates:
+    ordinary_single_primary = [
+        span
+        for span in ordinary_primary_candidates
         if (
-            merged_attached_primary
-            and span.start < merged_attached_primary[-1].end
-        ):
-            previous = merged_attached_primary[-1]
-            merged_attached_primary[-1] = QuotedSpan(
-                start=previous.start,
-                end=max(previous.end, span.end),
-                content_start=previous.content_start,
-                content_end=max(previous.content_end, span.content_end),
-                delimiter=previous.delimiter,
-                priority=previous.priority,
-            )
-        else:
-            merged_attached_primary.append(span)
-
-    all_single_primary = sorted(
-        (
-            span
-            for span in (
-                *primary_candidates,
-                *merged_attached_primary,
-            )
-            if span.delimiter == single_quote_spec.name
-        ),
-        key=lambda span: (span.start, span.end),
+            span.delimiter == single_quote_spec.name
+            and not is_punctuation_bridge_span(text, span)
+        )
+    ]
+    selected_single_primary = select_single_quote_primary_spans(
+        [*ordinary_single_primary, *independent_single_primary],
+        attached_primary_candidates,
+        attached_evidence_bounds,
     )
-    merged_single_primary: list[QuotedSpan] = []
-    for span in all_single_primary:
-        if (
-            merged_single_primary
-            and span.start < merged_single_primary[-1].end
-        ):
-            previous = merged_single_primary[-1]
-            merged_single_primary[-1] = QuotedSpan(
-                start=previous.start,
-                end=max(previous.end, span.end),
-                content_start=previous.content_start,
-                content_end=max(previous.content_end, span.content_end),
-                delimiter=single_quote_spec.name,
-                priority=single_quote_spec.priority,
-            )
-        else:
-            merged_single_primary.append(span)
     primary_candidates = [
         span
-        for span in primary_candidates
+        for span in ordinary_primary_candidates
         if span.delimiter != single_quote_spec.name
     ]
-    primary_candidates.extend(merged_single_primary)
+    primary_candidates.extend(selected_single_primary)
 
+    evidence_spans = deduplicate_quote_spans(evidence_candidates)
     return QuoteViews(
         primary_spans=select_primary_quote_spans(primary_candidates),
-        evidence_spans=deduplicate_quote_spans(evidence_candidates),
+        primary_coverage=merge_intervals(
+            (span.content_start, span.content_end)
+            for span in chain(
+                (
+                    span
+                    for span in ordinary_primary_candidates
+                    if not (
+                        span.delimiter == single_quote_spec.name
+                        and is_punctuation_bridge_span(text, span)
+                    )
+                ),
+                selected_single_primary,
+            )
+        ),
+        evidence_spans=evidence_spans,
+        evidence_coverage=merge_intervals(
+            (span.start, span.end)
+            for span in evidence_spans
+            if (
+                span.content_end - span.content_start
+                >= MIN_SENSITIVE_LITERAL_LENGTH
+                and whitespace_prefix[span.content_end]
+                == whitespace_prefix[span.content_start]
+            )
+        ),
     )
 
 
@@ -1263,14 +1499,19 @@ def is_terminal_quote_context(
 def build_clause_bounds(
     text: str,
     primary_spans: tuple[QuotedSpan, ...],
+    primary_coverage: tuple[tuple[int, int], ...],
+    evidence_coverage: tuple[tuple[int, int], ...],
     escaped: list[bool],
     metrics: ParserMetrics | None,
 ) -> tuple[tuple[int, int], ...]:
-    """Classify boundaries only from deterministic primary quote coverage."""
+    """Classify boundaries from quote roles plus qualifying evidence coverage."""
     covered = merge_intervals(
-        (span.content_start, span.content_end)
-        for span in primary_spans
+        chain(
+            primary_coverage,
+            evidence_coverage,
+        )
     )
+    covered_starts = [start for start, _end in covered]
     boundaries: set[tuple[int, int]] = set()
     covered_index = 0
     index = 0
@@ -1313,11 +1554,18 @@ def build_clause_bounds(
             if span_index + 1 < len(primary_spans)
             else None
         )
+        coverage_index = bisect_right(covered_starts, span.end) - 1
+        bisects_evidence = (
+            coverage_index >= 0
+            and covered[coverage_index][0] < span.end
+            < covered[coverage_index][1]
+        )
         if (
             punctuation_index >= span.content_start
             and text[punctuation_index] in SENTENCE_FINAL_PUNCTUATION
             and not escaped[punctuation_index]
             and is_terminal_quote_context(text, span, next_span, metrics)
+            and not bisects_evidence
         ):
             boundaries.add((span.end, span.end))
 
@@ -1376,6 +1624,8 @@ def scan_clauses(
     clause_bounds = build_clause_bounds(
         text,
         quote_views.primary_spans,
+        quote_views.primary_coverage,
+        quote_views.evidence_coverage,
         escaped,
         metrics,
     )
