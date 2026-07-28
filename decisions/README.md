@@ -34,6 +34,7 @@ Company OS ADR must never index personal implementation or runtime decisions.
 | ADR | Title | Status |
 |---|---|---|
 | [0001](0001-company-os-is-index-not-implementation.md) | Company OS repo is an index, not an implementation | Accepted |
+| [0002](0002-personal-projects-remain-outside-company-os.md) | Personal projects remain outside Company OS | Accepted |
 
 ## Related platform ADRs (in `adapteng-automation-platform`)
 

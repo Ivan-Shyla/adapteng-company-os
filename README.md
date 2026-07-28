@@ -15,6 +15,8 @@ runtime-дампов и копий реализации из других реп
 делаются через PR и обновляют существующий master-файл, а не создают новый
 параллельный план. Принцип зафиксирован в
 [`decisions/0001-…`](decisions/0001-company-os-is-index-not-implementation.md).
+Граница личных проектов зафиксирована в
+[`decisions/0002-…`](decisions/0002-personal-projects-remain-outside-company-os.md).
 
 ## Структура репозитория (operating structure)
 
