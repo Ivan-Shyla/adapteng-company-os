@@ -6,7 +6,7 @@
 # Personal domains (Job Monitor / English Coach) are out of Company scope (ARCHITECTURE.md §6.3).
 # No secrets: webhook paths and tokens are marked, not printed.
 version: 1
-updated: 2026-07-27
+updated: 2026-07-28
 last_verified_live: 2026-07-27
 live_counts:
   self_hosted: { total: 2, active: 2, drift: none }
@@ -24,6 +24,18 @@ freeze_fail_closed_evidence:
     manual_probe: { result: rejected_before_execution_creation, execution_id: null }
     post_freeze_execution_count: 0
   conclusion: fail-closed freeze verified in both modes
+
+repository_containment_evidence:
+  repository: adapteng-automation-platform
+  pull_request: 85
+  reviewed_head: a88ba7e3f76e6a192ee687ef7d55aa50fc575fc1
+  independent_review: REVIEW_CLEAN
+  merge_method: guarded_squash
+  main_commit: 99f4d88e867cb874cf8821de14ddea1b882b5560
+  merged_at: 2026-07-28T07:26:18Z
+  scope: merged repository documentation and inventory evidence only
+  live_effect: none; verified live counts remain 89 non-archived / 31 active / 58 inactive
+  live_closure: unresolved; authenticated MCP availability and explicit allowlist verification remain owner actions
 
 systemic_mcp_exposure:
   status: unresolved

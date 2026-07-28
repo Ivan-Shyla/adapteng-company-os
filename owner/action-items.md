@@ -32,7 +32,14 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   workflows. Disable instance-level MCP globally or change per-workflow
   availability through a supported UI/API, then verify the effective exposure
   is an explicit allowlist only. Turning **Available in MCP** off does not stop
-  normal webhook, schedule, manual or internal triggers.
+  normal webhook, schedule, manual or internal triggers. Repository containment
+  evidence is merged: automation-platform PR #85 reviewed head
+  `a88ba7e3f76e6a192ee687ef7d55aa50fc575fc1` received independent
+  **REVIEW CLEAN** and was guarded squash-merged as automation `main`
+  `99f4d88e867cb874cf8821de14ddea1b882b5560` at
+  `2026-07-28T07:26:18Z`. Keep this owner action open: that merge did not access
+  n8n, change live availability, verify an authenticated MCP allowlist, or alter
+  the verified **89 non-archived / 31 active / 58 inactive** state.
 - [ ] **Harden live paths before any further freeze decision.** Do not freeze
   MM-18 while recent successful webhooks prove it is the current website lead
   path; retain it until a new immutable review-clean WEB-002 producer head plus

@@ -9,7 +9,7 @@
 #   repo-merged-not-live     - code merged to main, no live deploy/wiring yet
 #   planned                  - designed, not built
 version: 1
-updated: 2026-07-27
+updated: 2026-07-28
 
 services:
   - id: adapteng-website
@@ -191,6 +191,12 @@ services:
       31 active / 58 inactive versus 82 repository exports; drift remains
       14 live-only / 7 repo-only. The safety-freeze chain is
       42 -> 40 -> 38 -> 37 -> 36 -> 35 -> 34 -> 33 -> 31.
+      Automation-platform PR #85 reviewed head
+      a88ba7e3f76e6a192ee687ef7d55aa50fc575fc1 received independent REVIEW CLEAN
+      and was guarded squash-merged to automation main as
+      99f4d88e867cb874cf8821de14ddea1b882b5560 at 2026-07-28T07:26:18Z.
+      This is merged repository evidence only; it does not alter the live
+      89 / 31 / 58 state or prove authenticated MCP/live closure.
       Gateway d1SDcRTgMqS9Zvgi remains frozen for broad-read
       confidentiality/exfiltration risk to external Claude, not arbitrary write.
       MM-ZH-02 J5SpIS8Ye8JHViFi, MM-04 4D9UBruS1ZhLn1pS and MM-05

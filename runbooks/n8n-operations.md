@@ -36,6 +36,15 @@ not change n8n Cloud. The supplied 2026-07-27 live evidence is:
   `1ca9a60e-9c4f-425c-980f-fedc24d85bf2`; they received defense-in-depth node
   disabling with no count effect and prior history remains retained.
 
+Repository evidence is now merged: automation-platform PR #85 exact reviewed
+head `a88ba7e3f76e6a192ee687ef7d55aa50fc575fc1` received independent
+**REVIEW CLEAN** and was guarded squash-merged to automation `main` as
+`99f4d88e867cb874cf8821de14ddea1b882b5560` at
+`2026-07-28T07:26:18Z`. This does not change n8n Cloud. The live state remains
+**89 non-archived / 31 active / 58 inactive**, and authenticated MCP/live
+closure remains unresolved until a supported live availability change and
+explicit allowlist verification are evidenced.
+
 Keep the two latest freezes reversible. Retain MM-Visual's old published version
 for audit and keep its Manual, Telegram and worker nodes disabled. Do not
 reactivate it until a founder/principal allowlist precedes every command and
