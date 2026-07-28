@@ -17,6 +17,7 @@ from scripts.validate_sensitive_references import (
     inspect_line,
     inspect_url,
     is_identifier_continuation,
+    is_malformed_candidate_token,
     match_multiword_continuation,
     normalize_ascii_linker_word,
     read_context_word,
@@ -63,6 +64,55 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
         "just before",
         "just after",
     )
+    REVIEWED_STANDARD_ADDITIONS = (
+        "albeit",
+        "whilst",
+        "seeing that",
+        "such that",
+        "every time",
+        "each time",
+        "the moment",
+        "the minute",
+        "the instant",
+        "the second",
+    )
+    EXACT_SINGLE_FALLBACK_CANDIDATES = {
+        "as": "if",
+        "except": "that",
+        "provided": "that",
+        "providing": "that",
+        "so": "that",
+        "whether": "or",
+    }
+    UNRELATED_UNICODE_GLUE = (
+        ("combining-acute", "\u0301", "Mn"),
+        ("variation-selector", "\ufe0f", "Mn"),
+        ("devanagari-spacing-mark", "\u0903", "Mc"),
+        ("combining-enclosing-circle", "\u20dd", "Me"),
+        ("zero-width-non-joiner", "\u200c", "Cf"),
+        ("zero-width-joiner", "\u200d", "Cf"),
+        ("word-joiner", "\u2060", "Cf"),
+        ("invisible-separator", "\u2063", "Cf"),
+        ("underscore", "_", "Pc"),
+        ("undertie", "\u203f", "Pc"),
+        ("character-tie", "\u2040", "Pc"),
+    )
+    UNICODE_QUOTE_EDGE_CHARACTERS = (
+        ("uppercase-letter", "A", "Lu"),
+        ("lowercase-letter", "a", "Ll"),
+        ("titlecase-letter", "\u01c5", "Lt"),
+        ("other-letter", "\u05d0", "Lo"),
+        ("decimal-number", "7", "Nd"),
+        ("letter-number", "\u2160", "Nl"),
+        ("other-number", "\u00b2", "No"),
+        ("combining-acute", "\u0301", "Mn"),
+        ("devanagari-spacing-mark", "\u0903", "Mc"),
+        ("combining-enclosing-circle", "\u20dd", "Me"),
+        ("connector", "\u203f", "Pc"),
+        ("zero-width-joiner", "\u200d", "Cf"),
+        ("zero-width-non-joiner", "\u200c", "Cf"),
+        ("word-joiner", "\u2060", "Cf"),
+    )
     UNICODE_IDENTIFIER_BOUNDARIES = (
         ("combining-acute", "\u0301", "Mn"),
         ("combining-enclosing-circle", "\u20dd", "Me"),
@@ -100,6 +150,35 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
         self.assertGreaterEqual(len(clauses), 2)
         self.assertEqual(len(prefix), clauses[0].end)
         self.assertEqual([], inspect_line(line))
+
+    def assert_context_outcome(
+        self,
+        context: str,
+        line: str,
+        prefix: str,
+        unsafe_value: str,
+        *,
+        expected_continuation: bool | None = None,
+    ) -> None:
+        first_end, first_word = read_context_word(context, 0)
+        exact_single = (
+            normalize_ascii_linker_word(first_word)
+            in CONTINUATION_WORDS
+        )
+        if expected_continuation is None:
+            expected_continuation = exact_single
+        _index, category, context_value = classify_post_quote_context(
+            context,
+            0,
+        )
+        if expected_continuation:
+            self.assertEqual("continuation-word", category)
+            if exact_single:
+                self.assertEqual(context[:first_end], context_value)
+            self.assert_single_clause_violation(line, unsafe_value)
+        else:
+            self.assertEqual("word", category)
+            self.assert_boundary_after(line, prefix)
 
     def test_rejects_indented_yaml_google_id(self) -> None:
         line = "  folder_" + "id: " + ("A" * 24)
@@ -606,6 +685,9 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
         self.assertTrue(
             {
                 "by the time",
+                "each time",
+                "every time",
+                "if only",
                 "in case",
                 "in order that",
                 "in the event that",
@@ -613,7 +695,24 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                 "on condition that",
                 "on the condition that",
                 "only if",
+                "the instant",
+                "the minute",
+                "the moment",
+                "the second",
             }.issubset(by_category["condition-time"])
+        )
+        self.assertTrue(
+            {"albeit", "whilst"}.issubset(
+                by_category["subordinating-single"]
+            )
+        )
+        self.assertTrue(
+            {"seeing that", "such that"}.issubset(
+                by_category["cause-result"]
+            )
+        )
+        self.assertTrue(
+            set(self.REVIEWED_STANDARD_ADDITIONS).issubset(flattened)
         )
 
     def test_standard_continuation_word_matrix(self) -> None:
@@ -887,6 +986,60 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
             cases,
         )
 
+    def test_reviewed_standard_additions_reproduce_full_matrix(self) -> None:
+        next_value = "Synthetic-standard-addition-subject-1234567890"
+        unsafe_value = "synthetic-standard-addition-unsafe-1234567890"
+        spacings = ("", " ", "\t")
+        catalog = {
+            linker
+            for category in CONTINUATION_LINKER_CATALOG
+            for linker in category.linkers
+        }
+        cases = 0
+        for linker in self.REVIEWED_STANDARD_ADDITIONS:
+            self.assertIn(linker, catalog)
+            for first_name, first_opening, first_closing in self.QUOTE_PAIRS:
+                for punctuation in ".?!":
+                    for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
+                        for (
+                            wrapper_name,
+                            wrapper_opening,
+                            wrapper_closing,
+                        ) in self.NEXT_CONTEXT_WRAPPERS:
+                            for spacing in spacings:
+                                with self.subTest(
+                                    linker=linker,
+                                    first=first_name,
+                                    punctuation=punctuation,
+                                    next=next_name,
+                                    wrapper=wrapper_name,
+                                    spacing=repr(spacing),
+                                ):
+                                    line = (
+                                        "The cleanup token "
+                                        + first_opening
+                                        + "[REDACTED]"
+                                        + punctuation
+                                        + first_closing
+                                        + spacing
+                                        + wrapper_opening
+                                        + next_opening
+                                        + next_value
+                                        + next_closing
+                                        + wrapper_closing
+                                        + spacing
+                                        + linker
+                                        + " later records `"
+                                        + unsafe_value
+                                        + "`"
+                                    )
+                                    self.assert_single_clause_violation(
+                                        line,
+                                        unsafe_value,
+                                    )
+                                    cases += 1
+        self.assertEqual(18_000, cases)
+
     def test_reproduced_linker_partial_forms_stay_standalone(self) -> None:
         malformed_by_linker = {
             "even when": ("even", "evenwhen", "even whenever", "xeven when"),
@@ -1009,7 +1162,12 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
             parts = phrase.split()
             for prefix_length in range(1, len(parts)):
                 partial = " ".join(parts[:prefix_length])
-                expected_continuation = partial in all_linkers
+                first_end, first_word = read_context_word(partial, 0)
+                expected_continuation = (
+                    partial in all_linkers
+                    or normalize_ascii_linker_word(first_word)
+                    in CONTINUATION_WORDS
+                )
                 for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
                     for (
                         wrapper_name,
@@ -1038,13 +1196,13 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                                 + unsafe_value
                                 + "`"
                             )
-                            if expected_continuation:
-                                self.assert_single_clause_violation(
-                                    line,
-                                    unsafe_value,
-                                )
-                            else:
-                                self.assert_boundary_after(line, prefix)
+                            self.assert_context_outcome(
+                                partial,
+                                line,
+                                prefix,
+                                unsafe_value,
+                                expected_continuation=expected_continuation,
+                            )
 
     def test_catalog_glued_prefixed_and_suffixed_forms_are_standalone(
         self,
@@ -1088,7 +1246,12 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                             + unsafe_value
                             + "`"
                         )
-                        self.assert_boundary_after(line, prefix)
+                        self.assert_context_outcome(
+                            malformed,
+                            line,
+                            prefix,
+                            unsafe_value,
+                        )
 
     def test_unicode_identifier_continuation_categories(self) -> None:
         self.assertTrue({"\u200c", "\u200d"}.issubset(
@@ -1144,11 +1307,6 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
         self.assertTrue(cases)
         for linker, malformed in sorted(cases):
             with self.subTest(linker=linker, malformed=malformed):
-                _index, category, _token = classify_post_quote_context(
-                    malformed,
-                    0,
-                )
-                self.assertEqual("word", category)
                 prefix = 'The cleanup token "[REDACTED]."'
                 line = (
                     prefix
@@ -1160,7 +1318,12 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                     + unsafe_value
                     + "`"
                 )
-                self.assert_boundary_after(line, prefix)
+                self.assert_context_outcome(
+                    malformed,
+                    line,
+                    prefix,
+                    unsafe_value,
+                )
 
     def test_single_linker_survives_unrelated_multiword_prefixes(
         self,
@@ -1192,7 +1355,131 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                 )
                 self.assert_single_clause_violation(line, unsafe_value)
 
-    def test_ascii_prefixes_on_multiword_final_tokens_are_standalone(
+    def test_exact_single_fallback_ignores_unrelated_unicode_words(
+        self,
+    ) -> None:
+        next_value = "Synthetic-unrelated-word-subject-1234567890"
+        unsafe_value = "synthetic-unrelated-word-unsafe-1234567890"
+        cases = 0
+        for single, candidate in (
+            self.EXACT_SINGLE_FALLBACK_CANDIDATES.items()
+        ):
+            self.assertIn(single, CONTINUATION_WORDS)
+            for first_name, first_opening, first_closing in self.QUOTE_PAIRS:
+                for punctuation in ".?!":
+                    for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
+                        for (
+                            wrapper_name,
+                            wrapper_opening,
+                            wrapper_closing,
+                        ) in self.SIMPLE_WRAPPERS:
+                            for glue_name, glue, _category in (
+                                self.UNRELATED_UNICODE_GLUE
+                            ):
+                                unrelated_words = (
+                                    candidate + glue + "tail",
+                                    "head" + glue + candidate + glue + "tail",
+                                    "head" + glue + candidate,
+                                )
+                                for position, unrelated in zip(
+                                    ("start", "middle", "end"),
+                                    unrelated_words,
+                                ):
+                                    with self.subTest(
+                                        single=single,
+                                        candidate=candidate,
+                                        first=first_name,
+                                        punctuation=punctuation,
+                                        next=next_name,
+                                        wrapper=wrapper_name,
+                                        glue=glue_name,
+                                        position=position,
+                                    ):
+                                        context = (
+                                            single
+                                            + " "
+                                            + unrelated
+                                            + " later records"
+                                        )
+                                        _index, category, context_value = (
+                                            classify_post_quote_context(
+                                                context,
+                                                0,
+                                            )
+                                        )
+                                        self.assertEqual(
+                                            "continuation-word",
+                                            category,
+                                        )
+                                        self.assertEqual(single, context_value)
+                                        line = (
+                                            "The cleanup token "
+                                            + first_opening
+                                            + "[REDACTED]"
+                                            + punctuation
+                                            + first_closing
+                                            + " "
+                                            + wrapper_opening
+                                            + next_opening
+                                            + next_value
+                                            + next_closing
+                                            + wrapper_closing
+                                            + " "
+                                            + context
+                                            + " `"
+                                            + unsafe_value
+                                            + "`"
+                                        )
+                                        self.assert_single_clause_violation(
+                                            line,
+                                            unsafe_value,
+                                        )
+                                        cases += 1
+        self.assertEqual(59_400, cases)
+
+    def test_malformed_candidate_projection_requires_exact_equivalence(
+        self,
+    ) -> None:
+        for candidate in set(
+            self.EXACT_SINGLE_FALLBACK_CANDIDATES.values()
+        ):
+            for _name, glue, _category in self.UNRELATED_UNICODE_GLUE:
+                genuine_glued = (
+                    glue + candidate,
+                    candidate + glue,
+                    candidate[:1] + glue + candidate[1:],
+                )
+                unrelated = (
+                    candidate + glue + "tail",
+                    "head" + glue + candidate + glue + "tail",
+                    "head" + glue + candidate,
+                )
+                for actual in genuine_glued:
+                    with self.subTest(
+                        candidate=candidate,
+                        actual=actual,
+                        expected="glued",
+                    ):
+                        self.assertTrue(
+                            is_malformed_candidate_token(
+                                actual,
+                                candidate,
+                            )
+                        )
+                for actual in unrelated:
+                    with self.subTest(
+                        candidate=candidate,
+                        actual=actual,
+                        expected="unrelated",
+                    ):
+                        self.assertFalse(
+                            is_malformed_candidate_token(
+                                actual,
+                                candidate,
+                            )
+                        )
+
+    def test_ascii_prefixes_on_multiword_final_tokens_use_single_fallback(
         self,
     ) -> None:
         next_value = "Synthetic-ascii-prefix-subject-1234567890"
@@ -1201,10 +1488,6 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
             parts = phrase.split()
             malformed = " ".join(parts[:-1] + ["x" + parts[-1]])
             with self.subTest(phrase=phrase, malformed=malformed):
-                _index, category, _context_value = (
-                    classify_post_quote_context(malformed, 0)
-                )
-                self.assertEqual("word", category)
                 prefix = 'The cleanup token "[REDACTED]."'
                 line = (
                     prefix
@@ -1216,7 +1499,19 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                     + unsafe_value
                     + "`"
                 )
-                self.assert_boundary_after(line, prefix)
+                self.assertIsNone(
+                    match_multiword_continuation(
+                        malformed,
+                        malformed.index(" "),
+                        malformed.partition(" ")[0],
+                    )
+                )
+                self.assert_context_outcome(
+                    malformed,
+                    line,
+                    prefix,
+                    unsafe_value,
+                )
 
     def test_composed_unicode_and_ascii_glue_is_standalone(self) -> None:
         next_value = "Synthetic-composed-glue-subject-1234567890"
@@ -1241,10 +1536,6 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
             for malformed_word in sorted(malformed_words):
                 malformed = " ".join(parts[:-1] + [malformed_word])
                 with self.subTest(phrase=phrase, malformed=malformed):
-                    _index, category, _context_value = (
-                        classify_post_quote_context(malformed, 0)
-                    )
-                    self.assertEqual("word", category)
                     prefix = 'The cleanup token "[REDACTED]."'
                     line = (
                         prefix
@@ -1256,7 +1547,19 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                         + unsafe_value
                         + "`"
                     )
-                    self.assert_boundary_after(line, prefix)
+                    self.assertIsNone(
+                        match_multiword_continuation(
+                            malformed,
+                            malformed.index(" "),
+                            malformed.partition(" ")[0],
+                        )
+                    )
+                    self.assert_context_outcome(
+                        malformed,
+                        line,
+                        prefix,
+                        unsafe_value,
+                    )
 
     def test_unicode_identifier_boundaries_reject_every_linker(
         self,
@@ -1300,13 +1603,6 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                         self.assertEqual(len(isolated_word), word_end)
                         self.assertEqual(isolated_word, context_word)
 
-                        post_index, post_category, post_token = (
-                            classify_post_quote_context(malformed, 0)
-                        )
-                        self.assertEqual(0, post_index)
-                        self.assertEqual("word", post_category)
-                        self.assertIn(boundary, post_token)
-
                         if " " in linker:
                             malformed_first_end = malformed.find(" ")
                             malformed_first = malformed[:malformed_first_end]
@@ -1329,7 +1625,12 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                             + unsafe_value
                             + "`"
                         )
-                        self.assert_boundary_after(line, prefix)
+                        self.assert_context_outcome(
+                            malformed,
+                            line,
+                            prefix,
+                            unsafe_value,
+                        )
 
     def test_unicode_glue_rejects_every_multiword_token(self) -> None:
         next_value = "Synthetic-every-token-glue-subject-1234567890"
@@ -1355,10 +1656,6 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                             boundary=boundary_name,
                             position=position,
                         ):
-                            _index, category, _context_value = (
-                                classify_post_quote_context(malformed, 0)
-                            )
-                            self.assertEqual("word", category)
                             prefix = 'The cleanup token "[REDACTED]."'
                             line = (
                                 prefix
@@ -1370,7 +1667,19 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                                 + unsafe_value
                                 + "`"
                             )
-                            self.assert_boundary_after(line, prefix)
+                            self.assertIsNone(
+                                match_multiword_continuation(
+                                    malformed,
+                                    malformed.index(" "),
+                                    malformed.partition(" ")[0],
+                                )
+                            )
+                            self.assert_context_outcome(
+                                malformed,
+                                line,
+                                prefix,
+                                unsafe_value,
+                            )
                             cases += 1
         self.assertEqual(
             sum(
@@ -1476,6 +1785,354 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
                                     + "."
                                 )
                                 self.assert_boundary_after(line, prefix)
+
+    def test_unicode_identifier_attached_next_quote_prefix_matrix(
+        self,
+    ) -> None:
+        next_value = "Synthetic-attached-prefix-subject-1234567890"
+        unsafe_value = "synthetic-attached-prefix-unsafe-1234567890"
+        cases = 0
+        for edge_name, edge, expected_category in (
+            self.UNICODE_QUOTE_EDGE_CHARACTERS
+        ):
+            self.assertEqual(expected_category, unicodedata.category(edge))
+            self.assertTrue(is_identifier_continuation(edge))
+            for first_name, first_opening, first_closing in self.QUOTE_PAIRS:
+                for punctuation in ".?!":
+                    for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
+                        for (
+                            wrapper_name,
+                            wrapper_opening,
+                            wrapper_closing,
+                        ) in self.NEXT_CONTEXT_WRAPPERS:
+                            with self.subTest(
+                                edge=edge_name,
+                                first=first_name,
+                                punctuation=punctuation,
+                                next=next_name,
+                                wrapper=wrapper_name,
+                            ):
+                                line = (
+                                    "The cleanup token "
+                                    + first_opening
+                                    + "[REDACTED]"
+                                    + punctuation
+                                    + first_closing
+                                    + edge
+                                    + wrapper_opening
+                                    + next_opening
+                                    + next_value
+                                    + next_closing
+                                    + wrapper_closing
+                                    + " remains and later `"
+                                    + unsafe_value
+                                    + "`"
+                                )
+                                self.assert_single_clause_violation(
+                                    line,
+                                    unsafe_value,
+                                )
+                                cases += 1
+        self.assertEqual(
+            len(self.UNICODE_QUOTE_EDGE_CHARACTERS)
+            * len(self.QUOTE_PAIRS)
+            * 3
+            * len(self.QUOTE_PAIRS)
+            * len(self.NEXT_CONTEXT_WRAPPERS),
+            cases,
+        )
+
+    def test_unicode_identifier_attached_next_quote_suffix_matrix(
+        self,
+    ) -> None:
+        next_value = "Synthetic-attached-suffix-subject-1234567890"
+        unsafe_value = "synthetic-attached-suffix-unsafe-1234567890"
+        cases = 0
+        for edge_name, edge, expected_category in (
+            self.UNICODE_QUOTE_EDGE_CHARACTERS
+        ):
+            self.assertEqual(expected_category, unicodedata.category(edge))
+            self.assertTrue(is_identifier_continuation(edge))
+            for first_name, first_opening, first_closing in self.QUOTE_PAIRS:
+                for punctuation in ".?!":
+                    for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
+                        for (
+                            wrapper_name,
+                            wrapper_opening,
+                            wrapper_closing,
+                        ) in self.NEXT_CONTEXT_WRAPPERS:
+                            with self.subTest(
+                                edge=edge_name,
+                                first=first_name,
+                                punctuation=punctuation,
+                                next=next_name,
+                                wrapper=wrapper_name,
+                            ):
+                                line = (
+                                    "The cleanup token "
+                                    + first_opening
+                                    + "[REDACTED]"
+                                    + punctuation
+                                    + first_closing
+                                    + " "
+                                    + wrapper_opening
+                                    + next_opening
+                                    + next_value
+                                    + next_closing
+                                    + wrapper_closing
+                                    + edge
+                                    + " remains and later `"
+                                    + unsafe_value
+                                    + "`"
+                                )
+                                self.assert_single_clause_violation(
+                                    line,
+                                    unsafe_value,
+                                )
+                                cases += 1
+        self.assertEqual(
+            len(self.UNICODE_QUOTE_EDGE_CHARACTERS)
+            * len(self.QUOTE_PAIRS)
+            * 3
+            * len(self.QUOTE_PAIRS)
+            * len(self.NEXT_CONTEXT_WRAPPERS),
+            cases,
+        )
+
+    def test_next_quote_edges_remain_terminal_when_detached(self) -> None:
+        next_value = "Synthetic-detached-edge-subject-1234567890"
+        for next_name, next_opening, next_closing in self.QUOTE_PAIRS:
+            for (
+                wrapper_name,
+                wrapper_opening,
+                wrapper_closing,
+            ) in self.NEXT_CONTEXT_WRAPPERS:
+                for prefix_spacing, suffix in (
+                    (" ", " remains."),
+                    ("\t", "\tremains."),
+                    ("", "."),
+                ):
+                    with self.subTest(
+                        next=next_name,
+                        wrapper=wrapper_name,
+                        prefix_spacing=repr(prefix_spacing),
+                        suffix=repr(suffix),
+                    ):
+                        prefix = 'The cleanup token "[REDACTED]."'
+                        line = (
+                            prefix
+                            + prefix_spacing
+                            + wrapper_opening
+                            + next_opening
+                            + next_value
+                            + next_closing
+                            + wrapper_closing
+                            + suffix
+                        )
+                        self.assert_boundary_after(line, prefix)
+
+    def test_possessives_and_contractions_are_not_attached_quotes(
+        self,
+    ) -> None:
+        audit_value = "synthetic-detached-reference-1234567890"
+        for ordinary_context in (
+            "Alice's report records ",
+            "Alice's owners' report records ",
+            "Alice\u0301's report records ",
+            "The reviewer isn't recording ",
+            "Owners' reports record ",
+        ):
+            for audit_name, audit_opening, audit_closing in (
+                self.QUOTE_PAIRS
+            ):
+                with self.subTest(
+                    context=ordinary_context,
+                    audit=audit_name,
+                ):
+                    prefix = 'The cleanup token "[REDACTED]."'
+                    line = (
+                        prefix
+                        + " "
+                        + ordinary_context
+                        + audit_opening
+                        + audit_value
+                        + audit_closing
+                        + "."
+                    )
+                    self.assert_boundary_after(line, prefix)
+
+    def test_identifier_attached_literals_are_direct_evidence(self) -> None:
+        for edge_name, edge, _category in (
+            self.UNICODE_QUOTE_EDGE_CHARACTERS
+        ):
+            for quote_name, opening, closing in self.QUOTE_PAIRS:
+                for attachment in ("prefix", "suffix"):
+                    literal = (
+                        "synthetic-attached-"
+                        + attachment
+                        + "-value-1234567890"
+                    )
+                    quoted = opening + literal + closing
+                    attached = (
+                        edge + quoted
+                        if attachment == "prefix"
+                        else quoted + edge
+                    )
+                    with self.subTest(
+                        edge=edge_name,
+                        quote=quote_name,
+                        attachment=attachment,
+                    ):
+                        line = "The cleanup token " + attached
+                        self.assertEqual(
+                            [(0, len(line))],
+                            [
+                                (clause.start, clause.end)
+                                for clause in scan_clauses(line)
+                            ],
+                        )
+                        self.assertIn(
+                            literal,
+                            list(credential_prose_literals(line)),
+                        )
+                        self.assertIn(
+                            "credential-prose-literal",
+                            inspect_line(line),
+                        )
+
+    def test_possessive_before_attached_literal_does_not_shadow_it(
+        self,
+    ) -> None:
+        for literal in (
+            "synthetic-attached-dotted.value.1234567890",
+            "+actual.secret.1234567890",
+        ):
+            with self.subTest(literal=literal):
+                line = "The cleanup token O'Brien'" + literal + "'"
+                self.assertEqual(
+                    [(0, len(line))],
+                    [
+                        (clause.start, clause.end)
+                        for clause in scan_clauses(line)
+                    ],
+                )
+                self.assertIn(
+                    literal,
+                    list(credential_prose_literals(line)),
+                )
+                self.assertIn(
+                    "credential-prose-literal",
+                    inspect_line(line),
+                )
+
+    def test_apostrophe_bridge_does_not_shadow_wrapped_secret(
+        self,
+    ) -> None:
+        literal = "+actual.secret.12345678901234567890"
+        for wrapper_name, wrapper_opening, wrapper_closing in (
+            self.SIMPLE_WRAPPERS[1:]
+        ):
+            with self.subTest(wrapper=wrapper_name):
+                line = (
+                    "The cleanup token Alice's"
+                    + wrapper_opening
+                    + "'"
+                    + literal
+                    + "'"
+                    + wrapper_closing
+                )
+                self.assertEqual(
+                    [(0, len(line))],
+                    [
+                        (clause.start, clause.end)
+                        for clause in scan_clauses(line)
+                    ],
+                )
+                self.assertIn(
+                    literal,
+                    list(credential_prose_literals(line)),
+                )
+                self.assertIn(
+                    "credential-prose-literal",
+                    inspect_line(line),
+                )
+
+    def test_attached_recovery_preserves_existing_primary_coverage(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "The cleanup token 'prefix'\""
+                + "synthetic'.secret-1234567890"
+                + "\"",
+                "synthetic'.secret-1234567890",
+                True,
+            ),
+            (
+                "The cleanup token 'Alice's report'"
+                + "+actual.secret.1234567890'",
+                "+actual.secret.1234567890",
+                True,
+            ),
+            (
+                "The cleanup token '[REDACTED]'.'"
+                + "synthetic-lowercase-next-label-1234567890"
+                + "' remains",
+                "",
+                False,
+            ),
+        )
+        for line, literal, should_reject in cases:
+            with self.subTest(line=line):
+                if should_reject:
+                    self.assertIn(
+                        literal,
+                        list(credential_prose_literals(line)),
+                    )
+                    self.assertIn(
+                        "credential-prose-literal",
+                        inspect_line(line),
+                    )
+                else:
+                    clauses = scan_clauses(line)
+                    self.assertGreaterEqual(len(clauses), 2)
+                    self.assertEqual([], inspect_line(line))
+
+    def test_attached_recovery_rejects_cross_syntax_bridges(self) -> None:
+        cross_delimiter_literal = "def'ghi.secret.1234567890"
+        cross_delimiter = (
+            "The cleanup token x'placeholder-xxxxxxxx\""
+            + cross_delimiter_literal
+            + "\""
+        )
+        self.assertIn(
+            cross_delimiter_literal,
+            list(credential_prose_literals(cross_delimiter)),
+        )
+        self.assertIn(
+            "credential-prose-literal",
+            inspect_line(cross_delimiter),
+        )
+
+        punctuation_bridge = (
+            "The cleanup token '[REDACTED]'"
+            + ("." * 20)
+            + "'synthetic-unrelated-secret-1234567890'"
+        )
+        self.assertGreaterEqual(
+            len(scan_clauses(punctuation_bridge)),
+            2,
+        )
+        self.assertEqual([], inspect_line(punctuation_bridge))
+
+        wrapper_bridge = (
+            "The cleanup token "
+            + ("(" * 20)
+            + "'safe'"
+            + (")" * 20)
+            + "'next'"
+        )
+        self.assertEqual([], inspect_line(wrapper_bridge))
 
     def test_balanced_emphasis_next_sentence_matrix(self) -> None:
         next_value = "Synthetic-emphasized-next-sentence-1234567890"

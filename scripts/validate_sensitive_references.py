@@ -77,6 +77,7 @@ CONTINUATION_PUNCTUATION = frozenset(",:-\u2010\u2011\u2012\u2013\u2014\u2015")
 IDENTIFIER_JOIN_CONTROLS = frozenset({"\u200c", "\u200d"})
 IDENTIFIER_CONTINUATION_CATEGORY_PREFIXES = frozenset({"L", "M", "N"})
 IDENTIFIER_CONTINUATION_CATEGORIES = frozenset({"Cf", "Pc"})
+MIN_SENSITIVE_LITERAL_LENGTH = 20
 
 
 @dataclass(frozen=True)
@@ -86,9 +87,11 @@ class ContinuationLinkerCategory:
     linkers: tuple[str, ...]
 
 
-# Only this reviewed finite catalog keeps credential scope open; treating every
-# lowercase predicate as a linker would merge otherwise independent sentences.
-# It is also the sole source for matcher and positive-test generation.
+# This reviewed finite catalog is the supported inventory of common modern
+# English clause linkers. It is intentionally explicit rather than claiming
+# linguistic completeness: treating every lowercase predicate as a linker
+# would merge otherwise independent sentences. The table is the sole source
+# for matcher and positive-test generation.
 CONTINUATION_LINKER_CATALOG = (
     ContinuationLinkerCategory(
         "coordinating",
@@ -100,6 +103,7 @@ CONTINUATION_LINKER_CATALOG = (
         "common single-token subordinating conjunctions",
         (
             "after",
+            "albeit",
             "although",
             "as",
             "because",
@@ -121,6 +125,7 @@ CONTINUATION_LINKER_CATALOG = (
             "whereas",
             "whether",
             "while",
+            "whilst",
         ),
     ),
     ContinuationLinkerCategory(
@@ -157,6 +162,7 @@ CONTINUATION_LINKER_CATALOG = (
             "as if",
             "as long as",
             "as much as",
+            "as often as",
             "as soon as",
             "as though",
         ),
@@ -168,12 +174,15 @@ CONTINUATION_LINKER_CATALOG = (
             "assuming that",
             "considering that",
             "given that",
+            "granted that",
+            "granting that",
+            "presuming that",
             "supposing that",
         ),
     ),
     ContinuationLinkerCategory(
         "even-family",
-        "complete common even-led temporal and concessive family",
+        "supported common even-led temporal and concessive family",
         (
             "even after",
             "even as",
@@ -187,21 +196,48 @@ CONTINUATION_LINKER_CATALOG = (
     ContinuationLinkerCategory(
         "exception-condition",
         "bounded exception and condition phrases",
-        ("except that", "provided that", "providing that"),
+        (
+            "except if",
+            "except that",
+            "except when",
+            "except where",
+            "provided that",
+            "providing that",
+            "save that",
+        ),
     ),
     ContinuationLinkerCategory(
         "condition-time",
         "common condition and time multiword subordinators",
         (
+            "any time",
             "by the time",
+            "each time",
+            "every time",
+            "if and when",
+            "if only",
             "in case",
             "in order that",
             "in the event that",
             "now that",
+            "on the assumption that",
             "on condition that",
             "on the condition that",
+            "on the understanding that",
             "only if",
+            "the first time",
+            "the instant",
+            "the last time",
+            "the minute",
+            "the moment",
+            "the next time",
+            "the second",
         ),
+    ),
+    ContinuationLinkerCategory(
+        "cause-result",
+        "common finite cause, content, concession, and result linkers",
+        ("for all that", "in that", "seeing that", "such that"),
     ),
     ContinuationLinkerCategory(
         "formal-causal",
@@ -210,7 +246,7 @@ CONTINUATION_LINKER_CATALOG = (
     ),
     ContinuationLinkerCategory(
         "just-temporal",
-        "complete common just-led temporal family",
+        "supported common just-led temporal family",
         ("just after", "just as", "just before", "just when"),
     ),
     ContinuationLinkerCategory(
@@ -464,10 +500,30 @@ def has_newline(prefix: list[int], start: int, end: int) -> bool:
     return prefix[end] != prefix[start]
 
 
+def is_apostrophe_identifier_edge(character: str) -> bool:
+    return (
+        character not in "*_"
+        and is_identifier_continuation(character)
+    )
+
+
+def is_intraword_apostrophe(text: str, index: int) -> bool:
+    return (
+        index > 0
+        and index + 1 < len(text)
+        and is_apostrophe_identifier_edge(text[index - 1])
+        and is_apostrophe_identifier_edge(text[index + 1])
+    )
+
+
 def can_open_delimiter(text: str, index: int, spec: DelimiterSpec) -> bool:
     if index + 1 >= len(text) or text[index + 1].isspace():
         return False
-    if spec.opener == "'" and index > 0 and text[index - 1].isalnum():
+    if (
+        spec.opener == "'"
+        and index > 0
+        and is_apostrophe_identifier_edge(text[index - 1])
+    ):
         return False
     return True
 
@@ -478,8 +534,8 @@ def can_close_delimiter(text: str, index: int, spec: DelimiterSpec) -> bool:
     if (
         spec.closer == "'"
         and index + 1 < len(text)
-        and text[index - 1].isalnum()
-        and text[index + 1].isalnum()
+        and is_apostrophe_identifier_edge(text[index - 1])
+        and is_apostrophe_identifier_edge(text[index + 1])
     ):
         return False
     return True
@@ -546,10 +602,17 @@ def collect_quote_views(
 ) -> QuoteViews:
     """Collect primary segmentation spans and independent evidence spans."""
     newline_prefix = [0] * (len(text) + 1)
+    whitespace_prefix = [0] * (len(text) + 1)
+    single_quote_positions: list[int] = []
     for index, character in enumerate(text):
         newline_prefix[index + 1] = newline_prefix[index] + int(
             character in LINE_TERMINATORS
         )
+        whitespace_prefix[index + 1] = whitespace_prefix[index] + int(
+            character.isspace()
+        )
+        if character == "'" and not escaped[index]:
+            single_quote_positions.append(index)
 
     evidence_candidates: list[QuotedSpan] = []
     primary_candidates: list[QuotedSpan] = []
@@ -570,10 +633,7 @@ def collect_quote_views(
                     continue
                 if (
                     spec.opener == "'"
-                    and index > 0
-                    and index + 1 < len(text)
-                    and text[index - 1].isalnum()
-                    and text[index + 1].isalnum()
+                    and is_intraword_apostrophe(text, index)
                 ):
                     continue
                 if (
@@ -616,6 +676,127 @@ def collect_quote_views(
                     span = make_quoted_span(start, index, spec)
                     evidence_candidates.append(span)
                     primary_candidates.append(span)
+
+    single_quote_spec = DELIMITER_SPECS[2]
+    ordinary_single_openers = {
+        span.start
+        for span in primary_candidates
+        if span.delimiter == single_quote_spec.name
+    }
+    ordinary_single_closers = {
+        span.end - 1
+        for span in primary_candidates
+        if span.delimiter == single_quote_spec.name
+    }
+    delimiter_characters = frozenset(
+        character
+        for spec in DELIMITER_SPECS
+        for character in (spec.opener, spec.closer)
+    )
+    attached_primary_candidates: list[QuotedSpan] = []
+    for opening, closing in zip(
+        single_quote_positions,
+        single_quote_positions[1:],
+    ):
+        if (
+            closing <= opening + 1
+            or whitespace_prefix[closing] != whitespace_prefix[opening + 1]
+        ):
+            continue
+        opening_attached = (
+            opening > 0
+            and is_apostrophe_identifier_edge(text[opening - 1])
+        )
+        closing_attached = (
+            closing + 1 < len(text)
+            and is_apostrophe_identifier_edge(text[closing + 1])
+        )
+        if not (opening_attached or closing_attached):
+            continue
+        content = text[opening + 1 : closing]
+        if len(content) < MIN_SENSITIVE_LITERAL_LENGTH:
+            continue
+        if (
+            opening in ordinary_single_closers
+            and closing in ordinary_single_openers
+        ):
+            continue
+        if content and all(
+            character in WRAPPER_MARKERS
+            for character in content
+        ):
+            continue
+        if any(
+            character in delimiter_characters
+            for character in content
+        ):
+            continue
+        if not (
+            opening_attached
+            or can_open_delimiter(text, opening, single_quote_spec)
+        ):
+            continue
+        if not (
+            closing_attached
+            or can_close_delimiter(text, closing, single_quote_spec)
+        ):
+            continue
+        span = make_quoted_span(opening, closing, single_quote_spec)
+        evidence_candidates.append(span)
+        attached_primary_candidates.append(span)
+
+    merged_attached_primary: list[QuotedSpan] = []
+    for span in attached_primary_candidates:
+        if (
+            merged_attached_primary
+            and span.start < merged_attached_primary[-1].end
+        ):
+            previous = merged_attached_primary[-1]
+            merged_attached_primary[-1] = QuotedSpan(
+                start=previous.start,
+                end=max(previous.end, span.end),
+                content_start=previous.content_start,
+                content_end=max(previous.content_end, span.content_end),
+                delimiter=previous.delimiter,
+                priority=previous.priority,
+            )
+        else:
+            merged_attached_primary.append(span)
+
+    all_single_primary = sorted(
+        (
+            span
+            for span in (
+                *primary_candidates,
+                *merged_attached_primary,
+            )
+            if span.delimiter == single_quote_spec.name
+        ),
+        key=lambda span: (span.start, span.end),
+    )
+    merged_single_primary: list[QuotedSpan] = []
+    for span in all_single_primary:
+        if (
+            merged_single_primary
+            and span.start < merged_single_primary[-1].end
+        ):
+            previous = merged_single_primary[-1]
+            merged_single_primary[-1] = QuotedSpan(
+                start=previous.start,
+                end=max(previous.end, span.end),
+                content_start=previous.content_start,
+                content_end=max(previous.content_end, span.content_end),
+                delimiter=single_quote_spec.name,
+                priority=single_quote_spec.priority,
+            )
+        else:
+            merged_single_primary.append(span)
+    primary_candidates = [
+        span
+        for span in primary_candidates
+        if span.delimiter != single_quote_spec.name
+    ]
+    primary_candidates.extend(merged_single_primary)
 
     return QuoteViews(
         primary_spans=select_primary_quote_spans(primary_candidates),
@@ -701,42 +882,65 @@ def normalize_ascii_linker_word(word: str) -> str | None:
     return word.lower()
 
 
-def ascii_linker_projection(word: str) -> str:
+def is_identifier_glue(character: str) -> bool:
+    if not is_identifier_continuation(character):
+        return False
+    category = unicodedata.category(character)
+    return (
+        character == "-"
+        or character in IDENTIFIER_JOIN_CONTROLS
+        or category[0] == "M"
+        or category in IDENTIFIER_CONTINUATION_CATEGORIES
+    )
+
+
+def candidate_token_projection(
+    actual: str,
+    *,
+    compatibility: bool,
+) -> str:
+    value = (
+        unicodedata.normalize("NFKC", actual)
+        if compatibility
+        else actual
+    )
     return "".join(
-        character.lower()
-        for character in word
-        if "A" <= character <= "Z" or "a" <= character <= "z"
+        character
+        for character in value.casefold()
+        if not is_identifier_glue(character)
     )
 
 
 def is_malformed_candidate_token(actual: str, expected: str) -> bool:
-    folded = actual.casefold()
-    projection = ascii_linker_projection(folded)
-    compatibility_projection = ascii_linker_projection(
-        unicodedata.normalize("NFKC", actual).casefold()
-    )
-    if any(ord(character) > 127 for character in actual):
-        return (
-            expected in projection
-            or expected in compatibility_projection
-        )
+    if normalize_ascii_linker_word(actual) == expected:
+        return False
+    return expected in {
+        candidate_token_projection(actual, compatibility=False),
+        candidate_token_projection(actual, compatibility=True),
+    }
+
+
+def next_quote_opening_has_identifier_attachment(
+    text: str,
+    current_span: QuotedSpan,
+    next_span: QuotedSpan | None,
+) -> bool:
+    if next_span is None:
+        return False
+    preceding = next_span.start - 1
     if (
-        len(projection) == len(expected) + 1
-        and (
-            projection.startswith(expected)
-            or projection.endswith(expected)
-        )
+        preceding >= current_span.end
+        and is_identifier_continuation(text[preceding])
     ):
         return True
-    lowered = actual.lower()
+    while (
+        preceding >= current_span.end
+        and text[preceding] in OPENING_WRAPPER_MARKERS
+    ):
+        preceding -= 1
     return (
-        lowered.startswith(expected)
-        and len(lowered) > len(expected)
-        and not lowered[len(expected)].isalpha()
-    ) or (
-        lowered.endswith(expected)
-        and len(lowered) > len(expected)
-        and not lowered[-len(expected) - 1].isalpha()
+        preceding >= current_span.end
+        and is_identifier_continuation(text[preceding])
     )
 
 
@@ -832,19 +1036,20 @@ def classify_post_quote_context(
             "continuation-word"
             if (
                 phrase_match.end is not None
-                or (
-                    normalized_word in CONTINUATION_WORDS
-                    and not phrase_match.malformed_prefix
-                )
+                or normalized_word in CONTINUATION_WORDS
             )
             else "word"
         )
         token_end = (
             phrase_match.end
             or (
-                phrase_match.examined_end
-                if phrase_match.malformed_prefix
-                else end
+                end
+                if normalized_word in CONTINUATION_WORDS
+                else (
+                    phrase_match.examined_end
+                    if phrase_match.malformed_prefix
+                    else end
+                )
             )
         )
         return index, category, text[index:token_end]
@@ -892,10 +1097,7 @@ def scan_multiword_continuation(
             examined_end = max(examined_end, cursor)
             actual_normalized = normalize_ascii_linker_word(actual)
             if actual_normalized != expected:
-                if (
-                    matched_parts > 1
-                    or is_malformed_candidate_token(actual, expected)
-                ):
+                if is_malformed_candidate_token(actual, expected):
                     malformed_prefix = True
                 break
             matched_parts += 1
@@ -966,10 +1168,20 @@ def parse_next_quoted_context(
     if closing_end < len(text) and text[closing_end] in WRAPPER_MARKERS:
         return None
 
-    post_index, post_category, post_token = classify_post_quote_context(
-        text,
-        closing_end,
-    )
+    if (
+        closing_end < len(text)
+        and is_identifier_continuation(text[closing_end])
+    ):
+        post_index = closing_end
+        _post_end, post_token = read_context_word(text, closing_end)
+        post_category = "attached-identifier"
+    else:
+        post_index, post_category, post_token = (
+            classify_post_quote_context(
+                text,
+                closing_end,
+            )
+        )
     if metrics is not None:
         metrics.context_steps += (
             post_index - closing_end + max(1, len(post_token))
@@ -1023,6 +1235,12 @@ def is_terminal_quote_context(
         metrics,
     )
     if next_context is None:
+        if next_quote_opening_has_identifier_attachment(
+            text,
+            span,
+            next_span,
+        ):
+            return False
         # A wrapper-like run that failed exact parsing/flanking is ambiguous.
         # Keeping the clause open is the security-conservative outcome.
         if (
@@ -1290,7 +1508,10 @@ def inspect_line(
             violations.append("credential-name-literal")
 
     for value in credential_prose_literals(line):
-        if len(value) >= 20 and not allowed_placeholder(value):
+        if (
+            len(value) >= MIN_SENSITIVE_LITERAL_LENGTH
+            and not allowed_placeholder(value)
+        ):
             violations.append("credential-prose-literal")
 
     if LEAKED_TOKEN_LITERAL.search(line):
