@@ -11,6 +11,16 @@
 version: 1
 updated: 2026-07-28
 
+excluded_personal_projects:
+  status: excluded-from-company-os
+  projects: [Job Monitor / job-search, English Coach / English-learning, Kraken / personal trading]
+  registry_evidence: aggregate exclusion and isolation evidence only
+  operational_company_rows: prohibited for excluded personal projects, including Systems_Automations
+  company_resources: "prohibited: company Shared Drive, Baserow, Postgres, n8n, AI employees, budgets and operational roadmap"
+  self_hosted_company_cutover: prohibited
+  separation: separate any shared credentials and store in place without copying personal data
+  kraken_pattern_reuse: separately reviewed data-free generic patterns only
+
 services:
   - id: adapteng-website
     repo: adapteng-website
@@ -178,11 +188,11 @@ services:
     source_of_truth_for: Company OS governed workflows (AUT-001, WEB-002)
     status: live-partial-authority
     owner: Ivan
-    notes: Hosts exactly two active governed workflows (AUT-001 and WEB-002). Coolify still deploys from branch palinaruban-repo-status-review; repoint to main is an owner action. Workflow-to-credential binding isolation and second-admin continuity are not yet evidenced. n8n Cloud remains the authority for MM/LM/JM/EC domains until staged cutover.
+    notes: Hosts exactly two active governed workflows (AUT-001 and WEB-002). Coolify still deploys from branch palinaruban-repo-status-review; repoint to main is an owner action. Workflow-to-credential binding isolation and second-admin continuity are not yet evidenced. n8n Cloud remains the authority for company MM/LM domains until staged company cutover; excluded personal projects are not cutover candidates.
 
   - id: n8n-cloud
     repo: n/a (SaaS)
-    role: Current authority for legacy Marketing Machine/Lead Monitor and personal JM/EC workflows.
+    role: Current authority for legacy company Marketing Machine/Lead Monitor workflows; excluded Job Monitor and English Coach presence is aggregate boundary evidence only.
     status: live
     owner: Ivan
     notes: >-
@@ -245,9 +255,10 @@ services:
       supported workflows; disabling availability does not stop normal triggers.
       Keep MM-18 active until a new immutable review-clean WEB-002 producer head
       plus actual producer T1-T4, atomic no-dual-write cutover and rollback proof
-      are complete. Before further freezes, harden EC-02 principal access,
-      MM-20/MM-24 approval/dependency/idempotency, MM-07 redacted allowlist
-      logging and JM-09 suppression publication with error bindings preserved.
+      are complete. Before further company-workflow freezes, repair MM-20/MM-24
+      approval/dependency/idempotency and MM-07 redacted allowlist logging.
+      Excluded personal-project workflow work remains outside the Company OS
+      operational roadmap.
       This registry update performed no payload/credential review, model call,
       publication, website cutover or live mutation (ARCHITECTURE.md §6.3).
 

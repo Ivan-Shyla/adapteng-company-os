@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
 import unicodedata
 
@@ -23,6 +24,8 @@ from scripts.validate_sensitive_references import (
     read_context_word,
     scan_clauses,
 )
+
+STATUS_ROOT = Path(__file__).resolve().parents[1]
 
 
 class SensitiveReferenceValidatorTests(unittest.TestCase):
@@ -3582,6 +3585,89 @@ class SensitiveReferenceValidatorTests(unittest.TestCase):
             [],
             inspect_url("https://docs.google.com/documentation/help"),
         )
+
+
+class PersonalProjectBoundaryStatusTests(unittest.TestCase):
+    AUTHORITY_SURFACES = (
+        "ARCHITECTURE.md",
+        "registry/workflows.yaml",
+        "registry/environments.yaml",
+        "registry/services.yaml",
+        "owner/action-items.md",
+        "decisions/README.md",
+        "runbooks/n8n-operations.md",
+    )
+    REGISTRIES = (
+        "registry/workflows.yaml",
+        "registry/environments.yaml",
+        "registry/services.yaml",
+    )
+
+    @staticmethod
+    def read(relative_path: str) -> str:
+        return (STATUS_ROOT / relative_path).read_text(encoding="utf-8")
+
+    def test_personal_projects_are_explicitly_excluded_everywhere(self) -> None:
+        required_names = (
+            "Job Monitor",
+            "job-search",
+            "English Coach",
+            "English-learning",
+            "Kraken",
+        )
+        for relative_path in self.AUTHORITY_SURFACES:
+            text = self.read(relative_path)
+            with self.subTest(path=relative_path):
+                self.assertIn("excluded", text.lower())
+                for name in required_names:
+                    self.assertIn(name, text)
+
+    def test_registries_share_one_aggregate_boundary_contract(self) -> None:
+        required_contract = (
+            "excluded_personal_projects:",
+            "registry_evidence: aggregate exclusion and isolation evidence only",
+            (
+                "operational_company_rows: prohibited for excluded personal "
+                "projects, including Systems_Automations"
+            ),
+            "self_hosted_company_cutover: prohibited",
+            "separation: separate any shared credentials and store in place without copying personal data",
+            "kraken_pattern_reuse: separately reviewed data-free generic patterns only",
+        )
+        for relative_path in self.REGISTRIES:
+            text = self.read(relative_path)
+            with self.subTest(path=relative_path):
+                for contract_line in required_contract:
+                    self.assertIn(contract_line, text)
+
+    def test_personal_projects_have_no_company_rows_or_cutover(self) -> None:
+        corpus = "\n".join(
+            self.read(relative_path) for relative_path in self.AUTHORITY_SURFACES
+        )
+        forbidden_operational_language = (
+            "personal_domains_on_cloud:",
+            "domain = personal",
+            " / personal / ",
+            "MM/LM/JM/EC",
+            "personal JM/EC",
+            "EC-02",
+            "JM-09",
+            "SEPARATE ACTIVE SCOPE",
+            "Job Monitor / Postgres canonical layer",
+            "переносятся отдельно",
+        )
+        for forbidden in forbidden_operational_language:
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, corpus)
+
+        workflow_registry = self.read("registry/workflows.yaml")
+        operational_rows = workflow_registry.split(
+            "company_os_workflows:",
+            maxsplit=1,
+        )[1].split("cutover_truth:", maxsplit=1)[0]
+        for personal_name in ("Job Monitor", "English Coach", "Kraken"):
+            with self.subTest(personal_name=personal_name):
+                self.assertNotIn(personal_name, operational_rows)
 
 
 if __name__ == "__main__":

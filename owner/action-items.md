@@ -44,9 +44,9 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   MM-18 while recent successful webhooks prove it is the current website lead
   path; retain it until a new immutable review-clean WEB-002 producer head plus
   actual producer T1-T4, atomic no-dual-write cutover and rollback proof are
-  complete. Add an EC-02 principal allowlist before models; repair MM-20/MM-24
-  approval, dependency and idempotency controls; make MM-07 allowlist logging
-  redacted; and publish JM-09's suppression fix while preserving error bindings.
+  complete. Repair MM-20/MM-24 approval, dependency and idempotency controls and
+  make MM-07 allowlist logging redacted. Personal-project workflow work is
+  outside the Company OS operational roadmap.
 - [ ] **Enable minimal solo-safe `main` protection in repository Settings/Rules.**
   Re-verified 2026-07-27: `main` is **unprotected** in
   `Ivan-Shyla/adapteng-company-os`, `adapteng-automation-platform`,
@@ -63,11 +63,17 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   non-secret identifier, replace the shared key with per-repository/service
   least-privilege credentials, and prove deploy/rollback continuity without
   interrupting current deployments.
-- [ ] **Prove workflow credential isolation and second-admin continuity.** Record
-  the workflow→credential binding map by credential ID/name only — never values
-  — and verify company versus personal domain separation and least privilege.
-  Nominate and test a second administrator/break-glass operator so runtime
-  recovery does not depend on one personal account.
+- [ ] **Separate excluded personal-project resources and prove company credential
+  isolation.** Job Monitor/job-search, English Coach/English-learning and Kraken
+  personal trading must not migrate into Company OS, company Shared
+  Drive/Baserow/Postgres/n8n, AI employees, budgets or the operational roadmap.
+  Keep aggregate exclusion/isolation evidence only; create no
+  `Systems_Automations` or other operational company rows. Separate any currently
+  shared credential/store within the personal boundary and revoke the
+  company/shared binding after proof, without copying personal data. The
+  `ISO-1` waiver expires **2026-08-08**. Record company workflow→credential
+  bindings by ID/name only, then nominate and test a second company
+  administrator/break-glass operator.
 - [ ] **Contain and archive legacy `PalinaRuban/adapteng`.** Treat it only as a
   personal-account June-2026 WordPress/Azure snapshot — not active Company OS,
   authoritative production or rollback. The live public site is on the separate
@@ -157,8 +163,9 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   last. Keep model-provider legal placeholders unpublished.
 - [ ] **self-hosted n8n cutover:** repoint the Coolify source from branch
   `palinaruban-repo-status-review` to `main`, verify auto-deploy, then complete
-  the inactive shadow. n8n Cloud remains the authority for MM/LM/JM/EC until
-  each individual cutover is evidenced.
+  the inactive company-workflow shadow. n8n Cloud remains the authority for
+  company MM/LM until each company cutover is evidenced. Excluded personal
+  projects have no Company OS cutover.
 
 ## ⚪ Standing / Definition-of-Done
 
@@ -176,8 +183,6 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   `AdaptEng Company`, create/confirm the Cloud Identity Free break-glass
   super-admin, enable MFA, and store recovery codes offline. This cannot be
   proven by a service account.
-- [ ] **Personal JM/EC isolation:** verify live credential/store identity;
-  the `ISO-1` waiver expires **2026-08-08**.
 - [ ] **n8n Cloud inventory drift:** a fresh live audit reconfirmed
   89 non-archived workflows / 33 active; reversible freeze-now actions then
   produced **89 non-archived / 31 active / 58 inactive** versus 82 repository

@@ -3,7 +3,7 @@
 # Non-authority workflows are marked and must never silently become Company OS.
 # The repository baseline index currently contains 82 workflow exports:
 #   adapteng-automation-platform/n8n/workflow-index.json  (repository baseline)
-# Personal domains (Job Monitor / English Coach) are out of Company scope (ARCHITECTURE.md §6.3).
+# Job Monitor/job-search, English Coach/English-learning and Kraken are excluded personal projects.
 # No secrets: webhook paths and tokens are marked, not printed.
 version: 1
 updated: 2026-07-28
@@ -46,6 +46,16 @@ systemic_mcp_exposure:
   owner_action: disable instance-level MCP globally or set per-workflow availability through a supported UI/API, then verify an explicit allowlist only
 
 repository_update_boundary: no payload or credential review, model call, publication, website cutover or live mutation
+
+excluded_personal_projects:
+  status: excluded-from-company-os
+  projects: [Job Monitor / job-search, English Coach / English-learning, Kraken / personal trading]
+  registry_evidence: aggregate exclusion and isolation evidence only
+  operational_company_rows: prohibited for excluded personal projects, including Systems_Automations
+  company_resources: "prohibited: company Shared Drive, Baserow, Postgres, n8n, AI employees, budgets and operational roadmap"
+  self_hosted_company_cutover: prohibited
+  separation: separate any shared credentials and store in place without copying personal data
+  kraken_pattern_reuse: separately reviewed data-free generic patterns only
 
 canonical_full_index: adapteng-automation-platform/n8n/workflow-index.json  # 82 repository exports; live drift above must be reconciled
 
@@ -253,10 +263,8 @@ legacy_cloud_authority_dependencies:
   - { id: T3WHl2kCkPiPOPQd, name: MM-30, dependency: "deterministic draft builder", status: inactive }
 
 harden_before_freeze:
-  - { workflow: EC-02, requirement: principal allowlist before models }
   - { workflows: MM-20/MM-24, requirement: approval, dependency and idempotency repair }
   - { workflow: MM-07, requirement: redacted allowlist logging }
-  - { workflow: JM-09, requirement: publish suppression fix while preserving error bindings }
 
 legacy_approval_publish_state:
   artifacts: [Approval_Log, Content_Drafts, Publish_Plan]
@@ -316,6 +324,7 @@ cutover_truth:
   cloud_active_count: 31
   cloud_inactive_count: 58
   cloud_company_authority: Marketing Machine and Lead Monitor content/lead workflows
-  personal_domains_on_cloud: [Job Monitor, English Coach]
+  excluded_personal_project_evidence: aggregate boundary evidence only; see top-level contract
+  personal_project_company_cutover: prohibited
   inventory_drift: 14 live-only / 7 repo-only versus 82 repository exports
-  rule: one inactive shadow and controlled canary at a time; never big-bang
+  rule: one inactive company-workflow shadow and controlled canary at a time; never big-bang

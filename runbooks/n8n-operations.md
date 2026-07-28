@@ -77,10 +77,16 @@ Owner closure sequence:
 Do not freeze MM-18 while recent successful webhooks prove it is the current
 website lead path. Retain it until a new immutable review-clean WEB-002 producer
 head plus actual producer T1-T4, atomic no-dual-write cutover and rollback proof
-are complete. Before any further freeze decision, add the EC-02 principal
-allowlist before models; repair MM-20/MM-24 approval, dependency and idempotency
-controls; make MM-07 allowlist logging redacted; and publish JM-09's suppression
-fix while preserving error bindings.
+are complete. Before any further company-workflow freeze decision, repair
+MM-20/MM-24 approval, dependency and idempotency controls and make MM-07
+allowlist logging redacted.
+
+Job Monitor/job-search, English Coach/English-learning and Kraken personal
+trading are excluded personal projects, not Company OS migration targets. Do not
+import them into company n8n or create company operational rows. If a credential
+or store is shared today, separate it within the personal boundary without
+copying personal data. Retain aggregate exclusion/isolation evidence only;
+Kraken may contribute only a separately reviewed data-free generic pattern.
 
 The containment status update itself performs no payload or credential review,
 model call, publication, website cutover or other live mutation.
