@@ -3670,6 +3670,66 @@ class PersonalProjectBoundaryStatusTests(unittest.TestCase):
                 self.assertNotIn(personal_name, operational_rows)
 
 
+class LegacyRepositoryContainmentStatusTests(unittest.TestCase):
+    AUTHORITY_SURFACES = (
+        "ARCHITECTURE.md",
+        "registry/services.yaml",
+        "owner/action-items.md",
+    )
+    REVIEWED_HEAD = "9b9d9e99859370a4d43d563870d1028725171348"
+    MERGED_MAIN = "9c8acd166bf57dc416ed6de86ced8f0b26ac3eb5"
+
+    @staticmethod
+    def read(relative_path: str) -> str:
+        return (STATUS_ROOT / relative_path).read_text(encoding="utf-8")
+
+    def test_reviewed_merge_evidence_is_consistent_across_surfaces(self) -> None:
+        required = (
+            self.REVIEWED_HEAD,
+            self.MERGED_MAIN,
+            "2026-07-28T10:43:33Z",
+            "REVIEW CLEAN",
+            "candidate-policy",
+            "trusted-base-policy",
+            "one-time bootstrap",
+        )
+        for relative_path in self.AUTHORITY_SURFACES:
+            text = self.read(relative_path)
+            with self.subTest(path=relative_path):
+                for value in required:
+                    self.assertIn(value, text)
+
+    def test_registry_encodes_bounded_incomplete_state(self) -> None:
+        registry = self.read("registry/services.yaml")
+        required = (
+            "company_os_authority: excluded",
+            "repository_containment_complete: true",
+            "history_clean: false",
+            "credential_rotations_complete: false",
+            "archived: false",
+            "live_ready: false",
+            "candidate-policy: success",
+            (
+                "trusted-base-policy: skipped only for expected one-time "
+                "bootstrap"
+            ),
+        )
+        for value in required:
+            with self.subTest(value=value):
+                self.assertIn(value, registry)
+
+    def test_containment_does_not_admit_legacy_into_company_os(self) -> None:
+        for relative_path in self.AUTHORITY_SURFACES:
+            text = self.read(relative_path).lower()
+            with self.subTest(path=relative_path):
+                self.assertIn("repository containment", text)
+                self.assertIn("excluded", text)
+                if relative_path.endswith(".yaml"):
+                    self.assertIn("company_os_authority: excluded", text)
+                else:
+                    self.assertIn("company os authority", text)
+
+
 class DriveFolderUsageNoteStatusTests(unittest.TestCase):
     AUTHORITY_SURFACES = (
         "ARCHITECTURE.md",
