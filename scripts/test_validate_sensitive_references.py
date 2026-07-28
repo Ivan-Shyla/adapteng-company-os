@@ -3670,5 +3670,82 @@ class PersonalProjectBoundaryStatusTests(unittest.TestCase):
                 self.assertNotIn(personal_name, operational_rows)
 
 
+class DriveFolderUsageNoteStatusTests(unittest.TestCase):
+    AUTHORITY_SURFACES = (
+        "ARCHITECTURE.md",
+        "registry/data-stores.yaml",
+        "registry/services.yaml",
+        "owner/action-items.md",
+        "runbooks/company-drive.md",
+    )
+
+    @staticmethod
+    def read(relative_path: str) -> str:
+        return (STATUS_ROOT / relative_path).read_text(encoding="utf-8")
+
+    def test_usage_note_task_is_repository_only_across_surfaces(self) -> None:
+        for relative_path in self.AUTHORITY_SURFACES:
+            text = self.read(relative_path)
+            with self.subTest(path=relative_path):
+                self.assertIn("drive-folder-usage-notes", text)
+                self.assertIn("START HERE", text)
+                self.assertIn("live", text.lower())
+                self.assertIn("separate", text.lower())
+
+    def test_registry_contract_covers_every_required_folder(self) -> None:
+        registry = self.read("registry/data-stores.yaml")
+        required_contract = (
+            "status: repository-contract-approved-live-placement-pending",
+            "generated_folder_patterns: [AE-CAS-NNNN_short-name, AE-CGR-NNNN_short-title]",
+            "priority: [01_Inbox, 30_Projects_Cases folder contract, 40_Content folder contract]",
+            "current manual/live/planned automation",
+            "trigger/actions/output",
+            "approvals/PII",
+            "create only when missing; keep exactly one note",
+            (
+                "no duplicates, secrets, credentials, assigned/live IDs "
+                "including provider/resource IDs, live payloads or PII"
+            ),
+            "never overwrite content outside the managed section",
+            "PR #11 performs no live Drive write",
+        )
+        for folder in (
+            "00_Case_Uploads",
+            "01_Inbox",
+            "10_Company",
+            "20_Commercial",
+            "30_Projects_Cases",
+            "40_Content",
+            "50_Templates",
+            "90_Archive",
+        ):
+            with self.subTest(folder=folder):
+                self.assertIn(folder, registry)
+        for contract_line in required_contract:
+            with self.subTest(contract_line=contract_line):
+                self.assertIn(contract_line, registry)
+
+    def test_runbook_defines_complete_fail_closed_note_content(self) -> None:
+        runbook = self.read("runbooks/company-drive.md")
+        required_sections = (
+            "**Purpose**",
+            "**Allowed inputs / disallowed inputs**",
+            "**Naming / required metadata**",
+            "**One correct example**",
+            "**Current manual / live / planned automation**",
+            "**Trigger / actions / output**",
+            "**Approvals / PII**",
+            "**Owner / version**",
+            "keep exactly one note",
+            "preserve human-authored content",
+            "never create duplicates",
+            "missing/malformed",
+            "manual reconciliation",
+        )
+        for section in required_sections:
+            with self.subTest(section=section):
+                self.assertIn(section, runbook)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -155,7 +155,13 @@ services:
       controlled copy has begun. PR-A must provide the typed allowlisted
       copy/pending-artifact library, Google client, deterministic partial-failure
       replay, actual env config and dispatch/CLI. PR-B may add authenticated
-      internal HTTP only after PR-A review.
+      internal HTTP only after PR-A review. Task drive-folder-usage-notes is an
+      approved repository contract, not a live capability: current main does not
+      place or update START HERE notes. A separate reviewed implementation/live
+      approval must manage exactly one note per canonical or generated
+      AE-CAS/AE-CGR folder, update only versioned managed sections and preserve
+      human-authored content without duplicates, secrets, assigned/live IDs or
+      PII.
 
   - id: adapteng-baserow-schema
     repo: adapteng-automation-platform

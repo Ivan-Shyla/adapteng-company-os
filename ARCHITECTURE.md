@@ -566,7 +566,30 @@ process.
 page и LinkedIn post имеют разные `content_id`, `status` и `published_url`, но
 одинаковые `content_group_id`, source set и Drive folder.
 
-### 4.5 Что является draft
+### 4.5 Versioned `START HERE` usage notes
+
+Task `drive-folder-usage-notes` defines one concise, versioned `START HERE` note
+for each of the eight canonical Shared Drive work areas and for every generated
+`AE-CAS-NNNN_short-name` / `AE-CGR-NNNN_short-title` folder. The note states:
+purpose; allowed and disallowed inputs; naming and required metadata; one correct
+placeholder-only example; current manual/live/planned automation; trigger,
+actions and output; approvals/PII rules; and owner/contract version.
+
+Priority is `01_Inbox`, then the `30_Projects_Cases` generated-folder contract,
+then the `40_Content` generated-folder contract, followed by the remaining
+canonical work areas. Management must be idempotent: resolve by parent logical
+alias/pattern plus title, create only when missing, keep exactly one note and
+update only a versioned managed section. Never duplicate the note, include
+secrets, credentials, assigned/live IDs (including provider/resource IDs), live
+payloads or PII, or overwrite human-authored content outside the managed
+section. Ambiguous duplicates or
+missing/malformed managed markers fail closed for manual reconciliation.
+
+This PR records the architecture and backlog only. It does not place or update a
+live Drive note; live placement is a separately approved task. The complete
+contract is in [`runbooks/company-drive.md`](runbooks/company-drive.md).
+
+### 4.6 Что является draft
 
 Runtime draft не коммитится в Git.
 
@@ -1387,6 +1410,7 @@ Official references used for this decision:
 |---|---|---|---|
 | `COS-001` | Google Workspace | Buy Business Standard, verify domain, keep Zoho MX; create Cloud Identity Free break-glass admin | Company login works; MX unchanged; break-glass admin has 2FA + offline recovery codes. **Partial:** Business Standard is active; break-glass/MFA/recovery inventory remains open. |
 | `COS-002` | Google Drive | Create `AdaptEng Company` structure | Organization owns Shared Drive; Ivan has Manager/admin access and tested recovery; folders match §4. **Live-provisioned and re-verified:** sanctioned provisioning created the drive/eight folders; a 2026-07-26 dry run reported the drive and every folder `EXISTS`. Only owner Manager/recovery/break-glass acceptance remains open. |
+| `drive-folder-usage-notes` | Google Drive + automation | Add one versioned `START HERE` usage note to every canonical work area and generated `AE-CAS`/`AE-CGR` folder | Repository contract approved in §4.5; live placement is separate from PR #11. Prioritize `01_Inbox`, `30_Projects_Cases`, then `40_Content`. Notes cover purpose, input rules, naming/metadata, one placeholder-only example, automation/trigger/actions/output, approvals/PII and owner/version; updates are idempotent, duplicate-free, secret/assigned-ID/PII-free and preserve all human content outside managed sections. |
 | `SEC-001` | Accounts | Password manager, MFA and recovery inventory | Every critical system has status/owner/recovery |
 | `OPS-001` | Hetzner/Coolify | Record 7-day resource baseline | CPU/RAM/disk/swap known |
 | `OPS-002` | n8n | Create Drive service account credential | Credential/folder access is proven; file copy is not. **Controlled folder smoke passed:** automation-platform PR #69 (`ff5ccc0cbd84870e455173ff83865ccd9a47f623`) used approved `01_Inbox`; folder create/reuse/subfolder reuse/owned cleanup/missing verification passed (61 tests, 1 production-unsafe base-structure skip). It did not prove file/tree listing, copy, pending-artifact creation or partial-failure replay. The SA and locked Coolify B64/delegated-user config are provided, but no accepted Drive implementation PR or live copy exists. |
@@ -1514,6 +1538,7 @@ lead contract + repository identity → migration 004 live plan/restore gate
 |---|---|---|
 | Overall stage | **Operational foundation + controlled migration.** Company-owned Baserow, the Shared Drive folder skeleton, Postgres, internal Baserow adapter and two governed self-hosted workflows are live. No governed Drive file copy/artifact runtime or business AI is live. | Build/review Drive PR-A, then stack PR-B; only afterward approve controlled copy/artifact execution. Run the exact `ART-2026-001`/`SRC-2026-001` inactive model proof after every remaining gate; migrate `CASE-2026-001` on its separate governed lane without unblocking media/publication. |
 | Company Workspace / Drive | Business Standard active (~€13.80/month public reference; invoice/VAT authoritative). `AdaptEng Company` Shared Drive and all eight canonical folders are organization-owned, live and re-verified by sanctioned dry run. Direct links and upload rules: `runbooks/company-drive.md`. | Full personal-account exit is **not complete**: current MM workflows and media-worker still use legacy personal bindings. Owner must verify Manager/recovery/break-glass access. |
+| Drive folder usage notes | Task `drive-folder-usage-notes` is an approved repository contract for exactly one versioned `START HERE` note in every canonical work area and generated `AE-CAS`/`AE-CGR` folder. No note was placed or changed live by PR #11. | Implement and approve live placement separately. Start with `01_Inbox`, `30_Projects_Cases`, then `40_Content`; prove idempotent create/update, no duplicates/secrets/assigned IDs/PII and preservation of human-authored content outside managed sections. |
 | Drive implementation | Current `adapteng-drive-adapter` on `main` only lists/finds and creates folders/base structure. It has no general file/tree listing, file copy, pending-artifact creation or deterministic partial-failure replay state. Its repository env names (`GOOGLE_SERVICE_ACCOUNT_JSON` / `GOOGLE_WORKSPACE_ADMIN`) differ from the actual runtime contract (`GOOGLE_SERVICE_ACCOUNT_JSON_B64` / `GOOGLE_WORKSPACE_DELEGATED_USER`). Implementation/review is in progress; **no controlled copy has begun**. Open implementation attempts are not readiness evidence. | **PR-A:** typed allowlisted copy/pending-artifact library, Google client, deterministic partial-failure replay, actual env config and dispatch/CLI. Review PR-A first. **PR-B:** stack the authenticated internal HTTP service only after PR-A acceptance. No deployment or copy before separate approval. |
 | First governed raw-source migration | `CASE-2026-001` inventoried read-only: intake marker, case note, 4 HEIC images and 2 MOV videos. Its role is the first governed raw-source/case migration plus evidence-bounded deterministic case draft, **not** the first live model proof. The original is untouched; all media and publication remain fail-closed pending live Sheet-vs-Git reconciliation. Bounded claims/style/red-lines are in `ai/ai-001-pilot-intake.md`. | Complete and review Drive PR-A; stack PR-B only afterward. Then separately approve one controlled company-SA copy into corporate `00_Case_Uploads`, verify deterministic replay/no duplicates, and create Baserow/Drive pointers only through a reserved business ID. Do not promote media or publication records until human reconciliation. |
 | First live model-backed Company Drive proof | **Selected, not yet run:** exact already-approved/published July public article-radar package `ART-2026-001`, using `SRC-2026-001` (US EPA EMC / 40 CFR Part 60 Appendix F, Procedure 1). Marketing PR #20 pins the package. Its reuse supplies bounded public evidence only; it does not authorize republication. Company OS still has no live model call. | After `AG-007`, AG-008, privacy/cache/FX, canonical gateway/ledger/caps and governed Drive gates, run one measured inactive call that writes only a new pending/draft artifact and records model/cost/evidence. Never reactivate or route around frozen MM-22. |

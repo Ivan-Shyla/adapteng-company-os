@@ -121,6 +121,17 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   partial-failure replay, actual B64/delegated-user env config and dispatch/CLI.
   Review PR-A first. Only then stack PR-B with the authenticated internal HTTP
   service. Deployment and any controlled copy require separate approval.
+- [ ] **`drive-folder-usage-notes` — approve live `START HERE` placement
+  separately.** PR #11 defines only the repository contract; it performs no live
+  Drive write. Put exactly one concise versioned note in every canonical work
+  area and generated `AE-CAS`/`AE-CGR` folder, prioritizing `01_Inbox`,
+  `30_Projects_Cases`, then `40_Content`. Require purpose, allowed/disallowed
+  inputs, naming/metadata, one placeholder-only example, current
+  manual/live/planned automation, trigger/actions/output, approvals/PII and
+  owner/version. The manager must be idempotent, create no duplicate, include no
+  secret/credential/assigned or provider ID/live payload/PII, update only its
+  versioned managed section and preserve all human-authored content. Fail closed on
+  duplicate notes or malformed markers.
 - [ ] **INT-001 (integrity) — approve the deferred wiring, one PR at a time.**
   ADR-0011 defers each of these to a *future approved PR*: live schedule, the
   Finding→Action adapter, the n8n workflow, live manifest wiring, and deployed

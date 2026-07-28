@@ -59,6 +59,19 @@ google_drive:
     - { name: 40_Content, alias: "company-drive://40_Content" }
     - { name: 50_Templates, alias: "company-drive://50_Templates" }
     - { name: 90_Archive, alias: "company-drive://90_Archive" }
+  usage_notes:
+    task_id: drive-folder-usage-notes
+    title: START HERE
+    status: repository-contract-approved-live-placement-pending
+    canonical_work_areas: [00_Case_Uploads, 01_Inbox, 10_Company, 20_Commercial, 30_Projects_Cases, 40_Content, 50_Templates, 90_Archive]
+    generated_folder_patterns: [AE-CAS-NNNN_short-name, AE-CGR-NNNN_short-title]
+    priority: [01_Inbox, 30_Projects_Cases folder contract, 40_Content folder contract]
+    required_sections: [purpose, allowed/disallowed inputs, naming/required metadata, one placeholder-only correct example, current manual/live/planned automation, trigger/actions/output, approvals/PII, owner/version]
+    logical_key: parent governed alias or generated-folder pattern + START HERE
+    idempotency: create only when missing; keep exactly one note; update only the versioned managed section
+    content_policy: no duplicates, secrets, credentials, assigned/live IDs including provider/resource IDs, live payloads or PII
+    human_content_policy: never overwrite content outside the managed section; ambiguous duplicates or malformed markers fail closed
+    live_placement: "separate approval and execution; PR #11 performs no live Drive write"
   status: live-folder-skeleton-read-verified
   last_verified: "2026-07-26 (sanctioned GitHub Actions dry run; drive + 8 folders EXISTS)"
   credentials:
