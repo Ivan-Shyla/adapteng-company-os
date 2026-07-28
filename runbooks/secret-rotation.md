@@ -14,11 +14,12 @@ independent steps:
 2. **Revoke the old value at the source** (Baserow → Settings → API tokens →
    delete the old token; provider console for others).
 
-A real incident of this: after the `Company Operations` Baserow token was
-rotated in Coolify, the **previously-leaked token still authenticated** against
-Baserow because it was never deleted at the source. Until step 2 is done, the
-old credential remains valid. There is an open owner action to revoke it — see
-`owner/action-items.md`.
+A literal Baserow token value was committed to Git history. Current tracked
+files are sanitized, but history is immutable evidence of compromise. Treat the
+credential as **COMPROMISED** regardless of prior runtime changes. The owner
+must revoke it at the provider, issue/install a least-privilege replacement and
+verify the old value fails before recording rotation complete. Do not rewrite
+history; track the open action in `owner/action-items.md`.
 
 ## General rotation procedure
 
@@ -34,6 +35,20 @@ old credential remains valid. There is an open owner action to revoke it — see
 6. Verify the old value now **fails** (a call with the old value should be
    rejected). Only then is rotation complete.
 7. Update rotation status/date in `owner/access-map.md` (name + date only).
+
+## Repository regression check
+
+Run from the repository root:
+
+```powershell
+python scripts/validate_sensitive_references.py
+```
+
+The check is offline and inspects tracked files only. It rejects exact Google
+Drive/Docs resource URLs, raw Google resource-ID fields, credential-bearing
+URLs, literal secret assignments and leaked-token literals. Safe provider
+documentation links, redacted secret names/fingerprints and
+`company-drive://...` aliases remain allowed.
 
 ## Tokens in scope (names only)
 

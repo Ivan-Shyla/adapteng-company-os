@@ -1,13 +1,23 @@
 # AdaptEng Company OS — Environment Registry
 # Production hosts, domains, platform and budgets. NO secrets — names/hostnames/ids only.
 version: 1
-updated: 2026-07-27
+updated: 2026-07-28
 
 platform:
   compute: Hetzner (EU region) — single self-hosted host
   orchestrator: Coolify (self-hosted PaaS on Hetzner)
   container_network: coolify (internal; services reach each other by alias, no public exposure)
   policy: upgrade the existing host only after 7 days of measured CPU/RAM/disk pressure (ARCHITECTURE.md §9)
+
+excluded_personal_projects:
+  status: excluded-from-company-os
+  projects: [Job Monitor / job-search, English Coach / English-learning, Kraken / personal trading]
+  registry_evidence: aggregate exclusion and isolation evidence only
+  operational_company_rows: prohibited for excluded personal projects, including Systems_Automations
+  company_resources: "prohibited: company Shared Drive, Baserow, Postgres, n8n, AI employees, budgets and operational roadmap"
+  self_hosted_company_cutover: prohibited
+  separation: separate any shared credentials and store in place without copying personal data
+  kraken_pattern_reuse: separately reviewed data-free generic patterns only
 
 domains:
   - host: n8n.adapteng.com
@@ -25,7 +35,7 @@ domains:
 
 external_saas:
   - name: n8n Cloud
-    role: current authority for legacy MM/LM/JM/EC workflows; AUT-001 and WEB-002 already run on self-hosted n8n
+    role: current authority for legacy company MM/LM workflows; excluded Job Monitor and English Coach presence is aggregate boundary evidence only and has no Company OS cutover
     cost: paid/account-specific; record invoice before decommission decision
   - name: Cloudways WordPress
     role: live website + published content (adapteng-website)

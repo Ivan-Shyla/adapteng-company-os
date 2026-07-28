@@ -19,6 +19,16 @@ whole and links out to the platform ADRs they depend on.
 - Accepting an ADR is a **governance act, not a deployment** — it changes no live
   system by itself.
 
+## Excluded personal-project boundary
+
+Job Monitor/job-search, English Coach/English-learning and Kraken personal
+trading are excluded from Company OS. They have no company operational rows,
+Shared Drive/Baserow/Postgres/n8n runtime, AI employee, budget or roadmap role.
+Only aggregate exclusion/isolation evidence belongs here. Separate any shared
+credential/store within the personal boundary without copying personal data.
+Kraken may contribute only a separately reviewed, data-free generic pattern; a
+Company OS ADR must never index personal implementation or runtime decisions.
+
 ## Index
 
 | ADR | Title | Status |
@@ -29,7 +39,6 @@ whole and links out to the platform ADRs they depend on.
 
 | ADR | Subject |
 |---|---|
-| ADR-0002 | Job Monitor / Postgres canonical layer |
 | ADR-0006 | Encrypted secrets in repo (secrets policy) |
 | ADR-0009 | Coolify self-hosted platform |
 | ADR-0010 | AI Gateway — EU Vertex canonical service |

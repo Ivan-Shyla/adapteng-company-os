@@ -1,7 +1,8 @@
 # Runbook — n8n governed workflow operations
 
-How to build, activate and debug a **governed** self-hosted n8n workflow via
-the public API. Proven building AUT-001 (`NsWG1hD8VmIRRwCv`) and WEB-002
+How to build, activate and debug a **governed** self-hosted n8n workflow and
+record n8n Cloud containment without confusing repository evidence with a live
+runtime change. Proven building AUT-001 (`NsWG1hD8VmIRRwCv`) and WEB-002
 (`05ytz5If9kHUOYuA`).
 
 ## Principles
@@ -14,25 +15,102 @@ the public API. Proven building AUT-001 (`NsWG1hD8VmIRRwCv`) and WEB-002
 - The workflow must **fail closed**: a downstream error must return a non-2xx
   so the producer retries, never an empty 200 (see "The 200-on-error trap").
 
+## n8n Cloud containment and MCP closure
+
+Editing this runbook or the registries changes repository status only. It does
+not change n8n Cloud. The supplied 2026-07-27 live evidence is:
+
+- a fresh audit reconfirmed 89 non-archived / 33 active;
+- reversible freeze-now actions produced 89 non-archived / 31 active /
+  58 inactive, with chain `42 → 40 → 38 → 37 → 36 → 35 → 34 → 33 → 31`;
+- MM-Visual-Evidence-Intake `uBVRMTCKwnUG91kU` preserves published version
+  `dda7f039-764c-449d-9f0e-4c8badb44919` in contained draft
+  `3093a3bf-0567-4cb3-9956-56020dc4713c`; MM-08 `RAPjKSnj6EY7axtb`
+  preserves active version `644416d5-7f7f-4fa0-b02f-a8c787752617` in contained
+  draft `37817f58-e6fb-4876-a076-497ab776413c`. Both are `active=false` with
+  `active_version_id=null`; production and manual probes have
+  `execution_id=null`, and the post-freeze execution count is zero;
+- already-inactive MM-10 `39CAjeKcZD64VM25` and MM-29
+  `at9H54krWF9ULdtT` retain drafts
+  `22776538-c4eb-4ea3-98e8-eeb1de8c6ea7` and
+  `1ca9a60e-9c4f-425c-980f-fedc24d85bf2`; they received defense-in-depth node
+  disabling with no count effect and prior history remains retained.
+
+Repository evidence is now merged: automation-platform PR #85 exact reviewed
+head `a88ba7e3f76e6a192ee687ef7d55aa50fc575fc1` received independent
+**REVIEW CLEAN** and was guarded squash-merged to automation `main` as
+`99f4d88e867cb874cf8821de14ddea1b882b5560` at
+`2026-07-28T07:26:18Z`. This does not change n8n Cloud. The live state remains
+**89 non-archived / 31 active / 58 inactive**, and authenticated MCP/live
+closure remains unresolved until a supported live availability change and
+explicit allowlist verification are evidenced.
+
+Keep the two latest freezes reversible. Retain MM-Visual's old published version
+for audit and keep its Manual, Telegram and worker nodes disabled. Do not
+reactivate it until a founder/principal allowlist precedes every command and
+media-worker is reachable only from validated-ready output. Keep MM-08's
+webhook and lead-write nodes disabled. Reactivation/replacement requires named
+accountable owner Ivan, explicit owner approval, authentication, schema
+validation, rate control and stable deduplication. Preserve its prior active
+version and version history as rollback evidence against the containment draft.
+
+MCP exposure is a separate control plane and remains unresolved. Audited
+workflows still have **Available in MCP** enabled because the available update
+API rejected that unsupported field. Official n8n semantics require
+instance-level MCP, per-workflow availability and an authenticated user
+together to expose supported workflows. Disabling **Available in MCP** does not
+stop ordinary webhook, schedule, manual or internal triggers.
+
+Owner closure sequence:
+
+1. Disable instance-level MCP globally and keep it disabled unless an approved
+   MCP use case exists. If it must remain enabled, define the approved workflow
+   allowlist first.
+2. Use a supported n8n UI/API to change per-workflow availability; do not force
+   the rejected field through the unsupported workflow-update path.
+3. Verify the effective MCP exposure equals the explicit allowlist only (empty
+   when instance-level MCP is disabled).
+4. Confirm normal non-MCP triggers required by retained workflows still operate
+   independently, then record only non-secret counts and evidence in
+   `registry/workflows.yaml` and `ARCHITECTURE.md`.
+
+Do not freeze MM-18 while recent successful webhooks prove it is the current
+website lead path. Retain it until a new immutable review-clean WEB-002 producer
+head plus actual producer T1-T4, atomic no-dual-write cutover and rollback proof
+are complete. Before any further company-workflow freeze decision, repair
+MM-20/MM-24 approval, dependency and idempotency controls and make MM-07
+allowlist logging redacted.
+
+Job Monitor/job-search, English Coach/English-learning and Kraken personal
+trading are excluded personal projects, not Company OS migration targets. Do not
+import them into company n8n or create company operational rows. If a credential
+or store is shared today, separate it within the personal boundary without
+copying personal data. Retain aggregate exclusion/isolation evidence only;
+Kraken may contribute only a separately reviewed data-free generic pattern.
+
+The containment status update itself performs no payload or credential review,
+model call, publication, website cutover or other live mutation.
+
 ## Website producer cutover safety
 
-At reviewed draft head `b0e3a656cf6659b893810e11a15b9f515527ab79`,
-website PR #78 implements the randomized
-`/webhook/web002-lead-<8 lowercase hex>` allowlist, `X-Webhook-Token`,
-identity-only durable mode-bound outbox, legacy-default flat MM-18
-compatibility, transport/5xx retry, 409 terminal identity review and other-4xx
-terminal configuration/validation handling. It remains **draft, unmerged and
-undeployed**. Merging auto-deploys `wp-content/**`; repository tests do not prove
-actual WordPress/Fluent Forms producer T1–T4 or a seven-day cutover.
+Website PR #78 head `b0e3a656cf6659b893810e11a15b9f515527ab79` is historical
+last-reviewed evidence only. Head
+`1baedaf732088edcc3fa4e40892d23d42b140d7b` is historical evidence of the
+seven delivery/data-race review blockers. Current GitHub head
+`a23b194fb72aed51941d9cb1c288cbc7eb2f66a0` remains **draft, unmerged and
+undeployed** and awaits fresh independent review. No review-clean or
+cutover-ready claim is made.
 
 Safe sequence:
 
-1. Keep PR #78 draft/unmerged until an approved cutover window. Preserve the
-   existing flat MM-18 mode as the default.
-2. Store the real randomized WEB-002 URL and token only as encrypted host config;
-   verify the exact allowlisted path shape without copying the secret slug into
-   Git, PR text or logs.
-3. Stage the implemented self-hosted mode without dual-write. Confirm the outbox
+1. Keep PR #78 draft/unmerged and preserve flat MM-18 as the default. Require a
+   fresh independent **review-clean result on the exact current head** before
+   considering a cutover window; any subsequent change invalidates that result
+   and requires another exact-head review.
+2. Keep producer routing/authentication values only in encrypted host config;
+   never copy them into Git, PR text or logs.
+3. On the new review-clean head, stage self-hosted mode without dual-write.
+   Confirm the outbox
    persists only `formId:entryId`, remains bound to one delivery mode, and
    rebuilds payloads from the canonical Fluent Forms row.
 4. Verify the implemented response policy: 2xx acknowledges; transport/5xx
@@ -46,8 +124,8 @@ Safe sequence:
    WEB-002.
 7. Reconcile Fluent Forms entry references against Postgres/Baserow outcomes for
    seven days.
-8. Retire MM-18 last, only after the reconciliation window is clean and rollback
-   is proven.
+8. Prove rollback, then retire MM-18 last only after the reconciliation window
+   is clean.
 
 Keep all model-provider legal placeholders unpublished throughout this cutover.
 
@@ -106,7 +184,7 @@ success and never retries → silent data loss.
   sees 500 and retries. On retry, idempotent `business_id`s make already-written
   entities `created:false` and complete only the missing ones — zero duplicates.
 
-## Verify after any change
+## Verify after any governed self-hosted change
 
 - `GET /workflows/{id}` → confirm `active=true`, node URLs point at the
   internal adapter, webhook `authentication=headerAuth`.

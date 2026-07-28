@@ -3,24 +3,78 @@
 The company document authority is the organization-owned Shared Drive
 **AdaptEng Company**:
 
-<https://drive.google.com/drive/folders/0AC0RFKG8iI-TUk9PVA>
+Root alias: `company-drive://AdaptEng-Company`
 
 The drive and all eight standing folders were created live and re-verified by
 the sanctioned read-only provisioning dry run on 2026-07-26. New company files
 must not be created in a personal My Drive.
 
-## Where to put a file
+## Governed folder aliases
+
+Aliases are stable repository references. Resolve them only inside the approved
+Google Workspace context; never commit provider folder IDs or resource URLs.
+
+### Where to put a file
 
 | Material | Corporate destination |
 |---|---|
-| New case photos/videos and intake note | [`00_Case_Uploads`](https://drive.google.com/drive/folders/1mickIyT8nkiiYPt8xjcH8iLcg2Cbbq-K) |
-| Unsorted controlled input | [`01_Inbox`](https://drive.google.com/drive/folders/1pEvvJuIwb6iiRuyxA9rRk5HUZ5xT-vQF) |
-| Company policies, approved claims, legal-entity files | [`10_Company`](https://drive.google.com/drive/folders/1qm0ilYsy0muHBoXxfJcw3JPLQgywsZKH) |
-| Proposals, partner and RFQ material | [`20_Commercial`](https://drive.google.com/drive/folders/1U7Xq2aTEaFWccG39HIKsShhp5Ued60oS) |
-| Active delivery/project/case evidence | [`30_Projects_Cases`](https://drive.google.com/drive/folders/1GK8lS8gfMDyKLnlmho6_QqT6vkbvryGu) |
-| Case, article and channel drafts | [`40_Content`](https://drive.google.com/drive/folders/1vV163MvgmdLlYAAjZZq7KzMFw-QFTw13) |
-| Approved reusable templates | [`50_Templates`](https://drive.google.com/drive/folders/10rRpyG19cfqgPuny6PYA68lAxni4BPf1) |
-| Closed/obsolete material | [`90_Archive`](https://drive.google.com/drive/folders/1SGe_5JeJmRLTrnLek6Q-ewb_jvh_qwfu) |
+| New case photos/videos and intake note | `company-drive://00_Case_Uploads` |
+| Unsorted controlled input | `company-drive://01_Inbox` |
+| Company policies, approved claims, legal-entity files | `company-drive://10_Company` |
+| Proposals, partner and RFQ material | `company-drive://20_Commercial` |
+| Active delivery/project/case evidence | `company-drive://30_Projects_Cases` |
+| Case, article and channel drafts | `company-drive://40_Content` |
+| Approved reusable templates | `company-drive://50_Templates` |
+| Closed/obsolete material | `company-drive://90_Archive` |
+
+## Versioned `START HERE` usage-note contract
+
+Task: `drive-folder-usage-notes`.
+
+This is an approved repository contract only. PR #11 does not place or update
+any live Drive note. Live placement requires separate implementation, review and
+approval.
+
+Exactly one concise note titled `START HERE` belongs at the root of each of the
+eight canonical work areas above and each generated
+`AE-CAS-NNNN_short-name` / `AE-CGR-NNNN_short-title` folder. Roll out in this
+order:
+
+1. `company-drive://01_Inbox`;
+2. the generated-folder contract under
+   `company-drive://30_Projects_Cases`;
+3. the generated-folder contract under `company-drive://40_Content`;
+4. the remaining canonical work areas.
+
+Every note contains these short, version-controlled sections:
+
+1. **Purpose** — why the folder exists and the decision/evidence it supports.
+2. **Allowed inputs / disallowed inputs** — accepted material and explicit
+   exclusions.
+3. **Naming / required metadata** — naming pattern and required metadata fields,
+   without live values.
+4. **One correct example** — placeholder-only, such as
+   `AE-CAS-NNNN_short-name` or `AE-CGR-NNNN_short-title`; never a live ID or
+   payload.
+5. **Current manual / live / planned automation** — state each separately; do
+   not present planned behavior as live.
+6. **Trigger / actions / output** — concise input event, bounded actions and
+   expected artifact or record.
+7. **Approvals / PII** — required human approval, privacy classification and
+   prohibited PII handling.
+8. **Owner / version** — accountable owner, contract version and review date.
+
+Management is idempotent and fail-closed:
+
+- use parent governed alias/generated-folder pattern plus `START HERE` as the
+  logical key;
+- create only when missing and keep exactly one note;
+- update only the stable versioned managed section;
+- preserve human-authored content outside that section without modification;
+- never create duplicates or include secrets, credentials, provider/resource
+  IDs, any other assigned/live ID, live payloads or PII;
+- if multiple notes exist or managed markers are missing/malformed, do not
+  delete, merge or overwrite anything automatically; require manual reconciliation.
 
 ## New case intake
 

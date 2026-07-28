@@ -3,20 +3,59 @@
 # Non-authority workflows are marked and must never silently become Company OS.
 # The repository baseline index currently contains 82 workflow exports:
 #   adapteng-automation-platform/n8n/workflow-index.json  (repository baseline)
-# Personal domains (Job Monitor / English Coach) are out of Company scope (ARCHITECTURE.md §6.3).
+# Job Monitor/job-search, English Coach/English-learning and Kraken are excluded personal projects.
 # No secrets: webhook paths and tokens are marked, not printed.
 version: 1
-updated: 2026-07-27
+updated: 2026-07-28
 last_verified_live: 2026-07-27
 live_counts:
   self_hosted: { total: 2, active: 2, drift: none }
-  cloud: { total: 89, active: 33, repo_exports: 82, live_only: 14, repo_only: 7 }
-cloud_active_freeze_chain: "42 -> 40 (MM-40/MM-41) -> 38 (MM-42/MM-43) -> 37 (d1SDcRTgMqS9Zvgi) -> 36 (J5SpIS8Ye8JHViFi) -> 35 (4D9UBruS1ZhLn1pS) -> 34 (o9Lj7F9WbhFSCARq) -> 33 (clPtSQwzze8DHEvp)"
+  cloud: { total: 89, active: 31, inactive: 58, repo_exports: 82, live_only: 14, repo_only: 7 }
+cloud_pre_freeze_audit: { total: 89, active: 33, verified: 2026-07-27 }
+cloud_active_freeze_chain: "42 -> 40 -> 38 -> 37 -> 36 -> 35 -> 34 -> 33 -> 31"
 freeze_fail_closed_evidence:
-  workflows: [d1SDcRTgMqS9Zvgi, J5SpIS8Ye8JHViFi, 4D9UBruS1ZhLn1pS, o9Lj7F9WbhFSCARq, clPtSQwzze8DHEvp]
-  manual_mode: rejected before execution creation
-  production: rejected before execution creation
+  earlier:
+    workflows: [d1SDcRTgMqS9Zvgi, J5SpIS8Ye8JHViFi, 4D9UBruS1ZhLn1pS, o9Lj7F9WbhFSCARq, clPtSQwzze8DHEvp]
+    production_probe: { result: rejected_before_execution_creation, execution_id: null }
+    manual_probe: { result: rejected_before_execution_creation, execution_id: null }
+  latest:
+    workflows: [uBVRMTCKwnUG91kU, RAPjKSnj6EY7axtb]
+    production_probe: { result: rejected_before_execution_creation, execution_id: null }
+    manual_probe: { result: rejected_before_execution_creation, execution_id: null }
+    post_freeze_execution_count: 0
   conclusion: fail-closed freeze verified in both modes
+
+repository_containment_evidence:
+  repository: adapteng-automation-platform
+  pull_request: 85
+  reviewed_head: a88ba7e3f76e6a192ee687ef7d55aa50fc575fc1
+  independent_review: REVIEW_CLEAN
+  merge_method: guarded_squash
+  main_commit: 99f4d88e867cb874cf8821de14ddea1b882b5560
+  merged_at: 2026-07-28T07:26:18Z
+  scope: merged repository documentation and inventory evidence only
+  live_effect: none; verified live counts remain 89 non-archived / 31 active / 58 inactive
+  live_closure: unresolved; authenticated MCP availability and explicit allowlist verification remain owner actions
+
+systemic_mcp_exposure:
+  status: unresolved
+  observed: audited workflows still have Available in MCP enabled
+  update_attempt: workflow update API rejected the availability field as unsupported; no availability changed
+  exposure_semantics: instance-level MCP plus per-workflow availability and an authenticated user exposes supported workflows
+  trigger_independence: disabling Available in MCP does not stop normal webhook, schedule, manual or internal triggers
+  owner_action: disable instance-level MCP globally or set per-workflow availability through a supported UI/API, then verify an explicit allowlist only
+
+repository_update_boundary: no payload or credential review, model call, publication, website cutover or live mutation
+
+excluded_personal_projects:
+  status: excluded-from-company-os
+  projects: [Job Monitor / job-search, English Coach / English-learning, Kraken / personal trading]
+  registry_evidence: aggregate exclusion and isolation evidence only
+  operational_company_rows: prohibited for excluded personal projects, including Systems_Automations
+  company_resources: "prohibited: company Shared Drive, Baserow, Postgres, n8n, AI employees, budgets and operational roadmap"
+  self_hosted_company_cutover: prohibited
+  separation: separate any shared credentials and store in place without copying personal data
+  kraken_pattern_reuse: separately reviewed data-free generic patterns only
 
 canonical_full_index: adapteng-automation-platform/n8n/workflow-index.json  # 82 repository exports; live drift above must be reconciled
 
@@ -45,16 +84,23 @@ company_os_workflows:
     status: live-active
     proven: 2026-07-25 (T1 create, T2 idempotent replay, T3 reservation conflict -> HTTP 409, T4 no-loss -> HTTP 500 -> clean retry; independent Baserow read-back, zero duplicates)
     owner: Ivan
-    consumer_pending: "website producer (adapteng-website PR #78) remains draft/unmerged/undeployed; point it at this webhook only during the approved cutover."
+    consumer_pending: "website producer PR #78 remains draft, unmerged and undeployed; its current head awaits fresh independent review and must not be cut over."
     producer_cutover:
       producer: "adapteng-website PR #78"
-      reviewed_head: b0e3a656cf6659b893810e11a15b9f515527ab79
-      compatibility: WEB-002 producer controls implemented in reviewed draft
-      status: draft-unmerged-undeployed-cutover-unproven
-      implemented_controls: [randomized /webhook/web002-lead-<8 lowercase hex> allowlist, X-Webhook-Token, identity-only durable mode-bound outbox, legacy-default flat MM-18 compatibility, transport/5xx retry, terminal 409 and other-4xx handling]
-      remaining_evidence: [actual WordPress/Fluent Forms producer T1-T4, atomic no-dual-write cutover, seven-day reconciliation, rollback proof, wp-content deployment]
+      historical_last_reviewed_head: b0e3a656cf6659b893810e11a15b9f515527ab79
+      historical_seven_issue_blocked_head: 1baedaf732088edcc3fa4e40892d23d42b140d7b
+      current_github_head: a23b194fb72aed51941d9cb1c288cbc7eb2f66a0
+      status: draft-unmerged-undeployed-awaiting-fresh-independent-review
+      independent_review:
+        current_head_status: pending
+        historical_blocked_head: 1baedaf732088edcc3fa4e40892d23d42b140d7b
+        historical_issue_count: 7
+        historical_issue_class: delivery-and-data-race
+      readiness: no review-clean or cutover-ready claim; the exact current head must receive a fresh independent review-clean result
+      historical_controls_at_last_reviewed_head: [randomized producer route, header authentication, identity-only durable mode-bound outbox, legacy-default flat MM-18 compatibility, transport/5xx retry, terminal 409 and other-4xx handling]
+      remaining_evidence: [exact-head independent review-clean result, actual WordPress/Fluent Forms producer T1-T4, atomic no-dual-write cutover, seven-day reconciliation, rollback proof, wp-content deployment]
       legacy_default: flat MM-18 remains the default until atomic cutover
-      dark_mode: "allowlisted https://n8n.adapteng.com/webhook/web002-lead-<8 lowercase hex> plus X-Webhook-Token"
+      dark_mode: randomized producer route plus header authentication; values remain host-only
       outbox: durable identity-only Fluent Forms formId:entryId references bound to one delivery mode
       response_policy: { "2xx": ack, "5xx_or_transport": retry, "409": terminal-identity-review, "other_4xx": terminal-config-validation }
       canary: actual WordPress/Fluent Forms producer T1-T4 not yet proven
@@ -82,6 +128,8 @@ deferred_or_gated_workflows:
       as the host-only legacy default while PR #78's WEB-002 mode is dark; never
       dual-write. Retire MM-18 only after actual WordPress T1-T4, atomic flag
       cutover and seven-day reconciliation.
+    freeze_decision: do not freeze now; recent successful webhooks prove this is the current website lead path
+    cutover_gate: new immutable review-clean WEB-002 producer head plus actual producer T1-T4, atomic no-dual-write cutover and rollback proof
 
 non_authority_cloud_safety_freezes:
   - id: d1SDcRTgMqS9Zvgi
@@ -98,12 +146,43 @@ legacy_cloud_authority_dependencies:
   - { id: fTJVvxC0hviQy0im, name: MM-01, dependency: "legacy personal 01_Inbox", cutover: pending }
   - id: uBVRMTCKwnUG91kU
     name: MM-Visual-Evidence-Intake
-    status: live-active-legacy-binding
+    status: inactive-safety-freeze
     dependency: legacy personal 00_Case_Uploads
-    active_path: founder-chat-allowlisted media sanitize/log version remains active
-    disabled_draft_path: "/approve -> MM21-24 draft path disabled and unpublished"
-    active_count_effect: unchanged
-    cutover: pending
+    risk: published Telegram route lacked a principal allowlist and reached media-worker before a disconnected marker/schema/ready branch
+    freeze: old published version retained for audit/rollback; Manual, Telegram and worker nodes disabled; workflow unpublished
+    containment_evidence:
+      previous_published_version_id: dda7f039-764c-449d-9f0e-4c8badb44919
+      current_draft_version_id: 3093a3bf-0567-4cb3-9956-56020dc4713c
+      active: false
+      active_version_id: null
+      production_probe: { result: rejected_before_execution_creation, execution_id: null }
+      manual_probe: { result: rejected_before_execution_creation, execution_id: null }
+      post_freeze_execution_count: 0
+    reactivation_gate: founder/principal allowlist precedes every command and media-worker is reachable only from validated-ready output
+    cutover: replace with governed corporate intake; do not reactivate before the gate
+  - id: RAPjKSnj6EY7axtb
+    name: MM-08 Lead Intake & Triage
+    status: inactive-safety-freeze
+    risk: unauthenticated public write ingress
+    execution_history: zero executions
+    proven_dependency: none
+    freeze: webhook and lead-write nodes disabled; workflow unpublished
+    containment_evidence:
+      previous_active_version_id: 644416d5-7f7f-4fa0-b02f-a8c787752617
+      current_draft_version_id: 37817f58-e6fb-4876-a076-497ab776413c
+      active: false
+      active_version_id: null
+      production_probe: { result: rejected_before_execution_creation, execution_id: null }
+      manual_probe: { result: rejected_before_execution_creation, execution_id: null }
+      post_freeze_execution_count: 0
+      rollback:
+        retained: true
+        version_id: 644416d5-7f7f-4fa0-b02f-a8c787752617
+        version_history_retained: true
+        containment_draft_version_id: 37817f58-e6fb-4876-a076-497ab776413c
+    accountable_owner: Ivan
+    owner_approval_required: true
+    replacement_gate: named accountable owner Ivan and explicit owner approval, authentication, schema validation, rate control and stable deduplication
   - id: sM8lksVuYfMUeC6U
     name: MM-40
     status: inactive-safety-freeze
@@ -161,7 +240,31 @@ legacy_cloud_authority_dependencies:
     versions: prior active 72869463; freeze draft 28a7ef72
     preserved_history: 6 historical runs and their data
     cutover: never reactivate the direct-model path; use canonical gateway/ledger/caps, AG-008 and governed Company Drive
+  - id: 39CAjeKcZD64VM25
+    name: MM-10
+    status: inactive-defense-in-depth
+    active_count_effect: unchanged; already inactive
+    hardening: Manual, Schedule and approval-write nodes disabled
+    containment_evidence:
+      current_draft_version_id: 22776538-c4eb-4ea3-98e8-eeb1de8c6ea7
+      active: false
+      active_version_id: null
+      history: prior versions retained
+  - id: at9H54krWF9ULdtT
+    name: MM-29
+    status: inactive-defense-in-depth
+    active_count_effect: unchanged; already inactive
+    hardening: Manual, Schedule and approval-write nodes disabled
+    containment_evidence:
+      current_draft_version_id: 1ca9a60e-9c4f-425c-980f-fedc24d85bf2
+      active: false
+      active_version_id: null
+      history: prior versions retained
   - { id: T3WHl2kCkPiPOPQd, name: MM-30, dependency: "deterministic draft builder", status: inactive }
+
+harden_before_freeze:
+  - { workflows: MM-20/MM-24, requirement: approval, dependency and idempotency repair }
+  - { workflow: MM-07, requirement: redacted allowlist logging }
 
 legacy_approval_publish_state:
   artifacts: [Approval_Log, Content_Drafts, Publish_Plan]
@@ -218,8 +321,10 @@ safety_evidence:
 cutover_truth:
   self_hosted_active_count: 2
   cloud_total_count: 89
-  cloud_active_count: 33
+  cloud_active_count: 31
+  cloud_inactive_count: 58
   cloud_company_authority: Marketing Machine and Lead Monitor content/lead workflows
-  personal_domains_on_cloud: [Job Monitor, English Coach]
+  excluded_personal_project_evidence: aggregate boundary evidence only; see top-level contract
+  personal_project_company_cutover: prohibited
   inventory_drift: 14 live-only / 7 repo-only versus 82 repository exports
-  rule: one inactive shadow and controlled canary at a time; never big-bang
+  rule: one inactive company-workflow shadow and controlled canary at a time; never big-bang

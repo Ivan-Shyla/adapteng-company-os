@@ -10,9 +10,14 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
 
 ## 🔴 Security — do first
 
-- [x] **Revoke the leaked Baserow token `acJgo3…`.** ✅ **DONE 2026-07-26** — owner
-  revoked it at source (Baserow → API tokens). It no longer authenticates.
-- [x] **Revoke the temporary cleanup token `temporary-test-cleanup-2026-07-26`.**
+- [ ] **URGENT - revoke and rotate the compromised Baserow API token**
+  (`baserow-company-os-primary`; fingerprint redacted). Its literal value
+  was committed to Git history and must be treated as compromised. Owner
+  only: revoke it at the provider, issue and install a least-privilege
+  replacement, then verify the old value fails. Current tracked files are
+  sanitized, but rotation is not complete or evidenced; do not rewrite history.
+- [x] **Revoke the temporary Baserow cleanup token** (secret
+  name/fingerprint redacted).
   ✅ **DONE 2026-07-26** — independent API verification now returns HTTP 401.
 - [ ] **Rotate the self-hosted n8n public API management key after launch work.**
   It was supplied through chat for the governed workflow build. Revoke it in
@@ -20,6 +25,28 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   and keep the replacement in the password manager/runtime secret store — not
   Git or chat. Existing encrypted workflow credentials/webhooks do not depend
   on this management key, so rotation should not interrupt AUT-001/WEB-002.
+- [ ] **Close systemic n8n MCP exposure.** Audited workflows still have
+  **Available in MCP** enabled because the available workflow-update API
+  rejected that unsupported field; no availability changed. Instance-level MCP
+  plus per-workflow availability and an authenticated user exposes supported
+  workflows. Disable instance-level MCP globally or change per-workflow
+  availability through a supported UI/API, then verify the effective exposure
+  is an explicit allowlist only. Turning **Available in MCP** off does not stop
+  normal webhook, schedule, manual or internal triggers. Repository containment
+  evidence is merged: automation-platform PR #85 reviewed head
+  `a88ba7e3f76e6a192ee687ef7d55aa50fc575fc1` received independent
+  **REVIEW CLEAN** and was guarded squash-merged as automation `main`
+  `99f4d88e867cb874cf8821de14ddea1b882b5560` at
+  `2026-07-28T07:26:18Z`. Keep this owner action open: that merge did not access
+  n8n, change live availability, verify an authenticated MCP allowlist, or alter
+  the verified **89 non-archived / 31 active / 58 inactive** state.
+- [ ] **Harden live paths before any further freeze decision.** Do not freeze
+  MM-18 while recent successful webhooks prove it is the current website lead
+  path; retain it until a new immutable review-clean WEB-002 producer head plus
+  actual producer T1-T4, atomic no-dual-write cutover and rollback proof are
+  complete. Repair MM-20/MM-24 approval, dependency and idempotency controls and
+  make MM-07 allowlist logging redacted. Personal-project workflow work is
+  outside the Company OS operational roadmap.
 - [ ] **Enable minimal solo-safe `main` protection in repository Settings/Rules.**
   Re-verified 2026-07-27: `main` is **unprotected** in
   `Ivan-Shyla/adapteng-company-os`, `adapteng-automation-platform`,
@@ -36,11 +63,17 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   non-secret identifier, replace the shared key with per-repository/service
   least-privilege credentials, and prove deploy/rollback continuity without
   interrupting current deployments.
-- [ ] **Prove workflow credential isolation and second-admin continuity.** Record
-  the workflow→credential binding map by credential ID/name only — never values
-  — and verify company versus personal domain separation and least privilege.
-  Nominate and test a second administrator/break-glass operator so runtime
-  recovery does not depend on one personal account.
+- [ ] **Separate excluded personal-project resources and prove company credential
+  isolation.** Job Monitor/job-search, English Coach/English-learning and Kraken
+  personal trading must not migrate into Company OS, company Shared
+  Drive/Baserow/Postgres/n8n, AI employees, budgets or the operational roadmap.
+  Keep aggregate exclusion/isolation evidence only; create no
+  `Systems_Automations` or other operational company rows. Separate any currently
+  shared credential/store within the personal boundary and revoke the
+  company/shared binding after proof, without copying personal data. The
+  `ISO-1` waiver expires **2026-08-08**. Record company workflow→credential
+  bindings by ID/name only, then nominate and test a second company
+  administrator/break-glass operator.
 - [ ] **Contain and archive legacy `PalinaRuban/adapteng`.** Treat it only as a
   personal-account June-2026 WordPress/Azure snapshot — not active Company OS,
   authoritative production or rollback. The live public site is on the separate
@@ -88,6 +121,17 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   partial-failure replay, actual B64/delegated-user env config and dispatch/CLI.
   Review PR-A first. Only then stack PR-B with the authenticated internal HTTP
   service. Deployment and any controlled copy require separate approval.
+- [ ] **`drive-folder-usage-notes` — approve live `START HERE` placement
+  separately.** PR #11 defines only the repository contract; it performs no live
+  Drive write. Put exactly one concise versioned note in every canonical work
+  area and generated `AE-CAS`/`AE-CGR` folder, prioritizing `01_Inbox`,
+  `30_Projects_Cases`, then `40_Content`. Require purpose, allowed/disallowed
+  inputs, naming/metadata, one placeholder-only example, current
+  manual/live/planned automation, trigger/actions/output, approvals/PII and
+  owner/version. The manager must be idempotent, create no duplicate, include no
+  secret/credential/assigned or provider ID/live payload/PII, update only its
+  versioned managed section and preserve all human-authored content. Fail closed on
+  duplicate notes or malformed markers.
 - [ ] **INT-001 (integrity) — approve the deferred wiring, one PR at a time.**
   ADR-0011 defers each of these to a *future approved PR*: live schedule, the
   Finding→Action adapter, the n8n workflow, live manifest wiring, and deployed
@@ -116,23 +160,23 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   blocker above. Then one measured, inactive EU Vertex
   `gemini-3.1-flash-lite` call may run through the canonical gateway. Never
   reactivate or route around frozen direct-model workflow MM-22.
-- [ ] **Website producer (website PR #78)** stays draft/held. Reviewed draft head
-  `b0e3a656cf6659b893810e11a15b9f515527ab79` implements the randomized
-  `/webhook/web002-lead-<8 lowercase hex>` allowlist, `X-Webhook-Token`,
-  identity-only durable mode-bound outbox, legacy-default flat MM-18
-  compatibility, transport/5xx retry, 409 terminal identity review and
-  other-4xx terminal configuration/validation handling. It remains unmerged and
-  undeployed; merge auto-deploys `wp-content/**`. Follow the [producer cutover
+- [ ] **Website producer (website PR #78)** stays draft/held. Head
+  `b0e3a656cf6659b893810e11a15b9f515527ab79` is historical last-reviewed
+  evidence only. Head `1baedaf732088edcc3fa4e40892d23d42b140d7b` is the
+  historical seven-issue-blocked delivery/data-race head. Current GitHub head
+  `a23b194fb72aed51941d9cb1c288cbc7eb2f66a0` remains draft, unmerged and
+  undeployed and awaits fresh independent review. No review-clean or
+  cutover-ready claim is made. Require an exact-head independent review-clean
+  result before following the [producer cutover
   sequence](../runbooks/n8n-operations.md#website-producer-cutover-safety):
-  encrypted host-only URL/token config; actual WordPress/Fluent Forms producer
-  T1–T4; atomic mode switch with no dual-write; seven-day reconciliation and
-  rollback proof; MM-18 retirement last. Repository tests do not prove producer
-  T1–T4 or the cutover window. Keep model-provider legal placeholders
-  unpublished.
+  actual WordPress/Fluent Forms producer T1–T4, atomic mode switch with no
+  dual-write, seven-day reconciliation and rollback proof; MM-18 retirement
+  last. Keep model-provider legal placeholders unpublished.
 - [ ] **self-hosted n8n cutover:** repoint the Coolify source from branch
   `palinaruban-repo-status-review` to `main`, verify auto-deploy, then complete
-  the inactive shadow. n8n Cloud remains the authority for MM/LM/JM/EC until
-  each individual cutover is evidenced.
+  the inactive company-workflow shadow. n8n Cloud remains the authority for
+  company MM/LM until each company cutover is evidenced. Excluded personal
+  projects have no Company OS cutover.
 
 ## ⚪ Standing / Definition-of-Done
 
@@ -150,12 +194,11 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   `AdaptEng Company`, create/confirm the Cloud Identity Free break-glass
   super-admin, enable MFA, and store recovery codes offline. This cannot be
   proven by a service account.
-- [ ] **Personal JM/EC isolation:** verify live credential/store identity;
-  the `ISO-1` waiver expires **2026-08-08**.
-- [ ] **n8n Cloud inventory drift:** live API now reports 89 non-archived
-  workflows / 33 active versus 82 repository exports; drift remains 14
-  live-only / 7 repo-only. The active safety-freeze chain is **42 → 40 → 38 →
-  37 → 36 → 35 → 34 → 33**. Export,
+- [ ] **n8n Cloud inventory drift:** a fresh live audit reconfirmed
+  89 non-archived workflows / 33 active; reversible freeze-now actions then
+  produced **89 non-archived / 31 active / 58 inactive** versus 82 repository
+  exports. Drift remains 14 live-only / 7 repo-only. The active safety-freeze
+  chain is **42 → 40 → 38 → 37 → 36 → 35 → 34 → 33 → 31**. Export,
   sanitize, classify and reconcile before claiming the repository index is
   authoritative; do not bulk-import/activate during this cleanup. MM-40 through
   MM-43 were deliberately unpublished with all entry triggers disabled; do not
@@ -182,11 +225,33 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   `28a7ef72` and six historical runs/data are preserved. Do not reactivate the
   direct-model path. For the gateway, mail router, approval sync and plan
   builder plus MM-22, manual-mode and production probes reject before execution
-  creation; the five freezes are verified fail-closed.
-  `uBVRMTCKwnUG91kU` remains active in its founder-chat-allowlisted media
-  sanitize/log version; only the unpublished `/approve → MM21-24` draft path was
-  disabled, so do not subtract it from the active count. Historical WordPress
-  pages 878/880/882/884/891 are already in Trash, related n8n rows are
+  creation; the five earlier freezes are verified fail-closed.
+  MM-Visual-Evidence-Intake `uBVRMTCKwnUG91kU` is now unpublished because its
+  Telegram route lacked a principal allowlist and could reach media-worker
+  before validated-ready output. Published version
+  `dda7f039-764c-449d-9f0e-4c8badb44919` is retained for audit/rollback; current
+  draft is `3093a3bf-0567-4cb3-9956-56020dc4713c`, with `active=false` and
+  `active_version_id=null`. Manual, Telegram and worker nodes are disabled.
+  Never reactivate it until a founder/principal allowlist precedes every command
+  and media-worker is reachable only from validated-ready output. MM-08
+  `RAPjKSnj6EY7axtb` is also
+  unpublished because it was an unauthenticated public write ingress with zero
+  executions and no proven dependency; webhook and lead-write nodes are
+  disabled. Active version `644416d5-7f7f-4fa0-b02f-a8c787752617` is retained;
+  current draft is `37817f58-e6fb-4876-a076-497ab776413c`, with `active=false`
+  and `active_version_id=null`. The prior active version and version history
+  remain retained as rollback evidence against the containment draft.
+  Reactivation/replacement requires named accountable owner Ivan, explicit owner
+  approval, authentication, schema validation, rate control and stable
+  deduplication. Production and manual probes for both workflows have
+  `execution_id=null`; the post-freeze execution count is zero. Already-inactive
+  MM-10 `39CAjeKcZD64VM25` and MM-29
+  `at9H54krWF9ULdtT` retain drafts
+  `22776538-c4eb-4ea3-98e8-eeb1de8c6ea7` and
+  `1ca9a60e-9c4f-425c-980f-fedc24d85bf2`; Manual, Schedule and approval-write
+  nodes are disabled as defense-in-depth, both remain inactive, and prior
+  history is retained. Historical WordPress pages
+  878/880/882/884/891 are already in Trash, related n8n rows are
   quarantined and page 891 cache/public access was verified closed. Unattached
   public media IDs 886–889 and 893–896 were also removed and verified 404; the
   source Drive HEIC files remain untouched.
@@ -237,8 +302,9 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   fail-closed retry semantics.
 - Baserow Company OS schema provisioned live (8 tables / 107 fields / 10 views);
   read-only table-id binding captured on `main`.
-- Leaked Baserow token revoked at source; 14 synthetic proof rows deleted and
-  verified (2026-07-26).
+- Fourteen synthetic Baserow proof rows deleted and verified (2026-07-26).
+  Compromised token remediation is reopened under Security because a literal
+  value remains in Git history; no rotation completion is claimed.
 - Google service account provisioned with Drive domain-wide delegation; actual
   runtime refs are `GOOGLE_SERVICE_ACCOUNT_JSON_B64` and
   `GOOGLE_WORKSPACE_DELEGATED_USER`. This proves credential supply, not file
