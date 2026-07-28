@@ -40,13 +40,28 @@ services:
     legacy_snapshot:
       repository: PalinaRuban/adapteng
       classification: personal-account June-2026 WordPress/Azure snapshot; no active or authoritative production role
+      company_os_authority: excluded
       active_public_path: separate nginx/Cloudways deployment
       runtime_evidence: legacy Azure hostname no longer resolves; last deployment workflow failed
+      containment_pr: PalinaRuban/adapteng#3
+      reviewed_head: 9b9d9e99859370a4d43d563870d1028725171348
+      review_status: bounded immutable REVIEW CLEAN
+      merge_status: guarded squash-merged
+      merged_main_commit: 9c8acd166bf57dc416ed6de86ced8f0b26ac3eb5
+      merged_at: "2026-07-28T10:43:33Z"
+      policy_checks:
+        candidate-policy: success
+        trusted-base-policy: skipped only for expected one-time bootstrap
+      repository_containment_complete: true
+      history_clean: false
+      credential_rotations_complete: false
+      archived: false
+      live_ready: false
       retain: [custom theme, brand/license provenance, historical runbook]
       migrate_from_live: structured approved business knowledge from current CMS/database
       exclude: [WordPress core, plugins, runtime, credentials, PII]
-      security_gap: tracked wp-config.php has DB settings/auth salts; stale repository publish-profile secret/workflow and Zoho app password in DB/export require rotation
-      containment: separate PR removes tracked wp-config.php/deploy workflow and adds archive/rotation guardrails; no history rewrite yet
+      security_gap: historical DB/auth/deployment/mail credential exposure remains compromised; owner provider-side rotations and old-value failure verification are pending
+      containment: current main repository containment is complete; current-tree cleanup and archive/rotation guards are merged; no history cleanup or live-readiness claim
       archive_gate: fresh encrypted current CMS/database/media export plus company ownership transfer
     owner: Ivan
     notes: >-

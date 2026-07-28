@@ -74,20 +74,25 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   `ISO-1` waiver expires **2026-08-08**. Record company workflow→credential
   bindings by ID/name only, then nominate and test a second company
   administrator/break-glass operator.
-- [ ] **Contain and archive legacy `PalinaRuban/adapteng`.** Treat it only as a
-  personal-account June-2026 WordPress/Azure snapshot — not active Company OS,
-  authoritative production or rollback. The live public site is on the separate
-  nginx/Cloudways path; the legacy Azure hostname no longer resolves and its
-  last workflow failed. Rotate DB credentials, WordPress auth salts, the stale
-  repository/Azure publish-profile secret and the Zoho app password present in
-  the DB/export at their providers. Use a **separate containment PR** to remove
-  the currently tracked `wp-config.php` and deploy workflow and add
-  archive/rotation guardrails; do **not** rewrite Git history yet. Retain only
-  the custom theme, brand/license provenance and historical runbook. Migrate
-  structured approved business knowledge from the current live CMS/database;
-  exclude WordPress core/plugins/runtime/credentials/PII. Archive only after a
-  fresh encrypted current CMS/database/media export and company ownership
-  transfer.
+- [ ] **Finish owner-only remediation and archive legacy
+  `PalinaRuban/adapteng`.** Treat it only as a personal-account June-2026
+  WordPress/Azure snapshot — not active Company OS, authoritative production or
+  rollback. PR #3 exact head `9b9d9e99859370a4d43d563870d1028725171348`
+  received bounded immutable **REVIEW CLEAN** and was guarded squash-merged as
+  `main` commit `9c8acd166bf57dc416ed6de86ced8f0b26ac3eb5` at
+  `2026-07-28T10:43:33Z`. `candidate-policy` succeeded;
+  `trusted-base-policy` skipped only for the expected one-time bootstrap.
+  Repository containment is complete, but history-clean, credential rotations,
+  archival and live-ready all remain **false**. Rotate the historically exposed
+  DB credentials, WordPress auth salts, repository/Azure deployment credential
+  and mail credential at their providers, then verify the old values fail; no
+  rotation or history cleanup occurred here, and do **not** rewrite Git history
+  yet. Retain only the custom theme, brand/license provenance and historical
+  runbook. Migrate structured approved business knowledge from the current live
+  CMS/database; exclude WordPress core/plugins/runtime/credentials/PII. Archive
+  only after a fresh encrypted current CMS/database/media export and company
+  ownership transfer. Keep the legacy repository excluded from Company OS
+  authority throughout.
 
 ## 🟠 Data hygiene — synthetic test rows
 
