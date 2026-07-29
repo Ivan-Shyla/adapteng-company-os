@@ -9,7 +9,7 @@
 #   repo-merged-not-live     - code merged to main, no live deploy/wiring yet
 #   planned                  - designed, not built
 version: 1
-updated: 2026-07-28
+updated: 2026-07-29
 
 excluded_personal_projects:
   status: excluded-from-company-os
@@ -86,10 +86,12 @@ services:
     owner: Ivan
     notes: >-
       Migrations 001 and 004 are applied and used; 002/003/005/006 remain
-      repo-only and unapplied. Migration 007 source_identity_reservation is
-      repo-only in open automation-platform PR #80
-      (6c8d7830461ba5dcfcd261330f89c30d9b5d8c62) and unapplied. Fresh backup
-      exists; restore drill remains open.
+      repo-only and unapplied. Migrations 007_source_identity_reservation.sql
+      and 008_drive_bridge_replay_reservations.sql are repository-merged via
+      automation PR #89 / dbcf806ea7714b8e2a7415ae6cd788491924178d, but
+      live:false and unapplied. Unrelated 008_ai_gateway_runtime_hardening.sql
+      is forbidden for approved-source import. Before apply: managed backup,
+      isolated restore proof and exact-migration staging rehearsal.
 
   - id: adapteng-baserow-adapter
     repo: adapteng-automation-platform
@@ -155,28 +157,35 @@ services:
   - id: adapteng-drive-adapter
     repo: adapteng-automation-platform
     path: services/adapteng-drive-adapter
-    role: Folder ensure/base-structure adapter only; no file copy or pending-artifact capability.
+    role: Folder/base-structure adapter plus repository-ready bounded approved-source import; import is not live.
     runtime: repo-only library + base-structure dispatch/CLI; no deployed service
     source_of_truth_for: none (Drive is the document/evidence authority)
     status: repo-merged-not-live
     owner: Ivan
     notes: >-
-      Current main can find/create folders and provision the base skeleton only;
-      it has no general file/tree listing, file copy, pending-artifact creation
-      or deterministic partial-failure replay. Existing code expects
-      GOOGLE_SERVICE_ACCOUNT_JSON / GOOGLE_WORKSPACE_ADMIN, while the actual
-      runtime contract is GOOGLE_SERVICE_ACCOUNT_JSON_B64 /
-      GOOGLE_WORKSPACE_DELEGATED_USER. Implementation/review is in progress; no
-      controlled copy has begun. PR-A must provide the typed allowlisted
-      copy/pending-artifact library, Google client, deterministic partial-failure
-      replay, actual env config and dispatch/CLI. PR-B may add authenticated
-      internal HTTP only after PR-A review. Task drive-folder-usage-notes is an
-      approved repository contract, not a live capability: current main does not
-      place or update START HERE notes. A separate reviewed implementation/live
-      approval must manage exactly one note per canonical or generated
-      AE-CAS/AE-CGR folder, update only versioned managed sections and preserve
-      human-authored content without duplicates, secrets, assigned/live IDs or
-      PII.
+      Automation PR #89 was independently reviewed and squash-merged as
+      dbcf806ea7714b8e2a7415ae6cd788491924178d; its merge tree exactly matches
+      reviewed tree 8fc649a97963f38ce0a7592001a7fea4834eceea. The bounded
+      foundation admits exactly three immutable Git-byte JSON files for
+      ART-2026-001 / SRC-2026-001, uses the allocator-returned AE-CGR identity,
+      seals Drive upload, verifies exactly 2 folders / 3 files on replay and
+      emits boolean/count-only receipts. It excludes Baserow rows, AI/model
+      calls, publication, media binaries, extra historical files and all
+      CASE-2026-001 media. No dispatch, migration, upload, write or deployment
+      occurred. Next gates are named least-privilege Git credentials, managed
+      Postgres backup plus isolated restore, exact-migration staging rehearsal,
+      zero-write preflight, reviewed expected writes, the five-phase controlled
+      run and zero-duplicate replay. Drive remains artifact authority; Postgres
+      remains operational truth; Baserow remains the human projection. Task
+      drive-folder-usage-notes remains a repository contract only; no live
+      START HERE note placement is claimed. Read-only GitHub metadata found the
+      three approved-assets environments absent, no workflow run, all required
+      rollout secrets absent, and GOOGLE_CLOUD_PROJECT / GOOGLE_DRIVE_SCOPE
+      absent; only repository-wide GOOGLE_WORKSPACE_ADMIN exists. The
+      approved-source workflow uses GOOGLE_WORKSPACE_ADMIN as its delegated-user
+      variable. Do not dispatch even zero-write phases until environment-scoped
+      least privilege and the managed-backup/isolated-restore/exact-rehearsal
+      evidence chain are proven.
 
   - id: adapteng-baserow-schema
     repo: adapteng-automation-platform

@@ -3,7 +3,7 @@
 # Precedence (ADR-0011 platform layer map):
 #   Postgres = operational truth | Baserow = structured collaboration | Drive = document/media evidence
 version: 1
-updated: 2026-07-26
+updated: 2026-07-29
 
 baserow:
   service: baserow-self-hosted (https://baserow.adapteng.com)
@@ -39,6 +39,16 @@ postgres_adapteng_ops:
     - { file: 004_lead_identity.sql,              provides: "public.lead_identity_reservation + reserve_lead_identity()", live: true, applied: "2026-07-25 (WEB-002); function pins search_path=pg_catalog,public" }
     - { file: 005_ai_gateway.sql,                 provides: "AI gateway cost/run ledger",                      live: false }
     - { file: 006_integrity_projection_manifest.sql, provides: "integrity schema: projection_manifest + coverage_marker", live: false, note: "kept unapplied until backup/restore planning per ARCHITECTURE.md §11 + ADR-0011" }
+    - { file: 007_source_identity_reservation.sql, provides: "canonical source identity to allocator-returned AE-CGR reservation", live: false, note: "repository-merged via automation PR #89; unapplied" }
+    - { file: 008_drive_bridge_replay_reservations.sql, provides: "atomic governed Drive replay reservations", live: false, note: "repository-merged via automation PR #89; unapplied" }
+  approved_source_import:
+    repository_status: repo-merged-not-live
+    repository_status_updated: 2026-07-29
+    merge: "adapteng-automation-platform PR #89 / dbcf806ea7714b8e2a7415ae6cd788491924178d"
+    reviewed_tree: 8fc649a97963f38ce0a7592001a7fea4834eceea
+    permitted_migrations: [007_source_identity_reservation.sql, 008_drive_bridge_replay_reservations.sql]
+    forbidden_migration: 008_ai_gateway_runtime_hardening.sql
+    note: "No workflow dispatch or live database mutation occurred; repository readiness is not live readiness."
   backup:
     last_verified: "2026-07-25 13:31 (35.21 KB, Coolify local + owner download)"
     policy: back up before applying any migration; see runbooks/backup-and-restore.md
@@ -77,12 +87,29 @@ google_drive:
   credentials:
     service_account_ref: GOOGLE_SERVICE_ACCOUNT_JSON_B64
     delegated_user_ref: GOOGLE_WORKSPACE_DELEGATED_USER
-    current_main_mismatch: code expects GOOGLE_SERVICE_ACCOUNT_JSON / GOOGLE_WORKSPACE_ADMIN
-    target_live_wiring: PR-A typed library/client/replay/config/dispatch first; PR-B internal HTTP only after review
+    approved_source_git_credentials: "named least-privilege read-only credentials required before preflight"
     legacy: n8n Cloud OAuth + old media-worker service account still bind current media/content workflows to personal My Drive
-  cutover: base structure complete; implementation/review is in progress; no controlled copy has begun; PR-A/PR-B, workflow rewiring and owner recovery/break-glass acceptance remain pending
+  approved_source_import:
+    scope: "exact immutable ART-2026-001 / SRC-2026-001 three-JSON metadata package only"
+    behavior: "allocator-returned AE-CGR identity; sealed upload; exact 2-folder/3-file replay verification; boolean/count-only receipts"
+    excluded: [Baserow rows, AI generation/model calls, publication, media binaries, extra historical files, CASE-2026-001 media]
+    live: false
+    repository_status_updated: 2026-07-29
+    rollout_readiness:
+      environments_absent: [approved-assets-migrations, approved-assets-preflight, approved-assets-import]
+      workflow_runs: 0
+      required_secrets_absent: [APPROVED_ASSETS_DATABASE_URL, APPROVED_ASSETS_MIGRATION_EVIDENCE_JSON, MARKETING_CONTENTS_READ_TOKEN, COMPANY_OS_CONTENTS_READ_TOKEN, APPROVED_ASSETS_BASE_IDEMPOTENCY_KEY, CANONICAL_40_CONTENT_FOLDER_ID, GOOGLE_SERVICE_ACCOUNT_JSON_B64]
+      required_variables_absent: [GOOGLE_CLOUD_PROJECT, GOOGLE_DRIVE_SCOPE]
+      approved_source_delegated_user_variable: GOOGLE_WORKSPACE_ADMIN
+      repository_variables_present: [GOOGLE_WORKSPACE_ADMIN]
+      dispatch_safe: false
+      note: "Read-only GitHub metadata only; no secret values or live provider access."
+    backup_readiness: "2026-07-25 backup evidence is insufficient: managed backup identifier/hash, disposable isolated restore, exact 007/Drive-008 rehearsal/rollback/post-status and reviewed binding are absent."
+    next_gates: "create environment-scoped least-privilege rollout configuration; prove managed backup identifier/hash plus isolated restore; prove exact-migration rehearsal/rollback/post-status and reviewed binding; zero-write preflight; reviewed expected writes; five-phase controlled run; zero-duplicate replay"
+  cutover: base structure complete; approved-source foundation merged but not live; no controlled import has begun; workflow rewiring and owner recovery/break-glass acceptance remain pending
   operating_guide: runbooks/company-drive.md
 
 precedence_notes:
   - A business fact's canonical owner is Postgres (ids/ledger), surfaced for humans in Baserow, with evidence in Drive.
+  - Repository readiness is not live readiness; the approved-source import preserves Postgres operational truth, Drive artifact authority and Baserow human projection.
   - The integrity-reconciler (when enabled) compares an expected projection manifest against all three, read-only.
