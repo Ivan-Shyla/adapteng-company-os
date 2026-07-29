@@ -43,6 +43,7 @@ postgres_adapteng_ops:
     - { file: 008_drive_bridge_replay_reservations.sql, provides: "atomic governed Drive replay reservations", live: false, note: "repository-merged via automation PR #89; unapplied" }
   approved_source_import:
     repository_status: repo-merged-not-live
+    repository_status_updated: 2026-07-29
     merge: "adapteng-automation-platform PR #89 / dbcf806ea7714b8e2a7415ae6cd788491924178d"
     reviewed_tree: 8fc649a97963f38ce0a7592001a7fea4834eceea
     permitted_migrations: [007_source_identity_reservation.sql, 008_drive_bridge_replay_reservations.sql]
@@ -82,7 +83,7 @@ google_drive:
     human_content_policy: never overwrite content outside the managed section; ambiguous duplicates or malformed markers fail closed
     live_placement: "separate approval and execution; PR #11 performs no live Drive write"
   status: live-folder-skeleton-read-verified
-  last_verified: "2026-07-29 (folder skeleton remains live; approved-source import foundation repository-merged, not dispatched or live)"
+  last_verified: "2026-07-26 (sanctioned GitHub Actions dry run; drive + 8 folders EXISTS)"
   credentials:
     service_account_ref: GOOGLE_SERVICE_ACCOUNT_JSON_B64
     delegated_user_ref: GOOGLE_WORKSPACE_DELEGATED_USER
@@ -93,7 +94,18 @@ google_drive:
     behavior: "allocator-returned AE-CGR identity; sealed upload; exact 2-folder/3-file replay verification; boolean/count-only receipts"
     excluded: [Baserow rows, AI generation/model calls, publication, media binaries, extra historical files, CASE-2026-001 media]
     live: false
-    next_gates: "named least-privilege Git credentials; managed Postgres backup plus isolated restore; exact-migration staging rehearsal; zero-write preflight; reviewed expected writes; five-phase controlled run; zero-duplicate replay"
+    repository_status_updated: 2026-07-29
+    rollout_readiness:
+      environments_absent: [approved-assets-migrations, approved-assets-preflight, approved-assets-import]
+      workflow_runs: 0
+      required_secrets_absent: [APPROVED_ASSETS_DATABASE_URL, APPROVED_ASSETS_MIGRATION_EVIDENCE_JSON, MARKETING_CONTENTS_READ_TOKEN, COMPANY_OS_CONTENTS_READ_TOKEN, APPROVED_ASSETS_BASE_IDEMPOTENCY_KEY, CANONICAL_40_CONTENT_FOLDER_ID, GOOGLE_SERVICE_ACCOUNT_JSON_B64]
+      required_variables_absent: [GOOGLE_CLOUD_PROJECT, GOOGLE_DRIVE_SCOPE]
+      approved_source_delegated_user_variable: GOOGLE_WORKSPACE_ADMIN
+      repository_variables_present: [GOOGLE_WORKSPACE_ADMIN]
+      dispatch_safe: false
+      note: "Read-only GitHub metadata only; no secret values or live provider access."
+    backup_readiness: "2026-07-25 backup evidence is insufficient: managed backup identifier/hash, disposable isolated restore, exact 007/Drive-008 rehearsal/rollback/post-status and reviewed binding are absent."
+    next_gates: "create environment-scoped least-privilege rollout configuration; prove managed backup identifier/hash plus isolated restore; prove exact-migration rehearsal/rollback/post-status and reviewed binding; zero-write preflight; reviewed expected writes; five-phase controlled run; zero-duplicate replay"
   cutover: base structure complete; approved-source foundation merged but not live; no controlled import has begun; workflow rewiring and owner recovery/break-glass acceptance remain pending
   operating_guide: runbooks/company-drive.md
 

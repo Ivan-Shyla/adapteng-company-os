@@ -178,7 +178,14 @@ services:
       run and zero-duplicate replay. Drive remains artifact authority; Postgres
       remains operational truth; Baserow remains the human projection. Task
       drive-folder-usage-notes remains a repository contract only; no live
-      START HERE note placement is claimed.
+      START HERE note placement is claimed. Read-only GitHub metadata found the
+      three approved-assets environments absent, no workflow run, all required
+      rollout secrets absent, and GOOGLE_CLOUD_PROJECT / GOOGLE_DRIVE_SCOPE
+      absent; only repository-wide GOOGLE_WORKSPACE_ADMIN exists. The
+      approved-source workflow uses GOOGLE_WORKSPACE_ADMIN as its delegated-user
+      variable. Do not dispatch even zero-write phases until environment-scoped
+      least privilege and the managed-backup/isolated-restore/exact-rehearsal
+      evidence chain are proven.
 
   - id: adapteng-baserow-schema
     repo: adapteng-automation-platform
