@@ -186,17 +186,23 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
 ## ⚪ Standing / Definition-of-Done
 
 - [ ] **Configure and prove the approved `adapteng_ops` physical backup path.**
-  The selected design is pgBackRest physical base backups + continuous WAL,
-  client-side encrypted to a private Backblaze B2 EU Central repository, with a
-  clean disposable Hetzner PostgreSQL-only restore host. It is **proposed, not
-  configured**; the 2026-07-25 Coolify logical backup is insufficient and the
-  Baserow all-in-one backup is unrelated. Follow
+  The selected design is operator-managed pinned pgBackRest 2.59.0 physical
+  base backups + continuous WAL using provider-managed Backblaze B2 EU Central
+  object storage, with a clean disposable Hetzner PostgreSQL-only restore host.
+  It is **proposed, not configured**; it is not provider-managed PostgreSQL
+  backup, the 2026-07-25 Coolify logical backup is insufficient, and the Baserow
+  all-in-one backup is unrelated. Follow
   [`runbooks/backup-and-restore.md`](../runbooks/backup-and-restore.md): land the
-  reviewed pinned-image/scheduler/monitoring change, take a fresh labeled
-  backup, prove isolated restore, exact 007 + Drive-008 apply, rollback restore
-  and independent re-restore, then record digest-only evidence and delete the
-  host/revoke its read-only key. Do not dispatch approved-assets before a
-  reviewed sanitized `PASS`.
+  separately reviewed compatible images/collectors/status harness/scheduler,
+  approve the complete provider quote, require bucket Object Lock disabled,
+  take a fresh full, pass post-backup `check` and parsed selected-set `verify`,
+  and prove 12-full expiry beyond 21 + 35 + 14 days. Rehearse independent A/B/C
+  restores: A exact pre-migration baseline; B exact 007 + Drive-008 plus an
+  explicit post-migration DML transaction rollback with zero durable synthetic
+  state; C a fresh re-restore ending in the exact B migrated catalog state.
+  Record digest-only evidence, capture C final exact status before cleanup, then
+  delete the host/volumes and revoke the read-only key. Do not dispatch
+  approved-assets before a reviewed sanitized `PASS`.
 - [ ] **Migrations not live:** 002 (run ledger), 003 (approval/outbox), 005 (AI
   gateway), 006 (integrity), 007 (source-identity reservation) and Drive-008
   (replay reservations) are repo-only and unapplied. The approved-source pair

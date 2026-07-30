@@ -9,7 +9,7 @@
 #   repo-merged-not-live     - code merged to main, no live deploy/wiring yet
 #   planned                  - designed, not built
 version: 1
-updated: 2026-07-29
+updated: 2026-07-31
 
 excluded_personal_projects:
   status: excluded-from-company-os
@@ -90,11 +90,13 @@ services:
       and 008_drive_bridge_replay_reservations.sql are repository-merged via
       automation PR #89 / dbcf806ea7714b8e2a7415ae6cd788491924178d, but
       live:false and unapplied. Unrelated 008_ai_gateway_runtime_hardening.sql
-      is forbidden for approved-source import. Proposed pgBackRest physical/WAL
-      backup to B2 EU plus clean PostgreSQL-only restore is documented but not
-      configured. Before apply: fresh backup label/info digest, isolated restore,
-      exact 007/Drive-008 rehearsal, rollback restore, independent re-restore and
-      reviewed digest-only PASS.
+      is forbidden for approved-source import. Proposed operator-managed pinned
+      pgBackRest 2.59.0 physical/WAL backup using provider-managed B2 EU object
+      storage plus clean PostgreSQL-only restore is documented but not configured.
+      Before apply: exact runtime/catalog compatibility; post-backup check and
+      selected-set verify parsed to status ok; 12-full expiry and provider-cost
+      proofs; independent A baseline, B exact apply plus DML transaction rollback,
+      C final exact migrated state; cleanup; and reviewed digest-only PASS.
 
   - id: adapteng-baserow-adapter
     repo: adapteng-automation-platform
