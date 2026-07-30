@@ -185,14 +185,27 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
 
 ## ⚪ Standing / Definition-of-Done
 
-- [ ] **Restore drill:** restore an `adapteng_ops` backup into a scratch target
-  and prove readability (§13 DoD). Backup last verified 2026-07-25 13:31.
+- [ ] **Configure and prove the approved `adapteng_ops` physical backup path.**
+  The selected design is pgBackRest physical base backups + continuous WAL,
+  client-side encrypted to a private Backblaze B2 EU Central repository, with a
+  clean disposable Hetzner PostgreSQL-only restore host. It is **proposed, not
+  configured**; the 2026-07-25 Coolify logical backup is insufficient and the
+  Baserow all-in-one backup is unrelated. Follow
+  [`runbooks/backup-and-restore.md`](../runbooks/backup-and-restore.md): land the
+  reviewed pinned-image/scheduler/monitoring change, take a fresh labeled
+  backup, prove isolated restore, exact 007 + Drive-008 apply, rollback restore
+  and independent re-restore, then record digest-only evidence and delete the
+  host/revoke its read-only key. Do not dispatch approved-assets before a
+  reviewed sanitized `PASS`.
 - [ ] **Migrations not live:** 002 (run ledger), 003 (approval/outbox), 005 (AI
-  gateway), 006 (integrity) and 007 (source-identity reservation) are repo-only
-  and unapplied. Migration 007 is currently in open automation-platform PR #80
-  (`6c8d7830461ba5dcfcd261330f89c30d9b5d8c62`). Apply only after review, fresh
-  backup and a real consumer (`runbooks/apply-migration.md`); 007 also requires
-  adapter redeploy.
+  gateway), 006 (integrity), 007 (source-identity reservation) and Drive-008
+  (replay reservations) are repo-only and unapplied. The approved-source pair
+  was merged by automation-platform PR #89 at
+  `dbcf806ea7714b8e2a7415ae6cd788491924178d`; apply it to live only after the
+  physical-backup rehearsal above, rollout review and explicit owner go/no-go.
+  Follow [`runbooks/apply-migration.md`](../runbooks/apply-migration.md), require
+  a real consumer, and redeploy the adapter for 007. Unrelated
+  `008_ai_gateway_runtime_hardening.sql` remains forbidden for this rollout.
 - [ ] **Baserow off-host export/restore** completion; **Google Workspace**
   Manager/recovery acceptance.
 - [ ] **Workspace recovery/break-glass acceptance:** verify Ivan is Manager of

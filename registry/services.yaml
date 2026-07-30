@@ -90,8 +90,11 @@ services:
       and 008_drive_bridge_replay_reservations.sql are repository-merged via
       automation PR #89 / dbcf806ea7714b8e2a7415ae6cd788491924178d, but
       live:false and unapplied. Unrelated 008_ai_gateway_runtime_hardening.sql
-      is forbidden for approved-source import. Before apply: managed backup,
-      isolated restore proof and exact-migration staging rehearsal.
+      is forbidden for approved-source import. Proposed pgBackRest physical/WAL
+      backup to B2 EU plus clean PostgreSQL-only restore is documented but not
+      configured. Before apply: fresh backup label/info digest, isolated restore,
+      exact 007/Drive-008 rehearsal, rollback restore, independent re-restore and
+      reviewed digest-only PASS.
 
   - id: adapteng-baserow-adapter
     repo: adapteng-automation-platform
