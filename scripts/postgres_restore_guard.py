@@ -864,8 +864,8 @@ def main() -> int:
             "transaction_probe_sha256": probe_sha256,
             "guard_config_sha256": args.guard_config_sha256,
             "selected_set_ref_sha256": set_ref_sha256,
-            "selected_info_sha256": args.selected_info_sha256,
-            "selected_full_completed_at_utc": completed_at,
+            "selected_set_info_sha256": args.selected_info_sha256,
+            "completed_at": completed_at,
             "inventory_sha256": inventory_sha256,
             "approved_image_manifest_sha256": args.approved_image_manifest_sha256,
             "measured_image_identity_sha256": inventory[

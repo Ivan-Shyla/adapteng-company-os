@@ -255,14 +255,15 @@ def main() -> int:
             "selected_set_ref_sha256": hashlib.sha256(
                 args.selected_set.encode("utf-8")
             ).hexdigest(),
-            "selected_info_sha256": args.selected_info_sha256,
-            "selected_full_completed_at_utc": completed_at.strftime(TIMESTAMP),
+            "selected_set_info_sha256": args.selected_info_sha256,
+            "completed_at": completed_at.strftime(TIMESTAMP),
             "scheduler_inventory_sha256": args.scheduler_inventory_sha256,
+            "scheduler_inventory_observed_at": scheduler_at.strftime(TIMESTAMP),
             "repository_inventory_sha256": args.repository_inventory_sha256,
             "inventory_checked_at_utc": checked_at.strftime(TIMESTAMP),
             "completed_newer_fulls": newer_fulls,
             "retention_full_count": 12,
-            "retention_valid_until_utc": retention_valid_until.strftime(TIMESTAMP),
+            "retention_valid_until": retention_valid_until.strftime(TIMESTAMP),
             "latest_rollout_start_utc": latest_rollout_start.strftime(TIMESTAMP),
             "required_from_completion_through_utc": required_from_completion.strftime(
                 TIMESTAMP
@@ -296,9 +297,9 @@ def main() -> int:
                 {
                     "status": "RETENTION_AUTHORIZED",
                     "authorization_status": "AUTHORIZED",
-                    "authorization_checked_at_utc": checked_at.strftime(TIMESTAMP),
-                    "actual_rollout_start_utc": rollout_start.strftime(TIMESTAMP),
-                    "rollout_required_through_utc": rollout_required_through.strftime(
+                    "authorization_checked_at": checked_at.strftime(TIMESTAMP),
+                    "actual_rollout_start": rollout_start.strftime(TIMESTAMP),
+                    "rollout_required_through": rollout_required_through.strftime(
                         TIMESTAMP
                     ),
                 }
@@ -310,7 +311,7 @@ def main() -> int:
         args.output.write_bytes(canonical_json(packet))
         os.chmod(args.output, 0o600)
         print(f"retention_packet_sha256={sha256_file(args.output)}")
-        print(f"retention_valid_until_utc={packet['retention_valid_until_utc']}")
+        print(f"retention_valid_until={packet['retention_valid_until']}")
         print(f"status={packet['status']}")
         return 0
     except RetentionError as exc:

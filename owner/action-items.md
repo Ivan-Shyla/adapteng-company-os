@@ -207,7 +207,11 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   key. Automation evidence schema v2 at
   `4afc3b13668e6a07187db2ee50ee4a283833d16d` rejects the new procedure/image/
   inventory/retention fields; its separately reviewed schema, validator,
-  fixtures and consumer update is an explicit blocker. Do not dispatch
+  fixtures and consumer evidence-lifecycle PR is an explicit blocker. Rollout
+  authorization remains **NOT READY** until that PR merges and validates these
+  exact local fields: `completed_at`, `selected_set_info_sha256`,
+  `scheduler_inventory_sha256`, `scheduler_inventory_observed_at`, and
+  `retention_valid_until`. Do not dispatch
   approved-assets before that dependency merges and a reviewed sanitized
   `PASS` validates.
 - [ ] **Migrations not live:** 002 (run ledger), 003 (approval/outbox), 005 (AI

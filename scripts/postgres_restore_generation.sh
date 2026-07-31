@@ -178,4 +178,7 @@ printf 'inventory_sha256=%s\n' "$(packet_value inventory_sha256)"
 printf 'measured_image_identity_sha256=%s\n' \
   "$(packet_value measured_image_identity_sha256)"
 printf 'selected_set_ref_sha256=%s\n' "$(packet_value selected_set_ref_sha256)"
+printf 'selected_set_info_sha256=%s\n' \
+  "$(packet_value selected_set_info_sha256)"
+printf 'completed_at=%s\n' "$(packet_value completed_at)"
 printf 'status=RESTORED_LOCKED_READY\n'

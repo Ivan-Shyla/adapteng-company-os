@@ -149,7 +149,7 @@ artifacts:
    tracked transaction probe are enumerated in
    `scripts/postgres_restore_procedure_manifest.json`. The reviewed procedure
    manifest SHA-256 is
-   `40528807b3b91e35206e2b8460bb4b598e00cdb8f49a9cb076f2981b3d151a80`;
+   `1e6ee9c3a005b161395a5426867137ccd7f1aa3e6bc4fb563a626a66250f2a0f`;
    the transaction-probe SHA-256 is
    `236097579a1711888828a69691f0ea69da1c3a5d65de39682a031c7ebff68872`.
    Any mismatch is a stop condition.
@@ -215,7 +215,7 @@ implementation:
   runtime_compatibility_assertion_sha256: "<sha256>"
   selected_full_assertion_sha256: "<sha256>"
   migration_status_harness_sha256: "<sha256>"
-  restore_procedure_manifest_sha256: "40528807b3b91e35206e2b8460bb4b598e00cdb8f49a9cb076f2981b3d151a80"
+  restore_procedure_manifest_sha256: "1e6ee9c3a005b161395a5426867137ccd7f1aa3e6bc4fb563a626a66250f2a0f"
   transaction_probe_sha256: "236097579a1711888828a69691f0ea69da1c3a5d65de39682a031c7ebff68872"
 ```
 
@@ -730,7 +730,7 @@ scripts/postgres_restore_generation.sh \
   --selected-info-sha256 "$SELECTED_INFO_SHA256" \
   --approved-image-manifest /secure/backup-image-manifest.json \
   --approved-image-manifest-sha256 "$BACKUP_IMAGE_MANIFEST_SHA256" \
-  --procedure-manifest-sha256 40528807b3b91e35206e2b8460bb4b598e00cdb8f49a9cb076f2981b3d151a80 \
+  --procedure-manifest-sha256 1e6ee9c3a005b161395a5426867137ccd7f1aa3e6bc4fb563a626a66250f2a0f \
   --evidence-dir /secure/evidence
 ```
 
@@ -992,7 +992,7 @@ mounting that fixed repository path read-only:
 ```bash
 set -euo pipefail
 scripts/postgres_restore_transaction_probe.sh \
-  --procedure-manifest-sha256 40528807b3b91e35206e2b8460bb4b598e00cdb8f49a9cb076f2981b3d151a80 \
+  --procedure-manifest-sha256 1e6ee9c3a005b161395a5426867137ccd7f1aa3e6bc4fb563a626a66250f2a0f \
   --runner-image "$RUNNER_IMAGE" \
   --pgpass-file /secure/runner-b.pgpass \
   --evidence-dir /secure/evidence
@@ -1130,7 +1130,9 @@ selected-set/retention or procedure/image/isolation bindings required here.
 Company OS therefore remains **blocked, not executable end-to-end and not
 rollout-ready** until a separately reviewed automation change updates that
 schema, its validator/fixtures and the `APPROVED_ASSETS_MIGRATION_EVIDENCE_JSON`
-consumer.
+consumer. That work belongs in a separate automation evidence-lifecycle PR,
+not frozen authorization PR #93. Do not predict a final schema version or
+claim compatibility before that separate PR is independently reviewed.
 
 The expected contract adds these exact fields:
 
@@ -1138,8 +1140,9 @@ The expected contract adds these exact fields:
 |---|---|---|
 | `managed_backup` | `selected_set_ref_sha256` | SHA-256 of the raw selected full label; no raw label. |
 | `managed_backup` | `selected_set_info_sha256` | Digest of the already verified selected-set info JSON. |
-| `managed_backup` | `selected_full_completed_at` | UTC completion derived only from that info JSON. |
+| `managed_backup` | `completed_at` | UTC completion derived only from that info JSON; never manual input. |
 | `managed_backup` | `scheduler_inventory_sha256` | Fresh authorization-time exact scheduler export digest. |
+| `managed_backup` | `scheduler_inventory_observed_at` | UTC generation/observation time read from that exact scheduler inventory. |
 | `managed_backup` | `repository_inventory_sha256` | Fresh authorization-time completed-full/retention inventory digest. |
 | `managed_backup` | `retention_valid_until` | One second before the count-based selected-set expiry transition. |
 | `managed_backup` | `authorization_checked_at` | Exact UTC time the fresh-inventory gate ran. |
@@ -1207,7 +1210,7 @@ backup:
   source_signatures_captured_at_utc: "<RFC3339>"
   selected_set_ref_sha256: "<sha256; no raw label>"
   selected_set_info_sha256: "<sha256>"
-  selected_full_completed_at: "<RFC3339 derived from selected-set info>"
+  completed_at: "<RFC3339 derived from selected-set info>"
   post_backup_check: "passed"
   selected_set_verify_status: "ok"
   selected_set_verify_sha256: "<sha256>"
@@ -1219,7 +1222,7 @@ implementation_artifacts:
   runtime_compatibility_assertion_sha256: "<sha256>"
   selected_full_assertion_sha256: "<sha256>"
   migration_status_harness_sha256: "<sha256>"
-  restore_procedure_manifest_sha256: "40528807b3b91e35206e2b8460bb4b598e00cdb8f49a9cb076f2981b3d151a80"
+  restore_procedure_manifest_sha256: "1e6ee9c3a005b161395a5426867137ccd7f1aa3e6bc4fb563a626a66250f2a0f"
   transaction_probe_sha256: "236097579a1711888828a69691f0ea69da1c3a5d65de39682a031c7ebff68872"
 compatibility:
   source_image_identity_sha256: "<sha256>"
@@ -1270,8 +1273,9 @@ retention:
   safety_margin_days: 14
   selected_set_ref_sha256: "<same backup value>"
   selected_set_info_sha256: "<same backup value>"
-  selected_full_completed_at: "<same backup value>"
+  completed_at: "<same backup value>"
   scheduler_inventory_sha256: "<fresh authorization-time sha256>"
+  scheduler_inventory_observed_at: "<RFC3339 from that scheduler inventory>"
   repository_inventory_sha256: "<fresh authorization-time sha256>"
   authorization_checked_at: "<RFC3339>"
   actual_rollout_start: "<RFC3339>"
@@ -1283,7 +1287,7 @@ cost:
   quote_accessed_at_utc: "<RFC3339>"
   nonzero_costs_included: true
 isolation:
-  procedure_manifest_sha256: "40528807b3b91e35206e2b8460bb4b598e00cdb8f49a9cb076f2981b3d151a80"
+  procedure_manifest_sha256: "1e6ee9c3a005b161395a5426867137ccd7f1aa3e6bc4fb563a626a66250f2a0f"
   approved_image_manifest_sha256: "<sha256>"
   measured_image_identity_sha256: "<sha256>"
   generation_a_inventory_sha256: "<sha256>"
@@ -1300,9 +1304,9 @@ isolation:
   repository_credentials_present_during_sql: false
   raw_business_rows_in_evidence: 0
 rollout_evidence_contract:
-  automation_schema_version: "<version containing required bindings>"
-  automation_schema_sha256: "<sha256>"
-  required_fields_accepted: true
+  authorization_status: "NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR"
+  automation_schema_sha256: "<absent until separate reviewed PR merges>"
+  required_fields_accepted: false
 repository_controls:
   bucket_visibility: "private"
   bucket_sse_b2: "enabled"

@@ -839,11 +839,15 @@ class RetentionGateTests(unittest.TestCase):
         packet = json.loads(
             (self.base / "output-acceptance.json").read_text(encoding="utf-8")
         )
+        self.assertEqual(packet["completed_at"], "2026-08-01T00:00:00Z")
+        self.assertEqual(packet["selected_set_info_sha256"], sha256_file(self.info))
         self.assertEqual(
-            packet["selected_full_completed_at_utc"], "2026-08-01T00:00:00Z"
+            packet["scheduler_inventory_observed_at"], self.timestamp(now)
         )
+        self.assertIn("scheduler_inventory_sha256", packet)
+        self.assertIn("retention_valid_until", packet)
         self.assertEqual(packet["authorization_status"], "NOT_AUTHORIZED")
-        self.assertNotIn("actual_rollout_start_utc", packet)
+        self.assertNotIn("actual_rollout_start", packet)
 
     def test_authorization_binds_actual_rollout_and_fresh_inventories(self) -> None:
         now = self.completed + timedelta(days=4)
@@ -855,11 +859,17 @@ class RetentionGateTests(unittest.TestCase):
             (self.base / "output-authorization.json").read_text(encoding="utf-8")
         )
         self.assertEqual(packet["authorization_status"], "AUTHORIZED")
-        self.assertEqual(
-            packet["actual_rollout_start_utc"], self.timestamp(now)
-        )
+        self.assertEqual(packet["actual_rollout_start"], self.timestamp(now))
+        self.assertEqual(packet["authorization_checked_at"], self.timestamp(now))
+        self.assertIn("rollout_required_through", packet)
+        self.assertEqual(packet["completed_at"], "2026-08-01T00:00:00Z")
+        self.assertEqual(packet["selected_set_info_sha256"], sha256_file(self.info))
         self.assertIn("scheduler_inventory_sha256", packet)
+        self.assertEqual(
+            packet["scheduler_inventory_observed_at"], self.timestamp(now)
+        )
         self.assertIn("repository_inventory_sha256", packet)
+        self.assertIn("retention_valid_until", packet)
 
     def test_extra_fulls_shorten_horizon_and_fail_closed(self) -> None:
         now = self.completed + timedelta(days=4)
