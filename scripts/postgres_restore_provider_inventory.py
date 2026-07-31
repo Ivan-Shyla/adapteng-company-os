@@ -3,22 +3,46 @@
 
 from __future__ import annotations
 
+import argparse
+import base64
 import hashlib
 import json
 import os
+import socket
 import stat
+import struct
+import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROVIDER_MANIFEST = SCRIPT_DIR / "postgres_restore_provider_manifest.json"
+BROKER_SOCKET = Path("/run/adapteng/provider-inventory-broker.sock")
 API_ROOT = "https://api.hetzner.cloud/v1"
-TOKEN_PATH = Path("/run/secrets/hcloud-readonly-token")
+BROKER_LISTEN = ("127.0.0.1", 39716)
 LOCKED_FIREWALL_NAME = "pg-restore-locked"
 TIMESTAMP = "%Y-%m-%dT%H:%M:%SZ"
+SHA256 = __import__("re").compile(r"^[0-9a-f]{64}$")
+OPERATION_PHASES = {
+    "TARGET_START_RECOVERY",
+    "TARGET_START_FINAL",
+    "PRE_SQL",
+    "POST_SQL",
+}
+PUBLIC_NET_KEYS = {"ipv4", "ipv6", "floating_ips", "firewalls"}
+FORBIDDEN_ATTACHMENT_KEYS = {
+    "network",
+    "networks",
+    "private_network",
+    "private_networks",
+    "privateNet",
+}
 
 
 class ProviderInventoryError(RuntimeError):
@@ -54,6 +78,40 @@ def expected_locked_rules(owner_ssh_cidr: str) -> list[dict[str, Any]]:
     ]
 
 
+def validate_operation_request(
+    operation: Any, generation: str
+) -> dict[str, str]:
+    required = {
+        "schema_version",
+        "operation_id",
+        "challenge_sha256",
+        "generation",
+        "phase",
+        "target_container_id_sha256",
+        "target_image_identity_sha256",
+        "requested_at",
+    }
+    if not isinstance(operation, dict) or set(operation) != required:
+        raise ProviderInventoryError("provider operation request fields are not exact")
+    if (
+        operation["schema_version"] != 1
+        or operation["generation"] != generation
+        or operation["phase"] not in OPERATION_PHASES
+        or not SHA256.fullmatch(str(operation["operation_id"]))
+        or not SHA256.fullmatch(str(operation["challenge_sha256"]))
+        or not SHA256.fullmatch(str(operation["target_container_id_sha256"]))
+        or not SHA256.fullmatch(str(operation["target_image_identity_sha256"]))
+    ):
+        raise ProviderInventoryError("provider operation request binding is not exact")
+    try:
+        datetime.strptime(str(operation["requested_at"]), TIMESTAMP)
+    except ValueError as exc:
+        raise ProviderInventoryError(
+            "provider operation request timestamp is invalid"
+        ) from exc
+    return {key: str(operation[key]) for key in required if key != "schema_version"}
+
+
 def evaluate_provider_state(
     server: dict[str, Any],
     firewalls: list[dict[str, Any]],
@@ -61,6 +119,10 @@ def evaluate_provider_state(
     generation: str,
     observed_at: datetime,
     owner_ssh_cidr: str,
+    operation: dict[str, Any],
+    broker_response_sha256: str = "0" * 64,
+    broker_id: str = "company-os-hetzner-inventory-broker",
+    broker_version: int = 1,
 ) -> dict[str, Any]:
     if generation not in {"A", "B", "C"}:
         raise ProviderInventoryError("generation must be A, B or C")
@@ -71,9 +133,30 @@ def evaluate_provider_state(
         raise ProviderInventoryError("server purpose label is not exact")
     if labels.get("generation") != generation:
         raise ProviderInventoryError("server generation label is not exact")
+    if server.get("name") != f"pg-restore-{generation.lower()}":
+        raise ProviderInventoryError("server name is not exact")
     server_id = server.get("id")
     if not isinstance(server_id, int) or server_id <= 0:
         raise ProviderInventoryError("server ID is invalid")
+
+    if any(key in server for key in FORBIDDEN_ATTACHMENT_KEYS):
+        raise ProviderInventoryError("server contains an ambiguous network attachment field")
+    private_net = server.get("private_net")
+    if not isinstance(private_net, list) or private_net:
+        raise ProviderInventoryError("server private-network attachment state is not empty")
+    public_net = server.get("public_net")
+    if not isinstance(public_net, dict) or set(public_net) != PUBLIC_NET_KEYS:
+        raise ProviderInventoryError("server public-network attachment shape is not exact")
+    floating_ips = public_net.get("floating_ips")
+    if not isinstance(floating_ips, list) or floating_ips:
+        raise ProviderInventoryError("server has an unexpected floating IP attachment")
+    operation_binding = validate_operation_request(operation, generation)
+    if (
+        not SHA256.fullmatch(broker_response_sha256)
+        or broker_id != "company-os-hetzner-inventory-broker"
+        or broker_version != 1
+    ):
+        raise ProviderInventoryError("provider broker identity is not exact")
 
     matching = [
         firewall
@@ -89,18 +172,21 @@ def evaluate_provider_state(
     applied_to = firewall.get("applied_to")
     if not isinstance(applied_to, list):
         raise ProviderInventoryError("locked firewall attachment inventory is missing")
-    attached_server_ids = {
-        item.get("server", {}).get("id")
-        for item in applied_to
-        if isinstance(item, dict) and item.get("type") == "server"
-    }
-    if attached_server_ids != {server_id}:
+    if (
+        len(applied_to) != 1
+        or not isinstance(applied_to[0], dict)
+        or set(applied_to[0]) != {"type", "server"}
+        or applied_to[0].get("type") != "server"
+        or not isinstance(applied_to[0].get("server"), dict)
+        or set(applied_to[0]["server"]) != {"id"}
+        or applied_to[0]["server"].get("id") != server_id
+    ):
         raise ProviderInventoryError("locked firewall is not attached only to this server")
 
     rules = firewall.get("rules")
     if rules != expected_locked_rules(owner_ssh_cidr):
         raise ProviderInventoryError("locked firewall policy is not exact")
-    server_firewalls = server.get("public_net", {}).get("firewalls")
+    server_firewalls = public_net.get("firewalls")
     if not isinstance(server_firewalls, list):
         raise ProviderInventoryError("server firewall attachment state is missing")
     if (
@@ -113,9 +199,9 @@ def evaluate_provider_state(
 
     policy_sha256 = hashlib.sha256(canonical_json(rules)).hexdigest()
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "collector_id": "company-os-hetzner-locked-inventory",
-        "collector_version": 1,
+        "collector_version": 2,
         "collector_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "status": "LOCKED_CURRENT",
         "generation": generation,
@@ -126,16 +212,189 @@ def evaluate_provider_state(
         "owner_ssh_cidr_sha256": hashlib.sha256(owner_ssh_cidr.encode()).hexdigest(),
         "locked_firewall_attached": True,
         "other_firewalls_attached": 0,
+        "private_networks_attached": 0,
+        "private_network_inventory_sha256": hashlib.sha256(
+            canonical_json([])
+        ).hexdigest(),
+        "floating_ips_attached": 0,
+        "broker_id": broker_id,
+        "broker_version": broker_version,
+        "broker_response_sha256": broker_response_sha256,
+        **operation_binding,
     }
 
 
-def get_json(url: str, auth_value: str) -> dict[str, Any]:
+def memfd(payload: bytes, label: str) -> int:
+    if not hasattr(os, "memfd_create"):
+        raise ProviderInventoryError("provider broker verification requires memfd_create")
+    descriptor = os.memfd_create(label, flags=0)
+    os.write(descriptor, payload)
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    return descriptor
+
+
+def verify_broker_signature(payload: bytes, signature: bytes, public_key: bytes) -> None:
+    descriptors = [
+        memfd(public_key, "provider-public-key"),
+        memfd(payload, "provider-broker-response"),
+        memfd(signature, "provider-broker-signature"),
+    ]
+    try:
+        subprocess.run(
+            [
+                "openssl",
+                "pkeyutl",
+                "-verify",
+                "-pubin",
+                "-inkey",
+                f"/proc/self/fd/{descriptors[0]}",
+                "-rawin",
+                "-in",
+                f"/proc/self/fd/{descriptors[1]}",
+                "-sigfile",
+                f"/proc/self/fd/{descriptors[2]}",
+            ],
+            check=True,
+            capture_output=True,
+            pass_fds=tuple(descriptors),
+            env={
+                "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "LANG": "C",
+                "LC_ALL": "C",
+            },
+        )
+    finally:
+        for descriptor in descriptors:
+            os.close(descriptor)
+
+
+def evaluate_broker_response(
+    response_bytes: bytes,
+    request_bytes: bytes,
+    manifest: dict[str, Any],
+    *,
+    now: datetime,
+    verify: Any = verify_broker_signature,
+) -> tuple[dict[str, Any], list[dict[str, Any]], datetime, str]:
+    response = json.loads(response_bytes)
+    required = {
+        "schema_version",
+        "broker_id",
+        "broker_version",
+        "request_sha256",
+        "observed_at",
+        "server",
+        "firewalls",
+        "signature_base64",
+    }
+    if (
+        not isinstance(response, dict)
+        or set(response) != required
+        or canonical_json(response) != response_bytes
+    ):
+        raise ProviderInventoryError("provider broker response fields are not exact")
+    signed = {key: response[key] for key in required - {"signature_base64"}}
+    signed_bytes = canonical_json(signed)
+    if (
+        response["schema_version"] != 1
+        or response["broker_id"] != manifest.get("broker_id")
+        or response["broker_version"] != manifest.get("broker_version")
+        or response["request_sha256"] != hashlib.sha256(request_bytes).hexdigest()
+        or not isinstance(response["server"], dict)
+        or not isinstance(response["firewalls"], list)
+        or not all(isinstance(item, dict) for item in response["firewalls"])
+    ):
+        raise ProviderInventoryError("provider broker response binding is not exact")
+    try:
+        signature = base64.b64decode(
+            str(response["signature_base64"]), validate=True
+        )
+        observed = datetime.strptime(
+            str(response["observed_at"]), TIMESTAMP
+        ).replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError) as exc:
+        raise ProviderInventoryError("provider broker signature/time is malformed") from exc
+    age = now.astimezone(timezone.utc) - observed
+    if age.total_seconds() < 0 or age.total_seconds() > 10:
+        raise ProviderInventoryError("provider broker response is not current")
+    verify(
+        signed_bytes,
+        signature,
+        str(manifest["public_key_pem"]).encode("utf-8"),
+    )
+    return (
+        response["server"],
+        response["firewalls"],
+        observed,
+        hashlib.sha256(signed_bytes).hexdigest(),
+    )
+
+
+def broker_inventory(
+    request_bytes: bytes,
+    manifest: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]], datetime, str]:
+    info = BROKER_SOCKET.lstat()
+    if (
+        os.geteuid() != 0
+        or info.st_uid != 0
+        or not stat.S_ISSOCK(info.st_mode)
+        or info.st_mode & 0o077
+        or BROKER_SOCKET.is_symlink()
+    ):
+        raise ProviderInventoryError("provider inventory broker socket is not secure")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(10)
+        connection.connect(str(BROKER_SOCKET))
+        connection.sendall(struct.pack("!I", len(request_bytes)) + request_bytes)
+        header = exact_receive(connection, 4)
+        length = struct.unpack("!I", header)[0]
+        if length <= 0 or length > 4 * 1024 * 1024:
+            raise ProviderInventoryError("provider broker response length is invalid")
+        response = bytearray()
+        while len(response) < length:
+            chunk = connection.recv(length - len(response))
+            if not chunk:
+                raise ProviderInventoryError("provider broker response is incomplete")
+            response.extend(chunk)
+    return evaluate_broker_response(
+        bytes(response),
+        request_bytes,
+        manifest,
+        now=datetime.now(timezone.utc).replace(microsecond=0),
+    )
+
+
+def exact_receive(connection: socket.socket, length: int) -> bytes:
+    payload = bytearray()
+    while len(payload) < length:
+        chunk = connection.recv(length - len(payload))
+        if not chunk:
+            raise ProviderInventoryError("provider broker request is incomplete")
+        payload.extend(chunk)
+    return bytes(payload)
+
+
+def read_capability_fd(descriptor: int, label: str, maximum: int) -> bytes:
+    if descriptor < 3:
+        raise ProviderInventoryError(f"{label} descriptor is not explicit")
+    payload = bytearray()
+    while chunk := os.read(descriptor, 65536):
+        payload.extend(chunk)
+        if len(payload) > maximum:
+            raise ProviderInventoryError(f"{label} exceeds its maximum size")
+    if not payload:
+        raise ProviderInventoryError(f"{label} is empty")
+    return bytes(payload)
+
+
+def provider_api_get(path: str, provider_capability: bytes) -> dict[str, Any]:
     request = urllib.request.Request(
-        url,
+        f"{API_ROOT}{path}",
         headers={
-            "Authorization": "Bearer " + auth_value,
+            "Authorization": "Bearer " + provider_capability.decode("ascii"),
             "Accept": "application/json",
-            "User-Agent": "adapteng-company-os-restore-inventory/1",
+            "User-Agent": "adapteng-company-os-restore-broker/1",
         },
         method="GET",
     )
@@ -143,10 +402,123 @@ def get_json(url: str, auth_value: str) -> dict[str, Any]:
         with urllib.request.urlopen(request, timeout=15) as response:
             payload = json.load(response)
     except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
-        raise ProviderInventoryError(f"provider inventory request failed: {exc}") from exc
+        raise ProviderInventoryError("provider broker API request failed") from exc
     if not isinstance(payload, dict):
-        raise ProviderInventoryError("provider response is not an object")
+        raise ProviderInventoryError("provider broker API response is not an object")
     return payload
+
+
+def sign_broker_payload(payload: bytes, signing_capability: bytes) -> bytes:
+    descriptors = [
+        memfd(signing_capability, "provider-private-key"),
+        memfd(payload, "provider-signed-inventory"),
+    ]
+    try:
+        return subprocess.run(
+            [
+                "openssl",
+                "pkeyutl",
+                "-sign",
+                "-inkey",
+                f"/proc/self/fd/{descriptors[0]}",
+                "-rawin",
+                "-in",
+                f"/proc/self/fd/{descriptors[1]}",
+            ],
+            check=True,
+            capture_output=True,
+            pass_fds=tuple(descriptors),
+            env={
+                "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "LANG": "C",
+                "LC_ALL": "C",
+            },
+        ).stdout
+    finally:
+        for descriptor in descriptors:
+            os.close(descriptor)
+
+
+def broker_response(
+    request_bytes: bytes,
+    provider_capability: bytes,
+    signing_capability: bytes,
+) -> bytes:
+    request = json.loads(request_bytes)
+    required = {
+        "schema_version",
+        "generation",
+        "server_id",
+        "owner_ssh_cidr_sha256",
+        "operation",
+    }
+    if (
+        not isinstance(request, dict)
+        or set(request) != required
+        or canonical_json(request) != request_bytes
+        or request["schema_version"] != 1
+        or request["generation"] not in {"A", "B", "C"}
+        or not isinstance(request["server_id"], int)
+        or request["server_id"] <= 0
+        or not SHA256.fullmatch(str(request["owner_ssh_cidr_sha256"]))
+    ):
+        raise ProviderInventoryError("provider broker request is not exact")
+    validate_operation_request(request["operation"], str(request["generation"]))
+    server_id = int(request["server_id"])
+    server_payload = provider_api_get(
+        f"/servers/{server_id}", provider_capability
+    )
+    firewall_payload = provider_api_get(
+        "/firewalls?name="
+        + urllib.parse.quote(LOCKED_FIREWALL_NAME, safe=""),
+        provider_capability,
+    )
+    server = server_payload.get("server")
+    firewalls = firewall_payload.get("firewalls")
+    if not isinstance(server, dict) or not isinstance(firewalls, list):
+        raise ProviderInventoryError("provider broker inventory response shape is invalid")
+    signed = {
+        "schema_version": 1,
+        "broker_id": "company-os-hetzner-inventory-broker",
+        "broker_version": 1,
+        "request_sha256": hashlib.sha256(request_bytes).hexdigest(),
+        "observed_at": datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .strftime(TIMESTAMP),
+        "server": server,
+        "firewalls": firewalls,
+    }
+    signature = sign_broker_payload(
+        canonical_json(signed), signing_capability
+    )
+    return canonical_json(
+        {
+            **signed,
+            "signature_base64": base64.b64encode(signature).decode("ascii"),
+        }
+    )
+
+
+def serve_broker(
+    provider_capability: bytes, signing_capability: bytes
+) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(BROKER_LISTEN)
+        listener.listen(1)
+        listener.settimeout(1800)
+        for _ in range(32):
+            connection, _ = listener.accept()
+            with connection:
+                connection.settimeout(20)
+                length = struct.unpack("!I", exact_receive(connection, 4))[0]
+                if length <= 0 or length > 1024 * 1024:
+                    raise ProviderInventoryError("provider broker request length is invalid")
+                request = exact_receive(connection, length)
+                response = broker_response(
+                    request, provider_capability, signing_capability
+                )
+                connection.sendall(struct.pack("!I", len(response)) + response)
 
 
 def secure_read(path: Path, label: str, *, restricted: bool = True) -> str:
@@ -178,36 +550,88 @@ def secure_read(path: Path, label: str, *, restricted: bool = True) -> str:
     return value
 
 
-def main() -> int:
+def secure_read_fd(descriptor: int, label: str) -> str:
+    info = os.fstat(descriptor)
     if (
-        len(sys.argv) != 4
-        or sys.argv[1] not in {"A", "B", "C"}
-        or not sys.argv[2].isdecimal()
-        or int(sys.argv[2]) <= 0
+        descriptor < 3
+        or os.geteuid() != 0
+        or info.st_uid != 0
+        or not stat.S_ISREG(info.st_mode)
+        or stat.S_IMODE(info.st_mode) != 0o600
     ):
-        print(
-            "usage: postgres_restore_provider_inventory.py "
-            "A|B|C HETZNER_SERVER_ID OWNER_SSH_CIDR",
-            file=sys.stderr,
+        raise ProviderInventoryError(
+            f"{label} descriptor must be root-owned mode 0600"
         )
-        return 64
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    value = read_capability_fd(descriptor, label, 1024 * 1024).decode(
+        "utf-8"
+    ).strip()
+    if not value:
+        raise ProviderInventoryError(f"{label} is empty")
+    return value
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    modes = parser.add_subparsers(dest="mode", required=True)
+    collect = modes.add_parser("collect")
+    collect.add_argument("generation", choices=("A", "B", "C"))
+    collect.add_argument("server_id", type=int)
+    collect.add_argument("owner_ssh_cidr")
+    collect.add_argument("--operation-request-fd", required=True, type=int)
+    broker = modes.add_parser("broker")
+    broker.add_argument("--token-fd", required=True, type=int)
+    broker.add_argument("--signing-key-fd", required=True, type=int)
+    args = parser.parse_args()
     try:
-        auth_value = secure_read(TOKEN_PATH, "Hetzner read-only token")
-        instance_id = sys.argv[2]
-        server_payload = get_json(f"{API_ROOT}/servers/{instance_id}", auth_value)
-        firewall_payload = get_json(
-            f"{API_ROOT}/firewalls?name={LOCKED_FIREWALL_NAME}", auth_value
+        if args.mode == "broker":
+            provider_capability = read_capability_fd(
+                args.token_fd, "provider token", 4096
+            ).strip()
+            signing_capability = read_capability_fd(
+                args.signing_key_fd, "provider signing key", 65536
+            )
+            serve_broker(provider_capability, signing_capability)
+            return 0
+        if args.server_id <= 0:
+            raise ProviderInventoryError("Hetzner server ID is invalid")
+        manifest = json.loads(
+            secure_read(PROVIDER_MANIFEST, "provider manifest", restricted=False)
         )
-        server = server_payload.get("server")
-        firewalls = firewall_payload.get("firewalls")
-        if not isinstance(server, dict) or not isinstance(firewalls, list):
-            raise ProviderInventoryError("provider inventory response shape is invalid")
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get("status") != "APPROVED"
+            or manifest.get("schema_version") != 3
+        ):
+            raise ProviderInventoryError("provider manifest is NOT_CONFIGURED")
+        operation = json.loads(
+            secure_read_fd(args.operation_request_fd, "provider operation request")
+        )
+        instance_id = str(args.server_id)
+        broker_request = canonical_json(
+            {
+                "schema_version": 1,
+                "generation": args.generation,
+                "server_id": int(instance_id),
+                "owner_ssh_cidr_sha256": hashlib.sha256(
+                    args.owner_ssh_cidr.encode("ascii")
+                ).hexdigest(),
+                "operation": operation,
+            }
+        )
+        server, firewalls, observed_at, broker_response_sha256 = broker_inventory(
+            broker_request, manifest
+        )
         packet = evaluate_provider_state(
             server,
             firewalls,
-            generation=sys.argv[1],
-            observed_at=datetime.now(timezone.utc).replace(microsecond=0),
-            owner_ssh_cidr=sys.argv[3],
+            generation=args.generation,
+            observed_at=observed_at,
+            owner_ssh_cidr=args.owner_ssh_cidr,
+            operation=operation,
+            broker_response_sha256=broker_response_sha256,
+            broker_id=str(manifest["broker_id"]),
+            broker_version=int(manifest["broker_version"]),
         )
         sys.stdout.buffer.write(canonical_json(packet))
         return 0
@@ -215,6 +639,7 @@ def main() -> int:
         OSError,
         UnicodeError,
         json.JSONDecodeError,
+        subprocess.CalledProcessError,
         ProviderInventoryError,
     ) as exc:
         print(f"STOP: {exc}", file=sys.stderr)

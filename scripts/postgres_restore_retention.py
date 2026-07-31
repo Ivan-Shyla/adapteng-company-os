@@ -152,14 +152,15 @@ def load_exporter_manifest() -> tuple[dict[str, Any], str]:
         "artifact_sha256",
         "scheduler_output_schema_version",
         "repository_output_schema_version",
+        "host_scope",
         "repository_write_capability",
     }
     if (
         not isinstance(value, dict)
         or set(value) != required
-        or value.get("schema_version") != 2
+        or value.get("schema_version") != 3
     ):
-        raise RetentionError("inventory exporter manifest is not v1")
+        raise RetentionError("inventory exporter manifest is not exact v3")
     if value.get("status") != "APPROVED":
         raise RetentionError("inventory exporter manifest is NOT_CONFIGURED")
     for field in ("exporter_id", "exporter_version", "artifact_sha256"):
@@ -170,7 +171,7 @@ def load_exporter_manifest() -> tuple[dict[str, Any], str]:
     if (
         hashlib.sha256(EXPORTER.read_bytes()).hexdigest()
         != value["artifact_sha256"]
-        or value["scheduler_output_schema_version"] != 2
+        or value["scheduler_output_schema_version"] != 3
         or value["repository_output_schema_version"] != 1
         or not isinstance(value["repository_write_capability"], dict)
     ):
@@ -336,10 +337,16 @@ def main() -> int:
                 "full_job_identity_sha256",
                 "differential_job_identity_sha256",
                 "capability_inventory_sha256",
+                "runtime_writer_process_inventory_sha256",
                 "scheduler_sources_count",
                 "containers_count",
                 "writer_processes_count",
                 "unclassified_capability_surfaces",
+                "host_scope_identity_sha256",
+                "machine_id_sha256",
+                "user_systemd_managers_count",
+                "linger_accounts_count",
+                "credential_metadata_sha256",
                 "exporter_id",
                 "exporter_version",
                 "exporter_artifact_sha256",
@@ -363,11 +370,13 @@ def main() -> int:
             "repository inventory",
         )
         if (
-            scheduler["schema_version"] != 2
+            scheduler["schema_version"] != 3
             or scheduler["full_jobs_count"] != 1
             or scheduler["differential_jobs_count"] != 1
             or scheduler["timezone"] != "UTC"
             or scheduler["unclassified_capability_surfaces"] != 0
+            or scheduler["user_systemd_managers_count"] != 0
+            or scheduler["linger_accounts_count"] != 0
             or not all(
                 SHA256.fullmatch(str(scheduler[field]))
                 for field in (
@@ -375,6 +384,10 @@ def main() -> int:
                     "full_job_identity_sha256",
                     "differential_job_identity_sha256",
                     "capability_inventory_sha256",
+                    "runtime_writer_process_inventory_sha256",
+                    "host_scope_identity_sha256",
+                    "machine_id_sha256",
+                    "credential_metadata_sha256",
                 )
             )
             or repository["schema_version"] != 1

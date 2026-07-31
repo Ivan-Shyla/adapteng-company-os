@@ -91,11 +91,14 @@ class GenerationState:
     image_repo_digest: str
     image_environment_sha256: str
     recovery_container: str
+    recovery_container_id: str
     final_container: str
+    final_container_id: str
     volume: str
     bootstrap_network: str
     locked_network: str
     restore_pg1_path: str
+    database_pgdata: str
     repository_endpoint: str
     repository_bucket: str
     repository_region: str
@@ -402,11 +405,14 @@ def project_state(packet: dict[str, Any]) -> GenerationState:
         "image_repo_digest",
         "image_environment_sha256",
         "recovery_container",
+        "recovery_container_id",
         "final_container",
+        "final_container_id",
         "volume",
         "bootstrap_network",
         "locked_network",
         "restore_pg1_path",
+        "database_pgdata",
         "repository_endpoint",
         "repository_bucket",
         "repository_region",
@@ -577,6 +583,175 @@ def docker_inspect_one(kind: str, reference: str) -> dict[str, Any]:
     return values[0]
 
 
+def load_target_policy(state: GenerationState) -> tuple[dict[str, Any], str]:
+    raw = read_secured_once(RUNNER_MANIFEST, "runner manifest")
+    manifest = strict_json_object(raw, "runner manifest")
+    target = manifest.get("target")
+    required = {
+        "repo_digest",
+        "config_id",
+        "path",
+        "entrypoint",
+        "cmd",
+        "user",
+        "working_dir",
+        "image_environment",
+        "labels",
+        "hostname_template",
+        "runtime",
+        "apparmor_profile",
+        "masked_paths",
+        "readonly_paths",
+        "readonly_rootfs",
+        "tmpfs",
+    }
+    if (
+        manifest.get("schema_version") != 3
+        or manifest.get("status") != "APPROVED"
+        or not isinstance(target, dict)
+        or set(target) != required
+        or target.get("repo_digest") != state.image_repo_digest
+        or target.get("config_id") != state.image_config_id
+        or not isinstance(target.get("path"), str)
+        or not str(target["path"]).startswith("/")
+        or not isinstance(target.get("entrypoint"), list)
+        or not isinstance(target.get("cmd"), list)
+        or not isinstance(target.get("user"), str)
+        or not target["user"]
+        or not isinstance(target.get("working_dir"), str)
+        or not isinstance(target.get("image_environment"), list)
+        or not isinstance(target.get("labels"), dict)
+        or target.get("hostname_template") != "{target_name}"
+        or target.get("runtime") != "runc"
+        or not isinstance(target.get("apparmor_profile"), str)
+        or not target["apparmor_profile"]
+        or not isinstance(target.get("masked_paths"), list)
+        or not isinstance(target.get("readonly_paths"), list)
+        or target.get("readonly_rootfs") is not True
+        or not isinstance(target.get("tmpfs"), dict)
+        or set(target["tmpfs"]) != {"/tmp", "/var/run/postgresql"}
+        or not all(
+            isinstance(value, str) and value for value in target["tmpfs"].values()
+        )
+    ):
+        raise GenerationError("target execution policy is not approved/exact")
+    return target, hashlib.sha256(raw).hexdigest()
+
+
+def inspect_sealed_target(
+    *,
+    state: GenerationState,
+    target_policy: dict[str, Any],
+    container_id: str,
+    container_name: str,
+    running: bool,
+) -> dict[str, Any]:
+    try:
+        from postgres_restore_host_inventory import validate_sealed_target
+    except ModuleNotFoundError:  # pragma: no cover - package import in unit tests
+        from scripts.postgres_restore_host_inventory import validate_sealed_target
+    container = docker_inspect_one("container", container_id)
+    image = docker_inspect_one("image", str(container.get("Image", "")))
+    rootfs_diff = run_checked(
+        ["docker", "diff", container_id], capture_output=True
+    ).stdout
+    if rootfs_diff:
+        raise GenerationError("sealed target writable layer is not pristine")
+    try:
+        return validate_sealed_target(
+            container=container,
+            image=image,
+            expected_id=container_id,
+            expected_name=container_name,
+            expected_network=state.locked_network,
+            expected_host_network_mode="none",
+            expected_volume=state.volume,
+            expected_pgdata=state.database_pgdata,
+            target_policy=target_policy,
+            generation=state.generation,
+            running=running,
+            forbidden_identifiers={"adapteng-ops-db", "postgres-adapteng-ops"},
+        )
+    except RuntimeError as exc:
+        raise GenerationError("sealed target validation failed") from exc
+
+
+def stable_target_identity(identity: dict[str, Any]) -> dict[str, Any]:
+    ignored = {"running", "state_status"}
+    return {key: value for key, value in identity.items() if key not in ignored}
+
+
+def collect_provider_for_target(
+    *,
+    state: GenerationState,
+    phase: str,
+    container_id: str,
+    target_identity: dict[str, Any],
+    consumed_operations: set[str],
+) -> dict[str, Any]:
+    try:
+        from postgres_restore_isolation_gate import collect_provider_operation
+    except ModuleNotFoundError:  # pragma: no cover - package import in unit tests
+        from scripts.postgres_restore_isolation_gate import collect_provider_operation
+    return collect_provider_operation(
+        generation=state.generation,
+        phase=phase,
+        target_container_id=container_id,
+        target_image_identity_sha256=hashlib.sha256(
+            canonical_json(stable_target_identity(target_identity))
+        ).hexdigest(),
+        consumed_operations=consumed_operations,
+    )
+
+
+def authorize_and_start_target(
+    *,
+    state: GenerationState,
+    target_policy: dict[str, Any],
+    container_id: str,
+    container_name: str,
+    phase: str,
+    consumed_operations: set[str],
+    inspect_target: Any = inspect_sealed_target,
+    collect_provider: Any = collect_provider_for_target,
+    start: Any = run_checked,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    pristine = inspect_target(
+        state=state,
+        target_policy=target_policy,
+        container_id=container_id,
+        container_name=container_name,
+        running=False,
+    )
+    provider = collect_provider(
+        state=state,
+        phase=phase,
+        container_id=container_id,
+        target_identity=pristine,
+        consumed_operations=consumed_operations,
+    )
+    remeasured = inspect_target(
+        state=state,
+        target_policy=target_policy,
+        container_id=container_id,
+        container_name=container_name,
+        running=False,
+    )
+    if stable_target_identity(remeasured) != stable_target_identity(pristine):
+        raise GenerationError("target changed after provider authorization")
+    start(["docker", "start", container_id])
+    running_identity = inspect_target(
+        state=state,
+        target_policy=target_policy,
+        container_id=container_id,
+        container_name=container_name,
+        running=True,
+    )
+    if stable_target_identity(running_identity) != stable_target_identity(pristine):
+        raise GenerationError("target changed during start")
+    return provider, running_identity
+
+
 def capture_guard_packet(args: argparse.Namespace) -> bytes:
     command = [
         sys.executable,
@@ -597,6 +772,10 @@ def capture_guard_packet(args: argparse.Namespace) -> bytes:
         args.approved_image_manifest,
         "--approved-image-manifest-sha256",
         args.approved_image_manifest_sha256,
+        "--recovery-container-id",
+        args.recovery_container_id,
+        "--final-container-id",
+        args.final_container_id,
         "--procedure-manifest-sha256",
         args.procedure_manifest_sha256,
     ]
@@ -634,6 +813,8 @@ def load_provider_policy(value: dict[str, Any]) -> ProviderPolicy:
         "collector_id",
         "collector_version",
         "collector_sha256",
+        "broker_id",
+        "broker_version",
         "signature_algorithm",
         "public_key_pem",
         "public_key_pem_sha256",
@@ -645,11 +826,13 @@ def load_provider_policy(value: dict[str, Any]) -> ProviderPolicy:
     if value["status"] != "APPROVED":
         raise GenerationError("provider measurement manifest is not approved")
     if (
-        value["schema_version"] != 1
+        value["schema_version"] != 3
         or value["collector_id"] != "company-os-hetzner-locked-inventory"
-        or value["collector_version"] != 1
+        or value["collector_version"] != 2
+        or value["broker_id"] != "company-os-hetzner-inventory-broker"
+        or value["broker_version"] != 1
         or value["signature_algorithm"] != "ed25519"
-        or value["max_age_seconds"] != 120
+        or value["max_age_seconds"] != 30
     ):
         raise GenerationError("provider measurement policy is not exact")
     collector_sha256 = str(value["collector_sha256"])
@@ -843,62 +1026,6 @@ def write_owned_bytes(directory_fd: int, name: str, payload: bytes) -> None:
         os.close(fd)
 
 
-def wait_for_locked_provider_state(
-    generation: str,
-    expected_server_ref_sha256: str,
-    policy: ProviderPolicy,
-    directory: Path,
-    directory_fd: int,
-) -> tuple[bytes, dict[str, Any]]:
-    deadline = time.monotonic() + 600
-    last_error = ""
-    packet_source = PROVIDER_INBOX / f"generation-{generation}.json"
-    signature_source = PROVIDER_INBOX / f"generation-{generation}.sig"
-    while time.monotonic() < deadline:
-        try:
-            packet_bytes = read_secured_once(packet_source, "provider packet")
-            signature_bytes = read_secured_once(
-                signature_source, "provider packet signature"
-            )
-        except GenerationError as exc:
-            last_error = str(exc)
-            time.sleep(5)
-            continue
-        write_owned_bytes(directory_fd, "provider-signed.json", packet_bytes)
-        write_owned_bytes(directory_fd, "provider-signed.sig", signature_bytes)
-        public_key = policy.public_key_pem.encode("utf-8")
-        write_owned_bytes(directory_fd, "provider-public-key.pem", public_key)
-        run_checked(
-            [
-                "openssl",
-                "pkeyutl",
-                "-verify",
-                "-pubin",
-                "-inkey",
-                str(directory / "provider-public-key.pem"),
-                "-rawin",
-                "-in",
-                str(directory / "provider-signed.json"),
-                "-sigfile",
-                str(directory / "provider-signed.sig"),
-            ],
-            capture_output=True,
-        )
-        try:
-            packet = json.loads(packet_bytes)
-        except json.JSONDecodeError as exc:
-            raise GenerationError("signed provider packet is invalid JSON") from exc
-        validate_locked_measurement(
-            packet,
-            generation,
-            datetime.now(timezone.utc).replace(microsecond=0),
-            expected_server_ref_sha256,
-            policy,
-        )
-        return packet_bytes, packet
-    raise GenerationError(f"locked provider state was not measured: {last_error}")
-
-
 def validate_locked_measurement(
     packet: dict[str, Any],
     generation: str,
@@ -906,6 +1033,35 @@ def validate_locked_measurement(
     expected_server_ref_sha256: str | None = None,
     policy: ProviderPolicy | None = None,
 ) -> None:
+    required = {
+        "schema_version",
+        "collector_id",
+        "collector_version",
+        "collector_sha256",
+        "status",
+        "generation",
+        "observed_at",
+        "server_ref_sha256",
+        "firewall_ref_sha256",
+        "locked_policy_sha256",
+        "owner_ssh_cidr_sha256",
+        "locked_firewall_attached",
+        "other_firewalls_attached",
+        "private_networks_attached",
+        "private_network_inventory_sha256",
+        "floating_ips_attached",
+        "broker_id",
+        "broker_version",
+        "broker_response_sha256",
+        "operation_id",
+        "challenge_sha256",
+        "phase",
+        "target_container_id_sha256",
+        "target_image_identity_sha256",
+        "requested_at",
+    }
+    if set(packet) != required or packet.get("schema_version") != 2:
+        raise GenerationError("provider measurement fields are not exact v2")
     if packet.get("status") != "LOCKED_CURRENT":
         raise GenerationError("provider collector did not prove locked state")
     if packet.get("generation") != generation:
@@ -914,11 +1070,18 @@ def validate_locked_measurement(
         tzinfo=timezone.utc
     )
     age = now.astimezone(timezone.utc) - observed
-    max_age = policy.max_age_seconds if policy is not None else 120
+    max_age = policy.max_age_seconds if policy is not None else 30
     if age < timedelta(0) or age > timedelta(seconds=max_age):
         raise GenerationError("provider measurement is not current")
     if packet.get("locked_firewall_attached") is not True or (
         packet.get("other_firewalls_attached") != 0
+        or packet.get("private_networks_attached") != 0
+        or packet.get("private_network_inventory_sha256")
+        != hashlib.sha256(canonical_json([])).hexdigest()
+        or packet.get("floating_ips_attached") != 0
+        or packet.get("broker_id") != "company-os-hetzner-inventory-broker"
+        or packet.get("broker_version") != 1
+        or len(str(packet.get("broker_response_sha256"))) != 64
     ):
         raise GenerationError("provider measurement does not prove exclusive lock")
     if (
@@ -934,58 +1097,6 @@ def validate_locked_measurement(
         != policy.owner_ssh_cidr_sha256
     ):
         raise GenerationError("provider measurement collector identity mismatch")
-
-
-def assert_container_locked(
-    container: str, locked_network: str, expected_volume: str
-) -> dict[str, Any]:
-    completed = run_checked(
-        ["docker", "container", "inspect", container],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    value = json.loads(completed.stdout)
-    if not isinstance(value, list) or len(value) != 1:
-        raise GenerationError("locked container inspection is ambiguous")
-    item = value[0]
-    networks = item.get("NetworkSettings", {}).get("Networks")
-    if not isinstance(networks, dict) or set(networks) != {locked_network}:
-        raise GenerationError("SQL container is not only on the locked network")
-    if item.get("HostConfig", {}).get("PortBindings") not in (None, {}):
-        raise GenerationError("SQL container has published ports")
-    for mount in item.get("Mounts", []):
-        if "docker.sock" in str(mount.get("Source", "")) or "docker.sock" in str(
-            mount.get("Destination", "")
-        ):
-            raise GenerationError("SQL container mounts the Docker socket")
-    volume_mounts = [
-        mount
-        for mount in item.get("Mounts", [])
-        if mount.get("Type") == "volume" and mount.get("Name") == expected_volume
-    ]
-    if len(volume_mounts) != 1:
-        raise GenerationError("locked container volume identity changed")
-    endpoint = networks[locked_network]
-    if not isinstance(endpoint, dict):
-        raise GenerationError("locked container endpoint inventory is invalid")
-    return {
-        "container_ref_sha256": hashlib.sha256(
-            str(item.get("Id", "")).encode("utf-8")
-        ).hexdigest(),
-        "locked_network": locked_network,
-        "network_id_sha256": hashlib.sha256(
-            str(endpoint.get("NetworkID", "")).encode("utf-8")
-        ).hexdigest(),
-        "endpoint_id_sha256": hashlib.sha256(
-            str(endpoint.get("EndpointID", "")).encode("utf-8")
-        ).hexdigest(),
-        "published_ports": 0,
-        "docker_socket_mounts": 0,
-        "volume_ref_sha256": hashlib.sha256(
-            expected_volume.encode("utf-8")
-        ).hexdigest(),
-    }
 
 
 def wait_postgres(container: str, attempts: int) -> None:
@@ -1056,7 +1167,7 @@ def assert_recovery_complete(
 def execute(args: argparse.Namespace) -> dict[str, str]:
     (
         provider_manifest_raw,
-        provider_policy,
+        _provider_policy,
         accepted_raw,
         accepted,
         accepted_sha256,
@@ -1064,7 +1175,6 @@ def execute(args: argparse.Namespace) -> dict[str, str]:
     host_lock_fd = acquire_host_lock()
     directory, directory_fd = create_generation_directory(args.generation)
     guard_fd = -1
-    provider_fd = -1
     secret_env_fd = -1
     try:
         write_owned_bytes(
@@ -1081,6 +1191,7 @@ def execute(args: argparse.Namespace) -> dict[str, str]:
             raise GenerationError("guard generation changed")
         if accepted.get("completed_at") != state.completed_at:
             raise GenerationError("accepted retention completion differs from backup")
+        target_policy, runner_manifest_sha256 = load_target_policy(state)
         config_raw = build_pgbackrest_config(state)
         write_owned_bytes(directory_fd, "pgbackrest.conf", config_raw)
         staged_config = directory / "pgbackrest.conf"
@@ -1168,38 +1279,30 @@ def execute(args: argparse.Namespace) -> dict[str, str]:
         run_checked(["docker", "rm", restore_id])
         run_checked(["docker", "network", "rm", state.bootstrap_network])
 
-        provider_bytes, provider_packet = wait_for_locked_provider_state(
-            args.generation,
-            state.cloud_instance_id_sha256,
-            provider_policy,
-            directory,
-            directory_fd,
-        )
-        provider_fd, _, provider_sha256 = write_and_parse_once(
-            directory_fd, "provider-isolation.json", provider_bytes
-        )
-        if provider_packet.get("generation") != args.generation:
-            raise GenerationError("provider measurement generation mismatch")
-
+        consumed_provider_operations: set[str] = set()
         run_checked(
             [
                 "docker",
                 "network",
                 "connect",
                 state.locked_network,
-                state.recovery_container,
+                state.recovery_container_id,
             ]
         )
-        recovery_locked = assert_container_locked(
-            state.recovery_container, state.locked_network, state.volume
+        recovery_provider, recovery_running = authorize_and_start_target(
+            state=state,
+            target_policy=target_policy,
+            container_id=state.recovery_container_id,
+            container_name=state.recovery_container,
+            phase="TARGET_START_RECOVERY",
+            consumed_operations=consumed_provider_operations,
         )
-        run_checked(["docker", "start", state.recovery_container])
-        wait_postgres(state.recovery_container, 120)
+        wait_postgres(state.recovery_container_id, 120)
         recovery_runner = assert_recovery_complete(
             args.generation, "recovery", state.procedure_manifest_sha256
         )
-        run_checked(["docker", "stop", "--time", "30", state.recovery_container])
-        run_checked(["docker", "rm", state.recovery_container])
+        run_checked(["docker", "stop", "--time", "30", state.recovery_container_id])
+        run_checked(["docker", "rm", state.recovery_container_id])
 
         run_checked(
             [
@@ -1207,14 +1310,18 @@ def execute(args: argparse.Namespace) -> dict[str, str]:
                 "network",
                 "connect",
                 state.locked_network,
-                state.final_container,
+                state.final_container_id,
             ]
         )
-        final_locked = assert_container_locked(
-            state.final_container, state.locked_network, state.volume
+        final_provider, final_running = authorize_and_start_target(
+            state=state,
+            target_policy=target_policy,
+            container_id=state.final_container_id,
+            container_name=state.final_container,
+            phase="TARGET_START_FINAL",
+            consumed_operations=consumed_provider_operations,
         )
-        run_checked(["docker", "start", state.final_container])
-        wait_postgres(state.final_container, 60)
+        wait_postgres(state.final_container_id, 60)
         final_runner = assert_recovery_complete(
             args.generation, "final", state.procedure_manifest_sha256
         )
@@ -1223,9 +1330,18 @@ def execute(args: argparse.Namespace) -> dict[str, str]:
             "schema_version": 1,
             "status": "LOCKED_LOCAL_CURRENT",
             "generation": args.generation,
-            "provider_isolation_sha256": provider_sha256,
-            "recovery": recovery_locked,
-            "final": final_locked,
+            "recovery_provider_operation_sha256": recovery_provider[
+                "operation_binding_sha256"
+            ],
+            "final_provider_operation_sha256": final_provider[
+                "operation_binding_sha256"
+            ],
+            "recovery_target_identity_sha256": hashlib.sha256(
+                canonical_json(stable_target_identity(recovery_running))
+            ).hexdigest(),
+            "final_target_identity_sha256": hashlib.sha256(
+                canonical_json(stable_target_identity(final_running))
+            ).hexdigest(),
             "recovery_runner": recovery_runner,
             "final_runner": final_runner,
         }
@@ -1238,10 +1354,11 @@ def execute(args: argparse.Namespace) -> dict[str, str]:
             "generation": args.generation,
             "procedure_manifest_sha256": state.procedure_manifest_sha256,
             "guard_packet_sha256": guard_sha256,
-            "provider_isolation_sha256": provider_sha256,
+            "provider_isolation_sha256": final_provider["packet_sha256"],
             "provider_manifest_sha256": hashlib.sha256(
                 provider_manifest_raw
             ).hexdigest(),
+            "runner_manifest_sha256": runner_manifest_sha256,
             "accepted_retention_packet_sha256": accepted_sha256,
             "repository_configuration_sha256": hashlib.sha256(
                 config_raw
@@ -1261,7 +1378,7 @@ def execute(args: argparse.Namespace) -> dict[str, str]:
             "status": "RESTORED_LOCKED_READY",
         }
     finally:
-        for fd in (secret_env_fd, provider_fd, guard_fd, directory_fd, host_lock_fd):
+        for fd in (secret_env_fd, guard_fd, directory_fd, host_lock_fd):
             if fd >= 0:
                 os.close(fd)
 
@@ -1276,6 +1393,8 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--selected-info-sha256", required=True)
     value.add_argument("--approved-image-manifest", required=True)
     value.add_argument("--approved-image-manifest-sha256", required=True)
+    value.add_argument("--recovery-container-id", required=True)
+    value.add_argument("--final-container-id", required=True)
     value.add_argument("--procedure-manifest-sha256", required=True)
     value.add_argument("--accepted-retention-packet-sha256", required=True)
     return value

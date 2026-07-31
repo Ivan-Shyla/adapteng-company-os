@@ -22,6 +22,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 MANIFEST_PATH = SCRIPT_DIR / "postgres_restore_runner_manifest.json"
 PROCEDURE_MANIFEST = SCRIPT_DIR / "postgres_restore_procedure_manifest.json"
 DATABASE_SECRET = Path("/run/secrets/postgres-restore-runner.json")
+STATE_ROOT = Path("/var/lib/adapteng/postgres-restore-rehearsal")
 DIGEST = re.compile(r"^[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$")
 CONFIG_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -40,6 +41,13 @@ MANIFEST_KEYS = {
     "architecture",
     "image_environment",
     "image_labels",
+    "runtime",
+    "apparmor_profile",
+    "masked_paths",
+    "readonly_paths",
+    "readonly_rootfs",
+    "tmpfs",
+    "execution_gate_entrypoint",
     "psql_entrypoint",
     "probe_argv",
     "database_environment",
@@ -81,8 +89,9 @@ def load_sealed_dependencies() -> None:
             "HostInventoryError": host.HostInventoryError,
             "collect_docker_inventory": host.collect_docker_inventory,
             "container_execution_identity": host.container_execution_identity,
+            "validate_sealed_target": host.validate_sealed_target,
             "validate_host_inventory": host.validate_host_inventory,
-            "wait_for_provider_measurement": isolation.wait_for_provider_measurement,
+            "collect_provider_operation": isolation.collect_provider_operation,
         }
     )
 
@@ -159,9 +168,9 @@ def load_manifest() -> tuple[dict[str, Any], str]:
     if (
         not isinstance(manifest, dict)
         or set(manifest) != MANIFEST_KEYS
-        or manifest.get("schema_version") != 2
+        or manifest.get("schema_version") != 3
     ):
-        raise RunnerError("runner manifest is not exact v2")
+        raise RunnerError("runner manifest is not exact v3")
     if manifest.get("status") != "APPROVED":
         raise RunnerError("runner manifest is NOT_CONFIGURED")
     for field in ("repo_digest",):
@@ -178,6 +187,15 @@ def load_manifest() -> tuple[dict[str, Any], str]:
         not isinstance(manifest.get("image_environment"), list)
         or not all(isinstance(item, str) and "=" in item for item in manifest["image_environment"])
         or not isinstance(manifest.get("image_labels"), dict)
+        or manifest.get("runtime") != "runc"
+        or not isinstance(manifest.get("apparmor_profile"), str)
+        or not manifest["apparmor_profile"]
+        or not isinstance(manifest.get("masked_paths"), list)
+        or not isinstance(manifest.get("readonly_paths"), list)
+        or manifest.get("readonly_rootfs") is not True
+        or manifest.get("tmpfs") is not None
+        or manifest.get("execution_gate_entrypoint")
+        != "/usr/local/libexec/adapteng-postgres-restore-exec-gate"
     ):
         raise RunnerError("runner image environment/labels are not pinned")
     for environment in (
@@ -197,10 +215,20 @@ def load_manifest() -> tuple[dict[str, Any], str]:
     if not isinstance(target, dict) or set(target) != {
         "repo_digest",
         "config_id",
+        "path",
         "entrypoint",
         "cmd",
+        "user",
+        "working_dir",
         "image_environment",
         "labels",
+        "hostname_template",
+        "runtime",
+        "apparmor_profile",
+        "masked_paths",
+        "readonly_paths",
+        "readonly_rootfs",
+        "tmpfs",
     }:
         raise RunnerError("target identity policy is not exact")
     if (
@@ -208,8 +236,22 @@ def load_manifest() -> tuple[dict[str, Any], str]:
         or not CONFIG_ID.fullmatch(str(target["config_id"]))
         or not isinstance(target["entrypoint"], list)
         or not isinstance(target["cmd"], list)
+        or not isinstance(target["path"], str)
+        or not target["path"].startswith("/")
+        or not isinstance(target["user"], str)
+        or not target["user"]
+        or not isinstance(target["working_dir"], str)
         or not isinstance(target["image_environment"], list)
         or not isinstance(target["labels"], dict)
+        or target["hostname_template"] != "{target_name}"
+        or target["runtime"] != "runc"
+        or not isinstance(target["apparmor_profile"], str)
+        or not target["apparmor_profile"]
+        or not isinstance(target["masked_paths"], list)
+        or not isinstance(target["readonly_paths"], list)
+        or target["readonly_rootfs"] is not True
+        or not isinstance(target["tmpfs"], dict)
+        or set(target["tmpfs"]) != {"/tmp", "/var/run/postgresql"}
     ):
         raise RunnerError("target image/command identity is not approved")
     return manifest, hashlib.sha256(raw).hexdigest()
@@ -312,6 +354,21 @@ def exact_execution_identity(container: dict[str, Any]) -> dict[str, Any]:
         raise RunnerError("container host isolation identity is not exact") from exc
 
 
+def require_pristine_rootfs(
+    container_id: str,
+    *,
+    run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
+) -> None:
+    completed = run(
+        ["docker", "diff", container_id],
+        check=True,
+        capture_output=True,
+        env=CLEAN_ENVIRONMENT,
+    )
+    if completed.stdout not in (b"", ""):
+        raise RunnerError("runner writable layer is not pristine")
+
+
 def command_for_mode(
     manifest: dict[str, Any], mode: str
 ) -> tuple[str, list[str]]:
@@ -346,6 +403,7 @@ def validate_runner_inspection(
     entrypoint: str,
     argv: list[str],
     environment: dict[str, str],
+    expected_running: bool = False,
 ) -> dict[str, Any]:
     config = container.get("Config", {})
     host = container.get("HostConfig", {})
@@ -353,13 +411,20 @@ def validate_runner_inspection(
     if (
         container.get("Id") != expected_id
         or container.get("Name") != f"/{expected_name}"
-        or container.get("State", {}).get("Running") is not False
+        or container.get("State", {}).get("Running") is not expected_running
         or container.get("Image") != manifest["config_id"]
         or config.get("Image") != manifest["repo_digest"]
         or config.get("Hostname") != expected_name
         or config.get("User") != image.get("Config", {}).get("User")
-        or config.get("Entrypoint") != [entrypoint]
-        or config.get("Cmd") != argv
+        or config.get("WorkingDir") != image.get("Config", {}).get("WorkingDir", "")
+        or config.get("AttachStdin") is not True
+        or config.get("AttachStdout") is not True
+        or config.get("AttachStderr") is not True
+        or config.get("Tty") is not False
+        or config.get("OpenStdin") is not True
+        or config.get("StdinOnce") is not False
+        or config.get("Entrypoint") != [manifest["execution_gate_entrypoint"]]
+        or config.get("Cmd") != [entrypoint, *argv]
         or config.get("Labels") != {
             **manifest["image_labels"],
             **RUNNER_LABELS,
@@ -367,11 +432,37 @@ def validate_runner_inspection(
         }
         or host.get("NetworkMode") != "pg-rehearsal"
         or host.get("PortBindings") not in (None, {})
+        or host.get("Runtime") != manifest["runtime"]
+        or container.get("AppArmorProfile") != manifest["apparmor_profile"]
+        or host.get("MaskedPaths") != manifest["masked_paths"]
+        or host.get("ReadonlyPaths") != manifest["readonly_paths"]
+        or host.get("ReadonlyRootfs") is not manifest["readonly_rootfs"]
+        or host.get("Tmpfs") != manifest["tmpfs"]
         or container.get("Mounts") not in (None, [])
         or not isinstance(networks, dict)
         or set(networks) != {"pg-rehearsal"}
     ):
         raise RunnerError("runner container identity/command/isolation is not exact")
+    state = container.get("State", {})
+    if expected_running:
+        if (
+            state.get("Status") != "running"
+            or state.get("Restarting") is not False
+            or state.get("Paused") is not False
+            or state.get("Dead") is not False
+            or not isinstance(state.get("Pid"), int)
+            or state["Pid"] <= 0
+        ):
+            raise RunnerError("started runner state is not exact")
+    elif (
+        state.get("Status") != "created"
+        or state.get("Restarting") is not False
+        or state.get("Paused") is not False
+        or state.get("Dead") is not False
+        or state.get("Pid") != 0
+        or container.get("RestartCount") != 0
+    ):
+        raise RunnerError("runner is not pristine/never-started")
     expected_env = {
         item.split("=", 1)[0]: item.split("=", 1)[1]
         for item in manifest["image_environment"]
@@ -414,58 +505,37 @@ def validate_target_container(
     generation: str,
     target_kind: str,
     *,
+    expected_id: str,
+    expected_name: str,
+    expected_volume: str,
+    expected_pgdata: str,
     expected_running: bool = True,
     expected_network: str = "pg-rehearsal",
 ) -> dict[str, Any]:
     if target_kind not in {"recovery", "final"}:
         raise RunnerError("database target kind is not exact")
-    target = manifest["target"]
-    expected_name = (
-        f"adapteng-recover-{generation.lower()}"
-        if target_kind == "recovery"
-        else f"adapteng-db-{generation.lower()}"
-    )
-    config = container.get("Config", {})
-    host = container.get("HostConfig", {})
-    networks = container.get("NetworkSettings", {}).get("Networks")
-    mounts = container.get("Mounts")
-    if (
-        not str(container.get("Id", ""))
-        or container.get("Name") != f"/{expected_name}"
-        or container.get("State", {}).get("Running") is not expected_running
-        or container.get("Image") != target["config_id"]
-        or config.get("Image") != target["repo_digest"]
-        or config.get("Hostname") != expected_name
-        or config.get("User") != image.get("Config", {}).get("User")
-        or config.get("Entrypoint") != target["entrypoint"]
-        or config.get("Cmd") != target["cmd"]
-        or config.get("Env") != target["image_environment"]
-        or config.get("Labels") != target["labels"]
-        or host.get("NetworkMode") != "none"
-        or host.get("PortBindings") not in (None, {})
-        or not isinstance(networks, dict)
-        or set(networks) != {expected_network}
-        or not isinstance(mounts, list)
-        or len(mounts) != 1
-    ):
-        raise RunnerError("database target identity/command/isolation is not exact")
-    mount = mounts[0]
-    if (
-        mount.get("Type") != "volume"
-        or mount.get("Name") != f"adapteng-restore-{generation.lower()}"
-        or "docker.sock" in str(mount)
-    ):
-        raise RunnerError("database target volume/socket identity is not exact")
-    if (
-        image.get("Id") != target["config_id"]
-        or image.get("RepoDigests") != [target["repo_digest"]]
-    ):
-        raise RunnerError("database target image identity is not exact")
+    try:
+        identity = validate_sealed_target(
+            container=container,
+            image=image,
+            expected_id=expected_id,
+            expected_name=expected_name,
+            expected_network=expected_network,
+            expected_host_network_mode="none",
+            expected_volume=expected_volume,
+            expected_pgdata=expected_pgdata,
+            target_policy=manifest["target"],
+            generation=generation,
+            running=expected_running,
+            forbidden_identifiers={"adapteng-ops-db", "postgres-adapteng-ops"},
+        )
+    except HostInventoryError as exc:
+        raise RunnerError("database target identity/command/isolation is not exact") from exc
     execution = exact_execution_identity(container)
     return {
-        "container_id": str(container.get("Id", "")),
+        "container_id": expected_id,
         "container_id_sha256": hashlib.sha256(
-            str(container.get("Id", "")).encode("utf-8")
+            expected_id.encode("utf-8")
         ).hexdigest(),
         "container_execution_identity": execution,
         "container_execution_identity_sha256": hashlib.sha256(
@@ -473,10 +543,13 @@ def validate_target_container(
         ).hexdigest(),
         "generation": generation,
         "target_kind": target_kind,
-        "config_id": target["config_id"],
-        "repo_digest": target["repo_digest"],
+        "config_id": manifest["target"]["config_id"],
+        "repo_digest": manifest["target"]["repo_digest"],
         "volume_ref_sha256": hashlib.sha256(
-            str(mount["Name"]).encode("utf-8")
+            expected_volume.encode("utf-8")
+        ).hexdigest(),
+        "sealed_target_identity_sha256": hashlib.sha256(
+            canonical_json(identity)
         ).hexdigest(),
     }
 
@@ -486,6 +559,47 @@ def require_unchanged_execution_identity(
 ) -> None:
     if exact_execution_identity(after) != exact_execution_identity(before):
         raise RunnerError(f"{label} identity changed after isolation measurement")
+
+
+def load_generation_targets(
+    generation: str, expected_procedure_sha256: str
+) -> dict[str, str]:
+    packet_path = STATE_ROOT / f"generation-{generation}" / "guard-packet.json"
+    packet = strict_json_object(
+        secure_member_bytes(packet_path, "fixed generation target state", private=True),
+        "fixed generation target state",
+    )
+    required = {
+        "generation",
+        "procedure_manifest_sha256",
+        "recovery_container",
+        "recovery_container_id",
+        "final_container",
+        "final_container_id",
+        "volume",
+        "locked_network",
+        "restore_pg1_path",
+        "database_pgdata",
+    }
+    if (
+        not required.issubset(packet)
+        or packet.get("generation") != generation
+        or packet.get("procedure_manifest_sha256") != expected_procedure_sha256
+    ):
+        raise RunnerError("fixed generation target state is not exact/bound")
+    result = {key: str(packet[key]) for key in required}
+    if (
+        result["recovery_container"] != f"adapteng-recover-{generation.lower()}"
+        or result["final_container"] != f"adapteng-db-{generation.lower()}"
+        or result["volume"] != f"adapteng-restore-{generation.lower()}"
+        or result["locked_network"] != "pg-rehearsal"
+        or not all(
+            re.fullmatch(r"[0-9a-f]{64}", result[key])
+            for key in ("recovery_container_id", "final_container_id")
+        )
+    ):
+        raise RunnerError("fixed generation target identity is malformed")
+    return result
 
 
 def role_lifecycle_sql(mode: str, scratch_password: str) -> bytes:
@@ -510,11 +624,19 @@ def run_sealed_container(
     environment: dict[str, str],
     sql_input: bytes | None,
     forbidden_identifiers: set[str],
+    procedure_manifest_sha256: str,
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
 ) -> dict[str, Any]:
     environment_fd = create_environment_fd(environment)
     container_id = ""
     runner_name = f"adapteng-runner-{generation.lower()}-{mode}"
+    generation_targets = load_generation_targets(
+        generation, procedure_manifest_sha256
+    )
+    target_prefix = "recovery" if target_kind == "recovery" else "final"
+    target_name = generation_targets[f"{target_prefix}_container"]
+    target_id = generation_targets[f"{target_prefix}_container_id"]
+    consumed_provider_operations: set[str] = set()
     labels = [
         "--label",
         f"adapteng.restore.generation={generation}",
@@ -534,12 +656,15 @@ def run_sealed_container(
                 runner_name,
                 "--network",
                 "pg-rehearsal",
+                "--interactive",
+                "--read-only",
                 *labels,
                 "--env-file",
                 f"/proc/self/fd/{environment_fd}",
                 "--entrypoint",
-                entrypoint,
+                manifest["execution_gate_entrypoint"],
                 manifest["repo_digest"],
+                entrypoint,
                 *argv,
             ],
             check=True,
@@ -566,31 +691,46 @@ def run_sealed_container(
             argv=argv,
             environment=environment,
         )
-        target_name = (
-            f"adapteng-recover-{generation.lower()}"
-            if target_kind == "recovery"
-            else f"adapteng-db-{generation.lower()}"
-        )
-        target_container = inspect_one(["container", "inspect", target_name], run=run)
+        require_pristine_rootfs(container_id, run=run)
+        target_container = inspect_one(["container", "inspect", target_id], run=run)
         target_image = inspect_one(
             ["image", "inspect", str(target_container.get("Image", ""))], run=run
         )
         target = validate_target_container(
-            target_container, target_image, manifest, generation, target_kind
+            target_container,
+            target_image,
+            manifest,
+            generation,
+            target_kind,
+            expected_id=target_id,
+            expected_name=target_name,
+            expected_volume=generation_targets["volume"],
+            expected_pgdata=generation_targets["database_pgdata"],
+            expected_network=generation_targets["locked_network"],
         )
-        provider_pre = wait_for_provider_measurement(generation, run=run)
+        provider_pre = collect_provider_operation(
+            generation=generation,
+            phase="PRE_SQL",
+            target_container_id=target_id,
+            target_image_identity_sha256=target[
+                "sealed_target_identity_sha256"
+            ],
+            consumed_operations=consumed_provider_operations,
+            run=run,
+        )
         containers, images, networks, volumes = collect_docker_inventory(run=run)
         expected = {
             target_name: target["container_execution_identity"],
             runner_name: exact_execution_identity(runner_container),
         }
         peer_name = (
-            f"adapteng-db-{generation.lower()}"
+            generation_targets["final_container"]
             if target_kind == "recovery"
             else None
         )
         if peer_name is not None:
-            peer = inspect_one(["container", "inspect", peer_name], run=run)
+            peer_id = generation_targets["final_container_id"]
+            peer = inspect_one(["container", "inspect", peer_id], run=run)
             peer_image = inspect_one(
                 ["image", "inspect", str(peer.get("Image", ""))], run=run
             )
@@ -600,6 +740,10 @@ def run_sealed_container(
                 manifest,
                 generation,
                 "final",
+                expected_id=peer_id,
+                expected_name=peer_name,
+                expected_volume=generation_targets["volume"],
+                expected_pgdata=generation_targets["database_pgdata"],
                 expected_running=False,
                 expected_network="none",
             )
@@ -629,9 +773,48 @@ def run_sealed_container(
         require_unchanged_execution_identity(
             target_container, target_again, "database target"
         )
+        require_pristine_rootfs(container_id, run=run)
+        run(
+            ["docker", "start", container_id],
+            check=True,
+            capture_output=True,
+            env=CLEAN_ENVIRONMENT,
+        )
+        runner_started = inspect_one(["container", "inspect", container_id], run=run)
+        runner_image_started = inspect_one(
+            ["image", "inspect", str(runner_started.get("Image", ""))], run=run
+        )
+        validate_runner_inspection(
+            runner_started,
+            runner_image_started,
+            manifest,
+            expected_id=container_id,
+            expected_name=runner_name,
+            entrypoint=entrypoint,
+            argv=argv,
+            environment=environment,
+            expected_running=True,
+        )
+        target_started = inspect_one(["container", "inspect", target_id], run=run)
+        target_image_started = inspect_one(
+            ["image", "inspect", str(target_started.get("Image", ""))], run=run
+        )
+        validate_target_container(
+            target_started,
+            target_image_started,
+            manifest,
+            generation,
+            target_kind,
+            expected_id=target_id,
+            expected_name=target_name,
+            expected_volume=generation_targets["volume"],
+            expected_pgdata=generation_targets["database_pgdata"],
+            expected_network=generation_targets["locked_network"],
+        )
+        require_pristine_rootfs(container_id, run=run)
         completed = run(
-            ["docker", "start", "--attach", "--interactive", container_id],
-            input=sql_input,
+            ["docker", "attach", container_id],
+            input=b"ADAPTENG_EXECUTE_V1\n" + (sql_input or b""),
             env=CLEAN_ENVIRONMENT,
         )
         if completed.returncode != 0:
@@ -648,10 +831,14 @@ def run_sealed_container(
             env=CLEAN_ENVIRONMENT,
         )
         container_id = ""
-        sql_completed_at = datetime.now(timezone.utc)
-        provider_post = wait_for_provider_measurement(
-            generation,
-            after_observed_at=sql_completed_at,
+        provider_post = collect_provider_operation(
+            generation=generation,
+            phase="POST_SQL",
+            target_container_id=target_id,
+            target_image_identity_sha256=target[
+                "sealed_target_identity_sha256"
+            ],
+            consumed_operations=consumed_provider_operations,
             run=run,
         )
         containers, images, networks, volumes = collect_docker_inventory(run=run)
@@ -764,6 +951,7 @@ def main() -> int:
             environment=environment,
             sql_input=sql_input,
             forbidden_identifiers={"adapteng-ops-db", "postgres-adapteng-ops"},
+            procedure_manifest_sha256=args.procedure_manifest_sha256,
         )
         print(f"runner_manifest_sha256={manifest_sha256}", file=sys.stderr)
         print(

@@ -96,10 +96,13 @@ services:
       The tracked guarded restore/probe/retention artifacts exist but have not
       touched Docker or a provider. The proposed path now requires wrapper-
       generated exact restore config, fixed descriptor-only secrets, one
-      measured-and-executed runner container ID, fresh signed provider plus
-      complete Docker inventory before/after SQL, and an exclusive capability-
-      aware systemd-activation/cron/container/descriptor-measured writer-process
-      inventory. Before apply:
+      measured-and-executed runner container ID, authoritative never-started
+      target IDs, fresh challenge-bound signed provider broker proof of exact
+      firewall plus empty private_net, complete Docker inventory before/after
+      SQL, and a declared dedicated-host capability inventory covering user
+      manager/linger absence, every scheduler source and all root/admin/writer-
+      capable processes. The current shared Coolify host scope is not accepted
+      without a separately reviewed exclusive-broker replacement. Before apply:
       separately reviewed
       Docker-measured image/runner manifests and build, signed fresh Hetzner
       isolation measurement, descriptor-bound procedure state, and exact
@@ -109,9 +112,10 @@ services:
       baseline, B exact apply plus streamed digest-verified DML transaction
       rollback, C final exact
       migrated state; cleanup; reviewed digest-only PASS; and a separately merged
-      automation evidence schema/validator/consumer contract that accepts the new
-      bindings. Current schema v2 at 4afc3b13668e6a07187db2ee50ee4a283833d16d
-      cannot and is an explicit blocker. Rollout authorization is
+      automation evidence-lifecycle schema/validator/consumer contract that
+      validates exactly the five sanitized fields. No final schema version or
+      compatibility is claimed; that separate PR is an explicit blocker.
+      Rollout authorization is
       NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR.
 
   - id: adapteng-baserow-adapter

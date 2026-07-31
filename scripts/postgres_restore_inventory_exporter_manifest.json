@@ -1,15 +1,25 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "status": "NOT_CONFIGURED",
   "exporter_id": null,
   "exporter_version": null,
   "artifact_sha256": null,
-  "scheduler_output_schema_version": 2,
+  "scheduler_output_schema_version": 3,
   "repository_output_schema_version": 1,
+  "host_scope": {
+    "kind": "DEDICATED_POSTGRES_BACKUP_HOST",
+    "machine_id_sha256": null,
+    "require_no_user_managers": true,
+    "require_no_linger": true,
+    "root_admin_trust": "ALL_ROOT_PROCESSES_EXACTLY_INVENTORIED",
+    "docker_admin_allowed": false
+  },
   "repository_write_capability": {
     "principal": null,
     "uid": null,
     "credential_id": "pgbackrest-repository-write",
+    "credential_path": "/run/secrets/pgbackrest-repository-write",
+    "docker_gid": null,
     "config_path": "/etc/pgbackrest/pgbackrest.conf",
     "config_sha256": null,
     "pgbackrest_path": "/usr/bin/pgbackrest",

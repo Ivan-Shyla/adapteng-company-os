@@ -14,11 +14,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 import scripts.postgres_restore_inventory_exporter as inventory_exporter
+import scripts.postgres_restore_provider_inventory as provider_inventory
 from scripts.postgres_restore_generation import (
     CLEAN_ENVIRONMENT,
     GenerationError,
     GenerationState,
     ProviderPolicy,
+    authorize_and_start_target,
     build_pgbackrest_config,
     load_provider_policy,
     parse_descriptor_owned_bytes,
@@ -47,26 +49,34 @@ from scripts.postgres_restore_host_inventory import (
     HostInventoryError,
     container_execution_identity,
     validate_host_inventory,
+    validate_sealed_target,
 )
 from scripts.postgres_restore_image_identity import IdentityError, measure_container
 from scripts.postgres_restore_inventory_exporter import (
     ExporterError,
     canonical_executable_target,
+    aggregate_task_security,
+    container_capability_record,
     next_weekly_slots,
+    process_security_state,
     record_sha256,
     retention_policy,
     validate_capability_inventory,
     validate_effective_unit_properties,
     validate_job_policy,
+    user_unit_roots,
 )
 from scripts.postgres_restore_isolation_gate import (
     IsolationGateError,
-    require_measurement_after,
+    canonical_operation_request,
+    evaluate_collected_packet,
 )
 from scripts.postgres_restore_provider_inventory import (
     ProviderInventoryError,
+    evaluate_broker_response,
     evaluate_provider_state,
     expected_locked_rules,
+    secure_read_fd,
 )
 from scripts.postgres_restore_retention import (
     RetentionError,
@@ -82,6 +92,7 @@ from scripts.postgres_restore_runner import (
     load_sealed_dependencies,
     parse_database_secret,
     role_lifecycle_sql,
+    require_pristine_rootfs,
     require_unchanged_execution_identity,
     validate_runner_inspection,
     validate_target_container,
@@ -130,7 +141,7 @@ def approved_runner_manifest() -> dict[str, object]:
     runner_repo = "registry.example/runner@sha256:" + "5" * 64
     target_repo = "registry.example/postgres@sha256:" + "1" * 64
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "APPROVED",
         "repo_digest": runner_repo,
         "config_id": "sha256:" + "6" * 64,
@@ -138,6 +149,13 @@ def approved_runner_manifest() -> dict[str, object]:
         "architecture": "amd64",
         "image_environment": ["PATH=/usr/bin"],
         "image_labels": {"org.opencontainers.image.revision": "sealed"},
+        "runtime": "runc",
+        "apparmor_profile": "docker-default",
+        "masked_paths": ["/proc/kcore"],
+        "readonly_paths": ["/proc/asound"],
+        "readonly_rootfs": True,
+        "tmpfs": None,
+        "execution_gate_entrypoint": "/usr/local/libexec/adapteng-postgres-restore-exec-gate",
         "psql_entrypoint": "/usr/lib/postgresql/16/bin/psql",
         "probe_argv": ["--no-psqlrc", "-v", "ON_ERROR_STOP=1"],
         "database_environment": {
@@ -190,14 +208,27 @@ def approved_runner_manifest() -> dict[str, object]:
         "target": {
             "repo_digest": target_repo,
             "config_id": "sha256:" + "2" * 64,
+            "path": "/usr/local/bin/docker-entrypoint.sh",
             "entrypoint": ["/usr/local/bin/docker-entrypoint.sh"],
             "cmd": ["postgres"],
+            "user": "postgres",
+            "working_dir": "",
             "image_environment": [
                 "PGDATA=/var/lib/postgresql/data",
                 "PATH=/usr/bin",
             ],
             "labels": {
                 "adapteng.restore.purpose": "postgres-restore-rehearsal"
+            },
+            "hostname_template": "{target_name}",
+            "runtime": "runc",
+            "apparmor_profile": "docker-default",
+            "masked_paths": ["/proc/kcore"],
+            "readonly_paths": ["/proc/asound"],
+            "readonly_rootfs": True,
+            "tmpfs": {
+                "/tmp": "rw,noexec,nosuid,nodev,size=64m,mode=1777",
+                "/var/run/postgresql": "rw,noexec,nosuid,nodev,size=16m,mode=3775",
             },
         },
     }
@@ -242,11 +273,14 @@ def generation_state() -> GenerationState:
             canonical_json(approved_image_manifest()["image_environment"])
         ),
         recovery_container="adapteng-recover-a",
+        recovery_container_id="d" * 64,
         final_container="adapteng-db-a",
+        final_container_id="e" * 64,
         volume="adapteng-restore-a",
         bootstrap_network="pg-restore-bootstrap",
         locked_network="pg-rehearsal",
         restore_pg1_path="/restore/a/pgdata",
+        database_pgdata="/var/lib/postgresql/data",
         repository_endpoint="s3.eu-central-003.backblazeb2.com",
         repository_bucket="rehearsal",
         repository_region="eu-central-003",
@@ -275,13 +309,18 @@ def runner_environment() -> dict[str, str]:
     }
 
 
-def safe_host_config(network: str) -> dict[str, object]:
+def safe_host_config(
+    network: str,
+    *,
+    readonly_rootfs: bool = False,
+    tmpfs: dict[str, str] | None = None,
+) -> dict[str, object]:
     return {
         "NetworkMode": network,
         "PortBindings": {},
         "Privileged": False,
         "PublishAllPorts": False,
-        "ReadonlyRootfs": False,
+        "ReadonlyRootfs": readonly_rootfs,
         "AutoRemove": False,
         "PidMode": "",
         "IpcMode": "private",
@@ -303,6 +342,14 @@ def safe_host_config(network: str) -> dict[str, object]:
         "Links": None,
         "SecurityOpt": None,
         "VolumesFrom": None,
+        "GroupAdd": None,
+        "Sysctls": None,
+        "Tmpfs": tmpfs,
+        "Ulimits": None,
+        "CgroupParent": "",
+        "Runtime": "runc",
+        "MaskedPaths": ["/proc/kcore"],
+        "ReadonlyPaths": ["/proc/asound"],
     }
 
 
@@ -316,11 +363,21 @@ def runner_container(
         "Id": container_id,
         "Name": "/adapteng-runner-a-probe",
         "Image": manifest["config_id"],
-        "State": {"Running": False, "ExitCode": 0},
+        "AppArmorProfile": "docker-default",
+        "State": {
+            "Status": "created",
+            "Running": False,
+            "Pid": 0,
+            "ExitCode": 0,
+            "Paused": False,
+            "Restarting": False,
+            "Dead": False,
+        },
+        "RestartCount": 0,
         "Config": {
             "Image": manifest["repo_digest"],
-            "Entrypoint": [entrypoint],
-            "Cmd": manifest["probe_argv"],
+            "Entrypoint": [manifest["execution_gate_entrypoint"]],
+            "Cmd": [entrypoint, *manifest["probe_argv"]],
             "Labels": {
                 **manifest["image_labels"],
                 "adapteng.restore.purpose": "postgres-restore-rehearsal",
@@ -333,8 +390,17 @@ def runner_container(
             ],
             "Hostname": "adapteng-runner-a-probe",
             "User": "65532:65532",
+            "WorkingDir": "",
+            "AttachStdin": True,
+            "AttachStdout": True,
+            "AttachStderr": True,
+            "Tty": False,
+            "OpenStdin": True,
+            "StdinOnce": False,
         },
-        "HostConfig": safe_host_config("pg-rehearsal"),
+        "HostConfig": safe_host_config(
+            "pg-rehearsal", readonly_rootfs=True
+        ),
         "NetworkSettings": {
             "Networks": {
                 "pg-rehearsal": {
@@ -349,7 +415,7 @@ def runner_container(
 
 
 def target_container(
-    *, running: bool = True, target_kind: str = "final", container_id: str = "db-id"
+    *, running: bool = True, target_kind: str = "final", container_id: str = "d" * 64
 ) -> dict[str, object]:
     manifest = approved_runner_manifest()
     name = "adapteng-db-a" if target_kind == "final" else "adapteng-recover-a"
@@ -357,7 +423,22 @@ def target_container(
         "Id": container_id,
         "Name": f"/{name}",
         "Image": manifest["target"]["config_id"],
-        "State": {"Running": running},
+        "Path": manifest["target"]["path"],
+        "State": {
+            "Status": "running" if running else "created",
+            "Running": running,
+            "Pid": 123 if running else 0,
+            "ExitCode": 0,
+            "Error": "",
+            "StartedAt": "2026-07-31T08:00:00Z" if running else "0001-01-01T00:00:00Z",
+            "FinishedAt": "0001-01-01T00:00:00Z",
+            "Paused": False,
+            "Restarting": False,
+            "OOMKilled": False,
+            "Dead": False,
+        },
+        "RestartCount": 0,
+        "AppArmorProfile": "docker-default",
         "Config": {
             "Image": manifest["target"]["repo_digest"],
             "Entrypoint": manifest["target"]["entrypoint"],
@@ -366,14 +447,26 @@ def target_container(
             "Labels": manifest["target"]["labels"],
             "Hostname": name,
             "User": "postgres",
+            "WorkingDir": "",
+            "AttachStdin": False,
+            "AttachStdout": True,
+            "AttachStderr": True,
+            "Tty": False,
+            "OpenStdin": False,
+            "StdinOnce": False,
         },
-        "HostConfig": safe_host_config("none"),
+        "HostConfig": safe_host_config(
+            "none",
+            readonly_rootfs=True,
+            tmpfs=dict(manifest["target"]["tmpfs"]),
+        ),
         "NetworkSettings": {
             "Networks": {
                 "pg-rehearsal": {
                     "NetworkID": "locked-id",
                     "EndpointID": f"{target_kind}-endpoint",
-                    "Aliases": [name],
+                    "Aliases": [name, container_id[:12]],
+                    "IPAddress": "172.30.0.10",
                 }
             }
         },
@@ -669,21 +762,13 @@ class GuardBoundaryTests(unittest.TestCase):
             )
 
     def test_sql_container_rejects_repository_credentials_and_extra_mount(self) -> None:
-        container = {
-            "Name": "/adapteng-recover-a",
-            "State": {"Running": False},
-            "HostConfig": {"NetworkMode": "none", "PortBindings": {}},
-            "NetworkSettings": {"Networks": {"none": {}}, "Ports": {}},
-            "Mounts": [
-                {
-                    "Type": "volume",
-                    "Name": "adapteng-restore-a",
-                    "Destination": "/var/lib/postgresql/data",
-                    "RW": True,
-                }
-            ],
-            "Config": {"Env": ["PGBACKREST_REPO1_S3_KEY_SECRET=forbidden"]},
-        }
+        container = target_container(
+            running=False, target_kind="recovery", container_id="d" * 64
+        )
+        container["NetworkSettings"]["Networks"] = {"none": {}}
+        container["Config"]["Env"] = [
+            "PGBACKREST_REPO1_S3_KEY_SECRET=forbidden"
+        ]
         with self.assertRaises(GuardError):
             validate_container(
                 container,
@@ -852,12 +937,27 @@ class IsolationMeasurementTests(unittest.TestCase):
         self.owner_cidr = "203.0.113.10/32"
         self.server = {
             "id": 123,
+            "name": "pg-restore-a",
             "labels": {
                 "purpose": "postgres-restore-rehearsal",
                 "generation": "A",
             },
-            "public_net": {"firewalls": [{"id": 456, "status": "applied"}]},
+            "private_net": [],
+            "public_net": {
+                "ipv4": {},
+                "ipv6": {},
+                "floating_ips": [],
+                "firewalls": [{"id": 456, "status": "applied"}],
+            },
         }
+        self.operation = canonical_operation_request(
+            generation="A",
+            phase="PRE_SQL",
+            target_container_id="d" * 64,
+            target_image_identity_sha256="e" * 64,
+            nonce=b"N" * 32,
+            requested_at=self.now,
+        )
         self.firewall = {
             "id": 456,
             "name": "pg-restore-locked",
@@ -872,10 +972,38 @@ class IsolationMeasurementTests(unittest.TestCase):
             generation="A",
             observed_at=self.now,
             owner_ssh_cidr=self.owner_cidr,
+            operation=self.operation,
         )
         self.assertEqual(packet["status"], "LOCKED_CURRENT")
         self.assertNotIn("id", packet)
+        self.assertEqual(packet["private_networks_attached"], 0)
         validate_locked_measurement(packet, "A", self.now)
+
+    def test_private_network_attachment_shapes_fail_without_value_leak(self) -> None:
+        attacks = (
+            {},
+            {"private_net": None},
+            {"private_net": {}},
+            {"private_net": [{"network": 991, "ip": "10.0.0.2"}]},
+            {"private_net": [{"network": 991}, {"network": 992}]},
+            {"private_net": [], "private_networks": [{"id": 991}]},
+        )
+        for replacement in attacks:
+            server = {**self.server, **replacement}
+            if "private_net" not in replacement:
+                server.pop("private_net", None)
+            with self.subTest(replacement=replacement):
+                with self.assertRaises(ProviderInventoryError) as raised:
+                    evaluate_provider_state(
+                        server,
+                        [self.firewall],
+                        generation="A",
+                        observed_at=self.now,
+                        owner_ssh_cidr=self.owner_cidr,
+                        operation=self.operation,
+                    )
+                self.assertNotIn("991", str(raised.exception))
+                self.assertNotIn("10.0.0.2", str(raised.exception))
 
     def test_missing_extra_or_pending_firewall_is_rejected(self) -> None:
         with self.assertRaises(ProviderInventoryError):
@@ -885,10 +1013,30 @@ class IsolationMeasurementTests(unittest.TestCase):
                 generation="A",
                 observed_at=self.now,
                 owner_ssh_cidr=self.owner_cidr,
+                operation=self.operation,
+            )
+        selector = {
+            **self.firewall,
+            "applied_to": [
+                *self.firewall["applied_to"],
+                {"type": "label_selector", "label_selector": {"selector": "x=y"}},
+            ],
+        }
+        with self.assertRaises(ProviderInventoryError):
+            evaluate_provider_state(
+                self.server,
+                [selector],
+                generation="A",
+                observed_at=self.now,
+                owner_ssh_cidr=self.owner_cidr,
+                operation=self.operation,
             )
         server = {
             **self.server,
             "public_net": {
+                "ipv4": {},
+                "ipv6": {},
+                "floating_ips": [],
                 "firewalls": [
                     {"id": 456, "status": "applied"},
                     {"id": 789, "status": "pending"},
@@ -902,6 +1050,7 @@ class IsolationMeasurementTests(unittest.TestCase):
                 generation="A",
                 observed_at=self.now,
                 owner_ssh_cidr=self.owner_cidr,
+                operation=self.operation,
             )
 
     def test_stale_wrong_generation_or_host_measurement_is_rejected(self) -> None:
@@ -911,6 +1060,7 @@ class IsolationMeasurementTests(unittest.TestCase):
             generation="A",
             observed_at=self.now,
             owner_ssh_cidr=self.owner_cidr,
+            operation=self.operation,
         )
         with self.assertRaises(GenerationError):
             validate_locked_measurement(packet, "B", self.now)
@@ -918,12 +1068,12 @@ class IsolationMeasurementTests(unittest.TestCase):
             validate_locked_measurement(packet, "A", self.now + timedelta(minutes=3))
         policy = ProviderPolicy(
             collector_id="company-os-hetzner-locked-inventory",
-            collector_version=1,
+            collector_version=2,
             collector_sha256=str(packet["collector_sha256"]),
             public_key_pem="unused",
             public_key_pem_sha256="0" * 64,
             owner_ssh_cidr_sha256=sha256_bytes(self.owner_cidr.encode()),
-            max_age_seconds=120,
+            max_age_seconds=30,
         )
         with self.assertRaises(GenerationError):
             validate_locked_measurement(packet, "A", self.now, "f" * 64, policy)
@@ -937,15 +1087,172 @@ class IsolationMeasurementTests(unittest.TestCase):
         with self.assertRaises(GenerationError):
             load_provider_policy(manifest)
 
-    def test_post_sql_measurement_must_be_newer_than_completion_boundary(self) -> None:
-        with self.assertRaises(IsolationGateError):
-            require_measurement_after(self.now, self.now)
-        with self.assertRaises(IsolationGateError):
-            require_measurement_after(self.now, self.now + timedelta(seconds=1))
-        require_measurement_after(
-            self.now + timedelta(seconds=1),
-            self.now,
+    def test_operation_packet_is_single_use_and_cross_binding_replay_fails(self) -> None:
+        packet = evaluate_provider_state(
+            self.server,
+            [self.firewall],
+            generation="A",
+            observed_at=self.now,
+            owner_ssh_cidr=self.owner_cidr,
+            operation=self.operation,
         )
+        public_key = "-----BEGIN PUBLIC KEY-----\nunused\n-----END PUBLIC KEY-----\n"
+        manifest = canonical_json(
+            {
+                "schema_version": 3,
+                "status": "APPROVED",
+                "collector_id": "company-os-hetzner-locked-inventory",
+                "collector_version": 2,
+                "collector_sha256": sha256_bytes(
+                    (SCRIPTS / "postgres_restore_provider_inventory.py").read_bytes()
+                ),
+                "broker_id": "company-os-hetzner-inventory-broker",
+                "broker_version": 1,
+                "signature_algorithm": "ed25519",
+                "public_key_pem": public_key,
+                "public_key_pem_sha256": sha256_bytes(public_key.encode()),
+                "owner_ssh_cidr_sha256": sha256_bytes(self.owner_cidr.encode()),
+                "max_age_seconds": 30,
+            }
+        )
+        consumed: set[str] = set()
+        measured = evaluate_collected_packet(
+            canonical_json(packet),
+            manifest,
+            operation=self.operation,
+            now=self.now,
+            server_ref_sha256=sha256_bytes(b"123"),
+            consumed_operations=consumed,
+        )
+        self.assertEqual(
+            measured["operation_binding_sha256"],
+            sha256_bytes(canonical_json(self.operation)),
+        )
+        with self.assertRaises(IsolationGateError):
+            evaluate_collected_packet(
+                canonical_json(packet),
+                manifest,
+                operation=self.operation,
+                now=self.now,
+                server_ref_sha256=sha256_bytes(b"123"),
+                consumed_operations=consumed,
+            )
+        for field, value in (
+            ("phase", "POST_SQL"),
+            ("generation", "B"),
+            ("target_container_id_sha256", "f" * 64),
+        ):
+            replay = {**self.operation, field: value}
+            with self.assertRaises(IsolationGateError):
+                evaluate_collected_packet(
+                    canonical_json(packet),
+                    manifest,
+                    operation=replay,
+                    now=self.now,
+                    server_ref_sha256=sha256_bytes(b"123"),
+                    consumed_operations=set(),
+                )
+
+    def test_broker_signature_request_and_freshness_are_bound(self) -> None:
+        request = canonical_json({"operation": self.operation})
+        signed = {
+            "schema_version": 1,
+            "broker_id": "company-os-hetzner-inventory-broker",
+            "broker_version": 1,
+            "request_sha256": sha256_bytes(request),
+            "observed_at": self.now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "server": self.server,
+            "firewalls": [self.firewall],
+        }
+        response = canonical_json(
+            {**signed, "signature_base64": "c2lnbmF0dXJl"}
+        )
+        manifest = {
+            "broker_id": "company-os-hetzner-inventory-broker",
+            "broker_version": 1,
+            "public_key_pem": "pinned",
+        }
+        verified: list[bytes] = []
+
+        def verify(payload: bytes, signature: bytes, public_key: bytes) -> None:
+            verified.extend((payload, signature, public_key))
+
+        server, firewalls, observed, digest = evaluate_broker_response(
+            response,
+            request,
+            manifest,
+            now=self.now,
+            verify=verify,
+        )
+        self.assertEqual(server, self.server)
+        self.assertEqual(firewalls, [self.firewall])
+        self.assertEqual(observed, self.now)
+        self.assertRegex(digest, r"^[0-9a-f]{64}$")
+        self.assertEqual(verified[0], canonical_json(signed))
+        for attack_request, attack_now in (
+            (canonical_json({"operation": "replacement"}), self.now),
+            (request, self.now + timedelta(seconds=11)),
+        ):
+            with self.assertRaises(ProviderInventoryError):
+                evaluate_broker_response(
+                    response,
+                    attack_request,
+                    manifest,
+                    now=attack_now,
+                    verify=verify,
+                )
+
+    def test_caller_packet_and_collector_substitution_paths_are_absent(self) -> None:
+        source = (SCRIPTS / "postgres_restore_isolation_gate.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn('f"generation-{generation}.json"', source)
+        self.assertIn('f"/proc/self/fd/{collector_descriptor}"', source)
+        self.assertIn("pass_fds=(collector_descriptor, request_descriptor)", source)
+        self.assertIn('"--operation-request-fd"', source)
+        self.assertIn("O_EXCL | os.O_NOFOLLOW", source)
+        collector = (SCRIPTS / "postgres_restore_provider_inventory.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("provider-inventory-broker.sock", collector)
+        self.assertNotIn("hcloud-readonly-token", collector)
+        self.assertNotIn("TOKEN_PATH", collector)
+        self.assertIn("def broker_response(", collector)
+
+    def test_operation_request_is_read_from_the_inherited_descriptor(self) -> None:
+        with tempfile.NamedTemporaryFile(delete=False) as handle:
+            path = Path(handle.name)
+            handle.write(b'{"schema_version":1}\n')
+        try:
+            path.chmod(0o600)
+            descriptor = open(path, "rb", buffering=0)
+            try:
+                actual = provider_inventory.os.fstat(descriptor.fileno())
+                metadata = list(actual)
+                metadata[0] = stat.S_IFREG | 0o600
+                with (
+                    patch.object(
+                        provider_inventory.os,
+                        "geteuid",
+                        return_value=0,
+                        create=True,
+                    ),
+                    patch.object(
+                        provider_inventory.os,
+                        "fstat",
+                        return_value=provider_inventory.os.stat_result(metadata),
+                    ),
+                ):
+                    self.assertEqual(
+                        secure_read_fd(
+                            descriptor.fileno(), "provider operation request"
+                        ),
+                        '{"schema_version":1}',
+                    )
+            finally:
+                descriptor.close()
+        finally:
+            path.unlink()
 
 
 class RunnerLifecycleTests(unittest.TestCase):
@@ -956,6 +1263,31 @@ class RunnerLifecycleTests(unittest.TestCase):
         self.runner_image = image_objects()[0]
         self.target = target_container()
         self.target_image = image_objects()[1]
+
+    def validate_target(
+        self,
+        container: dict[str, object],
+        *,
+        target_kind: str = "final",
+        expected_running: bool = True,
+        expected_network: str = "pg-rehearsal",
+    ) -> dict[str, object]:
+        expected_name = (
+            "adapteng-recover-a" if target_kind == "recovery" else "adapteng-db-a"
+        )
+        return validate_target_container(
+            container,
+            self.target_image,
+            self.manifest,
+            "A",
+            target_kind,
+            expected_id="d" * 64,
+            expected_name=expected_name,
+            expected_volume="adapteng-restore-a",
+            expected_pgdata="/var/lib/postgresql/data",
+            expected_running=expected_running,
+            expected_network=expected_network,
+        )
 
     def test_runner_manifest_remains_fail_closed_until_reviewed(self) -> None:
         manifest = json.loads(
@@ -1022,6 +1354,24 @@ class RunnerLifecycleTests(unittest.TestCase):
                 environment=self.environment,
             )
 
+    def test_runner_writable_layer_must_remain_empty(self) -> None:
+        def clean_run(
+            *_args: object, **_kwargs: object
+        ) -> subprocess.CompletedProcess[bytes]:
+            return subprocess.CompletedProcess([], 0, stdout=b"", stderr=b"")
+
+        require_pristine_rootfs("runner-id", run=clean_run)
+
+        def changed_run(
+            *_args: object, **_kwargs: object
+        ) -> subprocess.CompletedProcess[bytes]:
+            return subprocess.CompletedProcess(
+                [], 0, stdout=b"C /usr/local/libexec\n", stderr=b""
+            )
+
+        with self.assertRaises(RunnerError):
+            require_pristine_rootfs("runner-id", run=changed_run)
+
     def test_tag_image_entrypoint_cmd_and_post_measure_mutation_are_rejected(self) -> None:
         attacks = [
             {**self.container, "Config": {**self.container["Config"], "Image": "tag"}},
@@ -1064,17 +1414,21 @@ class RunnerLifecycleTests(unittest.TestCase):
             )
 
     def test_target_validation_binds_image_command_and_container_id(self) -> None:
-        measured = validate_target_container(
-            self.target, self.target_image, self.manifest, "A", "final"
-        )
-        self.assertEqual(measured["container_id"], "db-id")
+        measured = self.validate_target(self.target)
+        self.assertEqual(measured["container_id"], "d" * 64)
         attacks = [
             {**self.target, "Image": "sha256:" + "9" * 64},
             {
                 **self.target,
                 "Config": {**self.target["Config"], "Entrypoint": ["/bin/sh"]},
             },
+            {**self.target, "Path": "/bin/sh"},
+            {
+                **self.target,
+                "Config": {**self.target["Config"], "Cmd": ["attacker"]},
+            },
             {**self.target, "Id": ""},
+            {**self.target, "RestartCount": 1},
             {
                 **self.target,
                 "HostConfig": {
@@ -1092,37 +1446,28 @@ class RunnerLifecycleTests(unittest.TestCase):
         ]
         for attack in attacks:
             with self.assertRaises(RunnerError):
-                validate_target_container(
-                    attack, self.target_image, self.manifest, "A", "final"
-                )
+                self.validate_target(attack)
 
     def test_stopped_final_peer_remains_on_none_during_recovery_assertion(self) -> None:
         peer = json.loads(json.dumps(self.target))
-        peer["State"] = {"Running": False}
+        peer["State"] = target_container(running=False)["State"]
         peer["NetworkSettings"]["Networks"] = {
             "none": {
                 "NetworkID": "",
                 "EndpointID": "",
                 "Aliases": None,
+                "IPAddress": "",
             }
         }
-        measured = validate_target_container(
+        measured = self.validate_target(
             peer,
-            self.target_image,
-            self.manifest,
-            "A",
-            "final",
             expected_running=False,
             expected_network="none",
         )
-        self.assertEqual(measured["container_id"], "db-id")
+        self.assertEqual(measured["container_id"], "d" * 64)
         with self.assertRaises(RunnerError):
-            validate_target_container(
+            self.validate_target(
                 peer,
-                self.target_image,
-                self.manifest,
-                "A",
-                "final",
                 expected_running=False,
             )
 
@@ -1130,7 +1475,91 @@ class RunnerLifecycleTests(unittest.TestCase):
         text = (SCRIPTS / "postgres_restore_runner.py").read_text(encoding="utf-8")
         self.assertNotIn('"run",', text)
         self.assertEqual(text.count('"create",'), 1)
-        self.assertIn('"start", "--attach", "--interactive"', text)
+        self.assertIn('["docker", "start", container_id]', text)
+        self.assertIn('["docker", "attach", container_id]', text)
+        self.assertLess(
+            text.index('["docker", "start", container_id]'),
+            text.index('["docker", "attach", container_id]'),
+        )
+        guard = (SCRIPTS / "postgres_restore_guard.py").read_text(encoding="utf-8")
+        self.assertIn("args.recovery_container_id", guard)
+        self.assertNotIn(
+            'docker_json("container", "inspect", names["recovery_container"])',
+            guard,
+        )
+
+    def test_complete_target_measurement_precedes_only_id_start(self) -> None:
+        events: list[object] = []
+        pristine = {
+            "container_id": "d" * 64,
+            "running": False,
+            "state_status": "created",
+            "entrypoint": "approved",
+        }
+
+        def inspect_target(**kwargs: object) -> dict[str, object]:
+            running = bool(kwargs["running"])
+            events.append(("inspect", running, kwargs["container_id"]))
+            return {
+                **pristine,
+                "running": running,
+                "state_status": "running" if running else "created",
+            }
+
+        def collect_provider(**kwargs: object) -> dict[str, object]:
+            events.append(("provider", kwargs["container_id"], kwargs["phase"]))
+            return {"operation_binding_sha256": "a" * 64}
+
+        def start(command: list[str]) -> None:
+            events.append(tuple(command))
+
+        authorize_and_start_target(
+            state=generation_state(),
+            target_policy=dict(self.manifest["target"]),
+            container_id="d" * 64,
+            container_name="adapteng-recover-a",
+            phase="TARGET_START_RECOVERY",
+            consumed_operations=set(),
+            inspect_target=inspect_target,
+            collect_provider=collect_provider,
+            start=start,
+        )
+        self.assertEqual(
+            events,
+            [
+                ("inspect", False, "d" * 64),
+                ("provider", "d" * 64, "TARGET_START_RECOVERY"),
+                ("inspect", False, "d" * 64),
+                ("docker", "start", "d" * 64),
+                ("inspect", True, "d" * 64),
+            ],
+        )
+
+        events.clear()
+        inspections = iter(
+            [
+                pristine,
+                {**pristine, "entrypoint": "attacker"},
+            ]
+        )
+
+        def swapped_inspect(**kwargs: object) -> dict[str, object]:
+            events.append(("inspect", kwargs["running"]))
+            return next(inspections)
+
+        with self.assertRaises(GenerationError):
+            authorize_and_start_target(
+                state=generation_state(),
+                target_policy=dict(self.manifest["target"]),
+                container_id="d" * 64,
+                container_name="adapteng-recover-a",
+                phase="TARGET_START_RECOVERY",
+                consumed_operations=set(),
+                inspect_target=swapped_inspect,
+                collect_provider=collect_provider,
+                start=start,
+            )
+        self.assertFalse(any(event == ("docker", "start", "d" * 64) for event in events))
 
     def test_role_lifecycle_and_command_allowlist_are_exact(self) -> None:
         self.assertIn(
@@ -1371,6 +1800,11 @@ class CapabilityInventoryTests(unittest.TestCase):
             {"source_type": "cron", "symlink": "/opt/current"},
             {"source_type": "cron", "argv": ["sh", "-c", "opaque"]},
             {"source_type": "coolify", "argv": ["docker", "exec", "opaque"]},
+            {"source_type": "user-systemd-linger", "unit": "hidden.timer"},
+            {"source_type": "systemd-transient", "unit": "run-u1.service"},
+            {"source_type": "root-cron", "path": "/var/spool/cron/root"},
+            {"source_type": "anacron", "path": "/var/spool/anacron/hidden"},
+            {"source_type": "at", "path": "/var/spool/cron/atjobs/a0001"},
         ]
         for attack in attacks:
             with self.assertRaises(ExporterError):
@@ -1385,6 +1819,19 @@ class CapabilityInventoryTests(unittest.TestCase):
         for containers, processes in (
             ([*self.containers, {"image": "opaque", "entrypoint": None}], []),
             (self.containers, [{"uid": 123, "argv": ["unknown"]}]),
+            (self.containers, [{"uids": [0, 0, 0, 0], "argv": ["root-job"]}]),
+            (
+                self.containers,
+                [{"uids": [1002] * 4, "environment_keys": ["PGBACKREST_REPO1_KEY"]}],
+            ),
+            (
+                self.containers,
+                [{"uids": [1003] * 4, "open_fd_target_sha256s": ["a" * 64]}],
+            ),
+            (
+                self.containers,
+                [{"uids": [1004] * 4, "docker_admin_group": True}],
+            ),
         ):
             with self.assertRaises(ExporterError):
                 validate_capability_inventory(
@@ -1404,22 +1851,104 @@ class CapabilityInventoryTests(unittest.TestCase):
     def test_non_timer_systemd_activation_is_inventory_bound(self) -> None:
         def fake_command(arguments: list[str]) -> bytes:
             joined = " ".join(arguments)
-            if "list-unit-files" in arguments and "--type=path" in arguments:
+            if "list-unit-files" in arguments:
                 return b"unapproved-backup.path enabled\n"
-            if "list-unit-files" in arguments or "list-units" in arguments:
+            if "list-units" in arguments:
                 return b""
-            if "--property=Triggers" in arguments:
-                return b"unapproved-backup.service\n"
-            if "cat" in arguments:
-                return f"[Unit]\nDescription={arguments[2]}\n".encode("utf-8")
+            if "show" in arguments:
+                return (
+                    b"Id=unapproved-backup.path\n"
+                    b"LoadState=loaded\nActiveState=active\n"
+                    b"UnitFileState=enabled\nTransient=no\n"
+                )
             raise AssertionError(joined)
 
         with patch.object(inventory_exporter, "command_bytes", fake_command):
-            records = inventory_exporter.scheduler_records(set())
+            records = inventory_exporter.scheduler_records(set(), account_homes=set())
         self.assertEqual(len(records), 1)
-        self.assertEqual(records[0]["unit_type"], "path")
-        self.assertEqual(records[0]["source_type"], "systemd-activation")
-        self.assertEqual(len(records[0]["trigger_units"]), 1)
+        self.assertEqual(records[0]["source_type"], "systemd-system-unit")
+        self.assertRegex(records[0]["effective_properties_sha256"], r"^[0-9a-f]{64}$")
+
+    def test_primary_docker_gid_and_permitted_capability_are_classified(self) -> None:
+        base = (
+            "Uid:\t1001\t1001\t1001\t1001\n"
+            "Gid:\t998\t998\t998\t998\n"
+            "Groups:\t1001\n"
+            "CapInh:\t0000000000000000\n"
+            "CapPrm:\t0000000000000000\n"
+            "CapEff:\t0000000000000000\n"
+            "CapAmb:\t0000000000000000\n"
+        )
+        primary = process_security_state(base, writer_uid=1002, docker_gid=998)
+        self.assertTrue(primary["docker_admin"])
+        permitted = process_security_state(
+            base.replace(
+                "CapPrm:\t0000000000000000",
+                "CapPrm:\t0000000000000080",
+            ),
+            writer_uid=1002,
+            docker_gid=997,
+        )
+        self.assertTrue(permitted["privileged_capability"])
+        aggregate = aggregate_task_security(
+            [("10", primary), ("11", permitted)]
+        )
+        self.assertTrue(aggregate["docker_admin"])
+        self.assertTrue(aggregate["privileged_capability"])
+        self.assertEqual(aggregate["task_count"], 2)
+
+    def test_container_security_identity_rejects_admin_and_binds_user(self) -> None:
+        container = runner_container()
+        image = image_objects()[0]
+        baseline = container_capability_record(container, image)
+        root_user = json.loads(json.dumps(container))
+        root_user["Config"]["User"] = "0"
+        self.assertNotEqual(
+            record_sha256(baseline),
+            record_sha256(container_capability_record(root_user, image)),
+        )
+        privileged = json.loads(json.dumps(container))
+        privileged["HostConfig"]["Privileged"] = True
+        with self.assertRaises(ExporterError):
+            container_capability_record(privileged, image)
+
+    def test_user_unit_roots_cover_account_database_homes_and_xdg_data(self) -> None:
+        roots = user_unit_roots({Path("/srv/service-account")}, Path("/absent"))
+        self.assertIn(
+            Path("/srv/service-account/.config/systemd/user"),
+            roots,
+        )
+        self.assertIn(
+            Path("/srv/service-account/.local/share/systemd/user"),
+            roots,
+        )
+        self.assertIn(
+            Path("/srv/service-account/.config/systemd/user-generators"),
+            roots,
+        )
+
+    def test_closed_host_scope_and_all_uid_capability_sources_are_explicit(self) -> None:
+        source = (SCRIPTS / "postgres_restore_inventory_exporter.py").read_text(
+            encoding="utf-8"
+        )
+        for required in (
+            "/var/lib/systemd/linger",
+            "/run/user",
+            "list-unit-files",
+            '"--all"',
+            "/var/spool/anacron",
+            "/var/spool/at",
+            "/etc/systemd/user",
+            ".local/share/systemd/user",
+            "/usr/local/share/systemd/user",
+            "/etc/xdg/systemd/user",
+            "task_security_inventory_sha256",
+            "mountinfo",
+            "open_fd_target_sha256s",
+            "docker_admin_group",
+            "shared Coolify scheduler scope is unsupported",
+        ):
+            self.assertIn(required, source)
 
     def test_deleted_and_memfd_writer_executables_fail_closed(self) -> None:
         for value in (

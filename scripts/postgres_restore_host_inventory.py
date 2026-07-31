@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -23,6 +24,8 @@ FORBIDDEN_ENV_PREFIXES = (
     "PGBACKREST_",
 )
 TIMESTAMP = "%Y-%m-%dT%H:%M:%SZ"
+CONTAINER_ID = re.compile(r"^[0-9a-f]{64}$")
+ZERO_TIME = {"", "0001-01-01T00:00:00Z"}
 
 
 class HostInventoryError(RuntimeError):
@@ -78,7 +81,10 @@ def host_isolation_shape(host: dict[str, Any]) -> dict[str, Any]:
         "DnsSearch",
         "ExtraHosts",
         "Links",
+        "GroupAdd",
         "SecurityOpt",
+        "Sysctls",
+        "Ulimits",
         "VolumesFrom",
     )
     if any(host.get(key) not in (None, [], {}) for key in empty_fields):
@@ -86,13 +92,14 @@ def host_isolation_shape(host: dict[str, Any]) -> dict[str, Any]:
     if (
         host.get("Privileged") is not False
         or host.get("PublishAllPorts") is not False
-        or host.get("ReadonlyRootfs") is not False
+        or not isinstance(host.get("ReadonlyRootfs"), bool)
         or host.get("AutoRemove") is not False
         or host.get("PidMode") not in (None, "")
         or host.get("IpcMode") not in (None, "", "private")
         or host.get("UTSMode") not in (None, "")
         or host.get("UsernsMode") not in (None, "")
         or host.get("CgroupnsMode") not in (None, "", "private")
+        or host.get("CgroupParent") not in (None, "")
         or host.get("OomKillDisable") not in (None, False)
         or host.get("Init") not in (None, False)
     ):
@@ -102,6 +109,15 @@ def host_isolation_shape(host: dict[str, Any]) -> dict[str, Any]:
         restart.get("MaximumRetryCount", 0)
     ) != 0:
         raise HostInventoryError("container restart policy is not disabled")
+    tmpfs = host.get("Tmpfs") or {}
+    if not isinstance(tmpfs, dict) or not all(
+        isinstance(path, str)
+        and path.startswith("/")
+        and isinstance(options, str)
+        and options
+        for path, options in tmpfs.items()
+    ):
+        raise HostInventoryError("container tmpfs policy is malformed")
     return {
         "privileged": False,
         "cap_add": [],
@@ -114,7 +130,8 @@ def host_isolation_shape(host: dict[str, Any]) -> dict[str, Any]:
         "uts_mode": "",
         "userns_mode": "",
         "cgroupns_mode": "private",
-        "readonly_rootfs": False,
+        "readonly_rootfs": host["ReadonlyRootfs"],
+        "tmpfs": {key: tmpfs[key] for key in sorted(tmpfs)},
         "publish_all_ports": False,
         "auto_remove": False,
         "restart_policy": "no",
@@ -193,6 +210,178 @@ def image_identity(image: dict[str, Any]) -> dict[str, Any]:
         "os": image.get("Os"),
         "architecture": image.get("Architecture"),
     }
+
+
+def validate_sealed_target(
+    *,
+    container: dict[str, Any],
+    image: dict[str, Any],
+    expected_id: str,
+    expected_name: str,
+    expected_network: str,
+    expected_host_network_mode: str,
+    expected_volume: str,
+    expected_pgdata: str,
+    target_policy: dict[str, Any],
+    generation: str,
+    running: bool,
+    forbidden_identifiers: set[str],
+) -> dict[str, Any]:
+    if not CONTAINER_ID.fullmatch(expected_id) or container.get("Id") != expected_id:
+        raise HostInventoryError("target container ID is absent or changed")
+    if container.get("Name") != f"/{expected_name}":
+        raise HostInventoryError("target container name is not exact")
+    state = container.get("State")
+    if not isinstance(state, dict):
+        raise HostInventoryError("target container state is incomplete")
+    if running:
+        if state.get("Status") != "running" or state.get("Running") is not True:
+            raise HostInventoryError("target container did not enter running state")
+    elif (
+        state.get("Status") != "created"
+        or state.get("Running") is not False
+        or state.get("Pid") not in (0, None)
+        or state.get("ExitCode") not in (0, None)
+        or state.get("Error") not in ("", None)
+        or state.get("StartedAt") not in ZERO_TIME
+        or state.get("FinishedAt") not in ZERO_TIME
+        or any(state.get(key) is True for key in ("Paused", "Restarting", "OOMKilled", "Dead"))
+    ):
+        raise HostInventoryError("target container is not pristine/never-started")
+    if container.get("RestartCount") not in (0, None):
+        raise HostInventoryError("target container has restarted")
+
+    required_policy = {
+        "repo_digest",
+        "config_id",
+        "path",
+        "entrypoint",
+        "cmd",
+        "user",
+        "working_dir",
+        "image_environment",
+        "labels",
+        "hostname_template",
+        "runtime",
+        "apparmor_profile",
+        "masked_paths",
+        "readonly_paths",
+        "readonly_rootfs",
+        "tmpfs",
+    }
+    if not isinstance(target_policy, dict) or set(target_policy) != required_policy:
+        raise HostInventoryError("target policy fields are not exact")
+    config = container.get("Config")
+    host = container.get("HostConfig")
+    if not isinstance(config, dict) or not isinstance(host, dict):
+        raise HostInventoryError("target container configuration is incomplete")
+    expected_hostname = str(target_policy["hostname_template"]).format(
+        generation_lower=generation.lower(),
+        role="recovery" if "recovery" in expected_name else "final",
+        target_name=expected_name,
+    )
+    exact_config = {
+        "Image": target_policy["repo_digest"],
+        "Entrypoint": target_policy["entrypoint"],
+        "Cmd": target_policy["cmd"],
+        "User": target_policy["user"],
+        "WorkingDir": target_policy["working_dir"],
+        "Env": target_policy["image_environment"],
+        "Labels": target_policy["labels"],
+        "Hostname": expected_hostname,
+        "AttachStdin": False,
+        "AttachStdout": True,
+        "AttachStderr": True,
+        "Tty": False,
+        "OpenStdin": False,
+        "StdinOnce": False,
+    }
+    if container.get("Image") != target_policy["config_id"]:
+        raise HostInventoryError("target image config ID is not approved")
+    if container.get("Path") != target_policy["path"]:
+        raise HostInventoryError("target executable path is not approved")
+    if (
+        host.get("Runtime") != target_policy["runtime"]
+        or container.get("AppArmorProfile") != target_policy["apparmor_profile"]
+        or host.get("MaskedPaths") != target_policy["masked_paths"]
+        or host.get("ReadonlyPaths") != target_policy["readonly_paths"]
+        or host.get("ReadonlyRootfs") is not target_policy["readonly_rootfs"]
+        or host.get("Tmpfs") != target_policy["tmpfs"]
+    ):
+        raise HostInventoryError("target runtime/security profile is not approved")
+    if any(config.get(key) != value for key, value in exact_config.items()):
+        raise HostInventoryError("target immutable configuration is not approved")
+    measured_image = image_identity(image)
+    if measured_image != {
+        "config_id": target_policy["config_id"],
+        "repo_digest": target_policy["repo_digest"],
+        "os": "linux",
+        "architecture": image.get("Architecture"),
+    } or image.get("Architecture") not in {"amd64", "arm64"}:
+        raise HostInventoryError("target image identity is not approved")
+    if host.get("NetworkMode") != expected_host_network_mode:
+        raise HostInventoryError("target network mode is not exact")
+    isolation = host_isolation_shape(host)
+    if host.get("PortBindings") not in (None, {}):
+        raise HostInventoryError("target publishes a host port")
+
+    networks = container.get("NetworkSettings", {}).get("Networks")
+    if not isinstance(networks, dict) or set(networks) != {expected_network}:
+        raise HostInventoryError("target network attachment is not exact")
+    endpoint = networks[expected_network]
+    if not isinstance(endpoint, dict):
+        raise HostInventoryError("target network endpoint is malformed")
+    aliases = endpoint.get("Aliases") or []
+    expected_aliases = (
+        set() if expected_network == "none" else {expected_name, expected_id[:12]}
+    )
+    if (
+        not isinstance(aliases, list)
+        or not all(isinstance(alias, str) for alias in aliases)
+        or set(aliases) != expected_aliases
+    ):
+        raise HostInventoryError("target network aliases are not exact")
+    if expected_network != "none" and (
+        not str(endpoint.get("NetworkID", ""))
+        or not str(endpoint.get("EndpointID", ""))
+        or not str(endpoint.get("IPAddress", ""))
+    ):
+        raise HostInventoryError("target locked-network endpoint is incomplete")
+    ports = container.get("NetworkSettings", {}).get("Ports")
+    if ports not in (None, {}) and any(
+        bindings not in (None, []) for bindings in ports.values()
+    ):
+        raise HostInventoryError("target exposes a host port")
+
+    mounts = container.get("Mounts")
+    if (
+        not isinstance(mounts, list)
+        or len(mounts) != 1
+        or mounts[0].get("Type") != "volume"
+        or mounts[0].get("Name") != expected_volume
+        or mounts[0].get("Destination") != expected_pgdata
+        or mounts[0].get("RW") is not True
+    ):
+        raise HostInventoryError("target PGDATA mount is not exact")
+    serialized = json.dumps(container, sort_keys=True).lower()
+    if "docker.sock" in serialized or any(
+        identifier.lower() in serialized for identifier in forbidden_identifiers
+    ):
+        raise HostInventoryError("target contains a forbidden capability/identifier")
+    identity = container_execution_identity(container)
+    identity.update(
+        {
+            "container_id": expected_id,
+            "path": container.get("Path"),
+            "state_status": state.get("Status"),
+            "restart_count": container.get("RestartCount", 0),
+            "image_repo_digest": measured_image["repo_digest"],
+            "working_dir": config.get("WorkingDir"),
+            "hostname": config.get("Hostname"),
+            "host_isolation": isolation,
+        }
+    )
+    return identity
 
 
 def validate_host_inventory(

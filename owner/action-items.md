@@ -197,25 +197,29 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   harness and scheduler; approve the complete provider quote; require bucket
   Object Lock disabled; take a fresh full; and pass post-backup `check` plus
   parsed selected-set `verify`. Populate and independently review the exact
-  image, single-container runner, provider-signature and capability-complete
+  image, single-container runner, challenge-bound provider broker/signature and capability-complete
   inventory-exporter manifests; their current `NOT_CONFIGURED` state must stop
-  execution. The exporter must pin the exclusive repository-write principal,
+  execution. Establish the declared dedicated PostgreSQL/backup host scope
+  (or separately review an exclusive broker replacement); the current shared
+  Coolify scope is not accepted. The exporter must prove no user manager/linger,
+  pin the exclusive repository-write principal,
   encrypted credential, direct full/differential jobs and every other
-  enabled/active systemd timer/path/socket/automount/service trigger,
-  cron/container and descriptor-measured writer-process identity; unknown,
+  installed/loaded/generated/transient systemd unit, per-user unit source,
+  cron/anacron/at spool, container and all-UID capability-bearing process
+  identity; unknown,
   deleted, opaque or Docker-socket-capable surfaces fail. Use only the tracked
-  guarded entrypoint on three independent clean A/B/C hosts, signed fresh
-  Hetzner firewall measurement, Docker-measured image/runner identity and
+  guarded entrypoint on three independent clean A/B/C hosts, fresh one-use
+  provider operations that prove empty `private_net`, authoritative ID-only
+  never-started target validation, Docker-measured image/runner identity and
   descriptor-streamed transaction probe. Prove retention from the canonical
   fixed accepted packet and fresh scheduler/repository inventories. Rehearse A exact
   pre-migration baseline; B exact 007 + Drive-008 plus DML transaction rollback
   with zero durable synthetic state; and independent C ending in B's exact
   migrated catalog state. Record digest-only evidence, capture C final exact
   status before cleanup, then delete the host/volumes and revoke the read-only
-  key. Automation evidence schema v2 at
-  `4afc3b13668e6a07187db2ee50ee4a283833d16d` rejects the new procedure/image/
-  inventory/retention fields; its separately reviewed schema, validator,
-  fixtures and consumer evidence-lifecycle PR is an explicit blocker. Current
+  key. A separately reviewed automation evidence-lifecycle schema, validator,
+  fixtures and consumer PR is an explicit blocker; no final schema version or
+  compatibility is claimed. Current
   status is `NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR`; rollout
   authorization remains blocked until that PR merges and validates these
   exact local fields: `completed_at`, `selected_set_info_sha256`,

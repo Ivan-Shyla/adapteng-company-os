@@ -119,24 +119,26 @@ def load_policy() -> tuple[dict[str, Any], str]:
         "artifact_sha256",
         "scheduler_output_schema_version",
         "repository_output_schema_version",
+        "host_scope",
         "repository_write_capability",
     }
     if (
         not isinstance(policy, dict)
         or set(policy) != required
-        or policy.get("schema_version") != 2
+        or policy.get("schema_version") != 3
     ):
-        raise ExporterError("inventory exporter manifest is not exact v2")
+        raise ExporterError("inventory exporter manifest is not exact v3")
     if policy.get("status") != "APPROVED":
         raise ExporterError("inventory exporter manifest is NOT_CONFIGURED")
     if (
         not SHA256.fullmatch(str(policy.get("artifact_sha256")))
         or sha256_bytes(Path(__file__).read_bytes()) != policy["artifact_sha256"]
-        or policy.get("scheduler_output_schema_version") != 2
+        or policy.get("scheduler_output_schema_version") != 3
         or policy.get("repository_output_schema_version") != 1
     ):
         raise ExporterError("inventory exporter artifact/schema identity is not exact")
     validate_capability_policy(policy["repository_write_capability"])
+    validate_host_scope_policy(policy["host_scope"])
     return policy, sha256_bytes(raw)
 
 
@@ -145,6 +147,8 @@ def validate_capability_policy(capability: Any) -> None:
         "principal",
         "uid",
         "credential_id",
+        "credential_path",
+        "docker_gid",
         "config_path",
         "config_sha256",
         "pgbackrest_path",
@@ -162,6 +166,10 @@ def validate_capability_policy(capability: Any) -> None:
         or not isinstance(capability["uid"], int)
         or capability["uid"] <= 0
         or capability["credential_id"] != "pgbackrest-repository-write"
+        or capability["credential_path"]
+        != "/run/secrets/pgbackrest-repository-write"
+        or not isinstance(capability["docker_gid"], int)
+        or capability["docker_gid"] <= 0
         or capability["config_path"] != str(PGBACKREST_CONFIG)
         or not SHA256.fullmatch(str(capability["config_sha256"]))
         or capability["pgbackrest_path"] != "/usr/bin/pgbackrest"
@@ -182,6 +190,29 @@ def validate_capability_policy(capability: Any) -> None:
             raise ExporterError(f"{field} is not an exact digest allowlist")
         if len(values) != len(set(values)):
             raise ExporterError(f"{field} contains duplicate identities")
+
+
+def validate_host_scope_policy(scope: Any) -> None:
+    required = {
+        "kind",
+        "machine_id_sha256",
+        "require_no_user_managers",
+        "require_no_linger",
+        "root_admin_trust",
+        "docker_admin_allowed",
+    }
+    if (
+        not isinstance(scope, dict)
+        or set(scope) != required
+        or scope["kind"] != "DEDICATED_POSTGRES_BACKUP_HOST"
+        or not SHA256.fullmatch(str(scope["machine_id_sha256"]))
+        or scope["require_no_user_managers"] is not True
+        or scope["require_no_linger"] is not True
+        or scope["root_admin_trust"]
+        != "ALL_ROOT_PROCESSES_EXACTLY_INVENTORIED"
+        or scope["docker_admin_allowed"] is not False
+    ):
+        raise ExporterError("dedicated host scope policy is not exact")
 
 
 def validate_job_policy(job: Any, backup_type: str) -> None:
@@ -325,6 +356,18 @@ def record_sha256(record: dict[str, Any]) -> str:
     return sha256_bytes(canonical_json(record))
 
 
+def writer_process_identity(record: dict[str, Any]) -> dict[str, Any]:
+    runtime_only = {
+        "mountinfo_sha256",
+        "open_fd_target_sha256s",
+        "task_security_inventory_sha256",
+        "task_count",
+    }
+    if runtime_only.issubset(record):
+        return {key: value for key, value in record.items() if key not in runtime_only}
+    return record
+
+
 def validate_capability_inventory(
     *,
     scheduler_records: list[dict[str, Any]],
@@ -336,7 +379,8 @@ def validate_capability_inventory(
         "scheduler": sorted(record_sha256(value) for value in scheduler_records),
         "containers": sorted(record_sha256(value) for value in container_records),
         "writer_processes": sorted(
-            record_sha256(value) for value in writer_process_records
+            record_sha256(writer_process_identity(value))
+            for value in writer_process_records
         ),
     }
     expected = {
@@ -349,7 +393,19 @@ def validate_capability_inventory(
             "scheduler/container/process capability inventory is not fully classified"
         )
     return {
-        "capability_inventory_sha256": sha256_bytes(canonical_json(actual)),
+        "capability_inventory_sha256": sha256_bytes(
+            canonical_json(
+                {
+                    "classified_identities": actual,
+                    "runtime_writer_process_inventory_sha256": sha256_bytes(
+                        canonical_json(writer_process_records)
+                    ),
+                }
+            )
+        ),
+        "runtime_writer_process_inventory_sha256": sha256_bytes(
+            canonical_json(writer_process_records)
+        ),
         "scheduler_sources_count": len(actual["scheduler"]),
         "containers_count": len(actual["containers"]),
         "writer_processes_count": len(actual["writer_processes"]),
@@ -366,64 +422,166 @@ def command_bytes(arguments: list[str]) -> bytes:
     ).stdout
 
 
-def scheduler_records(approved_units: set[str]) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    for unit_type in ("timer", "path", "socket", "automount", "service"):
-        enabled = command_bytes(
-            [
-                "systemctl",
-                "list-unit-files",
-                f"--type={unit_type}",
-                "--state=enabled",
-                "--no-legend",
-                "--no-pager",
-            ]
-        ).decode("utf-8")
-        active = command_bytes(
-            [
-                "systemctl",
-                "list-units",
-                f"--type={unit_type}",
-                "--state=active",
-                "--no-legend",
-                "--no-pager",
-                "--plain",
-            ]
-        ).decode("utf-8")
-        unit_names = {
-            line.split()[0]
-            for payload in (enabled, active)
-            for line in payload.splitlines()
-            if line.split()
+def scheduler_file_record(path: Path) -> dict[str, Any]:
+    if path.is_symlink() or path.resolve(strict=True) != path:
+        raise ExporterError("scheduler source contains a symlink chain")
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o022:
+            raise ExporterError("scheduler file ownership/mode permits replacement")
+        payload = bytearray()
+        while chunk := os.read(descriptor, 65536):
+            payload.extend(chunk)
+    finally:
+        os.close(descriptor)
+    return {
+        "source_type": "scheduler-file",
+        "path_sha256": sha256_bytes(path.as_posix().encode("utf-8")),
+        "owner_uid": info.st_uid,
+        "mode": stat.S_IMODE(info.st_mode),
+        "content_sha256": sha256_bytes(payload),
+    }
+
+
+def user_unit_roots(
+    account_homes: set[Path], run_user: Path = Path("/run/user")
+) -> tuple[Path, ...]:
+    return tuple(
+        sorted(
+            {home / ".config/systemd/user" for home in account_homes}
+            | {home / ".config/systemd/user-generators" for home in account_homes}
+            | {
+                home / ".config/systemd/user-environment-generators"
+                for home in account_homes
+            }
+            | {home / ".local/share/systemd/user" for home in account_homes}
+            | {
+                home / ".local/share/systemd/user-generators"
+                for home in account_homes
+            }
+            | set(run_user.glob("*/systemd/user"))
+            | set(run_user.glob("*/systemd/generator*"))
+        )
+    )
+
+
+def host_scope_state(scope: dict[str, Any], capability: dict[str, Any]) -> dict[str, Any]:
+    machine_id = secure_bytes(Path("/etc/machine-id"), "machine ID").strip()
+    if sha256_bytes(machine_id) != scope["machine_id_sha256"]:
+        raise ExporterError("inventory is not running on the approved dedicated host")
+    linger = Path("/var/lib/systemd/linger")
+    linger_accounts = (
+        sorted(path.name for path in linger.iterdir()) if linger.is_dir() else []
+    )
+    run_user = Path("/run/user")
+    user_managers = (
+        sorted(
+            path.name
+            for path in run_user.iterdir()
+            if path.is_dir() and path.name.isdecimal()
+        )
+        if run_user.is_dir()
+        else []
+    )
+    if linger_accounts or user_managers:
+        raise ExporterError("user systemd managers/linger are unsupported and not absent")
+    if any(
+        path.exists()
+        for path in (
+            Path("/data/coolify"),
+            Path("/var/lib/coolify"),
+            Path("/etc/coolify"),
+        )
+    ):
+        raise ExporterError(
+            "shared Coolify scheduler scope is unsupported; use the dedicated host contract"
+        )
+    credential = Path(capability["credential_path"])
+    if credential.is_symlink():
+        raise ExporterError("repository-write credential path is a symlink")
+    info = credential.stat()
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != capability["uid"]
+        or stat.S_IMODE(info.st_mode) != 0o400
+    ):
+        raise ExporterError("repository-write credential is not exclusive to its principal")
+    return {
+        "host_scope_identity_sha256": sha256_bytes(canonical_json(scope)),
+        "machine_id_sha256": scope["machine_id_sha256"],
+        "user_systemd_managers_count": 0,
+        "linger_accounts_count": 0,
+        "credential_metadata_sha256": sha256_bytes(
+            canonical_json(
+                {
+                    "path_sha256": sha256_bytes(
+                        capability["credential_path"].encode("utf-8")
+                    ),
+                    "uid": info.st_uid,
+                    "mode": stat.S_IMODE(info.st_mode),
+                }
+            )
+        ),
+    }
+
+
+def scheduler_records(
+    approved_units: set[str], *, account_homes: set[Path] | None = None
+) -> list[dict[str, Any]]:
+    if account_homes is None:
+        try:
+            import pwd
+        except ImportError as exc:
+            raise ExporterError("account-database inventory is unavailable") from exc
+        account_homes = {
+            Path(account.pw_dir)
+            for account in pwd.getpwall()
+            if account.pw_dir.startswith("/")
         }
-        for unit in sorted(unit_names - approved_units):
-            triggers = sorted(
-                command_bytes(
-                    ["systemctl", "show", unit, "--property=Triggers", "--value"]
-                )
-                .decode("utf-8")
-                .split()
-            )
-            trigger_units = [
-                {
-                    "name_sha256": sha256_bytes(value.encode("utf-8")),
-                    "content_sha256": sha256_bytes(
-                        command_bytes(["systemctl", "cat", value, "--no-pager"])
-                    ),
-                }
-                for value in triggers
+    records: list[dict[str, Any]] = []
+    unit_files = command_bytes(
+        ["systemctl", "list-unit-files", "--all", "--no-legend", "--no-pager"]
+    ).decode("utf-8")
+    loaded_units = command_bytes(
+        ["systemctl", "list-units", "--all", "--no-legend", "--no-pager", "--plain"]
+    ).decode("utf-8")
+    unit_names = {
+        line.split()[0]
+        for payload in (unit_files, loaded_units)
+        for line in payload.splitlines()
+        if line.split() and "." in line.split()[0]
+    }
+    properties = (
+        "Id",
+        "LoadState",
+        "ActiveState",
+        "UnitFileState",
+        "FragmentPath",
+        "SourcePath",
+        "DropInPaths",
+        "Transient",
+        "Triggers",
+        "TriggeredBy",
+        "ExecStart",
+    )
+    for unit in sorted(unit_names - approved_units):
+        effective = command_bytes(
+            [
+                "systemctl",
+                "show",
+                unit,
+                *[f"--property={name}" for name in properties],
             ]
-            records.append(
-                {
-                    "source_type": "systemd-activation",
-                    "unit_type": unit_type,
-                    "unit_name_sha256": sha256_bytes(unit.encode("utf-8")),
-                    "unit_content_sha256": sha256_bytes(
-                        command_bytes(["systemctl", "cat", unit, "--no-pager"])
-                    ),
-                    "trigger_units": trigger_units,
-                }
-            )
+        )
+        records.append(
+            {
+                "source_type": "systemd-system-unit",
+                "unit_name_sha256": sha256_bytes(unit.encode("utf-8")),
+                "effective_properties_sha256": sha256_bytes(effective),
+            }
+        )
+    account_user_unit_roots = user_unit_roots(account_homes)
     for root in (
         Path("/etc/crontab"),
         Path("/etc/anacrontab"),
@@ -432,8 +590,32 @@ def scheduler_records(approved_units: set[str]) -> list[dict[str, Any]]:
         Path("/etc/cron.daily"),
         Path("/etc/cron.weekly"),
         Path("/etc/cron.monthly"),
+        Path("/etc/cron.allow"),
+        Path("/etc/cron.deny"),
+        Path("/etc/at.allow"),
+        Path("/etc/at.deny"),
         Path("/var/spool/cron/crontabs"),
+        Path("/var/spool/cron"),
         Path("/var/spool/cron/atjobs"),
+        Path("/var/spool/anacron"),
+        Path("/var/spool/at"),
+        Path("/var/spool/atjobs"),
+        Path("/etc/systemd/user"),
+        Path("/etc/xdg/systemd/user"),
+        Path("/run/systemd/user"),
+        Path("/usr/lib/systemd/user"),
+        Path("/usr/share/systemd/user"),
+        Path("/usr/local/lib/systemd/user"),
+        Path("/usr/local/share/systemd/user"),
+        Path("/run/systemd/user-generators"),
+        Path("/etc/systemd/user-generators"),
+        Path("/usr/local/lib/systemd/user-generators"),
+        Path("/usr/lib/systemd/user-generators"),
+        Path("/run/systemd/user-environment-generators"),
+        Path("/etc/systemd/user-environment-generators"),
+        Path("/usr/local/lib/systemd/user-environment-generators"),
+        Path("/usr/lib/systemd/user-environment-generators"),
+        *account_user_unit_roots,
     ):
         candidates = (
             [root]
@@ -443,21 +625,101 @@ def scheduler_records(approved_units: set[str]) -> list[dict[str, Any]]:
             else []
         )
         for path in candidates:
-            if path.is_symlink():
-                raise ExporterError("scheduler source contains a symlink chain")
             if path.is_file():
-                records.append(
-                    {
-                        "source_type": "scheduler-file",
-                        "path_sha256": sha256_bytes(
-                            path.as_posix().encode("utf-8")
-                        ),
-                        "content_sha256": sha256_bytes(
-                            secure_bytes(path, "scheduler file")
-                        ),
-                    }
-                )
+                records.append(scheduler_file_record(path))
     return records
+
+
+def container_capability_record(
+    container: dict[str, Any], image: dict[str, Any]
+) -> dict[str, Any]:
+    config = container.get("Config", {})
+    host = container.get("HostConfig", {})
+    state = container.get("State", {})
+    network_settings = container.get("NetworkSettings", {})
+    env = config.get("Env") or []
+    mounts = container.get("Mounts") or []
+    if (
+        not isinstance(config, dict)
+        or not isinstance(host, dict)
+        or not isinstance(state, dict)
+        or not isinstance(network_settings, dict)
+        or not isinstance(env, list)
+        or not isinstance(mounts, list)
+        or not all(isinstance(item, str) and "=" in item for item in env)
+        or not all(isinstance(item, dict) for item in mounts)
+        or not isinstance(network_settings.get("Networks"), dict)
+    ):
+        raise ExporterError("Docker capability entry shape is malformed")
+    if any(
+        isinstance(item, str) and item.startswith(SENSITIVE_ENV_PREFIXES)
+        for item in env
+    ) or any(
+        "pgbackrest" in str(item).lower()
+        or "/run/secrets" in str(item).lower()
+        or "docker.sock" in str(item).lower()
+        or item.get("Type") == "bind"
+        for item in mounts
+    ):
+        raise ExporterError("container has unapproved repository-write capability")
+    if (
+        host.get("Privileged") is not False
+        or host.get("CapAdd") not in (None, [])
+        or host.get("Devices") not in (None, [])
+        or host.get("DeviceRequests") not in (None, [])
+        or host.get("PidMode") not in (None, "")
+        or host.get("IpcMode") not in (None, "private")
+        or host.get("UTSMode") not in (None, "")
+        or host.get("CgroupnsMode") not in (None, "", "private")
+        or host.get("UsernsMode") not in (None, "")
+    ):
+        raise ExporterError("container has unapproved host-admin capability")
+    return {
+        "container_id_sha256": sha256_bytes(
+            str(container.get("Id", "")).encode("utf-8")
+        ),
+        "image_config_id": container.get("Image"),
+        "config_image": config.get("Image"),
+        "repo_digests": image.get("RepoDigests"),
+        "user": config.get("User"),
+        "working_dir": config.get("WorkingDir"),
+        "hostname": config.get("Hostname"),
+        "entrypoint": config.get("Entrypoint"),
+        "cmd": config.get("Cmd"),
+        "labels": config.get("Labels") or {},
+        "mounts": mounts,
+        "environment_keys": sorted(
+            item.split("=", 1)[0] for item in env if isinstance(item, str) and "=" in item
+        ),
+        "state": {
+            "status": state.get("Status"),
+            "running": state.get("Running"),
+        },
+        "host_security": {
+            key: host.get(key)
+            for key in (
+                "Privileged",
+                "CapAdd",
+                "CapDrop",
+                "SecurityOpt",
+                "Devices",
+                "DeviceRequests",
+                "ReadonlyRootfs",
+                "Runtime",
+                "PidMode",
+                "IpcMode",
+                "UTSMode",
+                "CgroupnsMode",
+                "UsernsMode",
+                "GroupAdd",
+                "CgroupParent",
+                "Binds",
+                "NetworkMode",
+                "RestartPolicy",
+            )
+        },
+        "networks": network_settings["Networks"],
+    }
 
 
 def container_records() -> list[dict[str, Any]]:
@@ -475,22 +737,6 @@ def container_records() -> list[dict[str, Any]]:
     for container in inspected:
         if not isinstance(container, dict):
             raise ExporterError("Docker capability entry is malformed")
-        config = container.get("Config", {})
-        host = container.get("HostConfig", {})
-        env = config.get("Env") or []
-        mounts = container.get("Mounts") or []
-        if any(
-            isinstance(item, str) and item.startswith(SENSITIVE_ENV_PREFIXES)
-            for item in env
-        ) or any(
-            "pgbackrest" in str(item).lower()
-            or "/run/secrets" in str(item).lower()
-            or "docker.sock" in str(item).lower()
-            or str(item.get("Source", "")) in {"/", "/etc", "/proc", "/sys"}
-            or str(item.get("Source", "")).startswith("/var/lib/docker")
-            for item in mounts
-        ):
-            raise ExporterError("container has unapproved repository-write capability")
         image = json.loads(
             command_bytes(
                 ["docker", "image", "inspect", str(container.get("Image", ""))]
@@ -498,23 +744,7 @@ def container_records() -> list[dict[str, Any]]:
         )
         if not isinstance(image, list) or len(image) != 1:
             raise ExporterError("container image identity is ambiguous")
-        records.append(
-            {
-                "container_id_sha256": sha256_bytes(
-                    str(container.get("Id", "")).encode("utf-8")
-                ),
-                "image_config_id": container.get("Image"),
-                "repo_digests": image[0].get("RepoDigests"),
-                "entrypoint": config.get("Entrypoint"),
-                "cmd": config.get("Cmd"),
-                "labels": config.get("Labels") or {},
-                "mounts": mounts,
-                "network_mode": host.get("NetworkMode"),
-                "environment_keys": sorted(
-                    item.split("=", 1)[0] for item in env if "=" in item
-                ),
-            }
-        )
+        records.append(container_capability_record(container, image[0]))
     return records
 
 
@@ -546,22 +776,180 @@ def descriptor_payload(path: Path) -> bytes:
         os.close(descriptor)
 
 
-def writer_process_records(writer_uid: int) -> list[dict[str, Any]]:
+def process_environment_keys(path: Path) -> list[str]:
+    entries = path.read_bytes().split(b"\x00")
+    keys: list[str] = []
+    for item in entries:
+        if not item:
+            continue
+        if b"=" not in item:
+            raise ExporterError("process environment entry is malformed")
+        key = item.split(b"=", 1)[0].decode("ascii")
+        keys.append(key)
+    if len(keys) != len(set(keys)):
+        raise ExporterError("process environment contains duplicate keys")
+    return sorted(keys)
+
+
+def process_fd_targets(path: Path) -> tuple[list[str], list[str]]:
+    raw_targets: list[str] = []
+    for descriptor in sorted(path.iterdir(), key=lambda item: item.name):
+        try:
+            raw_targets.append(os.readlink(descriptor))
+        except FileNotFoundError:
+            continue
+    return raw_targets, sorted(
+        sha256_bytes(value.encode("utf-8")) for value in raw_targets
+    )
+
+
+def process_security_state(
+    status: str, *, writer_uid: int, docker_gid: int
+) -> dict[str, Any]:
+    def values(name: str) -> list[int]:
+        line = next(
+            item for item in status.splitlines() if item.startswith(f"{name}:")
+        )
+        return [int(value) for value in line.split()[1:]]
+
+    uids = values("Uid")
+    gids = values("Gid") + values("Groups")
+    capability_sets = {
+        name: int(
+            next(
+                line
+                for line in status.splitlines()
+                if line.startswith(f"{name}:")
+            ).split()[1],
+            16,
+        )
+        for name in ("CapInh", "CapPrm", "CapEff", "CapAmb")
+    }
+    return {
+        "uids": uids,
+        "gids": sorted(set(gids)),
+        "capability_sets": capability_sets,
+        "root_or_writer": 0 in uids or writer_uid in uids,
+        "docker_admin": docker_gid in gids,
+        "privileged_capability": any(capability_sets.values()),
+    }
+
+
+def aggregate_task_security(
+    task_states: list[tuple[str, dict[str, Any]]],
+) -> dict[str, Any]:
+    if not task_states:
+        raise ExporterError("process has no non-kernel task security inventory")
+    shapes = sorted(
+        {
+            canonical_json(
+                {
+                    "uids": security["uids"],
+                    "gids": security["gids"],
+                    "capability_sets": {
+                        key: f"{value:x}"
+                        for key, value in sorted(
+                            security["capability_sets"].items()
+                        )
+                    },
+                }
+            ).decode("ascii").strip()
+            for _, security in task_states
+        }
+    )
+    runtime = [
+        {
+            "task_ref_sha256": sha256_bytes(task_id.encode("ascii")),
+            "security_shape_sha256": sha256_bytes(
+                canonical_json(
+                    {
+                        "uids": security["uids"],
+                        "gids": security["gids"],
+                        "capability_sets": security["capability_sets"],
+                    }
+                )
+            ),
+        }
+        for task_id, security in sorted(task_states)
+    ]
+    return {
+        "security_shapes": shapes,
+        "task_count": len(task_states),
+        "task_security_inventory_sha256": sha256_bytes(canonical_json(runtime)),
+        "root_or_writer": any(
+            security["root_or_writer"] for _, security in task_states
+        ),
+        "docker_admin": any(
+            security["docker_admin"] for _, security in task_states
+        ),
+        "privileged_capability": any(
+            security["privileged_capability"] for _, security in task_states
+        ),
+    }
+
+
+def writer_process_records(capability: dict[str, Any]) -> list[dict[str, Any]]:
     records = []
     for entry in sorted(Path("/proc").iterdir(), key=lambda path: path.name):
         if not entry.name.isdigit():
             continue
         try:
-            status = (entry / "status").read_text(encoding="utf-8")
-            uid_line = next(
-                line for line in status.splitlines() if line.startswith("Uid:")
+            task_paths = sorted(
+                (entry / "task").iterdir(), key=lambda path: path.name
             )
-            real_uid = int(uid_line.split()[1])
-        except (FileNotFoundError, ProcessLookupError, StopIteration):
-            continue
-        if real_uid != writer_uid:
+        except (FileNotFoundError, ProcessLookupError):
             continue
         try:
+            task_states: list[tuple[str, dict[str, Any]]] = []
+            for task in task_paths:
+                status = (task / "status").read_text(encoding="utf-8")
+                if "Kthread:\t1" in status:
+                    continue
+                task_states.append(
+                    (
+                        task.name,
+                        process_security_state(
+                            status,
+                            writer_uid=capability["uid"],
+                            docker_gid=capability["docker_gid"],
+                        ),
+                    )
+                )
+            if not task_states:
+                continue
+            security = aggregate_task_security(task_states)
+            environment_keys = process_environment_keys(entry / "environ")
+            fd_targets, fd_target_hashes = process_fd_targets(entry / "fd")
+            mountinfo = (entry / "mountinfo").read_bytes()
+            cgroup = (entry / "cgroup").read_bytes()
+            capability_paths = {
+                capability["credential_path"],
+                capability["config_path"],
+                "/var/run/docker.sock",
+                "/run/docker.sock",
+            }
+            sensitive_environment = any(
+                key.startswith(SENSITIVE_ENV_PREFIXES)
+                or key in {"PGSERVICE", "PGPASSFILE"}
+                for key in environment_keys
+            )
+            path_capability = any(
+                any(target.startswith(path) for path in capability_paths)
+                for target in fd_targets
+            ) or any(
+                path.encode("utf-8") in mountinfo for path in capability_paths
+            )
+            root_or_writer = security["root_or_writer"]
+            docker_admin = security["docker_admin"]
+            privileged_capability = security["privileged_capability"]
+            if not (
+                root_or_writer
+                or docker_admin
+                or privileged_capability
+                or sensitive_environment
+                or path_capability
+            ):
+                continue
             executable_link = entry / "exe"
             executable = canonical_executable_target(os.readlink(executable_link))
             executable_payload = descriptor_payload(executable_link)
@@ -570,6 +958,10 @@ def writer_process_records(writer_uid: int) -> list[dict[str, Any]]:
                 for item in (entry / "cmdline").read_bytes().split(b"\x00")
                 if item
             ]
+            if executable.as_posix() in SHELL_EXECUTABLES:
+                raise ExporterError(
+                    "write-capable generic shell process is not permitted"
+                )
             records.append(
                 {
                     "executable_path_sha256": sha256_bytes(
@@ -579,10 +971,31 @@ def writer_process_records(writer_uid: int) -> list[dict[str, Any]]:
                         executable_payload
                     ),
                     "argv_sha256": sha256_bytes(canonical_json(argv)),
-                    "uid": real_uid,
+                    "task_security_shapes": security["security_shapes"],
+                    "task_count": security["task_count"],
+                    "task_security_inventory_sha256": security[
+                        "task_security_inventory_sha256"
+                    ],
+                    "cgroup_sha256": sha256_bytes(cgroup),
+                    "environment_keys": environment_keys,
+                    "mountinfo_sha256": sha256_bytes(mountinfo),
+                    "open_fd_target_sha256s": fd_target_hashes,
+                    "capability_reasons": {
+                        "root_or_writer_uid": root_or_writer,
+                        "docker_admin_group": docker_admin,
+                        "privileged_kernel_capability": privileged_capability,
+                        "sensitive_environment_keys": sensitive_environment,
+                        "credential_or_admin_path": path_capability,
+                    },
                 }
             )
-        except (FileNotFoundError, ProcessLookupError) as exc:
+        except (
+            FileNotFoundError,
+            ProcessLookupError,
+            StopIteration,
+            UnicodeError,
+            ValueError,
+        ) as exc:
             raise ExporterError(
                 "writer process identity disappeared during capability inventory"
             ) from exc
@@ -645,6 +1058,7 @@ def main() -> int:
             raise ExporterError("inventory exporter requires a POSIX root host")
         policy, policy_sha256 = load_policy()
         capability = policy["repository_write_capability"]
+        host_scope = host_scope_state(policy["host_scope"], capability)
         config_raw = secure_bytes(PGBACKREST_CONFIG, "pgBackRest config")
         if sha256_bytes(config_raw) != capability["config_sha256"]:
             raise ExporterError("pgBackRest capability config digest changed")
@@ -663,7 +1077,7 @@ def main() -> int:
                 }
             ),
             container_records=container_records(),
-            writer_process_records=writer_process_records(capability["uid"]),
+            writer_process_records=writer_process_records(capability),
             capability=capability,
         )
         completed = subprocess.run(
@@ -688,7 +1102,7 @@ def main() -> int:
             "exporter_artifact_sha256": policy["artifact_sha256"],
         }
         scheduler = {
-            "schema_version": 2,
+            "schema_version": 3,
             "generated_at_utc": now.strftime(TIMESTAMP),
             "full_jobs_count": 1,
             "differential_jobs_count": 1,
@@ -704,6 +1118,7 @@ def main() -> int:
                 canonical_json(diff_job)
             ),
             **capability_inventory,
+            **host_scope,
             **identity,
         }
         repository = {

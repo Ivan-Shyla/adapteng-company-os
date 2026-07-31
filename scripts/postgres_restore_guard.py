@@ -24,6 +24,7 @@ try:
         sha256_file,
         validate_manifest,
     )
+    from postgres_restore_host_inventory import HostInventoryError, host_isolation_shape
 except ModuleNotFoundError:  # pragma: no cover - package import in unit tests
     from scripts.postgres_restore_image_identity import (
         IdentityError,
@@ -31,6 +32,10 @@ except ModuleNotFoundError:  # pragma: no cover - package import in unit tests
         measure_container,
         sha256_file,
         validate_manifest,
+    )
+    from scripts.postgres_restore_host_inventory import (
+        HostInventoryError,
+        host_isolation_shape,
     )
 
 
@@ -472,11 +477,27 @@ def validate_container(
     expected_volume: str,
     expected_pgdata: str,
 ) -> None:
+    container_id = container.get("Id")
+    if not isinstance(container_id, str) or not re.fullmatch(r"[0-9a-f]{64}", container_id):
+        raise GuardError("container ID is not authoritative")
     if container.get("Name") != f"/{expected_name}":
         raise GuardError("container name does not match generation")
-    if container.get("State", {}).get("Running") is not False:
-        raise GuardError("expected generation container is running")
+    state = container.get("State")
+    if (
+        not isinstance(state, dict)
+        or state.get("Status") != "created"
+        or state.get("Running") is not False
+        or state.get("Pid") not in (0, None)
+        or state.get("StartedAt") not in ("", "0001-01-01T00:00:00Z")
+        or state.get("FinishedAt") not in ("", "0001-01-01T00:00:00Z")
+        or container.get("RestartCount") not in (0, None)
+    ):
+        raise GuardError("expected generation container is not pristine/never-started")
     host = container.get("HostConfig", {})
+    try:
+        host_isolation_shape(host)
+    except HostInventoryError as exc:
+        raise GuardError("container host isolation is unsafe") from exc
     if host.get("NetworkMode") != expected_network:
         raise GuardError("container network mode is not exact")
     port_bindings = host.get("PortBindings")
@@ -653,6 +674,8 @@ def main() -> int:
     parser.add_argument("--selected-info-sha256", required=True)
     parser.add_argument("--approved-image-manifest", type=Path, required=True)
     parser.add_argument("--approved-image-manifest-sha256", required=True)
+    parser.add_argument("--recovery-container-id", required=True)
+    parser.add_argument("--final-container-id", required=True)
     parser.add_argument("--procedure-manifest-sha256", required=True)
     args = parser.parse_args()
 
@@ -721,23 +744,35 @@ def main() -> int:
         if selected["ref_sha256"] != set_ref_sha256:
             raise GuardError("selected backup set differs from guard config")
 
+        if not all(
+            re.fullmatch(r"[0-9a-f]{64}", value)
+            for value in (args.recovery_container_id, args.final_container_id)
+        ):
+            raise GuardError("creation-returned target container IDs are malformed")
+        recovery = one_inspect(
+            docker_json("container", "inspect", args.recovery_container_id),
+            "recovery container inspection",
+        )
+        final = one_inspect(
+            docker_json("container", "inspect", args.final_container_id),
+            "final container inspection",
+        )
+        recovery_container_id = str(recovery.get("Id", ""))
+        final_container_id = str(final.get("Id", ""))
+        if (
+            recovery_container_id != args.recovery_container_id
+            or final_container_id != args.final_container_id
+        ):
+            raise GuardError("target container inspection changed creation-returned ID")
         recovery_identity = measure_container(
-            names["recovery_container"],
+            recovery_container_id,
             args.approved_image_manifest,
             args.approved_image_manifest_sha256,
         )
         final_identity = measure_container(
-            names["final_container"],
+            final_container_id,
             args.approved_image_manifest,
             args.approved_image_manifest_sha256,
-        )
-        recovery = one_inspect(
-            docker_json("container", "inspect", names["recovery_container"]),
-            "recovery container inspection",
-        )
-        final = one_inspect(
-            docker_json("container", "inspect", names["final_container"]),
-            "final container inspection",
         )
         measured_platform = (
             f"{recovery_identity['os']}/{recovery_identity['architecture']}"
@@ -921,7 +956,9 @@ def main() -> int:
                 canonical_json(approved_image_manifest["image_environment"])
             ).hexdigest(),
             "recovery_container": names["recovery_container"],
+            "recovery_container_id": recovery_container_id,
             "final_container": names["final_container"],
+            "final_container_id": final_container_id,
             "volume": names["volume"],
             "bootstrap_network": names["bootstrap_network"],
             "locked_network": names["locked_network"],
