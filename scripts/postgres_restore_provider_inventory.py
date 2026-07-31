@@ -8,7 +8,6 @@ import base64
 import hashlib
 import json
 import os
-import socket
 import stat
 import struct
 import subprocess
@@ -23,9 +22,7 @@ from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROVIDER_MANIFEST = SCRIPT_DIR / "postgres_restore_provider_manifest.json"
-BROKER_SOCKET = Path("/run/adapteng/provider-inventory-broker.sock")
 API_ROOT = "https://api.hetzner.cloud/v1"
-BROKER_LISTEN = ("127.0.0.1", 39716)
 LOCKED_FIREWALL_NAME = "pg-restore-locked"
 TIMESTAMP = "%Y-%m-%dT%H:%M:%SZ"
 SHA256 = __import__("re").compile(r"^[0-9a-f]{64}$")
@@ -285,6 +282,7 @@ def evaluate_broker_response(
         "observed_at",
         "server",
         "firewalls",
+        "account_context_sha256",
         "signature_base64",
     }
     if (
@@ -299,6 +297,8 @@ def evaluate_broker_response(
         response["schema_version"] != 1
         or response["broker_id"] != manifest.get("broker_id")
         or response["broker_version"] != manifest.get("broker_version")
+        or response["account_context_sha256"]
+        != manifest.get("account_context_sha256")
         or response["request_sha256"] != hashlib.sha256(request_bytes).hexdigest()
         or not isinstance(response["server"], dict)
         or not isinstance(response["firewalls"], list)
@@ -330,51 +330,6 @@ def evaluate_broker_response(
     )
 
 
-def broker_inventory(
-    request_bytes: bytes,
-    manifest: dict[str, Any],
-) -> tuple[dict[str, Any], list[dict[str, Any]], datetime, str]:
-    info = BROKER_SOCKET.lstat()
-    if (
-        os.geteuid() != 0
-        or info.st_uid != 0
-        or not stat.S_ISSOCK(info.st_mode)
-        or info.st_mode & 0o077
-        or BROKER_SOCKET.is_symlink()
-    ):
-        raise ProviderInventoryError("provider inventory broker socket is not secure")
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-        connection.settimeout(10)
-        connection.connect(str(BROKER_SOCKET))
-        connection.sendall(struct.pack("!I", len(request_bytes)) + request_bytes)
-        header = exact_receive(connection, 4)
-        length = struct.unpack("!I", header)[0]
-        if length <= 0 or length > 4 * 1024 * 1024:
-            raise ProviderInventoryError("provider broker response length is invalid")
-        response = bytearray()
-        while len(response) < length:
-            chunk = connection.recv(length - len(response))
-            if not chunk:
-                raise ProviderInventoryError("provider broker response is incomplete")
-            response.extend(chunk)
-    return evaluate_broker_response(
-        bytes(response),
-        request_bytes,
-        manifest,
-        now=datetime.now(timezone.utc).replace(microsecond=0),
-    )
-
-
-def exact_receive(connection: socket.socket, length: int) -> bytes:
-    payload = bytearray()
-    while len(payload) < length:
-        chunk = connection.recv(length - len(payload))
-        if not chunk:
-            raise ProviderInventoryError("provider broker request is incomplete")
-        payload.extend(chunk)
-    return bytes(payload)
-
-
 def read_capability_fd(descriptor: int, label: str, maximum: int) -> bytes:
     if descriptor < 3:
         raise ProviderInventoryError(f"{label} descriptor is not explicit")
@@ -386,6 +341,53 @@ def read_capability_fd(descriptor: int, label: str, maximum: int) -> bytes:
     if not payload:
         raise ProviderInventoryError(f"{label} is empty")
     return bytes(payload)
+
+
+def write_exact_fd(descriptor: int, payload: bytes, label: str) -> None:
+    if descriptor < 3:
+        raise ProviderInventoryError(f"{label} descriptor is not explicit")
+    offset = 0
+    while offset < len(payload):
+        written = os.write(descriptor, payload[offset:])
+        if written <= 0:
+            raise ProviderInventoryError(f"{label} write is incomplete")
+        offset += written
+
+
+def read_exact_fd(descriptor: int, length: int, label: str) -> bytes:
+    payload = bytearray()
+    while len(payload) < length:
+        chunk = os.read(descriptor, length - len(payload))
+        if not chunk:
+            raise ProviderInventoryError(f"{label} is incomplete")
+        payload.extend(chunk)
+    return bytes(payload)
+
+
+def write_framed_fd(descriptor: int, payload: bytes, label: str) -> None:
+    if not payload or len(payload) > 4 * 1024 * 1024:
+        raise ProviderInventoryError(f"{label} length is invalid")
+    write_exact_fd(descriptor, struct.pack("!I", len(payload)) + payload, label)
+
+
+def read_framed_fd(descriptor: int, label: str, maximum: int) -> bytes:
+    length = struct.unpack("!I", read_exact_fd(descriptor, 4, label))[0]
+    if length <= 0 or length > maximum:
+        raise ProviderInventoryError(f"{label} length is invalid")
+    return read_exact_fd(descriptor, length, label)
+
+
+def read_optional_framed_fd(
+    descriptor: int, label: str, maximum: int
+) -> bytes | None:
+    first = os.read(descriptor, 4)
+    if not first:
+        return None
+    header = first + read_exact_fd(descriptor, 4 - len(first), label)
+    length = struct.unpack("!I", header)[0]
+    if length <= 0 or length > maximum:
+        raise ProviderInventoryError(f"{label} length is invalid")
+    return read_exact_fd(descriptor, length, label)
 
 
 def provider_api_get(path: str, provider_capability: bytes) -> dict[str, Any]:
@@ -443,12 +445,12 @@ def broker_response(
     request_bytes: bytes,
     provider_capability: bytes,
     signing_capability: bytes,
+    pinned_config: dict[str, Any],
 ) -> bytes:
     request = json.loads(request_bytes)
     required = {
         "schema_version",
         "generation",
-        "server_id",
         "owner_ssh_cidr_sha256",
         "operation",
     }
@@ -458,13 +460,30 @@ def broker_response(
         or canonical_json(request) != request_bytes
         or request["schema_version"] != 1
         or request["generation"] not in {"A", "B", "C"}
-        or not isinstance(request["server_id"], int)
-        or request["server_id"] <= 0
         or not SHA256.fullmatch(str(request["owner_ssh_cidr_sha256"]))
     ):
         raise ProviderInventoryError("provider broker request is not exact")
     validate_operation_request(request["operation"], str(request["generation"]))
-    server_id = int(request["server_id"])
+    config_fields = {
+        "schema_version",
+        "account_context_sha256",
+        "server_ids",
+        "firewall_id",
+    }
+    server_ids = pinned_config.get("server_ids")
+    if (
+        not isinstance(pinned_config, dict)
+        or set(pinned_config) != config_fields
+        or pinned_config.get("schema_version") != 1
+        or not SHA256.fullmatch(str(pinned_config.get("account_context_sha256")))
+        or not isinstance(server_ids, dict)
+        or set(server_ids) != {"A", "B", "C"}
+        or not all(isinstance(value, int) and value > 0 for value in server_ids.values())
+        or not isinstance(pinned_config.get("firewall_id"), int)
+        or int(pinned_config["firewall_id"]) <= 0
+    ):
+        raise ProviderInventoryError("pinned provider target configuration is not exact")
+    server_id = int(server_ids[str(request["generation"])])
     server_payload = provider_api_get(
         f"/servers/{server_id}", provider_capability
     )
@@ -477,6 +496,12 @@ def broker_response(
     firewalls = firewall_payload.get("firewalls")
     if not isinstance(server, dict) or not isinstance(firewalls, list):
         raise ProviderInventoryError("provider broker inventory response shape is invalid")
+    if (
+        server.get("id") != server_id
+        or len(firewalls) != 1
+        or firewalls[0].get("id") != pinned_config["firewall_id"]
+    ):
+        raise ProviderInventoryError("provider response does not match pinned targets")
     signed = {
         "schema_version": 1,
         "broker_id": "company-os-hetzner-inventory-broker",
@@ -487,6 +512,7 @@ def broker_response(
         .strftime(TIMESTAMP),
         "server": server,
         "firewalls": firewalls,
+        "account_context_sha256": pinned_config["account_context_sha256"],
     }
     signature = sign_broker_payload(
         canonical_json(signed), signing_capability
@@ -499,26 +525,98 @@ def broker_response(
     )
 
 
-def serve_broker(
-    provider_capability: bytes, signing_capability: bytes
+def supervise_broker(
+    request_descriptor: int,
+    response_descriptor: int,
+    provider_descriptor: int,
+    signing_descriptor: int,
+    config_descriptor: int,
 ) -> None:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        listener.bind(BROKER_LISTEN)
-        listener.listen(1)
-        listener.settimeout(1800)
-        for _ in range(32):
-            connection, _ = listener.accept()
-            with connection:
-                connection.settimeout(20)
-                length = struct.unpack("!I", exact_receive(connection, 4))[0]
-                if length <= 0 or length > 1024 * 1024:
-                    raise ProviderInventoryError("provider broker request length is invalid")
-                request = exact_receive(connection, length)
-                response = broker_response(
-                    request, provider_capability, signing_capability
+    manifest = json.loads(
+        secure_read(PROVIDER_MANIFEST, "provider manifest", restricted=False)
+    )
+    collector_descriptor = os.open(Path(__file__), os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        collector = read_capability_fd(
+            collector_descriptor, "provider collector", 1024 * 1024
+        )
+        if hashlib.sha256(collector).hexdigest() != manifest.get("collector_sha256"):
+            raise ProviderInventoryError("provider broker executable is not sealed")
+        for _ in range(64):
+            request = read_optional_framed_fd(
+                request_descriptor, "supervised provider request", 1024 * 1024
+            )
+            if request is None:
+                return
+            request_fd = memfd(
+                struct.pack("!I", len(request)) + request,
+                "one-shot-provider-request",
+            )
+            response_fd = memfd(b"\0\0\0\0", "one-shot-provider-response")
+            os.ftruncate(response_fd, 0)
+            os.lseek(response_fd, 0, os.SEEK_SET)
+            for descriptor in (
+                collector_descriptor,
+                provider_descriptor,
+                signing_descriptor,
+                config_descriptor,
+            ):
+                os.lseek(descriptor, 0, os.SEEK_SET)
+            try:
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        f"/proc/self/fd/{collector_descriptor}",
+                        "broker-once",
+                        "--request-fd",
+                        str(request_fd),
+                        "--response-fd",
+                        str(response_fd),
+                        "--token-fd",
+                        str(provider_descriptor),
+                        "--signing-key-fd",
+                        str(signing_descriptor),
+                        "--provider-config-fd",
+                        str(config_descriptor),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    pass_fds=(
+                        collector_descriptor,
+                        request_fd,
+                        response_fd,
+                        provider_descriptor,
+                        signing_descriptor,
+                        config_descriptor,
+                    ),
+                    env={
+                        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                        "LANG": "C",
+                        "LC_ALL": "C",
+                    },
+                    timeout=20,
                 )
-                connection.sendall(struct.pack("!I", len(response)) + response)
+                if completed.stdout or completed.stderr:
+                    raise ProviderInventoryError(
+                        "one-shot provider child emitted unexpected diagnostics"
+                    )
+                os.lseek(response_fd, 0, os.SEEK_SET)
+                response = read_framed_fd(
+                    response_fd, "one-shot provider child response", 4 * 1024 * 1024
+                )
+                if os.read(response_fd, 1):
+                    raise ProviderInventoryError(
+                        "one-shot provider child emitted a second response"
+                    )
+                write_framed_fd(
+                    response_descriptor, response, "supervised provider response"
+                )
+            finally:
+                os.close(request_fd)
+                os.close(response_fd)
+        raise ProviderInventoryError("provider supervisor operation limit exceeded")
+    finally:
+        os.close(collector_descriptor)
 
 
 def secure_read(path: Path, label: str, *, restricted: bool = True) -> str:
@@ -576,25 +674,68 @@ def main() -> int:
     modes = parser.add_subparsers(dest="mode", required=True)
     collect = modes.add_parser("collect")
     collect.add_argument("generation", choices=("A", "B", "C"))
-    collect.add_argument("server_id", type=int)
-    collect.add_argument("owner_ssh_cidr")
+    collect.add_argument("--owner-cidr-fd", required=True, type=int)
     collect.add_argument("--operation-request-fd", required=True, type=int)
-    broker = modes.add_parser("broker")
+    collect.add_argument("--broker-request-fd", required=True, type=int)
+    collect.add_argument("--broker-response-fd", required=True, type=int)
+    broker = modes.add_parser("broker-once")
+    broker.add_argument("--request-fd", required=True, type=int)
+    broker.add_argument("--response-fd", required=True, type=int)
     broker.add_argument("--token-fd", required=True, type=int)
     broker.add_argument("--signing-key-fd", required=True, type=int)
+    broker.add_argument("--provider-config-fd", required=True, type=int)
+    supervisor = modes.add_parser("broker-supervisor")
+    supervisor.add_argument("--request-fd", required=True, type=int)
+    supervisor.add_argument("--response-fd", required=True, type=int)
+    supervisor.add_argument("--token-fd", required=True, type=int)
+    supervisor.add_argument("--signing-key-fd", required=True, type=int)
+    supervisor.add_argument("--provider-config-fd", required=True, type=int)
     args = parser.parse_args()
     try:
-        if args.mode == "broker":
+        if args.mode == "broker-supervisor":
+            supervise_broker(
+                args.request_fd,
+                args.response_fd,
+                args.token_fd,
+                args.signing_key_fd,
+                args.provider_config_fd,
+            )
+            return 0
+        if args.mode == "broker-once":
             provider_capability = read_capability_fd(
                 args.token_fd, "provider token", 4096
             ).strip()
             signing_capability = read_capability_fd(
                 args.signing_key_fd, "provider signing key", 65536
             )
-            serve_broker(provider_capability, signing_capability)
+            pinned_config_bytes = read_capability_fd(
+                args.provider_config_fd, "provider target configuration", 4096
+            )
+            pinned_config = json.loads(pinned_config_bytes)
+            broker_manifest = json.loads(
+                secure_read(PROVIDER_MANIFEST, "provider manifest", restricted=False)
+            )
+            if (
+                canonical_json(pinned_config) != pinned_config_bytes
+                or hashlib.sha256(pinned_config_bytes).hexdigest()
+                != broker_manifest.get("provider_target_config_sha256")
+                or pinned_config.get("account_context_sha256")
+                != broker_manifest.get("account_context_sha256")
+            ):
+                raise ProviderInventoryError(
+                    "provider target configuration is not canonical"
+                )
+            request_bytes = read_framed_fd(
+                args.request_fd, "one-shot provider request", 1024 * 1024
+            )
+            response = broker_response(
+                request_bytes,
+                provider_capability,
+                signing_capability,
+                pinned_config,
+            )
+            write_framed_fd(args.response_fd, response, "one-shot provider response")
             return 0
-        if args.server_id <= 0:
-            raise ProviderInventoryError("Hetzner server ID is invalid")
         manifest = json.loads(
             secure_read(PROVIDER_MANIFEST, "provider manifest", restricted=False)
         )
@@ -607,27 +748,37 @@ def main() -> int:
         operation = json.loads(
             secure_read_fd(args.operation_request_fd, "provider operation request")
         )
-        instance_id = str(args.server_id)
+        owner_ssh_cidr = secure_read_fd(
+            args.owner_cidr_fd, "owner SSH CIDR capability"
+        )
         broker_request = canonical_json(
             {
                 "schema_version": 1,
                 "generation": args.generation,
-                "server_id": int(instance_id),
                 "owner_ssh_cidr_sha256": hashlib.sha256(
-                    args.owner_ssh_cidr.encode("ascii")
+                    owner_ssh_cidr.encode("ascii")
                 ).hexdigest(),
                 "operation": operation,
             }
         )
-        server, firewalls, observed_at, broker_response_sha256 = broker_inventory(
-            broker_request, manifest
+        write_framed_fd(
+            args.broker_request_fd, broker_request, "one-shot broker request"
+        )
+        response = read_framed_fd(
+            args.broker_response_fd, "one-shot broker response", 4 * 1024 * 1024
+        )
+        server, firewalls, observed_at, broker_response_sha256 = evaluate_broker_response(
+            response,
+            broker_request,
+            manifest,
+            now=datetime.now(timezone.utc).replace(microsecond=0),
         )
         packet = evaluate_provider_state(
             server,
             firewalls,
             generation=args.generation,
             observed_at=observed_at,
-            owner_ssh_cidr=args.owner_ssh_cidr,
+            owner_ssh_cidr=owner_ssh_cidr,
             operation=operation,
             broker_response_sha256=broker_response_sha256,
             broker_id=str(manifest["broker_id"]),

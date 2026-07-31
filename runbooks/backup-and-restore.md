@@ -165,16 +165,32 @@ artifacts:
    entrypoint**; its descriptor-bound guard/orchestrator, measured-image helper,
    signed provider collector policy, sealed runner, retention/status helpers,
    tracked transaction probe and generation-C assertion are enumerated in
-   `scripts/postgres_restore_procedure_manifest.json`. The reviewed procedure
-   is loaded only after the pinned manifest and every enumerated member have
-   been verified from root-owned, non-group/other-writable bytes; direct runner
-   calls perform the same complete verification before importing the provider
-   isolation or Docker inventory implementation. The reviewed procedure
-   manifest SHA-256 is
-   `db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23`;
+   `scripts/postgres_restore_procedure_manifest.json`. `.gitattributes` forces
+   LF for every sealed text surface. The manifest is constructed only from
+   staged Git blobs and binds each member's regular-file mode, Git blob OID and
+   raw-byte SHA-256; CRLF, bare CR, NUL, symlink, submodule, missing, duplicate
+   or extra members stop construction and runtime verification. The reviewed
+   procedure is loaded only after the pinned manifest and every enumerated
+   on-disk member byte-matches those immutable blob identities. The reviewed
+   raw Git-blob procedure manifest SHA-256 is
+   `6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f`;
    the transaction-probe SHA-256 is
-   `236097579a1711888828a69691f0ea69da1c3a5d65de39682a031c7ebff68872`.
-   Any mismatch is a stop condition.
+   `0d9e668726ea70d67621ccd62d357e23b4e2d6cd4c74216365ef86c2d034d785`.
+   Any mismatch is a stop condition. Maintainers must use this exact two-phase
+   process, never a worktree hash or newline-normalizing helper:
+
+```bash
+git add .gitattributes scripts/postgres_restore_*
+python3 scripts/postgres_restore_git_seal.py build-index \
+  >scripts/postgres_restore_procedure_manifest.json
+git add scripts/postgres_restore_procedure_manifest.json
+git commit
+python3 scripts/postgres_restore_git_seal.py verify-ref HEAD
+```
+
+   `build-index` refuses unstaged substitutions in any member. `verify-ref`
+   reads only `HEAD` tree/blob objects through Git plumbing and must report the
+   same manifest/member-tree/probe digests before push.
 8. Fail-closed weekly full, daily differential, post-backup `check`, WAL health,
    disk/repository growth, and alert scheduling.
 9. A rollback to the exact current image digest with no database major-version
@@ -237,13 +253,13 @@ implementation:
   runtime_compatibility_assertion_sha256: "<sha256>"
   selected_full_assertion_sha256: "<sha256>"
   migration_status_harness_sha256: "<sha256>"
-  restore_procedure_manifest_sha256: "db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23"
+  restore_procedure_manifest_sha256: "6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f"
   runner_manifest_sha256: "<sha256>"
   provider_manifest_sha256: "<sha256>"
   host_inventory_collector_sha256: "<sha256>"
   isolation_gate_sha256: "<sha256>"
   inventory_exporter_manifest_sha256: "<sha256>"
-  transaction_probe_sha256: "236097579a1711888828a69691f0ea69da1c3a5d65de39682a031c7ebff68872"
+  transaction_probe_sha256: "0d9e668726ea70d67621ccd62d357e23b4e2d6cd4c74216365ef86c2d034d785"
   generation_c_final_assertion_sha256: "c19f862c21e00c62dbed57b496f3f05da8db357d58db2b58b5a6cdcd078c65f9"
 ```
 
@@ -761,8 +777,9 @@ not reuse or rename one host across generations.
    `postgres_restore_inventory_exporter_manifest.json` with immutable
    identities. Their current `NOT_CONFIGURED` values are deliberate stop
    conditions. The provider manifest pins the collector digest, Ed25519 public
-   key, fixed broker ID/version, owner-SSH `/32` digest, and 30-second packet
-   freshness. The broker-signed raw provider response is limited to ten
+   key, fixed broker ID/version, owner-SSH `/32` digest, account-context digest,
+   canonical pinned target-config digest, and 30-second packet freshness. The
+   broker-signed raw provider response is limited to ten
    seconds. Until all are
    independently reviewed and `APPROVED`, stop before restore.
 6. Never publish a container port and never mount `/var/run/docker.sock`.
@@ -774,7 +791,7 @@ manifest also pins the complete inherited environment and rejects any baked
 `PGPASSWORD`, `PGOPTIONS`, or `PGSERVICE` override. The fixed runner capability is
 canonical root-owned mode-0600 JSON at
 `/run/secrets/postgres-restore-runner.json`: exact schema/generation plus
-independent generated scratch and disposable-admin passwords of at least 32
+independent generated scratch and disposable-admin passwords of 48-128
 allowlisted characters. It contains no host, image, command, stanza, repository,
 or production override. The sealed runner derives the exact PG environment from
 its reviewed manifest, writes it only to an anonymous memfd, and passes
@@ -915,7 +932,7 @@ scripts/postgres_restore_generation.sh \
   --approved-image-manifest-sha256 "$BACKUP_IMAGE_MANIFEST_SHA256" \
   --recovery-container-id "$RECOVERY_CONTAINER_ID" \
   --final-container-id "$FINAL_CONTAINER_ID" \
-  --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23 \
+  --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f \
   --accepted-retention-packet-sha256 "$ACCEPTED_RETENTION_PACKET_SHA256"
 ```
 
@@ -935,38 +952,46 @@ start or SQL.
 
 Before the wrapper reaches a target start, the owner must detach
 `pg-restore-bootstrap`, attach only `pg-restore-locked`, and prove an HTTPS
-request from the host fails. The locked host cannot call the Hetzner API. On a
-separate trusted owner workstation, start the sealed provider broker
-with the read-only token and Ed25519 key supplied only through inherited
-descriptors:
+request from the host fails. The locked host cannot call the Hetzner API.
+There is no broker service, TCP/Unix listener, port, filesystem socket or
+reverse forward. The already authenticated owner SSH command supplies one
+private bidirectional stdio-pipe transport as host descriptors 197/198. On the
+trusted owner side, the sealed `broker-supervisor` is reachable only through
+that inherited stream; it has no bind/listen/accept path and no local client
+endpoint. For every received operation it creates a new private request/response
+descriptor pair and launches the same digest-pinned file as `broker-once`.
+Root-owned mode-0600 descriptors supply the child with the read-only token,
+Ed25519 key and canonical pinned target configuration. Frames are bounded and
+canonical. Each signing child handles exactly one challenge, emits exactly one
+response, closes its capabilities and exits under a 20-second deadline. The
+supervisor exits with the single authenticated rehearsal SSH stream.
 
-```bash
-set -euo pipefail
-umask 077
-exec 3</secure/hcloud-readonly-token
-exec 4</secure/provider-inventory-ed25519.pem
-python3 scripts/postgres_restore_provider_inventory.py broker \
-  --token-fd 3 --signing-key-fd 4
-```
+**Stop:** the required lifecycle PR must first install and approve the
+root-owned one-shot SSH stdio descriptor launcher and populate the manifest's
+account-context and target-config digests. Until that exists,
+`postgres_restore_provider_manifest.json` remains `NOT_CONFIGURED`; do not
+improvise a pipeline, listener, token path, environment variable or command-line
+secret. The approved launcher invocation must be exactly equivalent to:
 
-In a second owner terminal, establish the inbound SSH reverse forwarding path.
-The server's reviewed `sshd` configuration must retain
-`StreamLocalBindMask 0177`; verify the created socket is root-owned, is a socket,
-and has mode `0600` before starting the wrapper:
-
-```bash
-ssh -N \
-  -R /run/adapteng/provider-inventory-broker.sock:127.0.0.1:39716 \
-  "root@$RESTORE_HOST"
+```text
+owner supervisor:
+  postgres_restore_provider_inventory.py broker-supervisor
+  request-fd=<inherited> response-fd=<inherited>
+  token-fd=<root-held> signing-key-fd=<root-held>
+  provider-config-fd=<root-held>
+per operation:
+  supervisor launches digest-pinned broker-once with fresh private fds
+scratch collector:
+  broker-request-fd=197 broker-response-fd=198
 ```
 
 For every target-start, pre-SQL and post-SQL boundary, the host creates a
 cryptographically random private `O_EXCL` operation request and invokes the
-exact sealed collector itself. The collector sends only the canonical
-challenge, generation, current metadata server ID and owner-CIDR hash through
-the fixed socket. The owner broker performs the current Hetzner reads, signs
-the exact canonical server/firewall response and returns it through the
-existing inbound SSH connection. The host verifies broker ID/version, request
+exact sealed collector itself. The request contains only the canonical
+challenge, generation and owner-CIDR hash; it cannot select a server or
+firewall. The one-shot owner child obtains those only from its sealed canonical
+configuration, performs the current Hetzner reads, signs the exact canonical
+server/firewall response and exits. The host verifies broker ID/version, request
 hash, Ed25519 signature, ten-second broker observation, exact server
 ID/name/purpose/generation, exact sole firewall and rules, exact public
 attachment shape, zero floating IPs, and a present, correctly typed, exactly
@@ -983,8 +1008,13 @@ ID/image/entrypoint/cmd/env-key/label/hostname/network/alias/endpoint/port/mount
 every installed image identity, every network, and every volume. The inventory
 must equal the stage allowlist exactly and contain no production identifier,
 extra object, Docker socket, published port, privileged mode, added capability,
-device, host namespace, unsafe security option, restart policy, or user/hostname
-override. The same target/runner IDs are re-inspected immediately before start.
+device/device-cgroup rule, storage option, config/host/top-level annotation,
+host namespace, unsafe security option, restart policy, or user/hostname
+override. One shared schema-v1 projector is used by target validation and
+capability export; it binds actual validated masks/read-only paths, complete
+mount/network shapes and the raw inspect digest. Unknown security-relevant
+HostConfig fields or unsupported Docker inspect shapes stop readiness rather
+than receiving safe defaults. The same target/runner IDs are re-inspected immediately before start.
 After SQL and exact runner cleanup, it creates a different challenge, recollects
 and revalidates provider and host state. Only the resulting pre/post
 provider/host digests and zero exit permit `RESTORED_LOCKED_READY`. Repeat the
@@ -1013,14 +1043,14 @@ For generation A:
    cmp -s /secure/source-runtime.json /secure/a-runtime.json
    cmp -s /secure/source-catalog.json /secure/a-pre-catalog.json
    python3 scripts/postgres_restore_runner.py bootstrap-role --generation A \
-     --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23
+     --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f
    scripts/postgres_restore_status_gate.sh --generation A \
-     --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23 \
+     --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f \
      --expect-output absent \
      --expect 007=absent --expect drive-008=absent
    sha256sum /secure/a-runtime.json /secure/a-pre-catalog.json
    python3 scripts/postgres_restore_runner.py drop-role --generation A \
-     --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23
+     --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f
    ```
 
 Any comparison or status mismatch exits nonzero. Generation A proves only the
@@ -1044,9 +1074,9 @@ mv /secure/b-catalog.json /secure/b-pre-catalog.json
 cmp -s /secure/source-runtime.json /secure/b-runtime.json
 cmp -s /secure/source-catalog.json /secure/b-pre-catalog.json
 python3 scripts/postgres_restore_runner.py bootstrap-role --generation B \
-  --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23
+  --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23 \
+  --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f \
   --expect-output absent \
   --expect 007=absent --expect drive-008=absent
 ```
@@ -1056,23 +1086,23 @@ Apply only the exact fixed runners from the pinned automation tree:
 ```bash
 set -euo pipefail
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23 \
+  --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f \
   --expect-output absent \
   --expect 007=absent --expect drive-008=absent
 python3 scripts/postgres_restore_runner.py apply-007 --generation B \
-  --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23 \
+  --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f \
   >/dev/null
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23 \
+  --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f \
   --expect-output exact \
   --expect 007=exact --expect drive-008=absent
 
 # Drive-008 contains its own BEGIN/COMMIT. Never wrap, edit, or reseal it.
 python3 scripts/postgres_restore_runner.py apply-drive-008 --generation B \
-  --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23 \
+  --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f \
   >/dev/null
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23 \
+  --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f \
   --expect-output exact \
   --expect 007=exact --expect drive-008=exact
 ```
@@ -1084,8 +1114,16 @@ Do not apply migration 006, AI Gateway 008, or any other migration.
 
 `bootstrap-role` creates, measures and executes the same sealed runner container
 against the current locked target using the disposable-admin capability; it does
-not use `docker exec`. It creates the scratch-only login from the validated
-descriptor-held password. Normal runner sessions set
+not use `docker exec`. The runner opens the fixed root-owned mode-0600,
+non-symlink capability file once with `O_NOFOLLOW|O_CLOEXEC`, bounds and reads
+that held descriptor once, duplicate-safely parses exact JSON once, closes it,
+and retains only immutable validated values. The path is never reopened.
+The lifecycle password must be 48-128 characters generated from the closed
+ASCII alphabet `[A-Za-z0-9_+=:@%-]`; quotes, backslashes, semicolons,
+whitespace, Unicode, controls and oversize values stop before SQL. With
+`standard_conforming_strings=on`, those constrained bytes form exactly one
+fixed `CREATE ROLE` statement staged through the same-byte sealed stdin path;
+secret bytes never enter logs, evidence, errors or public digests. Normal runner sessions set
 `role=postgres`, so migration objects do not become owned by the scratch login.
 The generation wrapper's earlier recovery assertions also use the sealed
 disposable-admin connection because the scratch role must not exist yet.
@@ -1104,7 +1142,7 @@ sha256sum /secure/b-post-catalog.json
 
 The normative probe is the tracked
 `scripts/postgres_restore_transaction_probe.sql` artifact at SHA-256
-`236097579a1711888828a69691f0ea69da1c3a5d65de39682a031c7ebff68872`.
+`0d9e668726ea70d67621ccd62d357e23b4e2d6cd4c74216365ef86c2d034d785`.
 The readable rendering below is non-normative; never copy or retype it for
 execution. The tracked artifact uses only synthetic values, prints no returned
 ID, proves both writes visible inside the transaction, rolls them back, and
@@ -1261,7 +1299,7 @@ resolves a probe bind path:
 ```bash
 set -euo pipefail
 scripts/postgres_restore_transaction_probe.sh \
-  --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23
+  --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f
 ```
 
 Only a zero exit from the complete script permits
@@ -1275,11 +1313,11 @@ statuses are captured.
 
 ```bash
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23 \
+  --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f \
   --expect-output exact \
   --expect 007=exact --expect drive-008=exact
 python3 scripts/postgres_restore_runner.py drop-role --generation B \
-  --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23
+  --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f
 ```
 
 ## Phase 8 - independent generation C final exact state
@@ -1313,23 +1351,23 @@ mv /secure/c-catalog.json /secure/c-pre-catalog.json
 cmp -s /secure/source-runtime.json /secure/c-runtime.json
 cmp -s /secure/source-catalog.json /secure/c-pre-catalog.json
 python3 scripts/postgres_restore_runner.py bootstrap-role --generation C \
-  --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23
+  --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f
 scripts/postgres_restore_status_gate.sh --generation C \
-  --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23 \
+  --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f \
   --expect-output absent \
   --expect 007=absent --expect drive-008=absent
 python3 scripts/postgres_restore_runner.py apply-007 --generation C \
-  --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23 \
+  --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f \
   >/dev/null
 scripts/postgres_restore_status_gate.sh --generation C \
-  --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23 \
+  --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f \
   --expect-output exact \
   --expect 007=exact --expect drive-008=absent
 python3 scripts/postgres_restore_runner.py apply-drive-008 --generation C \
-  --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23 \
+  --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f \
   >/dev/null
 scripts/postgres_restore_status_gate.sh --generation C \
-  --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23 \
+  --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f \
   --expect-output exact \
   --expect 007=exact --expect drive-008=exact
 python3 scripts/postgres_restore_runner.py capture-catalog --generation C \
@@ -1337,17 +1375,17 @@ python3 scripts/postgres_restore_runner.py capture-catalog --generation C \
   >/secure/c-final-catalog.json
 
 python3 scripts/postgres_restore_c_final_assert.py \
-  --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23
+  --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f
 
 cmp -s /secure/source-runtime.json /secure/c-runtime.json
 cmp -s /secure/source-catalog.json /secure/c-pre-catalog.json
 cmp -s /secure/b-post-catalog.json /secure/c-final-catalog.json
 scripts/postgres_restore_status_gate.sh --generation C \
-  --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23 \
+  --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f \
   --expect-output exact \
   --expect 007=exact --expect drive-008=exact
 python3 scripts/postgres_restore_runner.py drop-role --generation C \
-  --procedure-manifest-sha256 db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23
+  --procedure-manifest-sha256 6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f
 sha256sum \
   /secure/c-runtime.json \
   /secure/c-pre-catalog.json \
@@ -1451,8 +1489,8 @@ implementation_artifacts:
   runtime_compatibility_assertion_sha256: "<sha256>"
   selected_full_assertion_sha256: "<sha256>"
   migration_status_harness_sha256: "<sha256>"
-  restore_procedure_manifest_sha256: "db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23"
-  transaction_probe_sha256: "236097579a1711888828a69691f0ea69da1c3a5d65de39682a031c7ebff68872"
+  restore_procedure_manifest_sha256: "6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f"
+  transaction_probe_sha256: "0d9e668726ea70d67621ccd62d357e23b4e2d6cd4c74216365ef86c2d034d785"
 compatibility:
   source_image_identity_sha256: "<sha256>"
   generation_a_image_identity_sha256: "<same approved target identity>"
@@ -1493,7 +1531,7 @@ migrations:
   generation_c_identity_sequence_fresh: true
   generation_c_final_state_captured_before_cleanup: true
 transaction_probe:
-  artifact_sha256: "236097579a1711888828a69691f0ea69da1c3a5d65de39682a031c7ebff68872"
+  artifact_sha256: "0d9e668726ea70d67621ccd62d357e23b4e2d6cd4c74216365ef86c2d034d785"
   generation: "B"
   transaction_result: "rolled_back"
   durable_synthetic_rows_or_allocator_state: 0
@@ -1532,7 +1570,7 @@ cost:
   quote_accessed_at_utc: "<RFC3339>"
   nonzero_costs_included: true
 isolation:
-  procedure_manifest_sha256: "db7d187f2751d27353e531d289402664c8b5ff817cf465671a8d9c3116deef23"
+  procedure_manifest_sha256: "6bf4c9ce04e51eec72d5bce8522c74f60f78fd0707741cc0802d82711bd4969f"
   approved_image_manifest_sha256: "<sha256>"
   measured_image_identity_sha256: "<sha256>"
   generation_a_inventory_sha256: "<sha256>"

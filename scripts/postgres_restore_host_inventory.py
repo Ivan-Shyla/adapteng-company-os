@@ -26,6 +26,48 @@ FORBIDDEN_ENV_PREFIXES = (
 TIMESTAMP = "%Y-%m-%dT%H:%M:%SZ"
 CONTAINER_ID = re.compile(r"^[0-9a-f]{64}$")
 ZERO_TIME = {"", "0001-01-01T00:00:00Z"}
+DOCKER_INSPECT_SCHEMA_VERSION = 1
+MOUNT_KEYS = {
+    "Type", "Name", "Source", "Destination", "Driver", "Mode", "RW", "Propagation"
+}
+ENDPOINT_KEYS = {
+    "IPAMConfig", "Links", "Aliases", "MacAddress", "DriverOpts", "GwPriority",
+    "NetworkID", "EndpointID", "Gateway", "IPAddress", "IPPrefixLen",
+    "IPv6Gateway", "GlobalIPv6Address", "GlobalIPv6PrefixLen", "DNSNames",
+}
+CONFIG_KEYS = {
+    "Annotations", "ArgsEscaped", "AttachStderr", "AttachStdin", "AttachStdout",
+    "Cmd", "Domainname", "Entrypoint", "Env", "ExposedPorts", "Healthcheck",
+    "Hostname", "Image", "Labels", "MacAddress", "NetworkDisabled", "OnBuild",
+    "OpenStdin", "Shell", "StdinOnce", "StopSignal", "StopTimeout", "Tty",
+    "User", "Volumes", "WorkingDir",
+}
+NETWORK_SETTINGS_KEYS = {
+    "Bridge", "EndpointID", "Gateway", "GlobalIPv6Address",
+    "GlobalIPv6PrefixLen", "HairpinMode", "IPAddress", "IPPrefixLen",
+    "IPv6Gateway", "LinkLocalIPv6Address", "LinkLocalIPv6PrefixLen",
+    "MacAddress", "Networks", "Ports", "SandboxID", "SandboxKey",
+    "SecondaryIPAddresses", "SecondaryIPv6Addresses",
+}
+KNOWN_HOST_SECURITY_KEYS = {
+    "Annotations", "AutoRemove", "Binds", "BlkioDeviceReadBps",
+    "BlkioDeviceReadIOps", "BlkioDeviceWriteBps", "BlkioDeviceWriteIOps",
+    "BlkioWeight", "BlkioWeightDevice", "CapAdd", "CapDrop", "Cgroup",
+    "CgroupParent", "CgroupnsMode", "ConsoleSize", "ContainerIDFile",
+    "CpuCount", "CpuPercent",
+    "CpuPeriod", "CpuQuota", "CpuRealtimePeriod", "CpuRealtimeRuntime",
+    "CpuShares", "CpusetCpus", "CpusetMems", "DeviceCgroupRules",
+    "DeviceRequests", "Devices", "Dns", "DnsOptions", "DnsSearch", "ExtraHosts",
+    "GroupAdd", "IOMaximumBandwidth", "IOMaximumIOps", "Init", "IpcMode",
+    "Isolation", "KernelMemory", "KernelMemoryTCP", "Links", "LogConfig",
+    "MaskedPaths", "Memory",
+    "MemoryReservation", "MemorySwap", "MemorySwappiness", "NanoCpus",
+    "NetworkMode", "OomKillDisable", "OomScoreAdj", "PidMode", "PidsLimit",
+    "PortBindings", "Privileged", "PublishAllPorts", "ReadonlyPaths",
+    "ReadonlyRootfs", "RestartPolicy", "Runtime", "SecurityOpt", "ShmSize",
+    "StorageOpt", "Sysctls", "Tmpfs", "UTSMode", "Ulimits", "UsernsMode",
+    "VolumeDriver", "VolumesFrom",
+}
 
 
 class HostInventoryError(RuntimeError):
@@ -76,6 +118,7 @@ def host_isolation_shape(host: dict[str, Any]) -> dict[str, Any]:
         "CapDrop",
         "Devices",
         "DeviceRequests",
+        "DeviceCgroupRules",
         "Dns",
         "DnsOptions",
         "DnsSearch",
@@ -87,8 +130,15 @@ def host_isolation_shape(host: dict[str, Any]) -> dict[str, Any]:
         "Ulimits",
         "VolumesFrom",
     )
+    if set(host) - KNOWN_HOST_SECURITY_KEYS:
+        raise HostInventoryError("container has an unknown HostConfig field")
     if any(host.get(key) not in (None, [], {}) for key in empty_fields):
         raise HostInventoryError("container has an elevated host capability")
+    if host.get("StorageOpt") not in (None, {}) or host.get("Annotations") not in (
+        None,
+        {},
+    ):
+        raise HostInventoryError("container storage/host annotations are not empty")
     if (
         host.get("Privileged") is not False
         or host.get("PublishAllPorts") is not False
@@ -102,6 +152,7 @@ def host_isolation_shape(host: dict[str, Any]) -> dict[str, Any]:
         or host.get("CgroupParent") not in (None, "")
         or host.get("OomKillDisable") not in (None, False)
         or host.get("Init") not in (None, False)
+        or host.get("Isolation") not in (None, "", "default")
     ):
         raise HostInventoryError("container host isolation settings are not safe")
     restart = host.get("RestartPolicy")
@@ -118,23 +169,38 @@ def host_isolation_shape(host: dict[str, Any]) -> dict[str, Any]:
         for path, options in tmpfs.items()
     ):
         raise HostInventoryError("container tmpfs policy is malformed")
+    masked_paths = host.get("MaskedPaths") or []
+    readonly_paths = host.get("ReadonlyPaths") or []
+    if any(
+        not isinstance(paths, list)
+        or len(paths) != len(set(paths))
+        or not all(isinstance(path, str) and path.startswith("/") for path in paths)
+        for paths in (masked_paths, readonly_paths)
+    ):
+        raise HostInventoryError("container masked/readonly paths are malformed")
     return {
-        "privileged": False,
-        "cap_add": [],
-        "cap_drop": [],
-        "devices": [],
-        "device_requests": [],
-        "security_opt": [],
-        "pid_mode": "",
-        "ipc_mode": "private",
-        "uts_mode": "",
-        "userns_mode": "",
-        "cgroupns_mode": "private",
+        "privileged": host["Privileged"],
+        "cap_add": host.get("CapAdd"),
+        "cap_drop": host.get("CapDrop"),
+        "devices": host.get("Devices"),
+        "device_requests": host.get("DeviceRequests"),
+        "device_cgroup_rules": host.get("DeviceCgroupRules"),
+        "security_opt": host.get("SecurityOpt"),
+        "masked_paths": sorted(masked_paths),
+        "readonly_paths": sorted(readonly_paths),
+        "storage_opt": host.get("StorageOpt"),
+        "annotations": host.get("Annotations"),
+        "isolation": host.get("Isolation"),
+        "pid_mode": host.get("PidMode"),
+        "ipc_mode": host.get("IpcMode"),
+        "uts_mode": host.get("UTSMode"),
+        "userns_mode": host.get("UsernsMode"),
+        "cgroupns_mode": host.get("CgroupnsMode"),
         "readonly_rootfs": host["ReadonlyRootfs"],
         "tmpfs": {key: tmpfs[key] for key in sorted(tmpfs)},
-        "publish_all_ports": False,
-        "auto_remove": False,
-        "restart_policy": "no",
+        "publish_all_ports": host["PublishAllPorts"],
+        "auto_remove": host["AutoRemove"],
+        "restart_policy": restart,
     }
 
 
@@ -146,6 +212,12 @@ def container_execution_identity(container: dict[str, Any]) -> dict[str, Any]:
         network_settings, dict
     ):
         raise HostInventoryError("container inspection is incomplete")
+    if config.get("Annotations") not in (None, {}) or container.get(
+        "Annotations"
+    ) not in (None, {}):
+        raise HostInventoryError("container annotations are not empty")
+    if set(config) - CONFIG_KEYS or set(network_settings) - NETWORK_SETTINGS_KEYS:
+        raise HostInventoryError("container Config/NetworkSettings schema is unknown")
     networks = network_settings.get("Networks")
     mounts = container.get("Mounts")
     if not isinstance(networks, dict) or not isinstance(mounts, list):
@@ -154,6 +226,8 @@ def container_execution_identity(container: dict[str, Any]) -> dict[str, Any]:
     for name, endpoint in sorted(networks.items()):
         if not isinstance(endpoint, dict):
             raise HostInventoryError("container endpoint inventory is malformed")
+        if set(endpoint) - ENDPOINT_KEYS:
+            raise HostInventoryError("container endpoint has an unknown field")
         aliases = endpoint.get("Aliases") or []
         if not isinstance(aliases, list) or not all(
             isinstance(alias, str) for alias in aliases
@@ -168,6 +242,8 @@ def container_execution_identity(container: dict[str, Any]) -> dict[str, Any]:
     for mount in mounts:
         if not isinstance(mount, dict):
             raise HostInventoryError("container mount entry is malformed")
+        if set(mount) - MOUNT_KEYS:
+            raise HostInventoryError("container mount has an unknown field")
         normalized_mounts.append(
             {
                 "type": mount.get("Type"),
@@ -178,6 +254,8 @@ def container_execution_identity(container: dict[str, Any]) -> dict[str, Any]:
             }
         )
     return {
+        "docker_inspect_schema_version": DOCKER_INSPECT_SCHEMA_VERSION,
+        "raw_inspect_sha256": hashlib.sha256(canonical_json(container)).hexdigest(),
         "id_sha256": ref_sha256(container.get("Id", "")),
         "name": container.get("Name"),
         "running": container.get("State", {}).get("Running"),
@@ -186,6 +264,9 @@ def container_execution_identity(container: dict[str, Any]) -> dict[str, Any]:
         "entrypoint": config.get("Entrypoint"),
         "cmd": config.get("Cmd"),
         "user": config.get("User"),
+        "working_dir": config.get("WorkingDir"),
+        "config_annotations": config.get("Annotations"),
+        "top_level_annotations": container.get("Annotations"),
         "hostname_sha256": ref_sha256(config.get("Hostname", "")),
         "labels": config.get("Labels") or {},
         "environment": environment_shape(config.get("Env") or []),

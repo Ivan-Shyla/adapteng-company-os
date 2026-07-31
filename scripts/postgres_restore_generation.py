@@ -41,6 +41,8 @@ CLEAN_ENVIRONMENT = {
     "LANG": "C",
     "LC_ALL": "C",
 }
+PROVIDER_BROKER_REQUEST_FD = 197
+PROVIDER_BROKER_RESPONSE_FD = 198
 
 
 class GenerationError(RuntimeError):
@@ -122,6 +124,8 @@ class ProviderPolicy:
     public_key_pem: str
     public_key_pem_sha256: str
     owner_ssh_cidr_sha256: str
+    account_context_sha256: str
+    provider_target_config_sha256: str
     max_age_seconds: int
 
 
@@ -819,6 +823,8 @@ def load_provider_policy(value: dict[str, Any]) -> ProviderPolicy:
         "public_key_pem",
         "public_key_pem_sha256",
         "owner_ssh_cidr_sha256",
+        "account_context_sha256",
+        "provider_target_config_sha256",
         "max_age_seconds",
     }
     if set(value) != required:
@@ -839,6 +845,8 @@ def load_provider_policy(value: dict[str, Any]) -> ProviderPolicy:
     public_key_pem = str(value["public_key_pem"])
     public_key_sha256 = str(value["public_key_pem_sha256"])
     owner_ssh_cidr_sha256 = str(value["owner_ssh_cidr_sha256"])
+    account_context_sha256 = str(value["account_context_sha256"])
+    provider_target_config_sha256 = str(value["provider_target_config_sha256"])
     if (
         hashlib.sha256(PROVIDER_COLLECTOR.read_bytes()).hexdigest()
         != collector_sha256
@@ -846,6 +854,13 @@ def load_provider_policy(value: dict[str, Any]) -> ProviderPolicy:
         != public_key_sha256
         or len(owner_ssh_cidr_sha256) != 64
         or any(character not in "0123456789abcdef" for character in owner_ssh_cidr_sha256)
+        or len(account_context_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in account_context_sha256)
+        or len(provider_target_config_sha256) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in provider_target_config_sha256
+        )
     ):
         raise GenerationError("provider measurement identity digest mismatch")
     return ProviderPolicy(
@@ -855,6 +870,8 @@ def load_provider_policy(value: dict[str, Any]) -> ProviderPolicy:
         public_key_pem=public_key_pem,
         public_key_pem_sha256=public_key_sha256,
         owner_ssh_cidr_sha256=owner_ssh_cidr_sha256,
+        account_context_sha256=account_context_sha256,
+        provider_target_config_sha256=provider_target_config_sha256,
         max_age_seconds=int(value["max_age_seconds"]),
     )
 
@@ -972,14 +989,42 @@ def load_approved_inputs(
         raise GenerationError("procedure manifest digest mismatch")
     procedure = json.loads(procedure_raw)
     artifacts = procedure.get("artifacts") if isinstance(procedure, dict) else None
-    if not isinstance(artifacts, dict):
-        raise GenerationError("procedure manifest artifacts are missing")
+    git_blobs = procedure.get("git_blobs") if isinstance(procedure, dict) else None
+    git_modes = procedure.get("git_modes") if isinstance(procedure, dict) else None
+    if (
+        b"\r" in procedure_raw
+        or b"\0" in procedure_raw
+        or not procedure_raw.endswith(b"\n")
+        or procedure.get("schema_version") != 2
+        or procedure.get("docker_inspect_schema_version") != 1
+        or not isinstance(artifacts, dict)
+        or not isinstance(git_blobs, dict)
+        or not isinstance(git_modes, dict)
+        or set(artifacts) != set(git_blobs)
+        or set(artifacts) != set(git_modes)
+        or hashlib.sha256(
+            canonical_json({"git_blobs": git_blobs, "git_modes": git_modes})
+        ).hexdigest()
+        != procedure.get("member_tree_sha256")
+    ):
+        raise GenerationError("procedure manifest Git-object binding is incomplete")
     root = SCRIPT_DIR.parent
     for member, expected in artifacts.items():
         if not isinstance(member, str) or not member.startswith("scripts/"):
             raise GenerationError("procedure manifest member path is not exact")
         payload = read_root_owned_member(root / member, member)
-        if not isinstance(expected, str) or hashlib.sha256(payload).hexdigest() != expected:
+        git_oid = hashlib.sha1(
+            f"blob {len(payload)}\0".encode("ascii") + payload
+        ).hexdigest()
+        if (
+            not isinstance(expected, str)
+            or b"\r" in payload
+            or b"\0" in payload
+            or not payload.endswith(b"\n")
+            or hashlib.sha256(payload).hexdigest() != expected
+            or git_blobs.get(member) != git_oid
+            or git_modes.get(member) not in {"100644", "100755"}
+        ):
             raise GenerationError(f"{member} digest differs from sealed procedure")
 
     runner_raw = read_root_owned_member(RUNNER_MANIFEST, "runner manifest")
@@ -1155,6 +1200,7 @@ def assert_recovery_complete(
         ],
         input=sql,
         capture_output=True,
+        pass_fds=(PROVIDER_BROKER_REQUEST_FD, PROVIDER_BROKER_RESPONSE_FD),
     )
     evidence: dict[str, str] = {}
     for line in completed.stderr.decode("utf-8").splitlines():

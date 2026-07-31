@@ -16,6 +16,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from postgres_restore_host_inventory import (
+        HostInventoryError,
+        container_execution_identity,
+    )
+except ModuleNotFoundError:  # pragma: no cover - package import in unit tests
+    from scripts.postgres_restore_host_inventory import (
+        HostInventoryError,
+        container_execution_identity,
+    )
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 MANIFEST = SCRIPT_DIR / "postgres_restore_inventory_exporter_manifest.json"
@@ -633,24 +643,11 @@ def scheduler_records(
 def container_capability_record(
     container: dict[str, Any], image: dict[str, Any]
 ) -> dict[str, Any]:
-    config = container.get("Config", {})
-    host = container.get("HostConfig", {})
-    state = container.get("State", {})
-    network_settings = container.get("NetworkSettings", {})
-    env = config.get("Env") or []
-    mounts = container.get("Mounts") or []
-    if (
-        not isinstance(config, dict)
-        or not isinstance(host, dict)
-        or not isinstance(state, dict)
-        or not isinstance(network_settings, dict)
-        or not isinstance(env, list)
-        or not isinstance(mounts, list)
-        or not all(isinstance(item, str) and "=" in item for item in env)
-        or not all(isinstance(item, dict) for item in mounts)
-        or not isinstance(network_settings.get("Networks"), dict)
-    ):
+    config = container.get("Config")
+    mounts = container.get("Mounts")
+    if not isinstance(config, dict) or not isinstance(mounts, list):
         raise ExporterError("Docker capability entry shape is malformed")
+    env = config.get("Env") or []
     if any(
         isinstance(item, str) and item.startswith(SENSITIVE_ENV_PREFIXES)
         for item in env
@@ -662,63 +659,16 @@ def container_capability_record(
         for item in mounts
     ):
         raise ExporterError("container has unapproved repository-write capability")
-    if (
-        host.get("Privileged") is not False
-        or host.get("CapAdd") not in (None, [])
-        or host.get("Devices") not in (None, [])
-        or host.get("DeviceRequests") not in (None, [])
-        or host.get("PidMode") not in (None, "")
-        or host.get("IpcMode") not in (None, "private")
-        or host.get("UTSMode") not in (None, "")
-        or host.get("CgroupnsMode") not in (None, "", "private")
-        or host.get("UsernsMode") not in (None, "")
-    ):
-        raise ExporterError("container has unapproved host-admin capability")
+    try:
+        execution_identity = container_execution_identity(container)
+    except HostInventoryError as exc:
+        raise ExporterError("container inspect identity is not supported/safe") from exc
     return {
-        "container_id_sha256": sha256_bytes(
-            str(container.get("Id", "")).encode("utf-8")
-        ),
-        "image_config_id": container.get("Image"),
-        "config_image": config.get("Image"),
+        "execution_identity": execution_identity,
         "repo_digests": image.get("RepoDigests"),
-        "user": config.get("User"),
-        "working_dir": config.get("WorkingDir"),
-        "hostname": config.get("Hostname"),
-        "entrypoint": config.get("Entrypoint"),
-        "cmd": config.get("Cmd"),
-        "labels": config.get("Labels") or {},
-        "mounts": mounts,
         "environment_keys": sorted(
             item.split("=", 1)[0] for item in env if isinstance(item, str) and "=" in item
         ),
-        "state": {
-            "status": state.get("Status"),
-            "running": state.get("Running"),
-        },
-        "host_security": {
-            key: host.get(key)
-            for key in (
-                "Privileged",
-                "CapAdd",
-                "CapDrop",
-                "SecurityOpt",
-                "Devices",
-                "DeviceRequests",
-                "ReadonlyRootfs",
-                "Runtime",
-                "PidMode",
-                "IpcMode",
-                "UTSMode",
-                "CgroupnsMode",
-                "UsernsMode",
-                "GroupAdd",
-                "CgroupParent",
-                "Binds",
-                "NetworkMode",
-                "RestartPolicy",
-            )
-        },
-        "networks": network_settings["Networks"],
     }
 
 

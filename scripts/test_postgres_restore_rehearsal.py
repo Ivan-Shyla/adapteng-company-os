@@ -7,6 +7,7 @@ import hashlib
 import json
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -51,6 +52,7 @@ from scripts.postgres_restore_host_inventory import (
     validate_host_inventory,
     validate_sealed_target,
 )
+from scripts.postgres_restore_git_seal import MEMBERS, SealError, validate_member
 from scripts.postgres_restore_image_identity import IdentityError, measure_container
 from scripts.postgres_restore_inventory_exporter import (
     ExporterError,
@@ -92,6 +94,7 @@ from scripts.postgres_restore_runner import (
     load_sealed_dependencies,
     parse_database_secret,
     role_lifecycle_sql,
+    sealed_text_git_oid,
     require_pristine_rootfs,
     require_unchanged_execution_identity,
     validate_runner_inspection,
@@ -1073,6 +1076,8 @@ class IsolationMeasurementTests(unittest.TestCase):
             public_key_pem="unused",
             public_key_pem_sha256="0" * 64,
             owner_ssh_cidr_sha256=sha256_bytes(self.owner_cidr.encode()),
+            account_context_sha256="1" * 64,
+            provider_target_config_sha256="2" * 64,
             max_age_seconds=30,
         )
         with self.assertRaises(GenerationError):
@@ -1112,6 +1117,8 @@ class IsolationMeasurementTests(unittest.TestCase):
                 "public_key_pem": public_key,
                 "public_key_pem_sha256": sha256_bytes(public_key.encode()),
                 "owner_ssh_cidr_sha256": sha256_bytes(self.owner_cidr.encode()),
+                "account_context_sha256": "1" * 64,
+                "provider_target_config_sha256": "2" * 64,
                 "max_age_seconds": 30,
             }
         )
@@ -1163,6 +1170,7 @@ class IsolationMeasurementTests(unittest.TestCase):
             "observed_at": self.now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "server": self.server,
             "firewalls": [self.firewall],
+            "account_context_sha256": "1" * 64,
         }
         response = canonical_json(
             {**signed, "signature_base64": "c2lnbmF0dXJl"}
@@ -1171,6 +1179,7 @@ class IsolationMeasurementTests(unittest.TestCase):
             "broker_id": "company-os-hetzner-inventory-broker",
             "broker_version": 1,
             "public_key_pem": "pinned",
+            "account_context_sha256": "1" * 64,
         }
         verified: list[bytes] = []
 
@@ -1208,13 +1217,16 @@ class IsolationMeasurementTests(unittest.TestCase):
         )
         self.assertNotIn('f"generation-{generation}.json"', source)
         self.assertIn('f"/proc/self/fd/{collector_descriptor}"', source)
-        self.assertIn("pass_fds=(collector_descriptor, request_descriptor)", source)
+        self.assertIn("*capability_descriptors", source)
         self.assertIn('"--operation-request-fd"', source)
         self.assertIn("O_EXCL | os.O_NOFOLLOW", source)
         collector = (SCRIPTS / "postgres_restore_provider_inventory.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn("provider-inventory-broker.sock", collector)
+        self.assertNotIn(".bind(", collector)
+        self.assertNotIn(".listen(", collector)
+        self.assertNotIn(".accept(", collector)
+        self.assertNotIn("socket.", collector)
         self.assertNotIn("hcloud-readonly-token", collector)
         self.assertNotIn("TOKEN_PATH", collector)
         self.assertIn("def broker_response(", collector)
@@ -1304,24 +1316,27 @@ class RunnerLifecycleTests(unittest.TestCase):
             {
                 "schema_version": 1,
                 "generation": "A",
-                "runner_password": "A" * 32,
-                "admin_password": "B" * 32,
+                "runner_password": "A" * 48,
+                "admin_password": "B" * 48,
             }
         )
-        values, identity = parse_database_secret(
+        validated = parse_database_secret(
             payload, self.manifest, "A", "probe", "final"
         )
-        self.assertEqual(values["PGHOST"], "adapteng-db-a")
-        self.assertNotEqual(identity, sha256_bytes(values["PGPASSWORD"].encode()))
-        recovery_values, _ = parse_database_secret(
+        self.assertEqual(validated.environment["PGHOST"], "adapteng-db-a")
+        self.assertNotEqual(
+            validated.public_identity_sha256,
+            sha256_bytes(validated.environment["PGPASSWORD"].encode()),
+        )
+        recovery_secret = parse_database_secret(
             payload, self.manifest, "A", "assert-recovery", "recovery"
         )
-        self.assertEqual(recovery_values["PGUSER"], "postgres")
-        self.assertEqual(recovery_values["PGPASSWORD"], "B" * 32)
+        self.assertEqual(recovery_secret.environment["PGUSER"], "postgres")
+        self.assertEqual(recovery_secret.environment["PGPASSWORD"], "B" * 48)
         for attack in (
             payload.replace(b'"generation":"A"', b'"generation":"B"'),
             payload[:-2] + b',"PGHOST":"adapteng-ops-db"}\n',
-            payload.replace(b"A" * 32, b"short", 1),
+            payload.replace(b"A" * 48, b"short", 1),
         ):
             with self.assertRaises(RunnerError):
                 parse_database_secret(
@@ -1564,7 +1579,7 @@ class RunnerLifecycleTests(unittest.TestCase):
     def test_role_lifecycle_and_command_allowlist_are_exact(self) -> None:
         self.assertIn(
             b"CREATE ROLE postgres_restore_runner",
-            role_lifecycle_sql("bootstrap-role", "A" * 32),
+            role_lifecycle_sql("bootstrap-role", "A" * 48),
         )
         self.assertEqual(
             role_lifecycle_sql("drop-role", "unused"),
@@ -2086,6 +2101,142 @@ class RetentionBindingTests(unittest.TestCase):
                 "retention_valid_until",
             },
         )
+
+
+class FinalBoundaryAttackTests(unittest.TestCase):
+    def test_role_password_injection_alphabet_is_closed(self) -> None:
+        for attack in (
+            "A" * 47 + "'",
+            "A" * 47 + "\\",
+            "A" * 47 + ";",
+            "A" * 47 + "\n",
+            "A" * 47 + "é",
+            "A" * 129,
+            "A" * 47,
+        ):
+            with self.assertRaises(RunnerError):
+                role_lifecycle_sql("bootstrap-role", attack)
+        sql = role_lifecycle_sql("bootstrap-role", "A" * 48)
+        self.assertEqual(sql.count(b"CREATE ROLE"), 1)
+        self.assertEqual(sql.count(b";"), 2)
+        self.assertNotIn(b"--", sql)
+        source = (SCRIPTS / "postgres_restore_runner.py").read_text(encoding="utf-8")
+        self.assertEqual(source.count("os.open(\n        DATABASE_SECRET,"), 1)
+        self.assertNotIn("secure_member_bytes(\n                    DATABASE_SECRET", source)
+
+    def test_complete_docker_security_shape_is_shared_and_bound(self) -> None:
+        baseline = runner_container()
+        image = image_objects()[0]
+        original = container_execution_identity(baseline)
+        rejected = (
+            ("HostConfig", "DeviceCgroupRules", ["a *:* rwm"]),
+            ("HostConfig", "StorageOpt", {"size": "100G"}),
+            ("HostConfig", "Annotations", {"attacker": "true"}),
+            ("HostConfig", "Devices", [{"PathOnHost": "/dev/sda"}]),
+            ("HostConfig", "DeviceRequests", [{"Count": -1}]),
+            ("HostConfig", "Isolation", "hyperv"),
+            ("HostConfig", "FutureSecurityMode", "unsafe"),
+            ("Config", "Annotations", {"attacker": "true"}),
+        )
+        for section, field, value in rejected:
+            attack = json.loads(json.dumps(baseline))
+            attack[section][field] = value
+            with self.subTest(field=field):
+                with self.assertRaises(HostInventoryError):
+                    container_execution_identity(attack)
+                with self.assertRaises(ExporterError):
+                    container_capability_record(attack, image)
+        for field in ("MaskedPaths", "ReadonlyPaths"):
+            attack = json.loads(json.dumps(baseline))
+            attack["HostConfig"][field].append("/proc/attacker")
+            self.assertNotEqual(container_execution_identity(attack), original)
+
+    def test_provider_broker_has_one_shot_nonselectable_target_shape(self) -> None:
+        source = (SCRIPTS / "postgres_restore_provider_inventory.py").read_text(
+            encoding="utf-8"
+        )
+        for forbidden in ("import socket", ".bind(", ".listen(", ".accept(", "serve_broker"):
+            self.assertNotIn(forbidden, source)
+        request_fields = source[source.index("required = {", source.index("def broker_response")) :]
+        self.assertNotIn('"server_id",', request_fields.split("}", 1)[0])
+        self.assertIn("pinned_config", source)
+        self.assertIn("read_capability_fd", source)
+        self.assertIn("def supervise_broker(", source)
+        self.assertIn('"broker-once"', source)
+        self.assertIn("request_fd = memfd(", source)
+        self.assertIn("response_fd = memfd(", source)
+        generation = (SCRIPTS / "postgres_restore_generation.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "pass_fds=(PROVIDER_BROKER_REQUEST_FD, PROVIDER_BROKER_RESPONSE_FD)",
+            generation,
+        )
+
+
+class GitObjectSealTests(unittest.TestCase):
+    def test_index_commit_and_autocrlf_use_identical_git_blob_bytes(self) -> None:
+        tool = SCRIPTS / "postgres_restore_git_seal.py"
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary)
+            subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "seal@example.invalid"],
+                cwd=repository,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Seal Test"],
+                cwd=repository,
+                check=True,
+            )
+            for index, member in enumerate(MEMBERS):
+                path = repository / member
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(f"member-{index}\n".encode("ascii"))
+            (repository / ".gitattributes").write_text(
+                "scripts/postgres_restore_* text eol=lf\n", encoding="ascii"
+            )
+            subprocess.run(
+                ["git", "add", ".gitattributes", *MEMBERS],
+                cwd=repository,
+                check=True,
+            )
+            manifest = subprocess.run(
+                [sys.executable, str(tool), "build-index"],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+            ).stdout
+            manifest_path = repository / "scripts/postgres_restore_procedure_manifest.json"
+            manifest_path.write_bytes(manifest)
+            subprocess.run(["git", "add", str(manifest_path)], cwd=repository, check=True)
+            subprocess.run(["git", "commit", "-qm", "sealed"], cwd=repository, check=True)
+            reports = []
+            for value in ("true", "false"):
+                subprocess.run(
+                    ["git", "config", "core.autocrlf", value],
+                    cwd=repository,
+                    check=True,
+                )
+                reports.append(
+                    subprocess.run(
+                        [sys.executable, str(tool), "verify-ref", "HEAD"],
+                        cwd=repository,
+                        check=True,
+                        capture_output=True,
+                    ).stdout
+                )
+            self.assertEqual(reports[0], reports[1])
+
+    def test_crlf_cr_and_nul_are_never_normalized(self) -> None:
+        for payload in (b"x\r\n", b"x\ry\n", b"x\0y\n"):
+            with self.assertRaises(SealError):
+                validate_member(
+                    "scripts/postgres_restore_guard.py", "100644", "0" * 40, payload
+                )
+            with self.assertRaises(RunnerError):
+                sealed_text_git_oid(payload, "member")
 
 
 class ReadinessAndManifestTests(unittest.TestCase):

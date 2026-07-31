@@ -16,6 +16,11 @@ from pathlib import Path
 from typing import Any
 
 try:
+    import fcntl
+except ModuleNotFoundError:  # pragma: no cover - production is Linux
+    fcntl = None  # type: ignore[assignment]
+
+try:
     from postgres_restore_generation import (
         GenerationError,
         load_provider_policy,
@@ -41,6 +46,8 @@ CLEAN_ENVIRONMENT = {
     "LC_ALL": "C",
 }
 TIMESTAMP = "%Y-%m-%dT%H:%M:%SZ"
+PROVIDER_BROKER_REQUEST_FD = 197
+PROVIDER_BROKER_RESPONSE_FD = 198
 
 
 class IsolationGateError(RuntimeError):
@@ -195,12 +202,23 @@ def invoke_pinned_collector(
     *,
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
 ) -> bytes:
-    instance_id, _ = current_server_identity()
     owner_cidr = secure_bytes(
         OWNER_CIDR, "owner SSH CIDR capability", private=True
-    ).decode("ascii").strip()
+    )
+    if not hasattr(os, "memfd_create") or fcntl is None:
+        raise IsolationGateError("one-shot collector requires memfd_create")
+    owner_cidr_descriptor = os.memfd_create(
+        "owner-ssh-cidr", flags=getattr(os, "MFD_CLOEXEC", 0)
+    )
+    os.fchmod(owner_cidr_descriptor, 0o600)
+    os.write(owner_cidr_descriptor, owner_cidr)
+    os.lseek(owner_cidr_descriptor, 0, os.SEEK_SET)
     collector_descriptor = os.open(
         PROVIDER_COLLECTOR, os.O_RDONLY | os.O_NOFOLLOW
+    )
+    capability_descriptors = (
+        PROVIDER_BROKER_REQUEST_FD,
+        PROVIDER_BROKER_RESPONSE_FD,
     )
     try:
         info = os.fstat(collector_descriptor)
@@ -217,26 +235,62 @@ def invoke_pinned_collector(
             raise IsolationGateError("provider collector descriptor is not sealed")
         os.lseek(collector_descriptor, 0, os.SEEK_SET)
         os.lseek(request_descriptor, 0, os.SEEK_SET)
+        for descriptor in capability_descriptors:
+            try:
+                capability_info = os.fstat(descriptor)
+            except OSError as exc:
+                raise IsolationGateError(
+                    "one-shot provider capability descriptor is absent"
+                ) from exc
+            access_mode = fcntl.fcntl(descriptor, fcntl.F_GETFL) & os.O_ACCMODE
+            expected_mode = (
+                os.O_WRONLY
+                if descriptor == PROVIDER_BROKER_REQUEST_FD
+                else os.O_RDONLY
+            )
+            if (
+                os.geteuid() != 0
+                or not stat.S_ISFIFO(capability_info.st_mode)
+                or access_mode != expected_mode
+            ):
+                raise IsolationGateError(
+                    "one-shot provider transport descriptor is not inherited pipe/stdio"
+                )
         completed = run(
             [
                 sys.executable,
                 f"/proc/self/fd/{collector_descriptor}",
                 "collect",
                 str(operation["generation"]),
-                instance_id,
-                owner_cidr,
+                "--owner-cidr-fd",
+                str(owner_cidr_descriptor),
                 "--operation-request-fd",
                 str(request_descriptor),
+                "--broker-request-fd",
+                str(PROVIDER_BROKER_REQUEST_FD),
+                "--broker-response-fd",
+                str(PROVIDER_BROKER_RESPONSE_FD),
             ],
             check=True,
             capture_output=True,
-            pass_fds=(collector_descriptor, request_descriptor),
+            pass_fds=(
+                collector_descriptor,
+                request_descriptor,
+                owner_cidr_descriptor,
+                *capability_descriptors,
+            ),
             env=CLEAN_ENVIRONMENT,
+            timeout=20,
         )
     finally:
         os.close(collector_descriptor)
+        os.close(owner_cidr_descriptor)
     packet = bytes(completed.stdout)
-    if not packet or canonical_json(json.loads(packet)) != packet:
+    if (
+        not packet
+        or len(packet) > 4 * 1024 * 1024
+        or canonical_json(json.loads(packet)) != packet
+    ):
         raise IsolationGateError("pinned provider collector output is not canonical")
     return packet
 

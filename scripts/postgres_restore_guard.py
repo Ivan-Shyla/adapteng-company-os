@@ -242,20 +242,63 @@ def verify_procedure_manifest(
         raise GuardError("procedure manifest is invalid JSON") from exc
     if not isinstance(manifest, dict):
         raise GuardError("procedure manifest must be an object")
-    require_keys(manifest, {"schema_version", "artifacts"}, "procedure manifest")
-    if manifest["schema_version"] != 1 or not isinstance(
-        manifest["artifacts"], dict
+    require_keys(
+        manifest,
+        {
+            "schema_version",
+            "docker_inspect_schema_version",
+            "member_tree_sha256",
+            "artifacts",
+            "git_blobs",
+            "git_modes",
+        },
+        "procedure manifest",
+    )
+    if (
+        b"\r" in manifest_raw
+        or b"\0" in manifest_raw
+        or not manifest_raw.endswith(b"\n")
+        or manifest["schema_version"] != 2
+        or manifest["docker_inspect_schema_version"] != 1
+        or not isinstance(manifest["artifacts"], dict)
+        or not isinstance(manifest["git_blobs"], dict)
+        or not isinstance(manifest["git_modes"], dict)
     ):
-        raise GuardError("procedure manifest is not v1")
+        raise GuardError("procedure manifest is not canonical v2")
     if set(manifest["artifacts"]) != ARTIFACT_PATHS:
         raise GuardError("procedure manifest artifact set is incomplete")
+    if (
+        set(manifest["git_blobs"]) != ARTIFACT_PATHS
+        or set(manifest["git_modes"]) != ARTIFACT_PATHS
+        or hashlib.sha256(
+            canonical_json(
+                {
+                    "git_blobs": manifest["git_blobs"],
+                    "git_modes": manifest["git_modes"],
+                }
+            )
+        ).hexdigest()
+        != manifest["member_tree_sha256"]
+    ):
+        raise GuardError("procedure manifest Git member set is incomplete")
     for relative_path, expected in manifest["artifacts"].items():
-        checked_sha256(
+        payload = checked_bytes(
             root / relative_path,
             str(expected),
             relative_path,
             restricted=False,
         )
+        git_oid = hashlib.sha1(
+            f"blob {len(payload)}\0".encode("ascii") + payload
+        ).hexdigest()
+        if (
+            b"\r" in payload
+            or b"\0" in payload
+            or not payload.endswith(b"\n")
+            or manifest["git_blobs"].get(relative_path) != git_oid
+            or manifest["git_modes"].get(relative_path) not in {"100644", "100755"}
+        ):
+            raise GuardError(f"{relative_path} Git blob binding is not exact")
     return (
         expected_sha256,
         str(manifest["artifacts"]["scripts/postgres_restore_transaction_probe.sql"]),

@@ -13,6 +13,7 @@ import stat
 import subprocess
 import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,8 @@ STATE_ROOT = Path("/var/lib/adapteng/postgres-restore-rehearsal")
 DIGEST = re.compile(r"^[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$")
 CONFIG_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
-SECRET_PATTERN = re.compile(r"^[A-Za-z0-9_./+=:@%-]{32,256}$")
+SECRET_PATTERN = re.compile(r"^[A-Za-z0-9_+=:@%-]{48,128}$")
+DATABASE_SECRET_MAX_BYTES = 1024
 CLEAN_ENVIRONMENT = {
     "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     "LANG": "C",
@@ -70,6 +72,14 @@ class RunnerError(RuntimeError):
 
 
 HostInventoryError = RunnerError
+
+
+@dataclass(frozen=True)
+class ValidatedDatabaseSecret:
+    environment: dict[str, str]
+    public_identity_sha256: str
+    runner_password: str
+    admin_password: str
 
 
 def canonical_json(value: Any) -> bytes:
@@ -134,18 +144,39 @@ def strict_json_object(payload: bytes, label: str) -> dict[str, Any]:
     return value
 
 
+def sealed_text_git_oid(payload: bytes, label: str) -> str:
+    if b"\r" in payload or b"\0" in payload or not payload.endswith(b"\n"):
+        raise RunnerError(f"{label} is not exact LF text")
+    return hashlib.sha1(
+        f"blob {len(payload)}\0".encode("ascii") + payload
+    ).hexdigest()
+
+
 def verify_procedure(expected_sha256: str) -> dict[str, Any]:
     if not SHA256.fullmatch(expected_sha256):
         raise RunnerError("procedure manifest SHA-256 is malformed")
     raw = secure_member_bytes(PROCEDURE_MANIFEST, "procedure manifest")
     if hashlib.sha256(raw).hexdigest() != expected_sha256:
         raise RunnerError("procedure manifest digest mismatch")
+    sealed_text_git_oid(raw, "procedure manifest")
     value = json.loads(raw)
     artifacts = value.get("artifacts") if isinstance(value, dict) else None
-    if not isinstance(artifacts, dict):
-        raise RunnerError("procedure manifest artifacts are missing")
+    git_blobs = value.get("git_blobs") if isinstance(value, dict) else None
+    git_modes = value.get("git_modes") if isinstance(value, dict) else None
+    if (
+        value.get("schema_version") != 2
+        or value.get("docker_inspect_schema_version") != 1
+        or not isinstance(artifacts, dict)
+        or not isinstance(git_blobs, dict)
+        or not isinstance(git_modes, dict)
+        or set(artifacts) != set(git_blobs)
+        or set(artifacts) != set(git_modes)
+    ):
+        raise RunnerError("procedure manifest Git-object binding is incomplete")
     root = SCRIPT_DIR.parent
     for member, expected in artifacts.items():
+        payload = secure_member_bytes(root / member, member)
+        git_oid = sealed_text_git_oid(payload, member)
         if (
             not isinstance(member, str)
             or not member.startswith("scripts/")
@@ -153,12 +184,16 @@ def verify_procedure(expected_sha256: str) -> dict[str, Any]:
             or ".." in Path(member).parts
             or not isinstance(expected, str)
             or not SHA256.fullmatch(expected)
-            or hashlib.sha256(
-                secure_member_bytes(root / member, member)
-            ).hexdigest()
-            != expected
+            or hashlib.sha256(payload).hexdigest() != expected
+            or git_blobs.get(member) != git_oid
+            or git_modes.get(member) not in {"100644", "100755"}
         ):
             raise RunnerError(f"{member} is not the sealed procedure member")
+    member_tree_sha256 = hashlib.sha256(
+        canonical_json({"git_blobs": git_blobs, "git_modes": git_modes})
+    ).hexdigest()
+    if value.get("member_tree_sha256") != member_tree_sha256:
+        raise RunnerError("procedure member Git tree binding is not exact")
     return value
 
 
@@ -263,7 +298,7 @@ def parse_database_secret(
     generation: str,
     mode: str,
     target_kind: str = "final",
-) -> tuple[dict[str, str], str]:
+) -> ValidatedDatabaseSecret:
     value = strict_json_object(payload, "database secret capability")
     required = {
         "schema_version",
@@ -306,14 +341,42 @@ def parse_database_secret(
     ):
         raise RunnerError("database environment contains a malformed entry")
     public = {key: item for key, item in values.items() if key != "PGPASSWORD"}
-    return values, hashlib.sha256(canonical_json(public)).hexdigest()
+    return ValidatedDatabaseSecret(
+        environment=values,
+        public_identity_sha256=hashlib.sha256(canonical_json(public)).hexdigest(),
+        runner_password=value["runner_password"],
+        admin_password=value["admin_password"],
+    )
 
 
 def read_database_secret(
     manifest: dict[str, Any], generation: str, mode: str, target_kind: str
-) -> tuple[dict[str, str], str]:
-    payload = secure_member_bytes(DATABASE_SECRET, "database secret capability", private=True)
-    return parse_database_secret(payload, manifest, generation, mode, target_kind)
+) -> ValidatedDatabaseSecret:
+    descriptor = os.open(
+        DATABASE_SECRET,
+        os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        info = os.fstat(descriptor)
+        if (
+            os.geteuid() != 0
+            or info.st_uid != 0
+            or not stat.S_ISREG(info.st_mode)
+            or stat.S_IMODE(info.st_mode) != 0o600
+            or info.st_size <= 0
+            or info.st_size > DATABASE_SECRET_MAX_BYTES
+        ):
+            raise RunnerError("database secret capability metadata is not exact")
+        payload = bytearray()
+        while chunk := os.read(descriptor, DATABASE_SECRET_MAX_BYTES + 1):
+            payload.extend(chunk)
+            if len(payload) > DATABASE_SECRET_MAX_BYTES:
+                raise RunnerError("database secret capability is oversized")
+    finally:
+        os.close(descriptor)
+    return parse_database_secret(
+        bytes(payload), manifest, generation, mode, target_kind
+    )
 
 
 def create_environment_fd(values: dict[str, str]) -> int:
@@ -604,7 +667,12 @@ def load_generation_targets(
 
 def role_lifecycle_sql(mode: str, scratch_password: str) -> bytes:
     if mode == "bootstrap-role":
+        if not SECRET_PATTERN.fullmatch(scratch_password):
+            raise RunnerError(
+                "database role password is outside the safe generated alphabet"
+            )
         return (
+            "SET standard_conforming_strings = on;\n"
             "CREATE ROLE postgres_restore_runner LOGIN SUPERUSER PASSWORD "
             f"'{scratch_password}';\n"
         ).encode("ascii")
@@ -919,9 +987,11 @@ def main() -> int:
         verify_procedure(args.procedure_manifest_sha256)
         load_sealed_dependencies()
         manifest, manifest_sha256 = load_manifest()
-        environment, database_target_sha256 = read_database_secret(
+        database_secret = read_database_secret(
             manifest, args.generation, args.mode, args.target_kind
         )
+        environment = database_secret.environment
+        database_target_sha256 = database_secret.public_identity_sha256
         entrypoint, argv = command_for_mode(manifest, args.mode)
         sql_input: bytes | None = None
         if args.mode == "status":
@@ -933,13 +1003,8 @@ def main() -> int:
         if args.mode in {"probe", "assert-c-final", "assert-recovery"}:
             sql_input = sys.stdin.buffer.read()
         elif args.mode in {"bootstrap-role", "drop-role"}:
-            database_capability = json.loads(
-                secure_member_bytes(
-                    DATABASE_SECRET, "database secret capability", private=True
-                )
-            )
             sql_input = role_lifecycle_sql(
-                args.mode, str(database_capability["runner_password"])
+                args.mode, database_secret.runner_password
             )
         evidence = run_sealed_container(
             manifest=manifest,
