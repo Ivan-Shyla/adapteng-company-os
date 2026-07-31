@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "status": "NOT_CONFIGURED",
+  "exporter_id": null,
+  "exporter_version": null,
+  "artifact_sha256": null,
+  "timer_unit_sha256": null,
+  "service_unit_sha256": null,
+  "on_calendar": "Sun *-*-* 02:00:00 UTC",
+  "diff_timer_unit_sha256": null,
+  "diff_service_unit_sha256": null,
+  "diff_on_calendar": "Mon..Sat *-*-* 02:00:00 UTC",
+  "scheduler_output_schema_version": 1,
+  "repository_output_schema_version": 1
+}

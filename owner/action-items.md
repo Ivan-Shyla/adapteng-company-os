@@ -196,10 +196,13 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   separately reviewed compatible image manifests/build, collectors, status
   harness and scheduler; approve the complete provider quote; require bucket
   Object Lock disabled; take a fresh full; and pass post-backup `check` plus
-  parsed selected-set `verify`. Use only the tracked guarded A/B/C restore
-  entrypoint, Docker-measured image identity and digest-verified transaction
-  probe. Prove retention from authentic selected-set completion and fresh
-  scheduler/repository inventories at rollout authorization. Rehearse A exact
+  parsed selected-set `verify`. Populate and independently review the exact
+  image, runner, provider-signature and inventory-exporter manifests; their
+  current `NOT_CONFIGURED` state must stop execution. Use only the tracked
+  guarded entrypoint on three independent clean A/B/C hosts, signed fresh
+  Hetzner firewall measurement, Docker-measured image/runner identity and
+  descriptor-streamed transaction probe. Prove retention from the canonical
+  fixed accepted packet and fresh scheduler/repository inventories. Rehearse A exact
   pre-migration baseline; B exact 007 + Drive-008 plus DML transaction rollback
   with zero durable synthetic state; and independent C ending in B's exact
   migrated catalog state. Record digest-only evidence, capture C final exact
@@ -207,8 +210,9 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   key. Automation evidence schema v2 at
   `4afc3b13668e6a07187db2ee50ee4a283833d16d` rejects the new procedure/image/
   inventory/retention fields; its separately reviewed schema, validator,
-  fixtures and consumer evidence-lifecycle PR is an explicit blocker. Rollout
-  authorization remains **NOT READY** until that PR merges and validates these
+  fixtures and consumer evidence-lifecycle PR is an explicit blocker. Current
+  status is `NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR`; rollout
+  authorization remains blocked until that PR merges and validates these
   exact local fields: `completed_at`, `selected_set_info_sha256`,
   `scheduler_inventory_sha256`, `scheduler_inventory_observed_at`, and
   `retention_valid_until`. Do not dispatch

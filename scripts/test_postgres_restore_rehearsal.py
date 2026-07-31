@@ -1,886 +1,791 @@
 #!/usr/bin/env python3
-"""Focused fail-before-restore tests for the PostgreSQL rehearsal artifacts."""
+"""Focused adversarial tests for PostgreSQL restore trust boundaries."""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
-import shutil
+import stat
 import subprocess
-import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable
+
+from scripts.postgres_restore_generation import (
+    GenerationError,
+    ProviderPolicy,
+    load_provider_policy,
+    parse_descriptor_owned_bytes,
+    project_state,
+    require_approved_manifest,
+    validate_exclusive_target,
+    validate_locked_measurement,
+    validate_owned_metadata,
+    validate_restore_acceptance,
+)
+from scripts.postgres_restore_guard import (
+    GuardError,
+    parse_selected_info_value,
+    scan_forbidden_identifiers,
+    stable_image_identity,
+    validate_generation_names,
+    validate_container,
+    validate_network,
+    validate_repository_endpoint,
+    validate_volume,
+)
+from scripts.postgres_restore_image_identity import (
+    IdentityError,
+    measure_container,
+)
+from scripts.postgres_restore_inventory_exporter import (
+    ExporterError,
+    next_weekly_slots,
+    reconcile_timer_names,
+    retention_policy,
+    validate_effective_unit_properties,
+    validate_no_additional_full_jobs,
+)
+from scripts.postgres_restore_provider_inventory import (
+    ProviderInventoryError,
+    evaluate_provider_state,
+    expected_locked_rules,
+)
+from scripts.postgres_restore_retention import (
+    RetentionError,
+    canonical_json,
+    parse_canonical_packet,
+    sanitized_consumer_fields,
+    validate_accepted_binding,
+    validate_weekly_schedule,
+)
+from scripts.postgres_restore_runner import (
+    RunnerError,
+    command_for_mode,
+    role_lifecycle_sql,
+    validate_database_env,
+    validate_runner_inspection,
+    validate_target_container,
+)
+from scripts.postgres_restore_status_gate import (
+    StatusGateError,
+    execute_status_gate,
+)
+from scripts.postgres_restore_transaction_probe import (
+    ProbeError,
+    verify_probe_payload,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
-GENERATION_SCRIPT = SCRIPTS / "postgres_restore_generation.sh"
-STATUS_SCRIPT = SCRIPTS / "postgres_restore_status_gate.sh"
-PROBE_SCRIPT = SCRIPTS / "postgres_restore_transaction_probe.sh"
-PROCEDURE_MANIFEST = SCRIPTS / "postgres_restore_procedure_manifest.json"
 
 
-def sha256_file(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
 
 
-def write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+def approved_image_manifest() -> dict[str, object]:
+    repo_digest = "registry.example/postgres@sha256:" + "1" * 64
+    return {
+        "schema_version": 1,
+        "status": "APPROVED",
+        "image_reference": repo_digest,
+        "repo_digest": repo_digest,
+        "config_id": "sha256:" + "2" * 64,
+        "os": "linux",
+        "architecture": "amd64",
+        "postgres_pgdata": "/var/lib/postgresql/data",
+        "postgres_version": "16",
+        "pgbackrest_version": "2.59.0",
+        "pgbackrest_binary_sha256": "3" * 64,
+        "build_artifact_sha256": "4" * 64,
+        "reviewed_at_utc": "2026-07-31T08:00:00Z",
+        "reviewed_by": "reviewer",
+    }
 
 
-def bash_path() -> str:
-    if os.name == "nt":
-        candidate = Path(r"C:\Program Files\Git\bin\bash.exe")
-        if candidate.is_file():
-            return str(candidate)
-    found = shutil.which("bash")
-    if not found:
-        raise unittest.SkipTest("Bash is unavailable")
-    return found
+def names(generation: str = "A") -> dict[str, str]:
+    suffix = generation.lower()
+    return {
+        "recovery_container": f"adapteng-recover-{suffix}",
+        "final_container": f"adapteng-db-{suffix}",
+        "volume": f"adapteng-restore-{suffix}",
+        "bootstrap_network": "pg-restore-bootstrap",
+        "locked_network": "pg-rehearsal",
+        "restore_pg1_path": f"/restore/{suffix}/pgdata",
+    }
 
 
-def add_python3_shim(directory: Path, env: dict[str, str]) -> None:
-    if os.name != "nt":
-        return
-    directory.mkdir(parents=True, exist_ok=True)
-    shell_shim = directory / "python3"
-    shell_shim.write_text(
-        f"#!/usr/bin/env bash\nexec '{Path(sys.executable).as_posix()}' \"$@\"\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    shell_shim.chmod(0o755)
-    (directory / "python3.cmd").write_text(
-        f'@"{sys.executable}" %*\n',
-        encoding="utf-8",
-        newline="\r\n",
-    )
-    env["PATH"] = str(directory) + os.pathsep + env.get("PATH", "")
-
-
-class RestoreFixture:
-    def __init__(self, base: Path) -> None:
-        self.base = base
-        self.secure = base / "secure"
-        self.system = base / "system"
-        self.bin = base / "bin"
-        self.evidence = base / "evidence"
-        self.state = base / "state"
-        self.volume_data = base / "volume-data"
-        for path in (
-            self.secure,
-            self.system,
-            self.bin,
-            self.evidence,
-            self.state,
-            self.volume_data,
-        ):
-            path.mkdir(parents=True, exist_ok=True)
-
-        self.generation = "A"
-        self.selected_set = "20260801-000000F"
-        self.repo_digest = (
-            "registry.example/approved/postgres@sha256:" + "1" * 64
-        )
-        self.config_id = "sha256:" + "2" * 64
-        self.log = base / "docker.log"
-        self.fixture_path = base / "docker-fixture.json"
-        self.guard_config = self.secure / "generation-a.json"
-        self.selected_info = self.secure / "selected-set-info.json"
-        self.approved_manifest = self.secure / "approved-image.json"
-        self._create_files()
-        self._create_fake_docker()
-
-    def _system_path(self, value: str) -> Path:
-        return self.system / value.lstrip("/")
-
-    def _create_files(self) -> None:
-        hostname = "pg-restore-a"
-        machine_id = "machine-a"
-        product_uuid = "product-a"
-        instance_id = "instance-a"
-        for path, value in (
-            ("/etc/hostname", hostname),
-            ("/etc/machine-id", machine_id),
-            ("/sys/class/dmi/id/product_uuid", product_uuid),
-        ):
-            target = self._system_path(path)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(value + "\n", encoding="utf-8", newline="\n")
-        cloud_path = self._system_path("/run/cloud-init/instance-data.json")
-        write_json(cloud_path, {"instance_id": instance_id})
-        purpose = {
-            "schema_version": 1,
-            "purpose": "postgres-restore-rehearsal",
-            "generation": "A",
-            "hostname": hostname,
-            "machine_id_sha256": hashlib.sha256(machine_id.encode()).hexdigest(),
-            "dmi_product_uuid_sha256": hashlib.sha256(
-                product_uuid.encode()
-            ).hexdigest(),
-            "cloud_instance_id_sha256": hashlib.sha256(
-                instance_id.encode()
-            ).hexdigest(),
+def selected_info(label: str = "20260731-080000F") -> list[dict[str, object]]:
+    return [
+        {
+            "status": {"code": 0, "message": "ok"},
+            "backup": [
+                {
+                    "label": label,
+                    "type": "full",
+                    "error": False,
+                    "archive": {"start": "0001", "stop": "0002"},
+                    "timestamp": {"stop": 1785484800},
+                }
+            ],
         }
-        purpose_path = self._system_path(
-            "/etc/adapteng/postgres-restore-purpose.json"
-        )
-        write_json(purpose_path, purpose)
+    ]
 
-        manifest = {
-            "schema_version": 1,
-            "status": "APPROVED",
-            "image_reference": self.repo_digest,
-            "repo_digest": self.repo_digest,
-            "config_id": self.config_id,
-            "os": "linux",
-            "architecture": "amd64",
-            "postgres_pgdata": "/var/lib/postgresql/data",
-            "postgres_version": "16",
-            "pgbackrest_version": "2.59.0",
-            "pgbackrest_binary_sha256": "3" * 64,
-            "build_artifact_sha256": "4" * 64,
-            "reviewed_at_utc": "2026-08-01T00:00:00Z",
-            "reviewed_by": "reviewer",
-        }
-        write_json(self.approved_manifest, manifest)
 
-        completion = int(
-            datetime(2026, 8, 1, tzinfo=timezone.utc).timestamp()
+class NoProductionTestHookTests(unittest.TestCase):
+    def test_production_modules_have_no_test_bypass_names(self) -> None:
+        forbidden = (
+            "POSTGRES_RESTORE_TEST",
+            "TEST_MODE",
+            "TEST_ROOT",
+            "TEST_DOCKER",
+            "--now",
         )
-        selected_info = [
-            {
-                "name": "adapteng-ops",
-                "status": {"code": 0, "message": "ok"},
-                "backup": [
-                    {
-                        "label": self.selected_set,
-                        "type": "full",
-                        "error": False,
-                        "archive": {"start": "0001", "stop": "0002"},
-                        "timestamp": {
-                            "start": completion - 60,
-                            "stop": completion,
-                        },
-                    }
-                ],
-            }
-        ]
-        write_json(self.selected_info, selected_info)
+        modules = (
+            "postgres_restore_guard.py",
+            "postgres_restore_image_identity.py",
+            "postgres_restore_retention.py",
+            "postgres_restore_generation.py",
+            "postgres_restore_provider_inventory.py",
+            "postgres_restore_runner.py",
+            "postgres_restore_status_gate.py",
+            "postgres_restore_transaction_probe.py",
+            "postgres_restore_c_final_assert.py",
+            "postgres_restore_inventory_exporter.py",
+        )
+        for module in modules:
+            text = (SCRIPTS / module).read_text(encoding="utf-8")
+            for token in forbidden:
+                self.assertNotIn(token, text, f"{module} contains {token}")
+        guard = (SCRIPTS / "postgres_restore_guard.py").read_text(encoding="utf-8")
+        for forbidden_name in ("--root", "verify-procedure-only", "packet-stdout"):
+            self.assertNotIn(forbidden_name, guard)
 
-        pgbackrest = self.secure / "pgbackrest.conf"
-        pgbackrest.write_text(
-            "\n".join(
-                (
-                    "[global]",
-                    "repo1-type=s3",
-                    "repo1-path=/physical-restore",
-                    "repo1-s3-bucket=restore-bucket",
-                    "repo1-s3-endpoint=s3.eu-central.example",
-                    "repo1-s3-region=eu-central",
-                    "repo1-s3-uri-style=path",
-                    "repo1-storage-verify-tls=y",
-                    "repo1-cipher-type=aes-256-cbc",
-                    "",
-                    "[adapteng-ops]",
-                    "pg1-path=/var/lib/postgresql/data",
-                    "",
-                )
-            ),
-            encoding="utf-8",
-            newline="\n",
+    def test_exporter_measures_exact_retention_policy(self) -> None:
+        valid = b"""[global]
+repo1-retention-full=12
+repo1-retention-full-type=count
+"""
+        self.assertEqual(retention_policy(valid), (12, "count"))
+        with self.assertRaises(ExporterError):
+            retention_policy(valid.replace(b"12", b"8"))
+        digest = validate_no_additional_full_jobs(
+            [("apt.timer", b"/usr/bin/apt update\n")]
         )
-        restore_env = self.secure / "restore.env"
-        restore_env.write_text(
-            "PGBACKREST_REPO1_S3_KEY=test\n"
-            "PGBACKREST_REPO1_S3_KEY_SECRET=test\n"
-            "PGBACKREST_REPO1_CIPHER_PASS=test\n",
-            encoding="utf-8",
-            newline="\n",
+        self.assertEqual(len(digest), 64)
+        with self.assertRaises(ExporterError):
+            validate_no_additional_full_jobs(
+                [("hidden.timer", b"/usr/bin/pgbackrest --type=full backup\n")]
+            )
+        with self.assertRaises(ExporterError):
+            validate_no_additional_full_jobs(
+                [("extra-diff.timer", b"/usr/bin/pgbackrest --type=diff backup\n")]
+            )
+        validate_effective_unit_properties(
+            "FragmentPath=/etc/systemd/system/example.timer\nDropInPaths=\n",
+            Path("/etc/systemd/system/example.timer"),
         )
-        key_attestation = self.secure / "restore-key.json"
-        write_json(
-            key_attestation,
-            {
-                "schema_version": 1,
-                "endpoint": "s3.eu-central.example",
-                "bucket": "restore-bucket",
-                "region": "eu-central",
-                "capabilities": ["list", "read"],
-                "can_write": False,
-                "can_delete": False,
-            },
+        with self.assertRaises(ExporterError):
+            validate_effective_unit_properties(
+                "FragmentPath=/etc/systemd/system/example.timer\n"
+                "DropInPaths=/etc/systemd/system/example.timer.d/override.conf\n",
+                Path("/etc/systemd/system/example.timer"),
+            )
+        timers = reconcile_timer_names(
+            ["full.timer", "diff.timer"],
+            ["full.timer", "diff.timer", "transient.timer"],
+            {"full.timer", "diff.timer"},
         )
-        network_attestation = self.secure / "network-attestation.json"
-        write_json(
-            network_attestation,
-            {
-                "schema_version": 1,
-                "purpose": "postgres-restore-rehearsal",
-                "generation": "A",
-                "bootstrap_firewall_export_sha256": "5" * 64,
-                "locked_firewall_export_sha256": "6" * 64,
-                "bootstrap_outbound": ["dns", "https"],
-                "locked_outbound": "deny",
-                "observed_at_utc": "2026-08-01T01:00:00Z",
-            },
-        )
-        forbidden = self.secure / "forbidden-identifiers.txt"
-        forbidden.write_text(
-            "adapteng-ops-db\npostgres-adapteng-ops\nproduction.example.internal\n",
-            encoding="utf-8",
-            newline="\n",
-        )
+        self.assertIn("transient.timer", timers)
 
-        self.config: dict[str, Any] = {
-            "schema_version": 1,
-            "purpose": "postgres-restore-rehearsal",
-            "generation": "A",
-            "host": {
-                "hostname": "pg-restore-a",
-                "purpose_attestation_sha256": sha256_file(purpose_path),
-            },
-            "names": {
-                "recovery_container": "adapteng-recover-a",
-                "final_container": "adapteng-db-a",
-                "volume": "adapteng-restore-a",
-                "bootstrap_network": "pg-restore-bootstrap",
-                "locked_network": "pg-rehearsal",
-                "restore_pg1_path": "/restore/a/pgdata",
-            },
-            "repository": {
-                "endpoint": "s3.eu-central.example",
-                "bucket": "restore-bucket",
-                "region": "eu-central",
-                "config_path": str(pgbackrest),
-                "config_sha256": sha256_file(pgbackrest),
-                "restore_env_path": str(restore_env),
-                "restore_env_sha256": sha256_file(restore_env),
-                "restore_key_attestation_path": str(key_attestation),
-                "restore_key_attestation_sha256": sha256_file(key_attestation),
-                "stanza": "adapteng-ops",
-                "repo": 1,
-            },
-            "selected_set": {
-                "ref_sha256": hashlib.sha256(
-                    self.selected_set.encode()
-                ).hexdigest(),
-                "info_sha256": sha256_file(self.selected_info),
-            },
-            "approved_image": {
-                "manifest_sha256": sha256_file(self.approved_manifest),
-                "platform": "linux/amd64",
-            },
-            "network_attestation": {
-                "path": str(network_attestation),
-                "sha256": sha256_file(network_attestation),
-            },
-            "forbidden_identifiers": {
-                "path": str(forbidden),
-                "sha256": sha256_file(forbidden),
-            },
-            "state_dir": str(self.state),
-        }
-        write_json(self.guard_config, self.config)
 
-        mount = {
-            "Type": "volume",
-            "Name": "adapteng-restore-a",
-            "Source": str(self.volume_data),
-            "Destination": "/var/lib/postgresql/data",
-            "RW": True,
-        }
-        recovery = {
-            "Id": "5" * 64,
-            "Name": "/adapteng-recover-a",
-            "Image": self.config_id,
-            "Platform": "linux",
-            "Config": {
-                "Image": self.repo_digest,
-                "Env": [
-                    "PGDATA=/var/lib/postgresql/data",
-                    "PGBACKREST_REPO1_S3_KEY=test",
-                ],
-            },
-            "State": {"Running": False},
-            "HostConfig": {
-                "NetworkMode": "pg-restore-bootstrap",
-                "PortBindings": {},
-            },
-            "NetworkSettings": {
-                "Networks": {"pg-restore-bootstrap": {}},
-                "Ports": {},
-            },
-            "Mounts": [mount],
-        }
-        final = {
-            "Id": "6" * 64,
-            "Name": "/adapteng-db-a",
-            "Image": self.config_id,
-            "Platform": "linux",
-            "Config": {
-                "Image": self.repo_digest,
-                "Env": [
-                    "PGDATA=/var/lib/postgresql/data",
-                    "POSTGRES_PASSWORD=scratch-only",
-                ],
-            },
-            "State": {"Running": False},
-            "HostConfig": {
-                "NetworkMode": "pg-rehearsal",
-                "PortBindings": {},
-            },
-            "NetworkSettings": {
-                "Networks": {"pg-rehearsal": {}},
-                "Ports": {},
-            },
-            "Mounts": [mount],
-        }
-        self.docker_fixture: dict[str, Any] = {
-            "containers": {
-                "adapteng-recover-a": recovery,
-                "adapteng-db-a": final,
-            },
-            "image": {
-                "Id": self.config_id,
-                "RepoDigests": [self.repo_digest],
-                "Os": "linux",
-                "Architecture": "amd64",
-                "Config": {"Env": ["PGDATA=/var/lib/postgresql/data"]},
-            },
-            "volume": {
-                "Name": "adapteng-restore-a",
-                "Driver": "local",
-                "Scope": "local",
-                "Options": {},
-                "Labels": {
-                    "adapteng.restore.generation": "A",
-                    "adapteng.restore.new": "true",
-                    "adapteng.restore.purpose": "postgres-restore-rehearsal",
-                },
-                "Mountpoint": str(self.volume_data),
-            },
-            "networks": {
-                "pg-restore-bootstrap": {
-                    "Name": "pg-restore-bootstrap",
+class GuardBoundaryTests(unittest.TestCase):
+    def test_generation_names_are_exact(self) -> None:
+        self.assertEqual(validate_generation_names(names(), "A"), names())
+        wrong = names()
+        wrong["volume"] = "adapteng-restore-b"
+        with self.assertRaises(GuardError):
+            validate_generation_names(wrong, "A")
+
+    def test_wrong_network_and_production_identifier_are_rejected(self) -> None:
+        with self.assertRaises(GuardError):
+            validate_network(
+                {
+                    "Name": "pg-rehearsal",
                     "Internal": False,
                     "Driver": "bridge",
                     "Scope": "local",
                     "Options": {},
                 },
-                "pg-rehearsal": {
-                    "Name": "pg-rehearsal",
-                    "Internal": True,
-                    "Driver": "bridge",
-                    "Scope": "local",
-                    "Options": {},
-                },
-            },
-            "container_inventory": ["adapteng-recover-a", "adapteng-db-a"],
-            "image_inventory": [
-                self.config_id + " registry.example/approved/postgres@sha256:" + "1" * 64,
-                "sha256:" + "7" * 64 + " registry.example/runner@sha256:" + "8" * 64,
-            ],
-            "volume_inventory": ["adapteng-restore-a"],
-            "network_inventory": [
-                "bridge",
-                "host",
-                "none",
-                "pg-restore-bootstrap",
                 "pg-rehearsal",
+                True,
+            )
+        with self.assertRaises(GuardError):
+            scan_forbidden_identifiers(
+                {"adapteng-ops-db", "postgres-adapteng-ops"},
+                ["repo endpoint=adapteng-ops-db"],
+            )
+
+    def test_recovery_sql_container_rejects_repository_credentials(self) -> None:
+        container = {
+            "Name": "/adapteng-recover-a",
+            "State": {"Running": False},
+            "HostConfig": {"NetworkMode": "none", "PortBindings": {}},
+            "NetworkSettings": {"Networks": {"none": {}}, "Ports": {}},
+            "Mounts": [
+                {
+                    "Type": "volume",
+                    "Name": "adapteng-restore-a",
+                    "Destination": "/var/lib/postgresql/data",
+                    "RW": True,
+                }
             ],
+            "Config": {"Env": ["PGBACKREST_REPO1_S3_KEY_SECRET=forbidden"]},
         }
-        write_json(self.fixture_path, self.docker_fixture)
-
-    def _create_fake_docker(self) -> None:
-        shim_env = {"PATH": ""}
-        add_python3_shim(self.bin, shim_env)
-        fake = self.bin / "docker_fake.py"
-        fake.write_text(
-            """#!/usr/bin/env python3
-import json
-import os
-import sys
-from pathlib import Path
-
-args = sys.argv[1:]
-fixture = json.loads(Path(os.environ["FAKE_DOCKER_FIXTURE"]).read_text())
-with Path(os.environ["FAKE_DOCKER_LOG"]).open("a", encoding="utf-8") as handle:
-    handle.write(json.dumps(args) + "\\n")
-
-if args[:2] == ["container", "inspect"]:
-    print(json.dumps([fixture["containers"][args[2]]]))
-elif args[:2] == ["image", "inspect"]:
-    print(json.dumps([fixture["image"]]))
-elif args[:2] == ["image", "ls"]:
-    print("\\n".join(fixture["image_inventory"]))
-elif args[:2] == ["volume", "inspect"]:
-    print(json.dumps([fixture["volume"]]))
-elif args[:2] == ["network", "inspect"]:
-    print(json.dumps([fixture["networks"][args[2]]]))
-elif args[:2] == ["ps", "-a"]:
-    print("\\n".join(fixture["container_inventory"]))
-elif args[:2] == ["volume", "ls"]:
-    print("\\n".join(fixture["volume_inventory"]))
-elif args[:2] == ["network", "ls"]:
-    print("\\n".join(fixture["network_inventory"]))
-elif args and args[0] == "run":
-    if "restore" in args:
-        sys.exit(91)
-    sys.exit(0)
-else:
-    sys.exit(92)
-""",
-            encoding="utf-8",
-            newline="\n",
-        )
-        if os.name == "nt":
-            (self.bin / "docker.cmd").write_text(
-                '@python "%~dp0docker_fake.py" %*\n',
-                encoding="utf-8",
-                newline="\r\n",
+        with self.assertRaises(GuardError):
+            validate_container(
+                container,
+                "adapteng-recover-a",
+                "none",
+                "adapteng-restore-a",
+                "/var/lib/postgresql/data",
             )
-            docker = self.bin / "docker"
-            docker.write_text(
-                f"#!/usr/bin/env bash\nexec '{Path(sys.executable).as_posix()}' "
-                f"'{fake.as_posix()}' \"$@\"\n",
-                encoding="utf-8",
-                newline="\n",
-            )
-            docker.chmod(0o755)
-        else:
-            docker = self.bin / "docker"
-            shutil.copy(fake, docker)
-            docker.chmod(0o755)
-
-    def save_config(self) -> None:
-        write_json(self.guard_config, self.config)
-
-    def save_docker_fixture(self) -> None:
-        write_json(self.fixture_path, self.docker_fixture)
-
-    def command(self, *, generation: str = "A", selected_set: str | None = None) -> list[str]:
-        return [
-            bash_path(),
-            str(GENERATION_SCRIPT),
-            "--generation",
-            generation,
-            "--guard-config",
-            str(self.guard_config),
-            "--guard-config-sha256",
-            sha256_file(self.guard_config),
-            "--selected-set",
-            selected_set or self.selected_set,
-            "--selected-info",
-            str(self.selected_info),
-            "--selected-info-sha256",
-            sha256_file(self.selected_info),
-            "--approved-image-manifest",
-            str(self.approved_manifest),
-            "--approved-image-manifest-sha256",
-            sha256_file(self.approved_manifest),
-            "--procedure-manifest-sha256",
-            sha256_file(PROCEDURE_MANIFEST),
-            "--evidence-dir",
-            str(self.evidence),
-        ]
-
-    def environment(self) -> dict[str, str]:
-        env = os.environ.copy()
-        env.update(
+        container["Config"]["Env"] = []
+        container["Mounts"].append(
             {
-                "PATH": str(self.bin) + os.pathsep + env.get("PATH", ""),
-                "POSTGRES_RESTORE_TEST_MODE": "1",
-                "POSTGRES_RESTORE_TEST_ROOT": str(self.system),
-                "POSTGRES_RESTORE_TEST_DOCKER": str(self.bin / "docker_fake.py"),
-                "FAKE_DOCKER_FIXTURE": str(self.fixture_path),
-                "FAKE_DOCKER_LOG": str(self.log),
-                "MSYS2_ARG_CONV_EXCL": (
-                    "--config=;--pg1-path=;type=volume,;type=bind,"
-                ),
+                "Type": "bind",
+                "Source": "/secure",
+                "Destination": "/secure",
+                "RW": True,
             }
         )
-        return env
-
-    def calls(self) -> list[list[str]]:
-        if not self.log.exists():
-            return []
-        return [
-            json.loads(line)
-            for line in self.log.read_text(encoding="utf-8").splitlines()
-        ]
-
-
-class RestoreGenerationGuardTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp = tempfile.TemporaryDirectory()
-        self.fixture = RestoreFixture(Path(self.temp.name))
-
-    def tearDown(self) -> None:
-        self.temp.cleanup()
-
-    def _assert_fails_before_restore(
-        self,
-        mutate: Callable[[RestoreFixture], None],
-        *,
-        generation: str = "A",
-        selected_set: str | None = None,
-    ) -> None:
-        mutate(self.fixture)
-        completed = subprocess.run(
-            self.fixture.command(
-                generation=generation, selected_set=selected_set
-            ),
-            env=self.fixture.environment(),
-            capture_output=True,
-            text=True,
-        )
-        self.assertNotEqual(completed.returncode, 0, completed.stdout + completed.stderr)
-        self.assertFalse(
-            any("restore" in call for call in self.fixture.calls()),
-            self.fixture.calls(),
-        )
-
-    def test_wrong_generation_fails_before_restore(self) -> None:
-        self._assert_fails_before_restore(lambda _: None, generation="B")
-
-    def test_wrong_host_fails_before_restore(self) -> None:
-        def mutate(fixture: RestoreFixture) -> None:
-            fixture._system_path("/etc/hostname").write_text(
-                "wrong-host\n", encoding="utf-8"
+        with self.assertRaises(GuardError):
+            validate_container(
+                container,
+                "adapteng-recover-a",
+                "none",
+                "adapteng-restore-a",
+                "/var/lib/postgresql/data",
             )
-
-        self._assert_fails_before_restore(mutate)
-
-    def test_wrong_volume_fails_before_restore(self) -> None:
-        def mutate(fixture: RestoreFixture) -> None:
-            fixture.docker_fixture["volume"]["Labels"][
-                "adapteng.restore.generation"
-            ] = "B"
-            fixture.save_docker_fixture()
-
-        self._assert_fails_before_restore(mutate)
-
-    def test_wrong_image_fails_before_restore(self) -> None:
-        def mutate(fixture: RestoreFixture) -> None:
-            fixture.docker_fixture["image"]["RepoDigests"].append(
-                "registry.example/other@sha256:" + "9" * 64
-            )
-            fixture.save_docker_fixture()
-
-        self._assert_fails_before_restore(mutate)
-
-    def test_wrong_platform_fails_before_restore(self) -> None:
-        def mutate(fixture: RestoreFixture) -> None:
-            fixture.config["approved_image"]["platform"] = "linux/arm64"
-            fixture.save_config()
-
-        self._assert_fails_before_restore(mutate)
-
-    def test_wrong_set_fails_before_restore(self) -> None:
-        self._assert_fails_before_restore(
-            lambda _: None, selected_set="20260802-000000F"
-        )
-
-    def test_wrong_endpoint_fails_before_restore(self) -> None:
-        def mutate(fixture: RestoreFixture) -> None:
-            fixture.config["repository"]["endpoint"] = "wrong.example"
-            fixture.save_config()
-
-        self._assert_fails_before_restore(mutate)
-
-    def test_wrong_network_fails_before_restore(self) -> None:
-        def mutate(fixture: RestoreFixture) -> None:
-            fixture.docker_fixture["networks"]["pg-rehearsal"]["Internal"] = False
-            fixture.save_docker_fixture()
-
-        self._assert_fails_before_restore(mutate)
-
-    def test_production_identifier_fails_before_restore(self) -> None:
-        def mutate(fixture: RestoreFixture) -> None:
-            fixture.docker_fixture["container_inventory"].append("adapteng-ops-db")
-            fixture.save_docker_fixture()
-
-        self._assert_fails_before_restore(mutate)
-
-    def test_valid_guard_reaches_only_mocked_restore(self) -> None:
-        completed = subprocess.run(
-            self.fixture.command(),
-            env=self.fixture.environment(),
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(completed.returncode, 91, completed.stdout + completed.stderr)
-        restore_calls = [
-            call for call in self.fixture.calls() if "restore" in call
-        ]
-        self.assertEqual(len(restore_calls), 1)
-        restore_call = restore_calls[0]
-        self.assertIn("--config=/etc/pgbackrest/pgbackrest.conf", restore_call)
-        self.assertIn("--stanza=adapteng-ops", restore_call)
-        self.assertIn("--repo=1", restore_call)
-        self.assertIn("--pg1-path=/restore/a/pgdata", restore_call)
-        self.assertIn("--set=20260801-000000F", restore_call)
-
-
-class StatusAndProbeIntegrityTests(unittest.TestCase):
-    def test_exact_output_with_nonzero_exit_is_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            fake = Path(temp) / "fake-status.sh"
-            fake.write_text(
-                "#!/usr/bin/env bash\nprintf 'exact\\n'\nexit 9\n",
-                encoding="utf-8",
-                newline="\n",
-            )
-            completed = subprocess.run(
-                [
-                    bash_path(),
-                    str(STATUS_SCRIPT),
-                    "--expect-output",
-                    "exact",
-                    "--",
-                    bash_path(),
-                    str(fake),
-                ],
-                capture_output=True,
-                text=True,
-            )
-            self.assertNotEqual(completed.returncode, 0)
-            self.assertIn("status command failed", completed.stderr)
-
-    def _copied_probe_command(
-        self, base: Path, expected_manifest_sha256: str
-    ) -> tuple[list[str], dict[str, str]]:
-        copied_scripts = base / "scripts"
-        copied_scripts.mkdir()
-        manifest = json.loads(PROCEDURE_MANIFEST.read_text(encoding="utf-8"))
-        for relative in manifest["artifacts"]:
-            source = ROOT / relative
-            target = base / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, target)
-        shutil.copyfile(PROCEDURE_MANIFEST, copied_scripts / PROCEDURE_MANIFEST.name)
-        pgpass = base / "pgpass"
-        pgpass.write_text("*:*:*:*:scratch\n", encoding="utf-8")
-        command = [
-            bash_path(),
-            str(copied_scripts / PROBE_SCRIPT.name),
-            "--procedure-manifest-sha256",
-            expected_manifest_sha256,
-            "--runner-image",
-            "registry.example/runner@sha256:" + "a" * 64,
-            "--pgpass-file",
-            str(pgpass),
-            "--evidence-dir",
-            str(base / "evidence"),
-        ]
-        env = os.environ.copy()
-        add_python3_shim(base / "bin", env)
-        env["POSTGRES_RESTORE_TEST_MODE"] = "1"
-        return command, env
-
-    def test_substituted_noop_probe_is_rejected_before_docker(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            base = Path(temp)
-            expected = sha256_file(PROCEDURE_MANIFEST)
-            command, env = self._copied_probe_command(base, expected)
-            copied_probe = (
-                base / "scripts" / "postgres_restore_transaction_probe.sql"
-            )
-            copied_probe.write_text("SELECT 1;\n", encoding="utf-8")
-            completed = subprocess.run(
-                command, env=env, capture_output=True, text=True
-            )
-            self.assertNotEqual(completed.returncode, 0)
-            self.assertIn("digest mismatch", completed.stderr)
-
-    def test_wrong_procedure_digest_is_rejected_before_docker(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            base = Path(temp)
-            command, env = self._copied_probe_command(base, "0" * 64)
-            completed = subprocess.run(
-                command, env=env, capture_output=True, text=True
-            )
-            self.assertNotEqual(completed.returncode, 0)
-            self.assertIn("procedure manifest digest mismatch", completed.stderr)
-
-
-class RetentionGateTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp = tempfile.TemporaryDirectory()
-        self.base = Path(self.temp.name)
-        self.selected_set = "20260801-000000F"
-        self.completed = datetime(2026, 8, 1, tzinfo=timezone.utc)
-        self.info = self.base / "info.json"
-        write_json(
-            self.info,
-            [
+        with self.assertRaises(GuardError):
+            validate_repository_endpoint(
                 {
-                    "status": {"code": 0, "message": "ok"},
-                    "backup": [
+                    "endpoint": "s3.eu-central-003.backblazeb2.com",
+                    "bucket": "rehearsal",
+                    "region": "eu-central-003",
+                },
+                {
+                    "repo1-s3-endpoint": "wrong.example",
+                    "repo1-s3-bucket": "rehearsal",
+                    "repo1-s3-region": "eu-central-003",
+                },
+            )
+
+    def test_selected_set_is_bound_to_exact_info(self) -> None:
+        label = "20260731-080000F"
+        digest, completed = parse_selected_info_value(selected_info(label), label)
+        self.assertEqual(digest, sha256_bytes(label.encode()))
+        self.assertEqual(completed, "2026-07-31T08:00:00Z")
+        with self.assertRaises(GuardError):
+            parse_selected_info_value(selected_info(label), "other-set")
+
+    def test_wrong_volume_rejected_before_path_access(self) -> None:
+        volume = {
+            "Name": "adapteng-restore-a",
+            "Driver": "local",
+            "Scope": "local",
+            "Options": {},
+            "Labels": {
+                "adapteng.restore.generation": "B",
+                "adapteng.restore.new": "true",
+                "adapteng.restore.purpose": "postgres-restore-rehearsal",
+            },
+            "Mountpoint": "not-used",
+        }
+        with self.assertRaises(GuardError):
+            validate_volume(volume, "adapteng-restore-a", "A")
+
+    def test_image_identity_uses_injected_inspector(self) -> None:
+        manifest = approved_image_manifest()
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "manifest.json"
+            raw = canonical_json(manifest)
+            path.write_bytes(raw)
+            calls: list[tuple[str, ...]] = []
+
+            def inspect(*args: str) -> object:
+                calls.append(args)
+                if args[:2] == ("container", "inspect"):
+                    return [
                         {
-                            "label": self.selected_set,
-                            "type": "full",
-                            "error": False,
-                            "timestamp": {
-                                "stop": int(self.completed.timestamp())
-                            },
+                            "Id": "container-id",
+                            "Image": manifest["config_id"],
+                            "Platform": "linux",
+                            "Config": {"Image": manifest["repo_digest"]},
                         }
-                    ],
-                }
-            ],
-        )
+                    ]
+                return [
+                    {
+                        "Id": manifest["config_id"],
+                        "RepoDigests": [manifest["repo_digest"]],
+                        "Os": "linux",
+                        "Architecture": "amd64",
+                        "Config": {"Env": ["PGDATA=/var/lib/postgresql/data"]},
+                    }
+                ]
 
-    def tearDown(self) -> None:
-        self.temp.cleanup()
-
-    @staticmethod
-    def timestamp(value: datetime) -> str:
-        return value.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    def run_gate(
-        self,
-        *,
-        mode: str,
-        now: datetime,
-        newer_fulls: int = 0,
-        rollout_start: datetime | None = None,
-    ) -> subprocess.CompletedProcess[str]:
-        scheduler_path = self.base / f"scheduler-{mode}.json"
-        repository_path = self.base / f"repository-{mode}.json"
-        output = self.base / f"output-{mode}.json"
-        future = [
-            now + timedelta(days=7 * index)
-            for index in range(1, 13)
-        ]
-        write_json(
-            scheduler_path,
-            {
-                "schema_version": 1,
-                "generated_at_utc": self.timestamp(now),
-                "full_jobs_count": 1,
-                "timezone": "UTC",
-                "future_fulls_utc": [self.timestamp(item) for item in future],
-            },
-        )
-        completed_fulls = [
-            {
-                "label": self.selected_set,
-                "completed_at_utc": self.timestamp(self.completed),
-                "type": "full",
-                "status": "complete",
-            }
-        ]
-        for index in range(newer_fulls):
-            completed_fulls.append(
-                {
-                    "label": f"newer-{index}",
-                    "completed_at_utc": self.timestamp(
-                        self.completed + timedelta(hours=12 * (index + 1))
-                    ),
-                    "type": "full",
-                    "status": "complete",
-                }
+            packet = measure_container(
+                "candidate",
+                path,
+                sha256_bytes(raw),
+                inspect=inspect,
             )
-        write_json(
-            repository_path,
+            self.assertEqual(packet["status"], "MEASURED_APPROVED")
+            self.assertEqual(len(calls), 2)
+
+    def test_multiple_or_wrong_image_digest_is_rejected(self) -> None:
+        manifest = approved_image_manifest()
+        container = {
+            "State": {"Running": False},
+            "Image": manifest["config_id"],
+            "Config": {"Image": manifest["repo_digest"]},
+        }
+        image = {
+            "Id": manifest["config_id"],
+            "RepoDigests": [manifest["repo_digest"], "other@sha256:" + "9" * 64],
+            "Os": "linux",
+            "Architecture": "amd64",
+        }
+        with self.assertRaises(RunnerError):
+            validate_runner_inspection(container, image, manifest)
+
+
+class DescriptorOwnershipTests(unittest.TestCase):
+    def test_symlink_owner_and_mode_attacks_are_rejected(self) -> None:
+        with self.assertRaises(GenerationError):
+            validate_owned_metadata(
+                uid=0, mode=stat.S_IFREG | 0o600, expected_kind="file", is_symlink=True
+            )
+        with self.assertRaises(GenerationError):
+            validate_owned_metadata(
+                uid=1000,
+                mode=stat.S_IFREG | 0o600,
+                expected_kind="file",
+                is_symlink=False,
+            )
+        with self.assertRaises(GenerationError):
+            validate_owned_metadata(
+                uid=0,
+                mode=stat.S_IFREG | 0o644,
+                expected_kind="file",
+                is_symlink=False,
+            )
+
+    def test_preexisting_state_is_rejected(self) -> None:
+        with self.assertRaises(GenerationError):
+            validate_exclusive_target(exists=True, is_symlink=False)
+        with self.assertRaises(GenerationError):
+            validate_exclusive_target(exists=False, is_symlink=True)
+
+    def test_descriptor_swap_is_rejected(self) -> None:
+        original = canonical_json({"generation": "A"})
+        swapped = canonical_json({"generation": "B"})
+        with self.assertRaises(GenerationError):
+            parse_descriptor_owned_bytes(
+                original,
+                swapped,
+                uid=0,
+                mode=stat.S_IFREG | 0o600,
+            )
+
+    def test_post_parse_path_replacement_cannot_change_frozen_state(self) -> None:
+        packet = {
+            "generation": "A",
+            "procedure_manifest_sha256": "9" * 64,
+            "image_config_id": "sha256:" + "1" * 64,
+            "recovery_container": "adapteng-recover-a",
+            "final_container": "adapteng-db-a",
+            "volume": "adapteng-restore-a",
+            "bootstrap_network": "pg-restore-bootstrap",
+            "locked_network": "pg-rehearsal",
+            "restore_pg1_path": "/restore/a/pgdata",
+            "repository_config_path": "/secure/pgbackrest.conf",
+            "repository_config_sha256": "6" * 64,
+            "restore_env_path": "/secure/restore.env",
+            "restore_env_sha256": "7" * 64,
+            "stanza": "adapteng-ops",
+            "repo": "1",
+            "selected_set_ref_sha256": "2" * 64,
+            "selected_set_info_sha256": "3" * 64,
+            "completed_at": "2026-07-31T08:00:00Z",
+            "inventory_sha256": "4" * 64,
+            "measured_image_identity_sha256": "5" * 64,
+            "cloud_instance_id_sha256": "8" * 64,
+        }
+        raw = canonical_json(packet)
+        parsed, digest = parse_descriptor_owned_bytes(
+            raw,
+            raw,
+            uid=0,
+            mode=stat.S_IFREG | 0o600,
+        )
+        state = project_state(parsed)
+        parsed["generation"] = "C"
+        self.assertEqual(state.generation, "A")
+        self.assertEqual(digest, sha256_bytes(raw))
+
+
+class IsolationMeasurementTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.now = datetime(2026, 7, 31, 8, 0, tzinfo=timezone.utc)
+        self.owner_cidr = "203.0.113.10/32"
+        self.server = {
+            "id": 123,
+            "labels": {
+                "purpose": "postgres-restore-rehearsal",
+                "generation": "A",
+            },
+            "public_net": {"firewalls": [{"id": 456, "status": "applied"}]},
+        }
+        self.firewall = {
+            "id": 456,
+            "name": "pg-restore-locked",
+            "applied_to": [{"type": "server", "server": {"id": 123}}],
+            "rules": expected_locked_rules(self.owner_cidr),
+        }
+
+    def test_current_locked_state_is_sanitized(self) -> None:
+        packet = evaluate_provider_state(
+            self.server,
+            [self.firewall],
+            generation="A",
+            observed_at=self.now,
+            owner_ssh_cidr=self.owner_cidr,
+        )
+        self.assertEqual(packet["status"], "LOCKED_CURRENT")
+        self.assertNotIn("id", packet)
+        validate_locked_measurement(packet, "A", self.now)
+
+    def test_missing_or_extra_firewall_is_rejected(self) -> None:
+        with self.assertRaises(ProviderInventoryError):
+            evaluate_provider_state(
+                self.server,
+                [],
+                generation="A",
+                observed_at=self.now,
+                owner_ssh_cidr=self.owner_cidr,
+            )
+        extra = {**self.firewall, "id": 789, "name": "other"}
+        server = {
+            **self.server,
+            "public_net": {
+                "firewalls": [
+                    {"id": 456, "status": "applied"},
+                    {"id": 789, "status": "applied"},
+                ]
+            },
+        }
+        with self.assertRaises(ProviderInventoryError):
+            evaluate_provider_state(
+                server,
+                [self.firewall, extra],
+                generation="A",
+                observed_at=self.now,
+                owner_ssh_cidr=self.owner_cidr,
+            )
+
+    def test_pending_firewall_attachment_is_rejected(self) -> None:
+        server = {
+            **self.server,
+            "public_net": {
+                "firewalls": [
+                    {"id": 456, "status": "applied"},
+                    {"id": 789, "status": "pending"},
+                ]
+            },
+        }
+        with self.assertRaises(ProviderInventoryError):
+            evaluate_provider_state(
+                server,
+                [self.firewall],
+                generation="A",
+                observed_at=self.now,
+                owner_ssh_cidr=self.owner_cidr,
+            )
+
+    def test_stale_or_wrong_generation_measurement_is_rejected(self) -> None:
+        packet = evaluate_provider_state(
+            self.server,
+            [self.firewall],
+            generation="A",
+            observed_at=self.now,
+            owner_ssh_cidr=self.owner_cidr,
+        )
+        with self.assertRaises(GenerationError):
+            validate_locked_measurement(packet, "B", self.now)
+        with self.assertRaises(GenerationError):
+            validate_locked_measurement(packet, "A", self.now + timedelta(minutes=3))
+
+    def test_unapproved_provider_manifest_stops_before_restore(self) -> None:
+        manifest = json.loads(
+            (SCRIPTS / "postgres_restore_provider_manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        with self.assertRaises(GenerationError):
+            load_provider_policy(manifest)
+
+    def test_signed_measurement_must_match_host_instance(self) -> None:
+        packet = evaluate_provider_state(
+            self.server,
+            [self.firewall],
+            generation="A",
+            observed_at=self.now,
+            owner_ssh_cidr=self.owner_cidr,
+        )
+        policy = ProviderPolicy(
+            collector_id="company-os-hetzner-locked-inventory",
+            collector_version=1,
+            collector_sha256=str(packet["collector_sha256"]),
+            public_key_pem="unused",
+            public_key_pem_sha256="0" * 64,
+            owner_ssh_cidr_sha256=sha256_bytes(self.owner_cidr.encode()),
+            max_age_seconds=120,
+        )
+        with self.assertRaises(GenerationError):
+            validate_locked_measurement(
+                packet,
+                "A",
+                self.now,
+                "f" * 64,
+                policy,
+            )
+
+
+class RunnerAndProbeTests(unittest.TestCase):
+    def test_runner_manifest_is_fail_closed_until_configured(self) -> None:
+        manifest = json.loads(
+            (SCRIPTS / "postgres_restore_runner_manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(manifest["status"], "NOT_CONFIGURED")
+        with self.assertRaises(RunnerError):
+            command_for_mode(manifest, "unknown")
+        with self.assertRaises(GenerationError):
+            require_approved_manifest(manifest, "runner manifest")
+
+    def test_runner_database_target_is_exact_and_secret_is_not_emitted(self) -> None:
+        manifest = json.loads(
+            (SCRIPTS / "postgres_restore_runner_manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        payload = (
+            b"PGDATABASE=adapteng_ops\n"
+            b"PGPORT=5432\n"
+            b"PGOPTIONS=-c role=postgres\n"
+            b"PGSSLMODE=disable\n"
+            b"PGUSER=postgres_restore_runner\n"
+            b"PGHOST=adapteng-db-b\n"
+            b"PGPASSWORD=abcdefghijklmnopqrstuvwxyzABCDEF\n"
+        )
+        target = validate_database_env(payload, manifest, "B")
+        self.assertNotIn("PGPASSWORD", target)
+        with self.assertRaises(RunnerError):
+            validate_database_env(
+                payload.replace(b"adapteng-db-b", b"adapteng-ops-db"),
+                manifest,
+                "B",
+            )
+
+    def test_runner_role_lifecycle_and_target_are_exact(self) -> None:
+        target = {
+            "Id": "container-b",
+            "Name": "/adapteng-db-b",
+            "State": {"Running": True},
+            "HostConfig": {"PortBindings": {}},
+            "NetworkSettings": {"Networks": {"pg-rehearsal": {}}},
+            "Mounts": [{"Type": "volume", "Name": "adapteng-restore-b"}],
+        }
+        self.assertEqual(validate_target_container(target, "B")["generation"], "B")
+        with self.assertRaises(RunnerError):
+            validate_target_container(
+                {**target, "NetworkSettings": {"Networks": {"bridge": {}}}},
+                "B",
+            )
+        create = role_lifecycle_sql(
+            "bootstrap-role", "abcdefghijklmnopqrstuvwxyzABCDEF"
+        )
+        self.assertIn(b"CREATE ROLE postgres_restore_runner", create)
+        self.assertEqual(
+            role_lifecycle_sql("drop-role", "unused"),
+            b"DROP ROLE postgres_restore_runner;\n",
+        )
+
+    def test_runner_platform_mismatch_is_rejected(self) -> None:
+        manifest = approved_image_manifest()
+        container = {
+            "State": {"Running": False},
+            "Image": manifest["config_id"],
+            "Config": {"Image": manifest["repo_digest"]},
+        }
+        image = {
+            "Id": manifest["config_id"],
+            "RepoDigests": [manifest["repo_digest"]],
+            "Os": "linux",
+            "Architecture": "arm64",
+        }
+        with self.assertRaises(RunnerError):
+            validate_runner_inspection(container, image, manifest)
+
+    def test_common_image_identity_excludes_unique_container_binding(self) -> None:
+        first = {"config_id": "same", "container_ref_sha256": "a" * 64}
+        second = {"config_id": "same", "container_ref_sha256": "b" * 64}
+        self.assertEqual(stable_image_identity(first), stable_image_identity(second))
+
+    def test_probe_substitution_and_noop_are_rejected(self) -> None:
+        probe = (SCRIPTS / "postgres_restore_transaction_probe.sql").read_bytes()
+        expected = sha256_bytes(probe)
+        self.assertEqual(verify_probe_payload(probe, expected), expected)
+        for replacement in (b"SELECT 1;\n", probe + b"\n-- substituted\n"):
+            with self.assertRaises(ProbeError):
+                verify_probe_payload(replacement, expected)
+
+    def test_exact_status_output_with_exit_9_is_rejected(self) -> None:
+        def fake_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess([], 9, stdout="exact\n", stderr="")
+
+        with self.assertRaises(StatusGateError):
+            execute_status_gate(
+                "exact", ["007=exact"], "B", "0" * 64, run=fake_run
+            )
+
+    def test_status_without_measured_runner_evidence_is_rejected(self) -> None:
+        def fake_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess([], 0, stdout="exact\n", stderr="")
+
+        with self.assertRaises(StatusGateError):
+            execute_status_gate(
+                "exact", ["007=exact"], "B", "0" * 64, run=fake_run
+            )
+
+
+class RetentionBindingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.now = datetime(2026, 7, 31, 8, 0, tzinfo=timezone.utc)
+        self.schedule = [
+            self.now + timedelta(days=7 * index) for index in range(1, 13)
+        ]
+        self.current = {
+            "selected_set_ref_sha256": "1" * 64,
+            "selected_set_info_sha256": "2" * 64,
+            "completed_at": "2026-07-31T07:00:00Z",
+            "scheduler_inventory_sha256": "3" * 64,
+            "scheduler_inventory_observed_at": "2026-07-31T08:00:00Z",
+            "repository_inventory_sha256": "4" * 64,
+            "retention_valid_until": "2026-10-22T07:59:59Z",
+        }
+        self.accepted = {
+            **self.current,
+            "packet_kind": "ACCEPTED_RETENTION",
+            "inventory_exporter_manifest_sha256": "5" * 64,
+            "weekly_cadence_seconds": 604800,
+            "weekly_slot_count": 12,
+        }
+
+    def test_exact_weekly_schedule_is_required(self) -> None:
+        validate_weekly_schedule(self.schedule, self.now)
+        irregular = list(self.schedule)
+        irregular[5] += timedelta(hours=1)
+        with self.assertRaises(RetentionError):
+            validate_weekly_schedule(irregular, self.now)
+
+    def test_exporter_derives_exact_next_twelve_weekly_slots(self) -> None:
+        slots = next_weekly_slots(self.now)
+        self.assertEqual(len(slots), 12)
+        validate_weekly_schedule(slots, self.now)
+
+    def test_annual_and_duplicate_schedules_are_rejected(self) -> None:
+        annual = [
+            self.now + timedelta(days=365 * index) for index in range(1, 13)
+        ]
+        with self.assertRaises(RetentionError):
+            validate_weekly_schedule(annual, self.now)
+        duplicate = list(self.schedule)
+        duplicate[-1] = duplicate[-2]
+        with self.assertRaises(RetentionError):
+            validate_weekly_schedule(duplicate, self.now)
+
+    def test_authorization_requires_exact_accepted_sources(self) -> None:
+        validate_accepted_binding(
+            self.accepted,
+            self.current,
+            accepted_scheduler_sha256="3" * 64,
+            accepted_repository_sha256="4" * 64,
+            exporter_manifest_sha256="5" * 64,
+        )
+        substituted = {**self.accepted, "scheduler_inventory_sha256": "9" * 64}
+        with self.assertRaises(RetentionError):
+            validate_accepted_binding(
+                substituted,
+                self.current,
+                accepted_scheduler_sha256="3" * 64,
+                accepted_repository_sha256="4" * 64,
+                exporter_manifest_sha256="5" * 64,
+            )
+
+    def test_restore_wrapper_rejects_free_form_acceptance_packet(self) -> None:
+        with self.assertRaises(GenerationError):
+            validate_restore_acceptance(
+                self.accepted,
+                selected_set="20260731-080000F",
+                selected_info_sha256="2" * 64,
+                exporter_manifest_sha256="5" * 64,
+            )
+
+    def test_accepted_packet_hash_and_canonical_bytes_are_required(self) -> None:
+        raw = canonical_json(self.accepted)
+        value, loaded = parse_canonical_packet(
+            raw, sha256_bytes(raw), "accepted packet"
+        )
+        self.assertEqual(value, self.accepted)
+        self.assertEqual(loaded, raw)
+        noncanonical = b'{ "packet_kind": "ACCEPTED_RETENTION" }\n'
+        with self.assertRaises(RetentionError):
+            parse_canonical_packet(
+                noncanonical, sha256_bytes(noncanonical), "packet"
+            )
+
+    def test_consumer_output_is_exactly_five_sanitized_fields(self) -> None:
+        fields = sanitized_consumer_fields(self.current)
+        self.assertEqual(
+            set(fields),
             {
-                "schema_version": 1,
-                "generated_at_utc": self.timestamp(now),
-                "retention_full": 12,
-                "retention_full_type": "count",
-                "selected_set": self.selected_set,
-                "completed_fulls": completed_fulls,
+                "completed_at",
+                "selected_set_info_sha256",
+                "scheduler_inventory_sha256",
+                "scheduler_inventory_observed_at",
+                "retention_valid_until",
             },
         )
-        command = [
-            sys.executable,
-            str(SCRIPTS / "postgres_restore_retention.py"),
-            "--mode",
-            mode,
-            "--selected-set",
-            self.selected_set,
-            "--selected-info",
-            str(self.info),
-            "--selected-info-sha256",
-            sha256_file(self.info),
-            "--scheduler-inventory",
-            str(scheduler_path),
-            "--scheduler-inventory-sha256",
-            sha256_file(scheduler_path),
-            "--repository-inventory",
-            str(repository_path),
-            "--repository-inventory-sha256",
-            sha256_file(repository_path),
-            "--now",
-            self.timestamp(now),
-            "--output",
-            str(output),
-        ]
-        if rollout_start is not None:
-            command.extend(["--rollout-start", self.timestamp(rollout_start)])
-        env = os.environ.copy()
-        env["POSTGRES_RESTORE_TEST_MODE"] = "1"
-        return subprocess.run(command, env=env, capture_output=True, text=True)
 
-    def test_acceptance_derives_completion_and_retention(self) -> None:
-        now = self.completed + timedelta(hours=1)
-        completed = self.run_gate(mode="acceptance", now=now)
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        packet = json.loads(
-            (self.base / "output-acceptance.json").read_text(encoding="utf-8")
-        )
-        self.assertEqual(packet["completed_at"], "2026-08-01T00:00:00Z")
-        self.assertEqual(packet["selected_set_info_sha256"], sha256_file(self.info))
-        self.assertEqual(
-            packet["scheduler_inventory_observed_at"], self.timestamp(now)
-        )
-        self.assertIn("scheduler_inventory_sha256", packet)
-        self.assertIn("retention_valid_until", packet)
-        self.assertEqual(packet["authorization_status"], "NOT_AUTHORIZED")
-        self.assertNotIn("actual_rollout_start", packet)
 
-    def test_authorization_binds_actual_rollout_and_fresh_inventories(self) -> None:
-        now = self.completed + timedelta(days=4)
-        completed = self.run_gate(
-            mode="authorization", now=now, rollout_start=now
+class ReadinessEnumTests(unittest.TestCase):
+    def test_literal_not_ready_enum_is_on_all_status_surfaces(self) -> None:
+        enum = "NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR"
+        paths = (
+            ROOT / "ARCHITECTURE.md",
+            ROOT / "owner/action-items.md",
+            ROOT / "runbooks/backup-and-restore.md",
+            ROOT / "registry/data-stores.yaml",
+            ROOT / "registry/services.yaml",
         )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        packet = json.loads(
-            (self.base / "output-authorization.json").read_text(encoding="utf-8")
-        )
-        self.assertEqual(packet["authorization_status"], "AUTHORIZED")
-        self.assertEqual(packet["actual_rollout_start"], self.timestamp(now))
-        self.assertEqual(packet["authorization_checked_at"], self.timestamp(now))
-        self.assertIn("rollout_required_through", packet)
-        self.assertEqual(packet["completed_at"], "2026-08-01T00:00:00Z")
-        self.assertEqual(packet["selected_set_info_sha256"], sha256_file(self.info))
-        self.assertIn("scheduler_inventory_sha256", packet)
-        self.assertEqual(
-            packet["scheduler_inventory_observed_at"], self.timestamp(now)
-        )
-        self.assertIn("repository_inventory_sha256", packet)
-        self.assertIn("retention_valid_until", packet)
-
-    def test_extra_fulls_shorten_horizon_and_fail_closed(self) -> None:
-        now = self.completed + timedelta(days=4)
-        completed = self.run_gate(
-            mode="authorization",
-            now=now,
-            newer_fulls=5,
-            rollout_start=now,
-        )
-        self.assertNotEqual(completed.returncode, 0)
-        self.assertIn("does not cover", completed.stderr)
+        for path in paths:
+            self.assertIn(enum, path.read_text(encoding="utf-8"), str(path))
 
 
 if __name__ == "__main__":

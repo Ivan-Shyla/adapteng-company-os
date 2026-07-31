@@ -95,10 +95,13 @@ services:
       storage plus clean PostgreSQL-only restore is documented but not configured.
       The tracked guarded restore/probe/retention artifacts exist but have not
       touched Docker or a provider. Before apply: separately reviewed
-      Docker-measured image manifests/build; exact runtime/catalog compatibility;
-      post-backup check and parsed selected-set verify; fresh authorization-time
-      12-full expiry and provider-cost proofs; guarded independent A baseline, B
-      exact apply plus digest-verified DML transaction rollback, C final exact
+      Docker-measured image/runner manifests and build, signed fresh Hetzner
+      isolation measurement, descriptor-bound procedure state, and exact
+      runtime/catalog compatibility; post-backup check and parsed selected-set
+      verify; canonical accepted retention packet plus fresh authorization-time
+      12-full expiry and provider-cost proofs; guarded independent-host A
+      baseline, B exact apply plus streamed digest-verified DML transaction
+      rollback, C final exact
       migrated state; cleanup; reviewed digest-only PASS; and a separately merged
       automation evidence schema/validator/consumer contract that accepts the new
       bindings. Current schema v2 at 4afc3b13668e6a07187db2ee50ee4a283833d16d

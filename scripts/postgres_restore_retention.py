@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,6 +17,19 @@ from typing import Any
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 TIMESTAMP = "%Y-%m-%dT%H:%M:%SZ"
+EXPORTER_MANIFEST = (
+    Path(__file__).resolve().parent
+    / "postgres_restore_inventory_exporter_manifest.json"
+)
+EXPORTER = (
+    Path(__file__).resolve().parent / "postgres_restore_inventory_exporter.py"
+)
+STATE_ROOT = Path("/var/lib/adapteng/postgres-restore-rehearsal/retention")
+ACCEPTED_PACKET = STATE_ROOT / "accepted.json"
+ACCEPTED_SELECTED_INFO = STATE_ROOT / "accepted-selected-set-info.json"
+ACCEPTED_SCHEDULER = STATE_ROOT / "accepted-scheduler-inventory.json"
+ACCEPTED_REPOSITORY = STATE_ROOT / "accepted-repository-inventory.json"
+AUTHORIZED_PACKET = STATE_ROOT / "authorized.json"
 
 
 class RetentionError(RuntimeError):
@@ -38,20 +52,53 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def checked_file(path: Path, expected: str, label: str) -> None:
+def checked_bytes(path: Path, expected: str, label: str) -> bytes:
     if not SHA256.fullmatch(expected):
         raise RetentionError(f"{label} expected SHA-256 is malformed")
-    if not path.is_file() or path.is_symlink():
-        raise RetentionError(f"{label} must be a regular non-symlink file")
-    if sha256_file(path) != expected:
-        raise RetentionError(f"{label} digest mismatch")
-
-
-def load_json(path: Path, label: str) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise RetentionError(f"{label} cannot be opened: {exc}") from exc
+    try:
+        info = os.fstat(descriptor)
+        if (
+            os.geteuid() != 0
+            or info.st_uid != 0
+            or not stat.S_ISREG(info.st_mode)
+            or info.st_mode & 0o077
+        ):
+            raise RetentionError(f"{label} must be root-owned mode 0600")
+        payload = bytearray()
+        while chunk := os.read(descriptor, 1024 * 1024):
+            payload.extend(chunk)
+    finally:
+        os.close(descriptor)
+    raw = bytes(payload)
+    if hashlib.sha256(raw).hexdigest() != expected:
+        raise RetentionError(f"{label} digest mismatch")
+    return raw
+
+
+def decode_json(raw: bytes, label: str) -> Any:
+    try:
+        return json.loads(raw)
+    except (UnicodeError, json.JSONDecodeError) as exc:
         raise RetentionError(f"{label} is not valid UTF-8 JSON: {exc}") from exc
+
+
+def write_exclusive(path: Path, payload: bytes) -> None:
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+    )
+    try:
+        offset = 0
+        while offset < len(payload):
+            offset += os.write(descriptor, payload[offset:])
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def parse_timestamp(value: Any, label: str) -> datetime:
@@ -87,17 +134,127 @@ def selected_completion(info: Any, selected_set: str) -> datetime:
     return datetime.fromtimestamp(timestamp["stop"], timezone.utc)
 
 
-def now_utc(explicit: str | None) -> datetime:
-    if explicit is None:
-        return datetime.now(timezone.utc).replace(microsecond=0)
-    if os.environ.get("POSTGRES_RESTORE_TEST_MODE") != "1":
-        raise RetentionError("--now is forbidden outside explicit test mode")
-    return parse_timestamp(explicit, "test now")
-
-
 def require_exact_keys(value: dict[str, Any], keys: set[str], label: str) -> None:
     if set(value) != keys:
         raise RetentionError(f"{label} has missing or unknown fields")
+
+
+def load_exporter_manifest() -> tuple[dict[str, Any], str]:
+    if not EXPORTER_MANIFEST.is_file() or EXPORTER_MANIFEST.is_symlink():
+        raise RetentionError("inventory exporter manifest is unavailable")
+    raw = EXPORTER_MANIFEST.read_bytes()
+    value = json.loads(raw)
+    required = {
+        "schema_version",
+        "status",
+        "exporter_id",
+        "exporter_version",
+        "artifact_sha256",
+        "timer_unit_sha256",
+        "service_unit_sha256",
+        "on_calendar",
+        "diff_timer_unit_sha256",
+        "diff_service_unit_sha256",
+        "diff_on_calendar",
+        "scheduler_output_schema_version",
+        "repository_output_schema_version",
+    }
+    if (
+        not isinstance(value, dict)
+        or set(value) != required
+        or value.get("schema_version") != 1
+    ):
+        raise RetentionError("inventory exporter manifest is not v1")
+    if value.get("status") != "APPROVED":
+        raise RetentionError("inventory exporter manifest is NOT_CONFIGURED")
+    for field in ("exporter_id", "exporter_version", "artifact_sha256"):
+        if not value.get(field):
+            raise RetentionError(f"inventory exporter {field} is not pinned")
+    if not SHA256.fullmatch(str(value["artifact_sha256"])):
+        raise RetentionError("inventory exporter artifact digest is malformed")
+    if (
+        hashlib.sha256(EXPORTER.read_bytes()).hexdigest()
+        != value["artifact_sha256"]
+        or not SHA256.fullmatch(str(value["timer_unit_sha256"]))
+        or not SHA256.fullmatch(str(value["service_unit_sha256"]))
+        or not SHA256.fullmatch(str(value["diff_timer_unit_sha256"]))
+        or not SHA256.fullmatch(str(value["diff_service_unit_sha256"]))
+        or value["on_calendar"] != "Sun *-*-* 02:00:00 UTC"
+        or value["diff_on_calendar"] != "Mon..Sat *-*-* 02:00:00 UTC"
+        or value["scheduler_output_schema_version"] != 1
+        or value["repository_output_schema_version"] != 1
+    ):
+        raise RetentionError("inventory exporter policy identity is not exact")
+    return value, hashlib.sha256(raw).hexdigest()
+
+
+def validate_weekly_schedule(
+    values: list[datetime], checked_at: datetime
+) -> None:
+    if len(values) != 12 or values != sorted(set(values)):
+        raise RetentionError("future full schedule must contain 12 unique ordered slots")
+    if values[0] <= checked_at or values[0] > checked_at + timedelta(days=7):
+        raise RetentionError("first weekly full slot is not within one week")
+    if any(
+        current - previous != timedelta(days=7)
+        for previous, current in zip(values, values[1:])
+    ):
+        raise RetentionError("full schedule is not an exact weekly cadence")
+
+
+def load_canonical_packet(
+    path: Path, expected_sha256: str, label: str
+) -> tuple[dict[str, Any], bytes]:
+    raw = checked_bytes(path, expected_sha256, label)
+    return parse_canonical_packet(raw, expected_sha256, label)
+
+
+def parse_canonical_packet(
+    raw: bytes, expected_sha256: str, label: str
+) -> tuple[dict[str, Any], bytes]:
+    if hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise RetentionError(f"{label} digest mismatch")
+    value = decode_json(raw, label)
+    if not isinstance(value, dict) or canonical_json(value) != raw:
+        raise RetentionError(f"{label} is not canonical JSON")
+    return value, raw
+
+
+def validate_accepted_binding(
+    accepted: dict[str, Any],
+    current: dict[str, Any],
+    *,
+    accepted_scheduler_sha256: str,
+    accepted_repository_sha256: str,
+    exporter_manifest_sha256: str,
+) -> None:
+    expected = {
+        "packet_kind": "ACCEPTED_RETENTION",
+        "scheduler_inventory_sha256": accepted_scheduler_sha256,
+        "repository_inventory_sha256": accepted_repository_sha256,
+        "selected_set_ref_sha256": current["selected_set_ref_sha256"],
+        "selected_set_info_sha256": current["selected_set_info_sha256"],
+        "completed_at": current["completed_at"],
+        "inventory_exporter_manifest_sha256": exporter_manifest_sha256,
+        "weekly_cadence_seconds": 604800,
+        "weekly_slot_count": 12,
+    }
+    for field, value in expected.items():
+        if accepted.get(field) != value:
+            raise RetentionError(f"accepted packet binding mismatch: {field}")
+
+
+def sanitized_consumer_fields(packet: dict[str, Any]) -> dict[str, Any]:
+    fields = (
+        "completed_at",
+        "selected_set_info_sha256",
+        "scheduler_inventory_sha256",
+        "scheduler_inventory_observed_at",
+        "retention_valid_until",
+    )
+    if any(field not in packet for field in fields):
+        raise RetentionError("consumer evidence fields are incomplete")
+    return {field: packet[field] for field in fields}
 
 
 def main() -> int:
@@ -111,29 +268,61 @@ def main() -> int:
     parser.add_argument("--repository-inventory", required=True, type=Path)
     parser.add_argument("--repository-inventory-sha256", required=True)
     parser.add_argument("--rollout-start")
-    parser.add_argument("--now")
-    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--accepted-packet-sha256")
     args = parser.parse_args()
 
     try:
-        checked_file(
+        exporter, exporter_manifest_sha256 = load_exporter_manifest()
+        accepted_packet: dict[str, Any] | None = None
+        accepted_packet_sha256: str | None = None
+        if args.mode == "authorization":
+            if args.accepted_packet_sha256 is None:
+                raise RetentionError(
+                    "authorization requires the exact accepted packet reference"
+                )
+            accepted_packet, accepted_raw = load_canonical_packet(
+                ACCEPTED_PACKET,
+                args.accepted_packet_sha256,
+                "accepted retention packet",
+            )
+            accepted_packet_sha256 = hashlib.sha256(accepted_raw).hexdigest()
+            if accepted_packet.get("packet_kind") != "ACCEPTED_RETENTION":
+                raise RetentionError("accepted packet kind is invalid")
+            checked_bytes(
+                ACCEPTED_SELECTED_INFO,
+                str(accepted_packet.get("selected_set_info_sha256")),
+                "accepted selected-set info",
+            )
+            checked_bytes(
+                ACCEPTED_SCHEDULER,
+                str(accepted_packet.get("scheduler_inventory_sha256")),
+                "accepted scheduler inventory",
+            )
+            checked_bytes(
+                ACCEPTED_REPOSITORY,
+                str(accepted_packet.get("repository_inventory_sha256")),
+                "accepted repository inventory",
+            )
+        elif args.accepted_packet_sha256 is not None:
+            raise RetentionError("acceptance must not consume an accepted packet")
+        selected_info_raw = checked_bytes(
             args.selected_info, args.selected_info_sha256, "selected-set info"
         )
-        checked_file(
+        scheduler_raw = checked_bytes(
             args.scheduler_inventory,
             args.scheduler_inventory_sha256,
             "scheduler inventory",
         )
-        checked_file(
+        repository_raw = checked_bytes(
             args.repository_inventory,
             args.repository_inventory_sha256,
             "repository inventory",
         )
         completed_at = selected_completion(
-            load_json(args.selected_info, "selected-set info"), args.selected_set
+            decode_json(selected_info_raw, "selected-set info"), args.selected_set
         )
-        scheduler = load_json(args.scheduler_inventory, "scheduler inventory")
-        repository = load_json(args.repository_inventory, "repository inventory")
+        scheduler = decode_json(scheduler_raw, "scheduler inventory")
+        repository = decode_json(repository_raw, "repository inventory")
         if not isinstance(scheduler, dict) or not isinstance(repository, dict):
             raise RetentionError("scheduler/repository inventories must be objects")
         require_exact_keys(
@@ -142,8 +331,13 @@ def main() -> int:
                 "schema_version",
                 "generated_at_utc",
                 "full_jobs_count",
+                "differential_jobs_count",
+                "scheduler_surface_sha256",
                 "timezone",
                 "future_fulls_utc",
+                "exporter_id",
+                "exporter_version",
+                "exporter_artifact_sha256",
             },
             "scheduler inventory",
         )
@@ -152,25 +346,38 @@ def main() -> int:
             {
                 "schema_version",
                 "generated_at_utc",
+                "pgbackrest_config_sha256",
                 "retention_full",
                 "retention_full_type",
                 "selected_set",
                 "completed_fulls",
+                "exporter_id",
+                "exporter_version",
+                "exporter_artifact_sha256",
             },
             "repository inventory",
         )
         if (
             scheduler["schema_version"] != 1
             or scheduler["full_jobs_count"] != 1
+            or scheduler["differential_jobs_count"] != 1
+            or not SHA256.fullmatch(str(scheduler["scheduler_surface_sha256"]))
             or scheduler["timezone"] != "UTC"
             or repository["schema_version"] != 1
             or repository["retention_full"] != 12
             or repository["retention_full_type"] != "count"
+            or not SHA256.fullmatch(str(repository["pgbackrest_config_sha256"]))
             or repository["selected_set"] != args.selected_set
+            or scheduler["exporter_id"] != exporter["exporter_id"]
+            or scheduler["exporter_version"] != exporter["exporter_version"]
+            or scheduler["exporter_artifact_sha256"] != exporter["artifact_sha256"]
+            or repository["exporter_id"] != exporter["exporter_id"]
+            or repository["exporter_version"] != exporter["exporter_version"]
+            or repository["exporter_artifact_sha256"] != exporter["artifact_sha256"]
         ):
             raise RetentionError("inventory policy or selected set is not exact")
 
-        checked_at = now_utc(args.now)
+        checked_at = datetime.now(timezone.utc).replace(microsecond=0)
         scheduler_at = parse_timestamp(
             scheduler["generated_at_utc"], "scheduler generated_at_utc"
         )
@@ -235,10 +442,7 @@ def main() -> int:
             parse_timestamp(value, f"future full {index}")
             for index, value in enumerate(future_values)
         ]
-        if future_fulls != sorted(set(future_fulls)):
-            raise RetentionError("future full schedule is not unique and ordered")
-        if future_fulls[0] <= checked_at:
-            raise RetentionError("future full schedule contains a past/nonfuture run")
+        validate_weekly_schedule(future_fulls, checked_at)
         expiry_at = future_fulls[remaining_slots - 1]
         retention_valid_until = expiry_at - timedelta(seconds=1)
         latest_rollout_start = completed_at + timedelta(days=21)
@@ -250,6 +454,7 @@ def main() -> int:
 
         packet: dict[str, Any] = {
             "schema_version": 1,
+            "packet_kind": "ACCEPTED_RETENTION",
             "mode": args.mode,
             "status": "RETENTION_ACCEPTED",
             "selected_set_ref_sha256": hashlib.sha256(
@@ -269,6 +474,12 @@ def main() -> int:
                 TIMESTAMP
             ),
             "authorization_status": "NOT_AUTHORIZED",
+            "inventory_exporter_id": exporter["exporter_id"],
+            "inventory_exporter_version": exporter["exporter_version"],
+            "inventory_exporter_artifact_sha256": exporter["artifact_sha256"],
+            "inventory_exporter_manifest_sha256": exporter_manifest_sha256,
+            "weekly_cadence_seconds": 604800,
+            "weekly_slot_count": 12,
         }
         if args.mode == "authorization":
             if args.rollout_start is None:
@@ -293,8 +504,22 @@ def main() -> int:
                 raise RetentionError(
                     "selected set does not cover rollback plus safety margin"
                 )
+            if accepted_packet is None or accepted_packet_sha256 is None:
+                raise RetentionError("accepted packet was not bound")
+            validate_accepted_binding(
+                accepted_packet,
+                packet,
+                accepted_scheduler_sha256=str(
+                    accepted_packet["scheduler_inventory_sha256"]
+                ),
+                accepted_repository_sha256=str(
+                    accepted_packet["repository_inventory_sha256"]
+                ),
+                exporter_manifest_sha256=exporter_manifest_sha256,
+            )
             packet.update(
                 {
+                    "packet_kind": "AUTHORIZED_RETENTION",
                     "status": "RETENTION_AUTHORIZED",
                     "authorization_status": "AUTHORIZED",
                     "authorization_checked_at": checked_at.strftime(TIMESTAMP),
@@ -302,17 +527,38 @@ def main() -> int:
                     "rollout_required_through": rollout_required_through.strftime(
                         TIMESTAMP
                     ),
+                    "accepted_packet_sha256": accepted_packet_sha256,
                 }
             )
         elif args.rollout_start is not None:
             raise RetentionError("acceptance mode must not claim an actual rollout start")
 
-        args.output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        args.output.write_bytes(canonical_json(packet))
-        os.chmod(args.output, 0o600)
-        print(f"retention_packet_sha256={sha256_file(args.output)}")
+        if args.mode == "acceptance":
+            parent = STATE_ROOT.parent
+            parent_info = parent.lstat()
+            if (
+                os.geteuid() != 0
+                or parent_info.st_uid != 0
+                or not stat.S_ISDIR(parent_info.st_mode)
+                or parent_info.st_mode & 0o077
+            ):
+                raise RetentionError("retention state parent must be root-owned mode 0700")
+            os.mkdir(STATE_ROOT, 0o700)
+            write_exclusive(ACCEPTED_SELECTED_INFO, selected_info_raw)
+            write_exclusive(ACCEPTED_SCHEDULER, scheduler_raw)
+            write_exclusive(ACCEPTED_REPOSITORY, repository_raw)
+            output = ACCEPTED_PACKET
+        else:
+            output = AUTHORIZED_PACKET
+        write_exclusive(output, canonical_json(packet))
+        print(f"retention_packet_sha256={sha256_file(output)}")
         print(f"retention_valid_until={packet['retention_valid_until']}")
         print(f"status={packet['status']}")
+        consumer_fields = sanitized_consumer_fields(packet)
+        print(
+            "automation_consumer_fields="
+            + canonical_json(consumer_fields).decode("ascii").strip()
+        )
         return 0
     except RetentionError as exc:
         print(f"STOP: {exc}", file=sys.stderr)

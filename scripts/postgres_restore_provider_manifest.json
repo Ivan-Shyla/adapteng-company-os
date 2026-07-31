@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "status": "NOT_CONFIGURED",
+  "collector_id": "company-os-hetzner-locked-inventory",
+  "collector_version": 1,
+  "collector_sha256": null,
+  "signature_algorithm": "ed25519",
+  "public_key_pem": null,
+  "public_key_pem_sha256": null,
+  "owner_ssh_cidr_sha256": null,
+  "max_age_seconds": 120
+}

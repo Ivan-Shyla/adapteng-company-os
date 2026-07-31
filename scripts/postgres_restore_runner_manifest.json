@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "status": "NOT_CONFIGURED",
+  "repo_digest": null,
+  "config_id": null,
+  "os": "linux",
+  "architecture": null,
+  "psql_entrypoint": "/usr/lib/postgresql/16/bin/psql",
+  "probe_argv": [
+    "--no-psqlrc",
+    "-v",
+    "ON_ERROR_STOP=1"
+  ],
+  "database_environment": {
+    "fixed": {
+      "PGDATABASE": "adapteng_ops",
+      "PGPORT": "5432",
+      "PGOPTIONS": "-c role=postgres",
+      "PGSSLMODE": "disable",
+      "PGUSER": "postgres_restore_runner"
+    },
+    "host_template": "adapteng-db-{generation_lower}",
+    "secret_key": "PGPASSWORD",
+    "minimum_secret_length": 32
+  },
+  "migration_entrypoint": null,
+  "bootstrap_entrypoint": "/usr/lib/postgresql/16/bin/psql",
+  "bootstrap_argv": [
+    "--dbname=postgres",
+    "--no-psqlrc",
+    "-v",
+    "ON_ERROR_STOP=1"
+  ],
+  "migration_commands": {
+    "status": [
+      "migration-status"
+    ],
+    "apply-007": [
+      "-m",
+      "scripts.migrations.apply_source_identity_007",
+      "apply"
+    ],
+    "apply-drive-008": [
+      "-m",
+      "scripts.migrations.apply_drive_bridge_008",
+      "apply"
+    ]
+  }
+}

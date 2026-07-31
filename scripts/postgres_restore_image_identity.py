@@ -8,9 +8,11 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 
@@ -65,16 +67,13 @@ def load_json_object(path: Path, label: str) -> dict[str, Any]:
     return value
 
 
-def docker_json(*args: str) -> Any:
-    command = ["docker", *args]
-    test_docker = os.environ.get("POSTGRES_RESTORE_TEST_DOCKER")
-    if test_docker:
-        if os.environ.get("POSTGRES_RESTORE_TEST_MODE") != "1":
-            raise IdentityError("test Docker override is forbidden outside test mode")
-        command = [sys.executable, test_docker, *args]
+def docker_json(
+    *args: str,
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> Any:
     try:
-        completed = subprocess.run(
-            command,
+        completed = run(
+            ["docker", *args],
             check=True,
             capture_output=True,
             text=True,
@@ -96,12 +95,27 @@ def validate_manifest(
 ) -> tuple[dict[str, Any], str]:
     if not SHA256.fullmatch(expected_sha256):
         raise IdentityError("approved manifest SHA-256 is malformed")
-    if not path.is_file() or path.is_symlink():
-        raise IdentityError("approved image manifest must be a regular non-symlink file")
-    actual_sha256 = sha256_file(path)
+    try:
+        descriptor = os.open(
+            path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        )
+    except OSError as exc:
+        raise IdentityError(f"approved image manifest cannot be opened: {exc}") from exc
+    try:
+        raw = bytearray()
+        while chunk := os.read(descriptor, 1024 * 1024):
+            raw.extend(chunk)
+    finally:
+        os.close(descriptor)
+    actual_sha256 = hashlib.sha256(raw).hexdigest()
     if actual_sha256 != expected_sha256:
         raise IdentityError("approved image manifest digest mismatch")
-    manifest = load_json_object(path, "approved image manifest")
+    try:
+        manifest = json.loads(raw)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise IdentityError(f"approved image manifest is invalid JSON: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise IdentityError("approved image manifest must be an object")
     if set(manifest) != MANIFEST_KEYS:
         raise IdentityError("approved image manifest has missing or unknown fields")
     if manifest["schema_version"] != 1 or manifest["status"] != "APPROVED":
@@ -137,16 +151,18 @@ def measure_container(
     container_name: str,
     manifest_path: Path,
     expected_manifest_sha256: str,
+    *,
+    inspect: Callable[..., Any] = docker_json,
 ) -> dict[str, Any]:
     manifest, manifest_sha256 = validate_manifest(
         manifest_path, expected_manifest_sha256
     )
     container = one_inspect(
-        docker_json("container", "inspect", container_name),
+        inspect("container", "inspect", container_name),
         "container inspection",
     )
     image = one_inspect(
-        docker_json("image", "inspect", str(container.get("Image", ""))),
+        inspect("image", "inspect", str(container.get("Image", ""))),
         "image inspection",
     )
 
@@ -213,8 +229,30 @@ def main() -> int:
             args.approved_manifest,
             args.approved_manifest_sha256,
         )
-        args.output.write_bytes(canonical_json(packet))
-        print(f"image_identity_sha256={sha256_file(args.output)}")
+        parent = args.output.parent
+        parent_info = parent.lstat()
+        if (
+            os.name != "posix"
+            or os.geteuid() != 0
+            or not stat.S_ISDIR(parent_info.st_mode)
+            or parent_info.st_uid != 0
+            or parent_info.st_mode & 0o077
+        ):
+            raise IdentityError("image identity output directory is not root-owned/private")
+        payload = canonical_json(packet)
+        descriptor = os.open(
+            args.output,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+        )
+        try:
+            offset = 0
+            while offset < len(payload):
+                offset += os.write(descriptor, payload[offset:])
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        print(f"image_identity_sha256={hashlib.sha256(payload).hexdigest()}")
         return 0
     except IdentityError as exc:
         print(f"STOP: {exc}", file=sys.stderr)
