@@ -1,10 +1,12 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "status": "NOT_CONFIGURED",
   "repo_digest": null,
   "config_id": null,
   "os": "linux",
   "architecture": null,
+  "image_environment": null,
+  "image_labels": null,
   "psql_entrypoint": "/usr/lib/postgresql/16/bin/psql",
   "probe_argv": [
     "--no-psqlrc",
@@ -12,18 +14,24 @@
     "ON_ERROR_STOP=1"
   ],
   "database_environment": {
-    "fixed": {
+    "runner_fixed": {
       "PGDATABASE": "adapteng_ops",
       "PGPORT": "5432",
       "PGOPTIONS": "-c role=postgres",
       "PGSSLMODE": "disable",
       "PGUSER": "postgres_restore_runner"
     },
-    "host_template": "adapteng-db-{generation_lower}",
-    "secret_key": "PGPASSWORD",
-    "minimum_secret_length": 32
+    "bootstrap_fixed": {
+      "PGDATABASE": "postgres",
+      "PGPORT": "5432",
+      "PGOPTIONS": "",
+      "PGSSLMODE": "disable",
+      "PGUSER": "postgres"
+    },
+    "host_template": "adapteng-db-{generation_lower}"
   },
   "migration_entrypoint": null,
+  "collector_entrypoint": null,
   "bootstrap_entrypoint": "/usr/lib/postgresql/16/bin/psql",
   "bootstrap_argv": [
     "--dbname=postgres",
@@ -45,5 +53,29 @@
       "scripts.migrations.apply_drive_bridge_008",
       "apply"
     ]
+  },
+  "collector_commands": {
+    "capture-runtime": [
+      "capture-runtime-signature",
+      "--database",
+      "adapteng_ops",
+      "--output",
+      "-"
+    ],
+    "capture-catalog": [
+      "capture-catalog-signature",
+      "--database",
+      "adapteng_ops",
+      "--output",
+      "-"
+    ]
+  },
+  "target": {
+    "repo_digest": null,
+    "config_id": null,
+    "entrypoint": null,
+    "cmd": null,
+    "image_environment": null,
+    "labels": null
   }
 }

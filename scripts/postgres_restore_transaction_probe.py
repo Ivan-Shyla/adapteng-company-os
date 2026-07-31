@@ -21,6 +21,22 @@ PROBE = SCRIPT_DIR / "postgres_restore_transaction_probe.sql"
 RUNNER = SCRIPT_DIR / "postgres_restore_runner.py"
 STATE_DIR = Path("/var/lib/adapteng/postgres-restore-rehearsal/generation-B")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+CLEAN_ENVIRONMENT = {
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C",
+}
+RUNNER_EVIDENCE_PREFIXES = (
+    "runner_manifest_sha256=",
+    "measured_runner_identity_sha256=",
+    "database_target_identity_sha256=",
+    "database_container_identity_sha256=",
+    "pre_sql_host_inventory_sha256=",
+    "post_sql_host_inventory_sha256=",
+    "pre_sql_provider_inventory_sha256=",
+    "post_sql_provider_inventory_sha256=",
+    "runner_exit=0",
+)
 
 
 class ProbeError(RuntimeError):
@@ -134,32 +150,25 @@ def main() -> int:
                 ],
                 stdin=probe_stream,
                 capture_output=True,
+                env=CLEAN_ENVIRONMENT,
             )
         if completed.returncode != 0:
             raise ProbeError(
                 completed.stderr.decode("utf-8", errors="replace").strip()
             )
         evidence = completed.stderr.decode("utf-8", errors="strict")
-        if (
-            "runner_manifest_sha256=" not in evidence
-            or "measured_runner_identity_sha256=" not in evidence
-            or "database_target_identity_sha256=" not in evidence
-            or "database_container_identity_sha256=" not in evidence
+        evidence_lines = evidence.splitlines()
+        if len(evidence_lines) != len(RUNNER_EVIDENCE_PREFIXES) or not all(
+            sum(line.startswith(prefix) for line in evidence_lines) == 1
+            for prefix in RUNNER_EVIDENCE_PREFIXES
         ):
             raise ProbeError("runner identity evidence is missing")
         print(f"transaction_probe_sha256={probe_sha256}")
         print("transaction_result=rolled_back")
         print("durable_synthetic_rows_or_allocator_state=0")
         print("identity_sequence_unchanged=true")
-        for line in evidence.splitlines():
-            if line.startswith(
-                (
-                    "runner_manifest_sha256=",
-                    "measured_runner_identity_sha256=",
-                    "database_target_identity_sha256=",
-                    "database_container_identity_sha256=",
-                )
-            ):
+        for line in evidence_lines:
+            if line.startswith(RUNNER_EVIDENCE_PREFIXES):
                 print(line)
         return 0
     except (

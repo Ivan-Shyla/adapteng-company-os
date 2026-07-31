@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export authentic weekly scheduler and pgBackRest full-set inventories."""
+"""Export capability-complete scheduler and pgBackRest repository inventories."""
 
 from __future__ import annotations
 
@@ -19,12 +19,24 @@ from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 MANIFEST = SCRIPT_DIR / "postgres_restore_inventory_exporter_manifest.json"
-TIMER_UNIT = Path("/etc/systemd/system/adapteng-pgbackrest-full.timer")
-SERVICE_UNIT = Path("/etc/systemd/system/adapteng-pgbackrest-full.service")
-DIFF_TIMER_UNIT = Path("/etc/systemd/system/adapteng-pgbackrest-diff.timer")
-DIFF_SERVICE_UNIT = Path("/etc/systemd/system/adapteng-pgbackrest-diff.service")
-PGBACKREST_CONFIG = "/etc/pgbackrest/pgbackrest.conf"
+PGBACKREST_CONFIG = Path("/etc/pgbackrest/pgbackrest.conf")
 TIMESTAMP = "%Y-%m-%dT%H:%M:%SZ"
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
+CLEAN_ENVIRONMENT = {
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C",
+}
+SHELL_EXECUTABLES = {
+    "/bin/bash",
+    "/bin/dash",
+    "/bin/sh",
+    "/usr/bin/bash",
+    "/usr/bin/dash",
+    "/usr/bin/env",
+    "/usr/bin/sh",
+}
+SENSITIVE_ENV_PREFIXES = ("AWS_", "B2_", "PGBACKREST_")
 
 
 class ExporterError(RuntimeError):
@@ -39,6 +51,10 @@ def canonical_json(value: Any) -> bytes:
     )
 
 
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
 def secure_bytes(path: Path, label: str, *, restricted: bool = False) -> bytes:
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
@@ -51,10 +67,10 @@ def secure_bytes(path: Path, label: str, *, restricted: bool = False) -> bytes:
             or info.st_mode & forbidden_mode
         ):
             raise ExporterError(f"{label} ownership/mode is not secure")
-        chunks: list[bytes] = []
+        payload = bytearray()
         while chunk := os.read(descriptor, 65536):
-            chunks.append(chunk)
-        return b"".join(chunks)
+            payload.extend(chunk)
+        return bytes(payload)
     finally:
         os.close(descriptor)
 
@@ -101,67 +117,112 @@ def load_policy() -> tuple[dict[str, Any], str]:
         "exporter_id",
         "exporter_version",
         "artifact_sha256",
-        "timer_unit_sha256",
-        "service_unit_sha256",
-        "on_calendar",
-        "diff_timer_unit_sha256",
-        "diff_service_unit_sha256",
-        "diff_on_calendar",
         "scheduler_output_schema_version",
         "repository_output_schema_version",
+        "repository_write_capability",
     }
-    if not isinstance(policy, dict) or set(policy) != required:
-        raise ExporterError("inventory exporter manifest fields are not exact")
-    if policy["schema_version"] != 1 or policy["status"] != "APPROVED":
+    if (
+        not isinstance(policy, dict)
+        or set(policy) != required
+        or policy.get("schema_version") != 2
+    ):
+        raise ExporterError("inventory exporter manifest is not exact v2")
+    if policy.get("status") != "APPROVED":
         raise ExporterError("inventory exporter manifest is NOT_CONFIGURED")
-    if hashlib.sha256(Path(__file__).read_bytes()).hexdigest() != (
-        policy["artifact_sha256"]
+    if (
+        not SHA256.fullmatch(str(policy.get("artifact_sha256")))
+        or sha256_bytes(Path(__file__).read_bytes()) != policy["artifact_sha256"]
+        or policy.get("scheduler_output_schema_version") != 2
+        or policy.get("repository_output_schema_version") != 1
     ):
-        raise ExporterError("inventory exporter artifact digest mismatch")
-    return policy, hashlib.sha256(raw).hexdigest()
+        raise ExporterError("inventory exporter artifact/schema identity is not exact")
+    validate_capability_policy(policy["repository_write_capability"])
+    return policy, sha256_bytes(raw)
 
 
-def validate_unit_pair(
-    timer: Path,
-    service: Path,
-    *,
-    timer_sha256: str,
-    service_sha256: str,
-    on_calendar: str,
-    label: str,
-) -> None:
-    for unit, expected_path in ((timer, timer), (service, service)):
-        properties = subprocess.run(
-            [
-                "systemctl",
-                "show",
-                unit.name,
-                "--property=FragmentPath",
-                "--property=DropInPaths",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        ).stdout
-        validate_effective_unit_properties(properties, expected_path)
-    timer_raw = secure_bytes(timer, f"{label} timer unit")
-    service_raw = secure_bytes(service, f"{label} service unit")
-    if hashlib.sha256(timer_raw).hexdigest() != timer_sha256 or (
-        hashlib.sha256(service_raw).hexdigest() != service_sha256
+def validate_capability_policy(capability: Any) -> None:
+    required = {
+        "principal",
+        "uid",
+        "credential_id",
+        "config_path",
+        "config_sha256",
+        "pgbackrest_path",
+        "pgbackrest_sha256",
+        "full_job",
+        "differential_job",
+        "allowed_scheduler_sources",
+        "allowed_containers",
+        "allowed_writer_processes",
+    }
+    if not isinstance(capability, dict) or set(capability) != required:
+        raise ExporterError("repository-write capability policy is not exact")
+    if (
+        not isinstance(capability["principal"], str)
+        or not isinstance(capability["uid"], int)
+        or capability["uid"] <= 0
+        or capability["credential_id"] != "pgbackrest-repository-write"
+        or capability["config_path"] != str(PGBACKREST_CONFIG)
+        or not SHA256.fullmatch(str(capability["config_sha256"]))
+        or capability["pgbackrest_path"] != "/usr/bin/pgbackrest"
+        or not SHA256.fullmatch(str(capability["pgbackrest_sha256"]))
     ):
-        raise ExporterError(f"{label} scheduler unit digest mismatch")
-    parser = configparser.ConfigParser(interpolation=None, strict=True)
-    parser.optionxform = str
-    parser.read_string(timer_raw.decode("utf-8"))
-    if parser.get("Timer", "OnCalendar", fallback=None) != on_calendar:
-        raise ExporterError(f"{label} scheduler cadence differs from policy")
-    for action in ("is-enabled", "is-active"):
-        subprocess.run(
-            ["systemctl", action, "--quiet", timer.name],
-            check=True,
-            capture_output=True,
-        )
+        raise ExporterError("repository-write capability identity is not pinned")
+    for name, backup_type in (("full_job", "full"), ("differential_job", "diff")):
+        validate_job_policy(capability[name], backup_type)
+    for field in (
+        "allowed_scheduler_sources",
+        "allowed_containers",
+        "allowed_writer_processes",
+    ):
+        values = capability[field]
+        if not isinstance(values, list) or not all(
+            isinstance(value, str) and SHA256.fullmatch(value) for value in values
+        ):
+            raise ExporterError(f"{field} is not an exact digest allowlist")
+        if len(values) != len(set(values)):
+            raise ExporterError(f"{field} contains duplicate identities")
+
+
+def validate_job_policy(job: Any, backup_type: str) -> None:
+    required = {
+        "timer_name",
+        "service_name",
+        "timer_path",
+        "service_path",
+        "timer_sha256",
+        "service_sha256",
+        "on_calendar",
+        "exec_path",
+        "exec_sha256",
+        "argv",
+        "systemd_properties",
+    }
+    if not isinstance(job, dict) or set(job) != required:
+        raise ExporterError(f"{backup_type} job policy is not exact")
+    expected_calendar = (
+        "Sun *-*-* 02:00:00 UTC"
+        if backup_type == "full"
+        else "Mon..Sat *-*-* 02:00:00 UTC"
+    )
+    expected_argv = [
+        "--config=/etc/pgbackrest/pgbackrest.conf",
+        "--stanza=adapteng-ops",
+        "--repo=1",
+        f"--type={backup_type}",
+        "backup",
+    ]
+    if (
+        job["exec_path"] != "/usr/bin/pgbackrest"
+        or job["exec_path"] in SHELL_EXECUTABLES
+        or job["argv"] != expected_argv
+        or job["on_calendar"] != expected_calendar
+        or not SHA256.fullmatch(str(job["timer_sha256"]))
+        or not SHA256.fullmatch(str(job["service_sha256"]))
+        or not SHA256.fullmatch(str(job["exec_sha256"]))
+        or not isinstance(job["systemd_properties"], dict)
+    ):
+        raise ExporterError(f"{backup_type} job is not a direct pinned pgBackRest command")
 
 
 def validate_effective_unit_properties(value: str, expected_path: Path) -> None:
@@ -176,116 +237,193 @@ def validate_effective_unit_properties(value: str, expected_path: Path) -> None:
         raise ExporterError("systemd unit fragment/drop-in state is not exact")
 
 
-def validate_scheduler(policy: dict[str, Any]) -> None:
-    validate_unit_pair(
-        TIMER_UNIT,
-        SERVICE_UNIT,
-        timer_sha256=policy["timer_unit_sha256"],
-        service_sha256=policy["service_unit_sha256"],
-        on_calendar=policy["on_calendar"],
-        label="weekly full",
-    )
-    validate_unit_pair(
-        DIFF_TIMER_UNIT,
-        DIFF_SERVICE_UNIT,
-        timer_sha256=policy["diff_timer_unit_sha256"],
-        service_sha256=policy["diff_service_unit_sha256"],
-        on_calendar=policy["diff_on_calendar"],
-        label="daily differential",
-    )
-
-
-def is_full_backup_surface(payload: bytes) -> bool:
-    text = payload.decode("utf-8", errors="replace").lower()
-    return "pgbackrest" in text and bool(
-        re.search(r"\bbackup\b|--type(?:=|\s+)full\b", text)
-    )
-
-
-def validate_no_additional_full_jobs(
-    surfaces: list[tuple[str, bytes]],
-) -> str:
-    for source, payload in surfaces:
-        if is_full_backup_surface(payload):
-            raise ExporterError(f"additional pgBackRest backup schedule found: {source}")
-    sanitized = [
-        {
-            "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
-            "content_sha256": hashlib.sha256(payload).hexdigest(),
-        }
-        for source, payload in sorted(surfaces)
-    ]
-    return hashlib.sha256(canonical_json(sanitized)).hexdigest()
-
-
-def command_bytes(command: list[str]) -> bytes:
-    completed = subprocess.run(command, check=True, capture_output=True)
-    return completed.stdout
-
-
-def reconcile_timer_names(
-    enabled: list[str], active: list[str], approved: set[str]
-) -> list[str]:
-    if any(enabled.count(timer) != 1 for timer in approved) or any(
-        active.count(timer) != 1 for timer in approved
+def validate_job_artifacts(
+    job: dict[str, Any],
+    capability: dict[str, Any],
+    *,
+    command: Any = subprocess.run,
+) -> dict[str, Any]:
+    timer = Path(job["timer_path"])
+    service = Path(job["service_path"])
+    executable = Path(job["exec_path"])
+    for path, expected, label in (
+        (timer, job["timer_sha256"], "timer"),
+        (service, job["service_sha256"], "service"),
+        (executable, job["exec_sha256"], "executable"),
     ):
-        raise ExporterError("approved backup timers are not uniquely enabled/active")
-    return sorted(set(enabled) | set(active))
-
-
-def scheduler_surfaces() -> list[tuple[str, bytes]]:
-    surfaces: list[tuple[str, bytes]] = []
-    timer_list = command_bytes(
+        if path.is_symlink() or path.resolve(strict=True) != path:
+            raise ExporterError(f"approved {label} path is a symlink/redirect")
+        if sha256_bytes(secure_bytes(path, f"approved {label}")) != expected:
+            raise ExporterError(f"approved {label} digest changed")
+    if job["exec_sha256"] != capability["pgbackrest_sha256"]:
+        raise ExporterError("job executable differs from the capability binary")
+    timer_raw = secure_bytes(timer, "approved timer")
+    parser = configparser.ConfigParser(interpolation=None, strict=True)
+    parser.optionxform = str
+    parser.read_string(timer_raw.decode("utf-8"))
+    if parser.get("Timer", "OnCalendar", fallback=None) != job["on_calendar"]:
+        raise ExporterError("approved timer cadence changed")
+    for unit, path in ((job["timer_name"], timer), (job["service_name"], service)):
+        properties = command(
+            [
+                "systemctl",
+                "show",
+                unit,
+                "--property=FragmentPath",
+                "--property=DropInPaths",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=CLEAN_ENVIRONMENT,
+        ).stdout
+        validate_effective_unit_properties(properties, path)
+    service_properties = command(
         [
             "systemctl",
-            "list-unit-files",
-            "--type=timer",
-            "--state=enabled",
-            "--no-legend",
-            "--no-pager",
-        ]
-    ).decode("utf-8")
-    enabled_timers = [
-        line.split()[0] for line in timer_list.splitlines() if line.split()
-    ]
-    active_list = command_bytes(
-        [
-            "systemctl",
-            "list-units",
-            "--type=timer",
-            "--state=active",
-            "--no-legend",
-            "--no-pager",
-            "--plain",
-        ]
-    ).decode("utf-8")
-    active_timers = [
-        line.split()[0] for line in active_list.splitlines() if line.split()
-    ]
-    approved_timers = {TIMER_UNIT.name, DIFF_TIMER_UNIT.name}
-    timers = reconcile_timer_names(
-        enabled_timers, active_timers, approved_timers
+            "show",
+            job["service_name"],
+            *[
+                f"--property={name}"
+                for name in sorted(job["systemd_properties"])
+            ],
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=CLEAN_ENVIRONMENT,
+    ).stdout
+    measured = dict(
+        line.split("=", 1) for line in service_properties.splitlines() if "=" in line
     )
-    for timer in timers:
-        if timer in approved_timers:
-            continue
-        service = command_bytes(
-            ["systemctl", "show", timer, "--property=Unit", "--value"]
-        ).decode("utf-8").strip()
-        if not service:
-            service = timer.removesuffix(".timer") + ".service"
-        unit = command_bytes(["systemctl", "cat", service, "--no-pager"])
-        surfaces.append((f"systemd:{timer}:{service}", unit))
-        for executable in re.findall(rb"(?m)(/[A-Za-z0-9_./-]+)", unit):
-            path = Path(executable.decode("ascii"))
-            if path.is_file() and not path.is_symlink():
-                surfaces.append(
-                    (
-                        f"systemd-exec:{timer}:{path}",
-                        secure_bytes(path, "scheduled executable"),
-                    )
-                )
+    if measured != job["systemd_properties"]:
+        raise ExporterError("approved service effective capability/command changed")
+    for action in ("is-enabled", "is-active"):
+        command(
+            ["systemctl", action, "--quiet", job["timer_name"]],
+            check=True,
+            capture_output=True,
+            env=CLEAN_ENVIRONMENT,
+        )
+    return {
+        "timer_name_sha256": sha256_bytes(job["timer_name"].encode("utf-8")),
+        "service_name_sha256": sha256_bytes(job["service_name"].encode("utf-8")),
+        "timer_sha256": job["timer_sha256"],
+        "service_sha256": job["service_sha256"],
+        "exec_path_sha256": sha256_bytes(job["exec_path"].encode("utf-8")),
+        "exec_sha256": job["exec_sha256"],
+        "argv_sha256": sha256_bytes(canonical_json(job["argv"])),
+        "properties_sha256": sha256_bytes(
+            canonical_json(job["systemd_properties"])
+        ),
+    }
 
+
+def record_sha256(record: dict[str, Any]) -> str:
+    return sha256_bytes(canonical_json(record))
+
+
+def validate_capability_inventory(
+    *,
+    scheduler_records: list[dict[str, Any]],
+    container_records: list[dict[str, Any]],
+    writer_process_records: list[dict[str, Any]],
+    capability: dict[str, Any],
+) -> dict[str, Any]:
+    actual = {
+        "scheduler": sorted(record_sha256(value) for value in scheduler_records),
+        "containers": sorted(record_sha256(value) for value in container_records),
+        "writer_processes": sorted(
+            record_sha256(value) for value in writer_process_records
+        ),
+    }
+    expected = {
+        "scheduler": sorted(capability["allowed_scheduler_sources"]),
+        "containers": sorted(capability["allowed_containers"]),
+        "writer_processes": sorted(capability["allowed_writer_processes"]),
+    }
+    if actual != expected:
+        raise ExporterError(
+            "scheduler/container/process capability inventory is not fully classified"
+        )
+    return {
+        "capability_inventory_sha256": sha256_bytes(canonical_json(actual)),
+        "scheduler_sources_count": len(actual["scheduler"]),
+        "containers_count": len(actual["containers"]),
+        "writer_processes_count": len(actual["writer_processes"]),
+        "unclassified_capability_surfaces": 0,
+    }
+
+
+def command_bytes(arguments: list[str]) -> bytes:
+    return subprocess.run(
+        arguments,
+        check=True,
+        capture_output=True,
+        env=CLEAN_ENVIRONMENT,
+    ).stdout
+
+
+def scheduler_records(approved_units: set[str]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for unit_type in ("timer", "path", "socket", "automount", "service"):
+        enabled = command_bytes(
+            [
+                "systemctl",
+                "list-unit-files",
+                f"--type={unit_type}",
+                "--state=enabled",
+                "--no-legend",
+                "--no-pager",
+            ]
+        ).decode("utf-8")
+        active = command_bytes(
+            [
+                "systemctl",
+                "list-units",
+                f"--type={unit_type}",
+                "--state=active",
+                "--no-legend",
+                "--no-pager",
+                "--plain",
+            ]
+        ).decode("utf-8")
+        unit_names = {
+            line.split()[0]
+            for payload in (enabled, active)
+            for line in payload.splitlines()
+            if line.split()
+        }
+        for unit in sorted(unit_names - approved_units):
+            triggers = sorted(
+                command_bytes(
+                    ["systemctl", "show", unit, "--property=Triggers", "--value"]
+                )
+                .decode("utf-8")
+                .split()
+            )
+            trigger_units = [
+                {
+                    "name_sha256": sha256_bytes(value.encode("utf-8")),
+                    "content_sha256": sha256_bytes(
+                        command_bytes(["systemctl", "cat", value, "--no-pager"])
+                    ),
+                }
+                for value in triggers
+            ]
+            records.append(
+                {
+                    "source_type": "systemd-activation",
+                    "unit_type": unit_type,
+                    "unit_name_sha256": sha256_bytes(unit.encode("utf-8")),
+                    "unit_content_sha256": sha256_bytes(
+                        command_bytes(["systemctl", "cat", unit, "--no-pager"])
+                    ),
+                    "trigger_units": trigger_units,
+                }
+            )
     for root in (
         Path("/etc/crontab"),
         Path("/etc/anacrontab"),
@@ -300,48 +438,155 @@ def scheduler_surfaces() -> list[tuple[str, bytes]]:
         candidates = (
             [root]
             if root.is_file()
-            else list(root.rglob("*"))
+            else sorted(root.rglob("*"))
             if root.is_dir()
             else []
         )
         for path in candidates:
-            target = path.resolve() if path.is_symlink() else path
-            if target.is_file():
-                surfaces.append(
-                    (
-                        f"scheduler-file:{path}",
-                        secure_bytes(target, "scheduler file"),
-                    )
+            if path.is_symlink():
+                raise ExporterError("scheduler source contains a symlink chain")
+            if path.is_file():
+                records.append(
+                    {
+                        "source_type": "scheduler-file",
+                        "path_sha256": sha256_bytes(
+                            path.as_posix().encode("utf-8")
+                        ),
+                        "content_sha256": sha256_bytes(
+                            secure_bytes(path, "scheduler file")
+                        ),
+                    }
                 )
+    return records
 
-    container_ids = command_bytes(
-        ["docker", "container", "ls", "--all", "--quiet"]
+
+def container_records() -> list[dict[str, Any]]:
+    ids = command_bytes(
+        ["docker", "container", "ls", "--all", "--quiet", "--no-trunc"]
     ).decode("ascii").split()
-    if container_ids:
-        inspected = json.loads(
-            command_bytes(["docker", "container", "inspect", *container_ids])
-        )
-        if not isinstance(inspected, list):
-            raise ExporterError("Docker scheduler inventory is malformed")
-        for container in inspected:
-            if not isinstance(container, dict):
-                raise ExporterError("Docker scheduler entry is malformed")
-            config = container.get("Config", {})
-            scheduler_config = {
-                "Entrypoint": config.get("Entrypoint"),
-                "Cmd": config.get("Cmd"),
-                "Labels": config.get("Labels"),
-            }
-            surfaces.append(
-                (
-                    "docker-scheduler:"
-                    + hashlib.sha256(
-                        str(container.get("Id", "")).encode("utf-8")
-                    ).hexdigest(),
-                    canonical_json(scheduler_config),
-                )
+    if not ids:
+        return []
+    inspected = json.loads(
+        command_bytes(["docker", "container", "inspect", *ids])
+    )
+    if not isinstance(inspected, list):
+        raise ExporterError("Docker capability inventory is malformed")
+    records = []
+    for container in inspected:
+        if not isinstance(container, dict):
+            raise ExporterError("Docker capability entry is malformed")
+        config = container.get("Config", {})
+        host = container.get("HostConfig", {})
+        env = config.get("Env") or []
+        mounts = container.get("Mounts") or []
+        if any(
+            isinstance(item, str) and item.startswith(SENSITIVE_ENV_PREFIXES)
+            for item in env
+        ) or any(
+            "pgbackrest" in str(item).lower()
+            or "/run/secrets" in str(item).lower()
+            or "docker.sock" in str(item).lower()
+            or str(item.get("Source", "")) in {"/", "/etc", "/proc", "/sys"}
+            or str(item.get("Source", "")).startswith("/var/lib/docker")
+            for item in mounts
+        ):
+            raise ExporterError("container has unapproved repository-write capability")
+        image = json.loads(
+            command_bytes(
+                ["docker", "image", "inspect", str(container.get("Image", ""))]
             )
-    return surfaces
+        )
+        if not isinstance(image, list) or len(image) != 1:
+            raise ExporterError("container image identity is ambiguous")
+        records.append(
+            {
+                "container_id_sha256": sha256_bytes(
+                    str(container.get("Id", "")).encode("utf-8")
+                ),
+                "image_config_id": container.get("Image"),
+                "repo_digests": image[0].get("RepoDigests"),
+                "entrypoint": config.get("Entrypoint"),
+                "cmd": config.get("Cmd"),
+                "labels": config.get("Labels") or {},
+                "mounts": mounts,
+                "network_mode": host.get("NetworkMode"),
+                "environment_keys": sorted(
+                    item.split("=", 1)[0] for item in env if "=" in item
+                ),
+            }
+        )
+    return records
+
+
+def canonical_executable_target(value: str) -> Path:
+    if (
+        not value.startswith("/")
+        or value.endswith(" (deleted)")
+        or value.startswith("/memfd:")
+        or "\x00" in value
+    ):
+        raise ExporterError("writer process executable is deleted/opaque")
+    executable = Path(value).resolve(strict=True)
+    if not executable.is_file():
+        raise ExporterError("writer process executable is not a regular file")
+    return executable
+
+
+def descriptor_payload(path: Path) -> bytes:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise ExporterError("writer process executable descriptor is not regular")
+        payload = bytearray()
+        while chunk := os.read(descriptor, 1024 * 1024):
+            payload.extend(chunk)
+        return bytes(payload)
+    finally:
+        os.close(descriptor)
+
+
+def writer_process_records(writer_uid: int) -> list[dict[str, Any]]:
+    records = []
+    for entry in sorted(Path("/proc").iterdir(), key=lambda path: path.name):
+        if not entry.name.isdigit():
+            continue
+        try:
+            status = (entry / "status").read_text(encoding="utf-8")
+            uid_line = next(
+                line for line in status.splitlines() if line.startswith("Uid:")
+            )
+            real_uid = int(uid_line.split()[1])
+        except (FileNotFoundError, ProcessLookupError, StopIteration):
+            continue
+        if real_uid != writer_uid:
+            continue
+        try:
+            executable_link = entry / "exe"
+            executable = canonical_executable_target(os.readlink(executable_link))
+            executable_payload = descriptor_payload(executable_link)
+            argv = [
+                item.decode("utf-8")
+                for item in (entry / "cmdline").read_bytes().split(b"\x00")
+                if item
+            ]
+            records.append(
+                {
+                    "executable_path_sha256": sha256_bytes(
+                        executable.as_posix().encode("utf-8")
+                    ),
+                    "executable_sha256": sha256_bytes(
+                        executable_payload
+                    ),
+                    "argv_sha256": sha256_bytes(canonical_json(argv)),
+                    "uid": real_uid,
+                }
+            )
+        except (FileNotFoundError, ProcessLookupError) as exc:
+            raise ExporterError(
+                "writer process identity disappeared during capability inventory"
+            ) from exc
+    return records
 
 
 def retention_policy(config_raw: bytes) -> tuple[int, str]:
@@ -399,19 +644,31 @@ def main() -> int:
         if os.name != "posix" or os.geteuid() != 0:
             raise ExporterError("inventory exporter requires a POSIX root host")
         policy, policy_sha256 = load_policy()
-        validate_scheduler(policy)
-        scheduler_surface_sha256 = validate_no_additional_full_jobs(
-            scheduler_surfaces()
+        capability = policy["repository_write_capability"]
+        config_raw = secure_bytes(PGBACKREST_CONFIG, "pgBackRest config")
+        if sha256_bytes(config_raw) != capability["config_sha256"]:
+            raise ExporterError("pgBackRest capability config digest changed")
+        retention_full, retention_full_type = retention_policy(config_raw)
+        full_job = validate_job_artifacts(capability["full_job"], capability)
+        diff_job = validate_job_artifacts(
+            capability["differential_job"], capability
         )
-        pgbackrest_config_raw = secure_bytes(
-            Path(PGBACKREST_CONFIG), "pgBackRest config"
-        )
-        retention_full, retention_full_type = retention_policy(
-            pgbackrest_config_raw
+        capability_inventory = validate_capability_inventory(
+            scheduler_records=scheduler_records(
+                {
+                    capability["full_job"]["timer_name"],
+                    capability["full_job"]["service_name"],
+                    capability["differential_job"]["timer_name"],
+                    capability["differential_job"]["service_name"],
+                }
+            ),
+            container_records=container_records(),
+            writer_process_records=writer_process_records(capability["uid"]),
+            capability=capability,
         )
         completed = subprocess.run(
             [
-                "pgbackrest",
+                capability["pgbackrest_path"],
                 f"--config={PGBACKREST_CONFIG}",
                 "--stanza=adapteng-ops",
                 "--repo=1",
@@ -422,6 +679,7 @@ def main() -> int:
             capture_output=True,
             text=True,
             encoding="utf-8",
+            env=CLEAN_ENVIRONMENT,
         )
         now = datetime.now(timezone.utc).replace(microsecond=0)
         identity = {
@@ -430,23 +688,28 @@ def main() -> int:
             "exporter_artifact_sha256": policy["artifact_sha256"],
         }
         scheduler = {
-            "schema_version": policy["scheduler_output_schema_version"],
+            "schema_version": 2,
             "generated_at_utc": now.strftime(TIMESTAMP),
             "full_jobs_count": 1,
             "differential_jobs_count": 1,
-            "scheduler_surface_sha256": scheduler_surface_sha256,
             "timezone": "UTC",
             "future_fulls_utc": [
                 value.strftime(TIMESTAMP) for value in next_weekly_slots(now)
             ],
+            "repository_write_capability_sha256": sha256_bytes(
+                canonical_json(capability)
+            ),
+            "full_job_identity_sha256": sha256_bytes(canonical_json(full_job)),
+            "differential_job_identity_sha256": sha256_bytes(
+                canonical_json(diff_job)
+            ),
+            **capability_inventory,
             **identity,
         }
         repository = {
-            "schema_version": policy["repository_output_schema_version"],
+            "schema_version": 1,
             "generated_at_utc": now.strftime(TIMESTAMP),
-            "pgbackrest_config_sha256": hashlib.sha256(
-                pgbackrest_config_raw
-            ).hexdigest(),
+            "pgbackrest_config_sha256": sha256_bytes(config_raw),
             "retention_full": retention_full,
             "retention_full_type": retention_full_type,
             "selected_set": args.selected_set,

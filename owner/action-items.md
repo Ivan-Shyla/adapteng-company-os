@@ -197,8 +197,13 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   harness and scheduler; approve the complete provider quote; require bucket
   Object Lock disabled; take a fresh full; and pass post-backup `check` plus
   parsed selected-set `verify`. Populate and independently review the exact
-  image, runner, provider-signature and inventory-exporter manifests; their
-  current `NOT_CONFIGURED` state must stop execution. Use only the tracked
+  image, single-container runner, provider-signature and capability-complete
+  inventory-exporter manifests; their current `NOT_CONFIGURED` state must stop
+  execution. The exporter must pin the exclusive repository-write principal,
+  encrypted credential, direct full/differential jobs and every other
+  enabled/active systemd timer/path/socket/automount/service trigger,
+  cron/container and descriptor-measured writer-process identity; unknown,
+  deleted, opaque or Docker-socket-capable surfaces fail. Use only the tracked
   guarded entrypoint on three independent clean A/B/C hosts, signed fresh
   Hetzner firewall measurement, Docker-measured image/runner identity and
   descriptor-streamed transaction probe. Prove retention from the canonical

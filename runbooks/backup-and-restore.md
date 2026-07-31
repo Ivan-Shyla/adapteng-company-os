@@ -145,9 +145,10 @@ artifacts:
    exact schema consumed by
    `scripts/postgres_restore_image_identity.py`: status `APPROVED`, one
    `repository@sha256:<manifest>` reference, exact Docker image config ID,
-   `linux/<architecture>`, exact `PGDATA`, PostgreSQL `16`, pgBackRest `absent`
-   for the pre-change source or exactly `2.59.0` for the derived image,
-   binary/build hashes, reviewer and review time. Mutable
+   `linux/<architecture>`, the complete inherited image environment with no
+   connection/repository override, exact `PGDATA`, PostgreSQL `16`, pgBackRest
+   `absent` for the pre-change source or exactly `2.59.0` for the derived
+   image, binary/build hashes, reviewer and review time. Mutable
    tags, absent/multiple `RepoDigests`, or a caller-supplied image string fail.
 6. The Company OS procedure bundle:
    `scripts/postgres_restore_generation.sh` is the **only permitted restore
@@ -155,8 +156,12 @@ artifacts:
    signed provider collector policy, sealed runner, retention/status helpers,
    tracked transaction probe and generation-C assertion are enumerated in
    `scripts/postgres_restore_procedure_manifest.json`. The reviewed procedure
+   is loaded only after the pinned manifest and every enumerated member have
+   been verified from root-owned, non-group/other-writable bytes; direct runner
+   calls perform the same complete verification before importing the provider
+   isolation or Docker inventory implementation. The reviewed procedure
    manifest SHA-256 is
-   `e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01`;
+   `1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d`;
    the transaction-probe SHA-256 is
    `236097579a1711888828a69691f0ea69da1c3a5d65de39682a031c7ebff68872`.
    Any mismatch is a stop condition.
@@ -222,9 +227,11 @@ implementation:
   runtime_compatibility_assertion_sha256: "<sha256>"
   selected_full_assertion_sha256: "<sha256>"
   migration_status_harness_sha256: "<sha256>"
-  restore_procedure_manifest_sha256: "e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01"
+  restore_procedure_manifest_sha256: "1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d"
   runner_manifest_sha256: "<sha256>"
   provider_manifest_sha256: "<sha256>"
+  host_inventory_collector_sha256: "<sha256>"
+  isolation_gate_sha256: "<sha256>"
   inventory_exporter_manifest_sha256: "<sha256>"
   transaction_probe_sha256: "236097579a1711888828a69691f0ea69da1c3a5d65de39682a031c7ebff68872"
   generation_c_final_assertion_sha256: "c19f862c21e00c62dbed57b496f3f05da8db357d58db2b58b5a6cdcd078c65f9"
@@ -515,7 +522,13 @@ mandatory gates. Do not provision a restore server before both pass for the
 selected set and the archive assertion exits zero.
 
 Enable the reviewed schedule after `check`/`verify` and before retention
-acceptance, so the exporter can measure both active approved timers:
+acceptance. The only repository-write principal is the dedicated
+`adapteng-pgbackrest-backup` service account. Its write key is delivered only by
+the two reviewed systemd services through the exact pinned
+`LoadCredentialEncrypted=pgbackrest-repository-write` contract; it is not stored
+in a general dotenv file, Docker image, container environment, wrapper, cron
+file, or Coolify scheduled command. Both services execute the canonical,
+non-symlink `/usr/bin/pgbackrest` bytes directly, never a shell or wrapper:
 
 - weekly: `pgbackrest --stanza=adapteng-ops --type=full backup`;
 - daily between fulls:
@@ -546,27 +559,43 @@ count retention is not a time guarantee: an extra successful full accelerates
 expiry.
 
 Run only the separately reviewed exporter pinned by
-`postgres_restore_inventory_exporter_manifest.json`. Both restricted canonical
-JSON documents must carry its exact `exporter_id`, `exporter_version`, and
-`exporter_artifact_sha256`:
+`postgres_restore_inventory_exporter_manifest.json`. Its v2 manifest establishes
+one exclusive repository-write capability: exact principal/UID, encrypted
+credential ID, pgBackRest config and binary bytes, direct full and differential
+systemd jobs, and digest allowlists for every other scheduler, container, and
+process in scope. Both restricted canonical JSON documents carry its exact
+`exporter_id`, `exporter_version`, and `exporter_artifact_sha256`:
 
-- scheduler inventory: generation time, exactly one UTC weekly full job, one
-  pinned Monday-Saturday differential job, the next 12 exact full timestamps,
-  and a digest of all other enabled systemd timer
-  services/referenced executables, cron/at files, and Docker scheduler command
-  surfaces; any additional pgBackRest backup command stops export;
+- scheduler inventory: generation time, exactly one direct UTC weekly full job,
+  one direct Monday-Saturday differential job, the next 12 exact full
+  timestamps, resolved timer/service/binary/argv/effective-property identities,
+  and a capability-aware inventory of every enabled or active systemd timer,
+  path, socket, automount and service plus each triggered unit,
+  every cron/anacron/at source, Docker/Coolify container, and process running as
+  the repository-write UID;
 - repository inventory: generation time, the digest of the root-owned
   pgBackRest config bytes, measured `retention_full=12`, measured type `count`,
   the raw selected set and every currently completed full
   label/completion/status.
+
+There is no command-substring inference. Every non-approved scheduler,
+container, or writer process must exactly match a reviewed digest identity.
+Unknown jobs, generic/nested/symlink wrappers, `sh -c`, `docker exec`, opaque
+container entrypoints, mutable/multiple image digests, credential/config mounts,
+Docker-socket or broad host mounts, deleted/memfd executables, and unclassified
+repository-write processes stop export. The process collector opens and hashes
+the live `/proc/<pid>/exe` descriptor; it never skips an identified writer
+whose executable becomes unresolved. The full job identity
+must resolve directly to the pinned pgBackRest binary and exact `--type=full`
+argv; the differential job resolves independently to exact `--type=diff`.
 
 The raw inventories and set label never enter Git. Derive the completion time
 only from the already verified `selected-set-info.json`; do not type or copy it
 into an argument. Export through the fixed artifact, which verifies the exact
 root-owned full and differential systemd timer/service bytes, active/enabled
 timers, exact `FragmentPath`, no effective drop-ins, exact `OnCalendar` values,
-its own pinned digest, every enabled or currently active/transient timer, all
-standard Debian
+its own pinned digest, every enabled or currently active/transient systemd
+timer/path/socket/automount/service and trigger, all standard Debian
 cron/anacron/at and Docker scheduler surfaces, and current `pgbackrest info`:
 
 ```bash
@@ -609,8 +638,10 @@ Acceptance creates the fixed root-owned
 the selected-info bytes, scheduler bytes, repository bytes, and canonical
 `accepted.json` with `O_EXCL`. It prints the accepted packet hash/reference.
 Existing/symlinked paths fail. The packet binds exact source digests, exporter
-identity/manifest digest, selected full hash and completion, observation time,
-12 weekly slots/cadence, and count-based `retention_valid_until`. The gate
+identity/manifest digest, exclusive repository-write capability digest,
+complete classified-inventory digest, both resolved job identities, selected
+full hash and completion, observation time, 12 weekly slots/cadence, and
+count-based `retention_valid_until`. The gate
 counts completed fulls newer than the selected set and treats the corresponding
 future scheduled full as expiry; validity is one second before that transition.
 
@@ -643,8 +674,10 @@ python3 scripts/postgres_restore_retention.py \
 
 Authorization loads only the fixed accepted packet/source objects, re-verifies
 their canonical hash and bound digests, and cannot accept caller-selected
-replacement acceptance paths. It writes fixed `authorized.json` with `O_EXCL`.
-Both current inventories must be at most 15 minutes old; actual rollout start
+replacement acceptance paths. It writes fixed `authorized.json` with `O_EXCL`
+and co-binds the accepted packet hash, accepted scheduler digest, freshly
+recollected current scheduler digest, and unchanged capability/resolved-job
+identities. Both current inventories must be at most 15 minutes old; actual rollout start
 must be contemporaneous and no later than completion +21 days; validity must
 cover actual start +35 rollback days +14 safety days. There is no prospective
 `no_extra_full_or_policy_change` assertion: fresh repository/scheduler digests
@@ -677,6 +710,10 @@ not reuse or rename one host across generations.
    reviewed immutable PostgreSQL/pgBackRest and migration-runner repo digests.
    Transfer the reviewed procedure, root-owned mode-0600 configuration,
    temporary read/list B2 key, separate repository cipher, and exact manifests.
+   Store repository restore secrets only as canonical root-owned mode-0600 JSON
+   at `/run/secrets/postgres-restore-repository.json`, with the exact keys
+   `schema_version`, endpoint/bucket/region SHA-256 bindings, `s3_key`,
+   `s3_key_secret`, and `cipher_pass`. No caller-created `restore.env` exists.
    Transfer the exact canonical `accepted.json` emitted by Phase 4 to a
    root-only temporary path and independently verify its printed SHA-256. The
    next step installs it at its fixed path after creating the parent directory.
@@ -704,16 +741,18 @@ not reuse or rename one host across generations.
 6. Never publish a container port and never mount `/var/run/docker.sock`.
 
 The final database uses no repository key/cipher, repository mount, application
-credential, production DSN, or public port. The fixed runner credential file is
-`/run/secrets/postgres-restore-runner.env`, root-owned mode 0600, and contains
-only `PGHOST=adapteng-db-<generation-lower>`, `PGPORT=5432`,
-`PGDATABASE=adapteng_ops`, `PGUSER=postgres_restore_runner`,
-`PGOPTIONS=-c role=postgres`, `PGSSLMODE=disable`, and a generated
-32-or-more-character scratch-only
-`PGPASSWORD` using only `A-Za-z0-9_./+=:@%-`. No production credential is
-copied. The sealed runner reads and
-validates these exact descriptor-held bytes, passes `/proc/self/fd/<fd>` to
-Docker, and binds only the non-secret target-identity digest to evidence.
+credential, production DSN, or public port. The separately reviewed image
+manifest also pins the complete inherited environment and rejects any baked
+`PGBACKREST_*`, `AWS_*`, `B2_*`, `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`,
+`PGPASSWORD`, `PGOPTIONS`, or `PGSERVICE` override. The fixed runner capability is
+canonical root-owned mode-0600 JSON at
+`/run/secrets/postgres-restore-runner.json`: exact schema/generation plus
+independent generated scratch and disposable-admin passwords of at least 32
+allowlisted characters. It contains no host, image, command, stanza, repository,
+or production override. The sealed runner derives the exact PG environment from
+its reviewed manifest, writes it only to an anonymous memfd, and passes
+`/proc/self/fd/<fd>` to Docker. Only non-secret target/identity digests enter
+evidence.
 
 For the host's single generation, create exactly one new local Docker volume
 with the exact purpose/generation/new labels. Pre-create the recovery and final
@@ -721,8 +760,9 @@ containers **stopped on Docker network `none`** from the approved repo digest.
 The one-shot helper alone receives repository config/secrets after the guard;
 the final container receives only the same volume/PGDATA and scratch database
 environment. It has no bind mounts. Evidence collectors write temporary
-in-container files that the owner copies out with `docker cp` and immediately
-deletes.
+canonical JSON to the attached sealed runner's stdout; redirect it only to a
+root-owned restricted host evidence object. No collector uses `docker exec`,
+`docker cp`, or an in-container evidence path.
 
 After independently verifying the approved manifest digest, create A as follows
 (repeat only on its independent B or C host with exact generation names):
@@ -736,13 +776,14 @@ docker volume create \
   --label adapteng.restore.new=true \
   adapteng-restore-a >/dev/null
 docker create --name adapteng-recover-a \
+  --hostname adapteng-recover-a --restart=no \
   --network none \
   --mount "type=volume,src=adapteng-restore-a,dst=$APPROVED_POSTGRES_PGDATA" \
   "$APPROVED_REPO_DIGEST" >/dev/null
 docker create --name adapteng-db-a \
+  --hostname adapteng-db-a --restart=no \
   --network none \
   --mount "type=volume,src=adapteng-restore-a,dst=$APPROVED_POSTGRES_PGDATA" \
-  --env-file /secure/database-a.env \
   "$APPROVED_REPO_DIGEST" >/dev/null
 ```
 
@@ -750,14 +791,17 @@ The restricted generation guard JSON uses the exact schema enforced by
 `scripts/postgres_restore_guard.py`: purpose/generation; exact hostname;
 root-owned host identity bound to `/etc/machine-id`, DMI product UUID and cloud
 `instance_id`; exact container/volume/network names and PGDATA; B2
-endpoint/bucket/region; config, restore environment and read/list-only
-key-attestation digests; selected-set reference/info digest; image
+endpoint/bucket/region/repository path and read/list-only key-attestation
+digest; selected-set reference/info digest; image
 manifest/platform; and restricted network/forbidden-identifier inventories.
 Unknown/missing fields fail. The wrapper, not the caller, creates its fixed
 generation directory and evidence objects with `O_EXCL`, parses the guard packet
-once from held bytes, projects immutable values, copies verified config/secret
-bytes into that root-owned directory, and never reopens a caller-replaceable
-pathname before Docker restore.
+once from held bytes, projects immutable values, generates the exact public
+pgBackRest config itself, and parses the fixed repository-secret descriptor with
+duplicate/unknown/control/expansion values rejected. It creates one private
+memfd-backed Docker env input and never reopens a caller path. Every helper starts
+with only fixed `PATH`, `LANG`, and `LC_ALL`; ambient `PGBACKREST_*`, `PG*`,
+`AWS*`, `B2*`, and Docker variables cannot override the sealed command.
 
 The forbidden file must include `adapteng-ops-db`,
 `postgres-adapteng-ops`, and every canonical production container ID/name,
@@ -771,40 +815,28 @@ escape, no port publication and no Docker socket.
 Run the target-image helper separately for the source and every final A/B/C
 container. It reads actual Docker `.Image`, image config ID, OS/architecture,
 image `PGDATA` and exactly one `RepoDigest`; its measured packet, never a caller
-image string, is the runtime collector input. Migration/status/probe commands do
-not accept a caller image: the sealed runner creates a stopped networkless
-measurement container, checks actual config ID/sole RepoDigest/platform, and
-then forces the exact reviewed entrypoint and arguments.
+image string, is the runtime collector input. Migration/status/probe/collector
+commands do not accept a caller image. For each invocation the sealed runner
+creates exactly one stopped container by immutable repo digest with exact
+network, labels, environment, entrypoint and argv; inspects that exact ID and
+underlying image; validates the target container ID/image/entrypoint/cmd/env/
+mount/network against the reviewed manifest; re-inspects both identities after
+the isolation gate; starts and attaches that same ID; checks its zero exit; and
+removes only that ID. `docker run`, a measurement container, or a second create
+is forbidden.
 
 ```bash
 set -euo pipefail
 capture_generation() {
   GEN="$1"
-  IDENTITY="/secure/${GEN}-image-identity.json"
-  python3 scripts/postgres_restore_image_identity.py \
-    --container "adapteng-db-${GEN}" \
-    --approved-manifest /secure/backup-image-manifest.json \
-    --approved-manifest-sha256 "$BACKUP_IMAGE_MANIFEST_SHA256" \
-    --output "$IDENTITY"
-  docker cp "$IDENTITY" \
-    "adapteng-db-${GEN}:/tmp/${GEN}-image-identity.json"
-  docker exec -u postgres "adapteng-db-${GEN}" \
-    capture-runtime-signature \
-    --database adapteng_ops \
-    --image-identity "/tmp/${GEN}-image-identity.json" \
-    --output "/tmp/${GEN}-runtime.json"
-  docker exec -u postgres "adapteng-db-${GEN}" \
-    capture-catalog-signature \
-    --database adapteng_ops \
-    --output "/tmp/${GEN}-catalog.json"
-  docker cp "adapteng-db-${GEN}:/tmp/${GEN}-runtime.json" \
-    "/secure/${GEN}-runtime.json"
-  docker cp "adapteng-db-${GEN}:/tmp/${GEN}-catalog.json" \
-    "/secure/${GEN}-catalog.json"
-  docker exec -u postgres "adapteng-db-${GEN}" rm -f \
-    "/tmp/${GEN}-image-identity.json" \
-    "/tmp/${GEN}-runtime.json" \
-    "/tmp/${GEN}-catalog.json"
+  python3 scripts/postgres_restore_runner.py capture-runtime \
+    --generation "${GEN^^}" \
+    --procedure-manifest-sha256 "$RESTORE_PROCEDURE_MANIFEST_SHA256" \
+    >"/secure/${GEN}-runtime.json"
+  python3 scripts/postgres_restore_runner.py capture-catalog \
+    --generation "${GEN^^}" \
+    --procedure-manifest-sha256 "$RESTORE_PROCEDURE_MANIFEST_SHA256" \
+    >"/secure/${GEN}-catalog.json"
 }
 ```
 
@@ -830,15 +862,23 @@ scripts/postgres_restore_generation.sh \
   --selected-info-sha256 "$SELECTED_INFO_SHA256" \
   --approved-image-manifest /secure/backup-image-manifest.json \
   --approved-image-manifest-sha256 "$BACKUP_IMAGE_MANIFEST_SHA256" \
-  --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01 \
+  --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d \
   --accepted-retention-packet-sha256 "$ACCEPTED_RETENTION_PACKET_SHA256"
 ```
 
 For B/C change only the generation/config digest on that generation's independent
-host. The wrapper passes the private staged config, exact stanza, repo `1`, set,
-and generation PGDATA to pgBackRest; no ambient stanza/PGDATA is accepted. It
-restores while both database containers remain stopped/networkless, then waits
-up to ten minutes for a signed current provider packet before any SQL.
+host. The wrapper generates the public config, supplies secrets only through its
+held private descriptor, and passes exact config/stanza/repo/set/PGDATA arguments
+after the image digest; no dotenv, ambient stanza/PGDATA, tag, image, entrypoint,
+or later Docker argument can override them. It creates the restore container,
+then twice inspects the same stopped ID and underlying image before start. The
+ID, immutable image/config, exact pgBackRest argv, inherited nonsecret
+environment, exact three secret keys, bootstrap network, read-only generated
+config mount, generation volume, no socket/privilege and no published ports
+must match; only the sanitized identity digest is emitted. It starts and removes
+that same ID while both database containers remain stopped/networkless, removes
+the bootstrap Docker network, then waits up to ten minutes for a signed current
+provider packet before any SQL.
 
 While it waits, the owner must detach `pg-restore-bootstrap`, attach only
 `pg-restore-locked`, and prove an HTTPS request from the host fails. On a
@@ -862,11 +902,22 @@ ssh "root@$RESTORE_HOST" \
 The wrapper reads each root-owned mode-0600 object once, verifies the Ed25519
 signature against the sealed public key, collector digest/version, exact host
 instance hash, generation, exclusive firewall attachment/policy, owner `/32`
-digest and 120-second freshness. Only then does it connect recovery and final
-containers solely to `pg-rehearsal`, run fail-closed recovery SQL, and emit
-`RESTORED_LOCKED_READY`. A caller boolean or pre-lock attestation never permits
-SQL. Bind provider/isolation, guard, selected-set and measured-image digests;
-never raw provider IDs/endpoints.
+digest and 120-second freshness. Before each SQL invocation, the sealed runner
+container is created stopped; the runner then requires a fresh signed packet and
+collects the entire live Docker host: every running/stopped container and its
+ID/image/entrypoint/cmd/env-key/label/hostname/network/alias/endpoint/port/mount,
+every installed image identity, every network, and every volume. The inventory
+must equal the stage allowlist exactly and contain no production identifier,
+extra object, Docker socket, published port, privileged mode, added capability,
+device, host namespace, unsafe security option, restart policy, or user/hostname
+override. The same target/runner IDs are re-inspected immediately before start.
+After SQL and exact runner cleanup, the runner records the current UTC boundary
+and blocks until the owner supplies a signed provider packet whose observation
+time is strictly later than that boundary,
+then recollects and revalidates host state. Only the resulting pre/post
+provider/host digests and zero exit permit `RESTORED_LOCKED_READY`. Repeat the
+read-only collector/sign/transfer command whenever the runner is waiting for its
+post-SQL packet. A caller boolean or old packet never permits the gate.
 
 For generation A:
 
@@ -888,14 +939,14 @@ For generation A:
    cmp -s /secure/source-runtime.json /secure/a-runtime.json
    cmp -s /secure/source-catalog.json /secure/a-pre-catalog.json
    python3 scripts/postgres_restore_runner.py bootstrap-role --generation A \
-     --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01
+     --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d
    scripts/postgres_restore_status_gate.sh --generation A \
-     --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01 \
+     --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d \
      --expect-output absent \
      --expect 007=absent --expect drive-008=absent
    sha256sum /secure/a-runtime.json /secure/a-pre-catalog.json
    python3 scripts/postgres_restore_runner.py drop-role --generation A \
-     --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01
+     --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d
    ```
 
 Any comparison or status mismatch exits nonzero. Generation A proves only the
@@ -919,9 +970,9 @@ mv /secure/b-catalog.json /secure/b-pre-catalog.json
 cmp -s /secure/source-runtime.json /secure/b-runtime.json
 cmp -s /secure/source-catalog.json /secure/b-pre-catalog.json
 python3 scripts/postgres_restore_runner.py bootstrap-role --generation B \
-  --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01
+  --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01 \
+  --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d \
   --expect-output absent \
   --expect 007=absent --expect drive-008=absent
 ```
@@ -931,23 +982,23 @@ Apply only the exact fixed runners from the pinned automation tree:
 ```bash
 set -euo pipefail
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01 \
+  --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d \
   --expect-output absent \
   --expect 007=absent --expect drive-008=absent
 python3 scripts/postgres_restore_runner.py apply-007 --generation B \
-  --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01 \
+  --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d \
   >/dev/null
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01 \
+  --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d \
   --expect-output exact \
   --expect 007=exact --expect drive-008=absent
 
 # Drive-008 contains its own BEGIN/COMMIT. Never wrap, edit, or reseal it.
 python3 scripts/postgres_restore_runner.py apply-drive-008 --generation B \
-  --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01 \
+  --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d \
   >/dev/null
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01 \
+  --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d \
   --expect-output exact \
   --expect 007=exact --expect drive-008=exact
 ```
@@ -957,10 +1008,13 @@ post-apply state. Migration 007 may use the runner's single transaction.
 Drive-008 uses its embedded transaction and must not be wrapped or rewritten.
 Do not apply migration 006, AI Gateway 008, or any other migration.
 
-`bootstrap-role` first measures the sealed runner and current locked target,
-then uses local `docker exec -u postgres` to create the scratch-only login from
-the validated descriptor-held password. Normal runner sessions set
+`bootstrap-role` creates, measures and executes the same sealed runner container
+against the current locked target using the disposable-admin capability; it does
+not use `docker exec`. It creates the scratch-only login from the validated
+descriptor-held password. Normal runner sessions set
 `role=postgres`, so migration objects do not become owned by the scratch login.
+The generation wrapper's earlier recovery assertions also use the sealed
+disposable-admin connection because the scratch role must not exist yet.
 `drop-role` uses the same measured path and must succeed after final evidence;
 failure proves unexpected ownership/dependency and stops cleanup acceptance.
 
@@ -968,12 +1022,9 @@ Capture `b-post-catalog.json` after both statuses are `exact`. Do not compare it
 to the pre-migration catalog; it is the expected migrated signature for C.
 
 ```bash
-docker exec -u postgres adapteng-db-b \
-  capture-catalog-signature \
-  --database adapteng_ops \
-  --output /tmp/b-post-catalog.json
-docker cp adapteng-db-b:/tmp/b-post-catalog.json /secure/b-post-catalog.json
-docker exec -u postgres adapteng-db-b rm -f /tmp/b-post-catalog.json
+python3 scripts/postgres_restore_runner.py capture-catalog --generation B \
+  --procedure-manifest-sha256 "$RESTORE_PROCEDURE_MANIFEST_SHA256" \
+  >/secure/b-post-catalog.json
 sha256sum /secure/b-post-catalog.json
 ```
 
@@ -1136,7 +1187,7 @@ resolves a probe bind path:
 ```bash
 set -euo pipefail
 scripts/postgres_restore_transaction_probe.sh \
-  --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01
+  --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d
 ```
 
 Only a zero exit from the complete script permits
@@ -1150,11 +1201,11 @@ statuses are captured.
 
 ```bash
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01 \
+  --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d \
   --expect-output exact \
   --expect 007=exact --expect drive-008=exact
 python3 scripts/postgres_restore_runner.py drop-role --generation B \
-  --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01
+  --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d
 ```
 
 ## Phase 8 - independent generation C final exact state
@@ -1188,44 +1239,41 @@ mv /secure/c-catalog.json /secure/c-pre-catalog.json
 cmp -s /secure/source-runtime.json /secure/c-runtime.json
 cmp -s /secure/source-catalog.json /secure/c-pre-catalog.json
 python3 scripts/postgres_restore_runner.py bootstrap-role --generation C \
-  --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01
+  --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d
 scripts/postgres_restore_status_gate.sh --generation C \
-  --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01 \
+  --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d \
   --expect-output absent \
   --expect 007=absent --expect drive-008=absent
 python3 scripts/postgres_restore_runner.py apply-007 --generation C \
-  --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01 \
+  --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d \
   >/dev/null
 scripts/postgres_restore_status_gate.sh --generation C \
-  --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01 \
+  --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d \
   --expect-output exact \
   --expect 007=exact --expect drive-008=absent
 python3 scripts/postgres_restore_runner.py apply-drive-008 --generation C \
-  --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01 \
+  --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d \
   >/dev/null
 scripts/postgres_restore_status_gate.sh --generation C \
-  --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01 \
+  --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d \
   --expect-output exact \
   --expect 007=exact --expect drive-008=exact
-docker exec -u postgres adapteng-db-c \
-  capture-catalog-signature \
-  --database adapteng_ops \
-  --output /tmp/c-final-catalog.json
-docker cp adapteng-db-c:/tmp/c-final-catalog.json /secure/c-final-catalog.json
-docker exec -u postgres adapteng-db-c rm -f /tmp/c-final-catalog.json
+python3 scripts/postgres_restore_runner.py capture-catalog --generation C \
+  --procedure-manifest-sha256 "$RESTORE_PROCEDURE_MANIFEST_SHA256" \
+  >/secure/c-final-catalog.json
 
 python3 scripts/postgres_restore_c_final_assert.py \
-  --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01
+  --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d
 
 cmp -s /secure/source-runtime.json /secure/c-runtime.json
 cmp -s /secure/source-catalog.json /secure/c-pre-catalog.json
 cmp -s /secure/b-post-catalog.json /secure/c-final-catalog.json
 scripts/postgres_restore_status_gate.sh --generation C \
-  --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01 \
+  --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d \
   --expect-output exact \
   --expect 007=exact --expect drive-008=exact
 python3 scripts/postgres_restore_runner.py drop-role --generation C \
-  --procedure-manifest-sha256 e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01
+  --procedure-manifest-sha256 1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d
 sha256sum \
   /secure/c-runtime.json \
   /secure/c-pre-catalog.json \
@@ -1254,31 +1302,18 @@ consumer. That work belongs in a separate automation evidence-lifecycle PR,
 not frozen authorization PR #93. Do not predict a final schema version or
 claim compatibility before that separate PR is independently reviewed.
 
-The expected contract adds these exact fields:
+The separate automation consumer must accept **only** these five sanitized
+fields. The richer canonical accepted/authorized packets remain restricted
+Company OS evidence and are co-bound through these digests; do not copy their
+additional local fields into the automation payload:
 
-| Object | Field | Required semantics |
-|---|---|---|
-| `managed_backup` | `selected_set_ref_sha256` | SHA-256 of the raw selected full label; no raw label. |
-| `managed_backup` | `selected_set_info_sha256` | Digest of the already verified selected-set info JSON. |
-| `managed_backup` | `completed_at` | UTC completion derived only from that info JSON; never manual input. |
-| `managed_backup` | `scheduler_inventory_sha256` | Fresh authorization-time exact scheduler export digest. |
-| `managed_backup` | `scheduler_inventory_observed_at` | UTC generation/observation time read from that exact scheduler inventory. |
-| `managed_backup` | `repository_inventory_sha256` | Fresh authorization-time completed-full/retention inventory digest. |
-| `managed_backup` | `retention_valid_until` | One second before the count-based selected-set expiry transition. |
-| `managed_backup` | `authorization_checked_at` | Exact UTC time the fresh-inventory gate ran. |
-| `managed_backup` | `actual_rollout_start` | Actual authorized start; no later than selected completion +21 days. |
-| `managed_backup` | `rollout_required_through` | Actual start +35 rollback days +14 safety days. |
-| `managed_backup` | `retention_status` | Constant `AUTHORIZED`; valid only when the tracked gate exits zero. |
-| `isolated_restore` | `procedure_manifest_sha256` | Pinned Company OS procedure-manifest digest. |
-| `isolated_restore` | `approved_image_manifest_sha256` | Separately reviewed target-image manifest digest. |
-| `isolated_restore` | `measured_image_identity_sha256` | Digest of Docker-measured identity common to accepted A/B/C targets. |
-| `isolated_restore` | `isolation_inventory_sha256` | Digest binding sanitized host/container/network/port/mount/endpoint/volume guards. |
-| `rehearsal.rollback` | `transaction_probe_sha256` | Exact tracked probe digest whose zero exit proves rollback. |
-| `rehearsal.rollback` | `generation_c_final_catalog_sha256` | C's final exact migrated catalog, equal to B post-migration. |
-
-`managed_backup.valid_until` and the top-level candidate `valid_until` may be
-bounded by `retention_valid_until`, but they are not substitutes for the source
-metadata, fresh inventory digests and authorization-time computation above.
+| Field | Required semantics |
+|---|---|
+| `completed_at` | UTC selected-full completion derived only from verified selected-set info. |
+| `selected_set_info_sha256` | Digest of those exact verified metadata bytes. |
+| `scheduler_inventory_sha256` | Fresh authorization-time capability-complete scheduler export digest. |
+| `scheduler_inventory_observed_at` | UTC observation time from that exact export. |
+| `retention_valid_until` | One second before the authentic count-based expiry transition. |
 
 ## Evidence, redaction, and final result
 
@@ -1342,7 +1377,7 @@ implementation_artifacts:
   runtime_compatibility_assertion_sha256: "<sha256>"
   selected_full_assertion_sha256: "<sha256>"
   migration_status_harness_sha256: "<sha256>"
-  restore_procedure_manifest_sha256: "e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01"
+  restore_procedure_manifest_sha256: "1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d"
   transaction_probe_sha256: "236097579a1711888828a69691f0ea69da1c3a5d65de39682a031c7ebff68872"
 compatibility:
   source_image_identity_sha256: "<sha256>"
@@ -1401,6 +1436,11 @@ retention:
   inventory_exporter_id: "<pinned id>"
   inventory_exporter_version: "<pinned version>"
   inventory_exporter_artifact_sha256: "<pinned sha256>"
+  repository_write_capability_sha256: "<pinned exact capability sha256>"
+  capability_inventory_sha256: "<complete classified inventory sha256>"
+  full_job_identity_sha256: "<resolved direct full job sha256>"
+  differential_job_identity_sha256: "<resolved direct differential job sha256>"
+  accepted_scheduler_inventory_sha256: "<acceptance-time sha256>"
   scheduler_inventory_sha256: "<fresh authorization-time sha256>"
   scheduler_inventory_observed_at: "<RFC3339 from that scheduler inventory>"
   repository_inventory_sha256: "<fresh authorization-time sha256>"
@@ -1414,7 +1454,7 @@ cost:
   quote_accessed_at_utc: "<RFC3339>"
   nonzero_costs_included: true
 isolation:
-  procedure_manifest_sha256: "e165a220967e84f89a28c81a1ff2f50229e48e24a42eff8ea500140a348b4e01"
+  procedure_manifest_sha256: "1b71a31f1384d1964a24e3a22bdfd0a634973ee3ad9d25667bd31616e760391d"
   approved_image_manifest_sha256: "<sha256>"
   measured_image_identity_sha256: "<sha256>"
   generation_a_inventory_sha256: "<sha256>"
@@ -1426,6 +1466,21 @@ isolation:
   generation_a_locked_local_inventory_sha256: "<sha256>"
   generation_b_locked_local_inventory_sha256: "<sha256>"
   generation_c_locked_local_inventory_sha256: "<sha256>"
+  generation_a_restore_container_identity_sha256: "<sha256>"
+  generation_b_restore_container_identity_sha256: "<sha256>"
+  generation_c_restore_container_identity_sha256: "<sha256>"
+  generation_a_pre_sql_host_inventory_sha256: "<sha256>"
+  generation_a_post_sql_host_inventory_sha256: "<sha256>"
+  generation_b_pre_sql_host_inventory_sha256: "<sha256>"
+  generation_b_post_sql_host_inventory_sha256: "<sha256>"
+  generation_c_pre_sql_host_inventory_sha256: "<sha256>"
+  generation_c_post_sql_host_inventory_sha256: "<sha256>"
+  generation_a_pre_sql_provider_inventory_sha256: "<sha256>"
+  generation_a_post_sql_provider_inventory_sha256: "<strictly newer packet sha256>"
+  generation_b_pre_sql_provider_inventory_sha256: "<sha256>"
+  generation_b_post_sql_provider_inventory_sha256: "<strictly newer packet sha256>"
+  generation_c_pre_sql_provider_inventory_sha256: "<sha256>"
+  generation_c_post_sql_provider_inventory_sha256: "<strictly newer packet sha256>"
   restore_host_clean_base_image: true
   postgres_port_published: false
   production_applications_present: false

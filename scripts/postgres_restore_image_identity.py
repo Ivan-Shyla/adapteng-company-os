@@ -27,6 +27,7 @@ MANIFEST_KEYS = {
     "config_id",
     "os",
     "architecture",
+    "image_environment",
     "postgres_pgdata",
     "postgres_version",
     "pgbackrest_version",
@@ -39,6 +40,22 @@ MANIFEST_KEYS = {
 
 class IdentityError(RuntimeError):
     """Fail-closed image identity error."""
+
+
+CLEAN_ENVIRONMENT = {
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C",
+}
+FORBIDDEN_OVERRIDE_KEYS = {
+    "PGHOST",
+    "PGPORT",
+    "PGDATABASE",
+    "PGUSER",
+    "PGPASSWORD",
+    "PGOPTIONS",
+    "PGSERVICE",
+}
 
 
 def canonical_json(value: Any) -> bytes:
@@ -78,6 +95,7 @@ def docker_json(
             capture_output=True,
             text=True,
             encoding="utf-8",
+            env=CLEAN_ENVIRONMENT,
         )
         return json.loads(completed.stdout)
     except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
@@ -131,6 +149,20 @@ def validate_manifest(
         "arm64",
     }:
         raise IdentityError("approved image platform is unsupported")
+    environment = manifest["image_environment"]
+    if (
+        not isinstance(environment, list)
+        or not all(isinstance(item, str) and "=" in item for item in environment)
+        or len({item.split("=", 1)[0] for item in environment}) != len(environment)
+    ):
+        raise IdentityError("approved image environment is not exact")
+    environment_keys = {item.split("=", 1)[0] for item in environment}
+    if any(
+        key.startswith(("PGBACKREST_", "AWS_", "B2_"))
+        or key in FORBIDDEN_OVERRIDE_KEYS
+        for key in environment_keys
+    ):
+        raise IdentityError("approved image environment contains a runtime override")
     if not str(manifest["postgres_pgdata"]).startswith("/"):
         raise IdentityError("approved image PGDATA must be an absolute path")
     if manifest["postgres_version"] != "16":
@@ -185,7 +217,7 @@ def measure_container(
         raise IdentityError("Docker image architecture does not match approved manifest")
 
     env = image.get("Config", {}).get("Env")
-    if not isinstance(env, list):
+    if not isinstance(env, list) or env != manifest["image_environment"]:
         raise IdentityError("Docker image environment is missing")
     pgdata_values = [
         item.split("=", 1)[1]
@@ -207,6 +239,7 @@ def measure_container(
         "repo_digest": manifest["repo_digest"],
         "os": manifest["os"],
         "architecture": manifest["architecture"],
+        "image_environment_sha256": hashlib.sha256(canonical_json(env)).hexdigest(),
         "postgres_pgdata": manifest["postgres_pgdata"],
         "postgres_version": manifest["postgres_version"],
         "pgbackrest_version": manifest["pgbackrest_version"],

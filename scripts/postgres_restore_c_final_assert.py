@@ -18,6 +18,22 @@ MANIFEST = SCRIPT_DIR / "postgres_restore_procedure_manifest.json"
 ASSERTION = SCRIPT_DIR / "postgres_restore_c_final_assert.sql"
 RUNNER = SCRIPT_DIR / "postgres_restore_runner.py"
 STATE_DIR = Path("/var/lib/adapteng/postgres-restore-rehearsal/generation-C")
+CLEAN_ENVIRONMENT = {
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C",
+}
+RUNNER_EVIDENCE_PREFIXES = (
+    "runner_manifest_sha256=",
+    "measured_runner_identity_sha256=",
+    "database_target_identity_sha256=",
+    "database_container_identity_sha256=",
+    "pre_sql_host_inventory_sha256=",
+    "post_sql_host_inventory_sha256=",
+    "pre_sql_provider_inventory_sha256=",
+    "post_sql_provider_inventory_sha256=",
+    "runner_exit=0",
+)
 
 
 class FinalAssertionError(RuntimeError):
@@ -93,26 +109,19 @@ def main() -> int:
             ],
             stdin=assertion_fd,
             capture_output=True,
+            env=CLEAN_ENVIRONMENT,
         )
         if completed.returncode != 0:
             raise FinalAssertionError("sealed generation-C assertion failed")
         evidence = completed.stderr.decode("utf-8", errors="strict")
-        if (
-            "runner_manifest_sha256=" not in evidence
-            or "measured_runner_identity_sha256=" not in evidence
-            or "database_target_identity_sha256=" not in evidence
-            or "database_container_identity_sha256=" not in evidence
+        evidence_lines = evidence.splitlines()
+        if len(evidence_lines) != len(RUNNER_EVIDENCE_PREFIXES) or not all(
+            sum(line.startswith(prefix) for line in evidence_lines) == 1
+            for prefix in RUNNER_EVIDENCE_PREFIXES
         ):
             raise FinalAssertionError("measured runner identity evidence is missing")
-        for line in evidence.splitlines():
-            if line.startswith(
-                (
-                    "runner_manifest_sha256=",
-                    "measured_runner_identity_sha256=",
-                    "database_target_identity_sha256=",
-                    "database_container_identity_sha256=",
-                )
-            ):
+        for line in evidence_lines:
+            if line.startswith(RUNNER_EVIDENCE_PREFIXES):
                 print(line)
         print(f"c_final_assertion_sha256={expected}")
         print("c_final_assertion_status=passed")

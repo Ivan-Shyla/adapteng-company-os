@@ -94,7 +94,13 @@ services:
       pgBackRest 2.59.0 physical/WAL backup using provider-managed B2 EU object
       storage plus clean PostgreSQL-only restore is documented but not configured.
       The tracked guarded restore/probe/retention artifacts exist but have not
-      touched Docker or a provider. Before apply: separately reviewed
+      touched Docker or a provider. The proposed path now requires wrapper-
+      generated exact restore config, fixed descriptor-only secrets, one
+      measured-and-executed runner container ID, fresh signed provider plus
+      complete Docker inventory before/after SQL, and an exclusive capability-
+      aware systemd-activation/cron/container/descriptor-measured writer-process
+      inventory. Before apply:
+      separately reviewed
       Docker-measured image/runner manifests and build, signed fresh Hetzner
       isolation measurement, descriptor-bound procedure state, and exact
       runtime/catalog compatibility; post-backup check and parsed selected-set

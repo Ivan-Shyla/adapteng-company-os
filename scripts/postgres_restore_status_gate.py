@@ -11,6 +11,11 @@ from pathlib import Path
 
 
 RUNNER = Path(__file__).resolve().parent / "postgres_restore_runner.py"
+CLEAN_ENVIRONMENT = {
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C",
+}
 
 
 class StatusGateError(RuntimeError):
@@ -40,7 +45,13 @@ def execute_status_gate(
     ]
     for expected in expected_states:
         command.extend(["--expect", expected])
-    completed = run(command, capture_output=True, text=True, encoding="utf-8")
+    completed = run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=CLEAN_ENVIRONMENT,
+    )
     if completed.returncode != 0:
         raise StatusGateError("migration status command failed")
     if completed.stdout != f"{expected_output}\n":
@@ -51,9 +62,14 @@ def execute_status_gate(
         "measured_runner_identity_sha256=",
         "database_target_identity_sha256=",
         "database_container_identity_sha256=",
+        "pre_sql_host_inventory_sha256=",
+        "post_sql_host_inventory_sha256=",
+        "pre_sql_provider_inventory_sha256=",
+        "post_sql_provider_inventory_sha256=",
+        "runner_exit=0",
     )
-    if len(evidence) != 4 or not all(
-        any(line.startswith(prefix) for line in evidence) for prefix in prefixes
+    if len(evidence) != len(prefixes) or not all(
+        sum(line.startswith(prefix) for line in evidence) == 1 for prefix in prefixes
     ):
         raise StatusGateError("measured runner identity evidence is not exact")
     for line in evidence:

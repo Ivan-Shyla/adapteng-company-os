@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import configparser
 import hashlib
 import json
 import os
@@ -55,9 +54,11 @@ ARTIFACT_PATHS = {
     "scripts/postgres_restore_generation.sh",
     "scripts/postgres_restore_generation.py",
     "scripts/postgres_restore_guard.py",
+    "scripts/postgres_restore_host_inventory.py",
     "scripts/postgres_restore_image_identity.py",
     "scripts/postgres_restore_inventory_exporter.py",
     "scripts/postgres_restore_inventory_exporter_manifest.json",
+    "scripts/postgres_restore_isolation_gate.py",
     "scripts/postgres_restore_provider_inventory.py",
     "scripts/postgres_restore_provider_manifest.json",
     "scripts/postgres_restore_retention.py",
@@ -77,6 +78,16 @@ SECRET_ENV_PREFIXES = (
     "PGBACKREST_REPO1_S3_KEY_SECRET=",
     "PGBACKREST_REPO1_CIPHER_PASS=",
 )
+REPOSITORY_POLICY_KEYS = {
+    "endpoint",
+    "bucket",
+    "region",
+    "repo_path",
+    "restore_key_attestation_path",
+    "restore_key_attestation_sha256",
+    "stanza",
+    "repo",
+}
 
 
 class GuardError(RuntimeError):
@@ -176,6 +187,11 @@ def docker_json(*args: str) -> Any:
             capture_output=True,
             text=True,
             encoding="utf-8",
+            env={
+                "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "LANG": "C",
+                "LC_ALL": "C",
+            },
         )
         return json.loads(completed.stdout)
     except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
@@ -190,6 +206,11 @@ def docker_text(*args: str) -> str:
             capture_output=True,
             text=True,
             encoding="utf-8",
+            env={
+                "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "LANG": "C",
+                "LC_ALL": "C",
+            },
         ).stdout
     except (OSError, subprocess.CalledProcessError) as exc:
         raise GuardError(f"docker {' '.join(args)} failed: {exc}") from exc
@@ -355,65 +376,16 @@ def parse_selected_info_value(
 
 
 def validate_repository(config: dict[str, Any]) -> dict[str, str]:
-    require_keys(
-        config,
-        {
-            "endpoint",
-            "bucket",
-            "region",
-            "config_path",
-            "config_sha256",
-            "restore_env_path",
-            "restore_env_sha256",
-            "restore_key_attestation_path",
-            "restore_key_attestation_sha256",
-            "stanza",
-            "repo",
-        },
-        "repository config",
-    )
+    require_keys(config, REPOSITORY_POLICY_KEYS, "repository config")
     for field in ("endpoint", "bucket", "region"):
         if not SAFE_NAME.fullmatch(str(config[field])):
             raise GuardError(f"repository {field} is malformed")
-    if config["stanza"] != "adapteng-ops" or config["repo"] != 1:
+    if (
+        config["stanza"] != "adapteng-ops"
+        or config["repo"] != 1
+        or config["repo_path"] != "/adapteng-ops"
+    ):
         raise GuardError("repository stanza/repo is not exact")
-
-    pgbackrest_path = Path(str(config["config_path"]))
-    pgbackrest_raw = checked_bytes(
-        pgbackrest_path, str(config["config_sha256"]), "pgBackRest config"
-    )
-    parser = configparser.ConfigParser(interpolation=None)
-    try:
-        parser.read_string(pgbackrest_raw.decode("utf-8"))
-    except (UnicodeError, configparser.Error) as exc:
-        raise GuardError(f"pgBackRest config is invalid: {exc}") from exc
-    if "global" not in parser or config["stanza"] not in parser:
-        raise GuardError("pgBackRest config lacks exact global/stanza sections")
-    global_config = parser["global"]
-    validate_repository_endpoint(config, global_config)
-    expected = {
-        "repo1-type": "s3",
-        "repo1-s3-endpoint": str(config["endpoint"]),
-        "repo1-s3-bucket": str(config["bucket"]),
-        "repo1-s3-region": str(config["region"]),
-        "repo1-s3-uri-style": "path",
-        "repo1-storage-verify-tls": "y",
-        "repo1-cipher-type": "aes-256-cbc",
-        "repo1-retention-full": "12",
-        "repo1-retention-full-type": "count",
-        "repo1-retention-archive": "12",
-        "repo1-retention-archive-type": "full",
-    }
-    for key, value in expected.items():
-        if global_config.get(key) != value:
-            raise GuardError(f"pgBackRest config {key} does not match guard config")
-    if "adapteng-ops-db" in global_config.get("repo1-path", ""):
-        raise GuardError("repository path contains a forbidden production identifier")
-
-    env_path = Path(str(config["restore_env_path"]))
-    env_raw = checked_bytes(
-        env_path, str(config["restore_env_sha256"]), "restore env"
-    )
     key_path = Path(str(config["restore_key_attestation_path"]))
     key_raw = checked_bytes(
         key_path,
@@ -453,30 +425,14 @@ def validate_repository(config: dict[str, Any]) -> dict[str, str]:
         "endpoint": str(config["endpoint"]),
         "bucket": str(config["bucket"]),
         "region": str(config["region"]),
-        "config_path": str(pgbackrest_path),
-        "config_sha256": str(config["config_sha256"]),
-        "restore_env_path": str(env_path),
-        "restore_env_sha256": str(config["restore_env_sha256"]),
+        "repo_path": str(config["repo_path"]),
         "restore_key_attestation_sha256": str(
             config["restore_key_attestation_sha256"]
         ),
         "stanza": str(config["stanza"]),
         "repo": "1",
-        "_config_text": pgbackrest_raw.decode("utf-8"),
-        "_env_text": env_raw.decode("utf-8"),
         "_key_text": key_raw.decode("utf-8"),
     }
-
-
-def validate_repository_endpoint(
-    config: dict[str, Any], global_config: Any
-) -> None:
-    if (
-        global_config.get("repo1-s3-endpoint") != str(config["endpoint"])
-        or global_config.get("repo1-s3-bucket") != str(config["bucket"])
-        or global_config.get("repo1-s3-region") != str(config["region"])
-    ):
-        raise GuardError("repository endpoint/bucket/region is not exact")
 
 
 def validate_forbidden(
@@ -744,7 +700,7 @@ def main() -> int:
             or approved_image["platform"] not in {"linux/amd64", "linux/arm64"}
         ):
             raise GuardError("approved-image config does not match invocation")
-        validate_manifest(
+        approved_image_manifest, _ = validate_manifest(
             args.approved_image_manifest,
             args.approved_image_manifest_sha256,
         )
@@ -883,8 +839,6 @@ def main() -> int:
             image_inventory,
             volume_inventory,
             network_inventory,
-            repository["_config_text"],
-            repository["_env_text"],
             repository["_key_text"],
             checked_bytes(
                 args.selected_info,
@@ -962,6 +916,10 @@ def main() -> int:
             ],
             "cloud_instance_id_sha256": host["cloud_instance_id_sha256"],
             "image_config_id": recovery_identity["image_config_id"],
+            "image_repo_digest": recovery_identity["repo_digest"],
+            "image_environment_sha256": hashlib.sha256(
+                canonical_json(approved_image_manifest["image_environment"])
+            ).hexdigest(),
             "recovery_container": names["recovery_container"],
             "final_container": names["final_container"],
             "volume": names["volume"],
@@ -969,10 +927,13 @@ def main() -> int:
             "locked_network": names["locked_network"],
             "restore_pg1_path": names["restore_pg1_path"],
             "database_pgdata": expected_pgdata,
-            "repository_config_path": repository["config_path"],
-            "repository_config_sha256": repository["config_sha256"],
-            "restore_env_path": repository["restore_env_path"],
-            "restore_env_sha256": repository["restore_env_sha256"],
+            "repository_endpoint": repository["endpoint"],
+            "repository_bucket": repository["bucket"],
+            "repository_region": repository["region"],
+            "repository_path": repository["repo_path"],
+            "restore_key_attestation_sha256": repository[
+                "restore_key_attestation_sha256"
+            ],
             "stanza": repository["stanza"],
             "repo": repository["repo"],
         }

@@ -150,19 +150,14 @@ def load_exporter_manifest() -> tuple[dict[str, Any], str]:
         "exporter_id",
         "exporter_version",
         "artifact_sha256",
-        "timer_unit_sha256",
-        "service_unit_sha256",
-        "on_calendar",
-        "diff_timer_unit_sha256",
-        "diff_service_unit_sha256",
-        "diff_on_calendar",
         "scheduler_output_schema_version",
         "repository_output_schema_version",
+        "repository_write_capability",
     }
     if (
         not isinstance(value, dict)
         or set(value) != required
-        or value.get("schema_version") != 1
+        or value.get("schema_version") != 2
     ):
         raise RetentionError("inventory exporter manifest is not v1")
     if value.get("status") != "APPROVED":
@@ -175,14 +170,9 @@ def load_exporter_manifest() -> tuple[dict[str, Any], str]:
     if (
         hashlib.sha256(EXPORTER.read_bytes()).hexdigest()
         != value["artifact_sha256"]
-        or not SHA256.fullmatch(str(value["timer_unit_sha256"]))
-        or not SHA256.fullmatch(str(value["service_unit_sha256"]))
-        or not SHA256.fullmatch(str(value["diff_timer_unit_sha256"]))
-        or not SHA256.fullmatch(str(value["diff_service_unit_sha256"]))
-        or value["on_calendar"] != "Sun *-*-* 02:00:00 UTC"
-        or value["diff_on_calendar"] != "Mon..Sat *-*-* 02:00:00 UTC"
-        or value["scheduler_output_schema_version"] != 1
+        or value["scheduler_output_schema_version"] != 2
         or value["repository_output_schema_version"] != 1
+        or not isinstance(value["repository_write_capability"], dict)
     ):
         raise RetentionError("inventory exporter policy identity is not exact")
     return value, hashlib.sha256(raw).hexdigest()
@@ -238,6 +228,14 @@ def validate_accepted_binding(
         "inventory_exporter_manifest_sha256": exporter_manifest_sha256,
         "weekly_cadence_seconds": 604800,
         "weekly_slot_count": 12,
+        "repository_write_capability_sha256": current[
+            "repository_write_capability_sha256"
+        ],
+        "capability_inventory_sha256": current["capability_inventory_sha256"],
+        "full_job_identity_sha256": current["full_job_identity_sha256"],
+        "differential_job_identity_sha256": current[
+            "differential_job_identity_sha256"
+        ],
     }
     for field, value in expected.items():
         if accepted.get(field) != value:
@@ -332,9 +330,16 @@ def main() -> int:
                 "generated_at_utc",
                 "full_jobs_count",
                 "differential_jobs_count",
-                "scheduler_surface_sha256",
                 "timezone",
                 "future_fulls_utc",
+                "repository_write_capability_sha256",
+                "full_job_identity_sha256",
+                "differential_job_identity_sha256",
+                "capability_inventory_sha256",
+                "scheduler_sources_count",
+                "containers_count",
+                "writer_processes_count",
+                "unclassified_capability_surfaces",
                 "exporter_id",
                 "exporter_version",
                 "exporter_artifact_sha256",
@@ -358,11 +363,20 @@ def main() -> int:
             "repository inventory",
         )
         if (
-            scheduler["schema_version"] != 1
+            scheduler["schema_version"] != 2
             or scheduler["full_jobs_count"] != 1
             or scheduler["differential_jobs_count"] != 1
-            or not SHA256.fullmatch(str(scheduler["scheduler_surface_sha256"]))
             or scheduler["timezone"] != "UTC"
+            or scheduler["unclassified_capability_surfaces"] != 0
+            or not all(
+                SHA256.fullmatch(str(scheduler[field]))
+                for field in (
+                    "repository_write_capability_sha256",
+                    "full_job_identity_sha256",
+                    "differential_job_identity_sha256",
+                    "capability_inventory_sha256",
+                )
+            )
             or repository["schema_version"] != 1
             or repository["retention_full"] != 12
             or repository["retention_full_type"] != "count"
@@ -480,6 +494,16 @@ def main() -> int:
             "inventory_exporter_manifest_sha256": exporter_manifest_sha256,
             "weekly_cadence_seconds": 604800,
             "weekly_slot_count": 12,
+            "repository_write_capability_sha256": scheduler[
+                "repository_write_capability_sha256"
+            ],
+            "capability_inventory_sha256": scheduler[
+                "capability_inventory_sha256"
+            ],
+            "full_job_identity_sha256": scheduler["full_job_identity_sha256"],
+            "differential_job_identity_sha256": scheduler[
+                "differential_job_identity_sha256"
+            ],
         }
         if args.mode == "authorization":
             if args.rollout_start is None:
@@ -528,6 +552,10 @@ def main() -> int:
                         TIMESTAMP
                     ),
                     "accepted_packet_sha256": accepted_packet_sha256,
+                    "accepted_scheduler_inventory_sha256": accepted_packet[
+                        "scheduler_inventory_sha256"
+                    ],
+                    "current_scheduler_inventory_sha256": args.scheduler_inventory_sha256,
                 }
             )
         elif args.rollout_start is not None:

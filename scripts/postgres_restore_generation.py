@@ -16,6 +16,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    import fcntl
+except ModuleNotFoundError:  # pragma: no cover - unavailable on non-POSIX test hosts
+    fcntl = None  # type: ignore[assignment]
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROCEDURE_MANIFEST = SCRIPT_DIR / "postgres_restore_procedure_manifest.json"
@@ -23,15 +28,33 @@ GUARD = SCRIPT_DIR / "postgres_restore_guard.py"
 PROVIDER_COLLECTOR = SCRIPT_DIR / "postgres_restore_provider_inventory.py"
 PROVIDER_MANIFEST = SCRIPT_DIR / "postgres_restore_provider_manifest.json"
 RUNNER_MANIFEST = SCRIPT_DIR / "postgres_restore_runner_manifest.json"
+RUNNER = SCRIPT_DIR / "postgres_restore_runner.py"
 EXPORTER_MANIFEST = SCRIPT_DIR / "postgres_restore_inventory_exporter_manifest.json"
 PROVIDER_INBOX = Path("/run/adapteng/postgres-restore-provider")
 STATE_ROOT = Path("/var/lib/adapteng/postgres-restore-rehearsal")
 ACCEPTED_RETENTION = STATE_ROOT / "retention" / "accepted.json"
+REPOSITORY_SECRET = Path("/run/secrets/postgres-restore-repository.json")
 TIMESTAMP = "%Y-%m-%dT%H:%M:%SZ"
+SAFE_SECRET = __import__("re").compile(r"^[A-Za-z0-9_./+=:@%-]{32,512}$")
+CLEAN_ENVIRONMENT = {
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C",
+}
 
 
 class GenerationError(RuntimeError):
     """Fail-closed generation orchestration error."""
+
+
+def host_isolation_shape(host: dict[str, Any]) -> dict[str, Any]:
+    try:
+        from postgres_restore_host_inventory import host_isolation_shape as validate
+    except ModuleNotFoundError:  # pragma: no cover - package import in unit tests
+        from scripts.postgres_restore_host_inventory import (
+            host_isolation_shape as validate,
+        )
+    return validate(host)
 
 
 def canonical_json(value: Any) -> bytes:
@@ -42,21 +65,42 @@ def canonical_json(value: Any) -> bytes:
     )
 
 
+def strict_json_object(payload: bytes, label: str) -> dict[str, Any]:
+    def pairs(values: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in values:
+            if key in result:
+                raise GenerationError(f"{label} contains a duplicate key")
+            result[key] = value
+        return result
+
+    try:
+        value = json.loads(payload, object_pairs_hook=pairs)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise GenerationError(f"{label} is invalid JSON") from exc
+    if not isinstance(value, dict):
+        raise GenerationError(f"{label} must be a JSON object")
+    return value
+
+
 @dataclass(frozen=True)
 class GenerationState:
     generation: str
     procedure_manifest_sha256: str
     image_config_id: str
+    image_repo_digest: str
+    image_environment_sha256: str
     recovery_container: str
     final_container: str
     volume: str
     bootstrap_network: str
     locked_network: str
     restore_pg1_path: str
-    repository_config_path: str
-    repository_config_sha256: str
-    restore_env_path: str
-    restore_env_sha256: str
+    repository_endpoint: str
+    repository_bucket: str
+    repository_region: str
+    repository_path: str
+    restore_key_attestation_sha256: str
     stanza: str
     repo: str
     selected_set_ref_sha256: str
@@ -245,21 +289,129 @@ def stage_secured_input(
     return directory / target_name
 
 
+def build_pgbackrest_config(state: GenerationState) -> bytes:
+    values = {
+        "repo1-type": "s3",
+        "repo1-path": state.repository_path,
+        "repo1-s3-endpoint": state.repository_endpoint,
+        "repo1-s3-bucket": state.repository_bucket,
+        "repo1-s3-region": state.repository_region,
+        "repo1-s3-uri-style": "path",
+        "repo1-storage-verify-tls": "y",
+        "repo1-cipher-type": "aes-256-cbc",
+        "repo1-retention-full": "12",
+        "repo1-retention-full-type": "count",
+        "repo1-retention-archive": "12",
+        "repo1-retention-archive-type": "full",
+    }
+    for value in values.values():
+        if not value or "\n" in value or "\r" in value or "\x00" in value:
+            raise GenerationError("repository public configuration is malformed")
+    lines = ["[global]", *(f"{key}={values[key]}" for key in sorted(values))]
+    lines.extend(("", f"[{state.stanza}]", ""))
+    return "\n".join(lines).encode("ascii")
+
+
+def validate_repository_secret(payload: bytes, state: GenerationState) -> dict[str, str]:
+    value = strict_json_object(payload, "repository secret capability")
+    required = {
+        "schema_version",
+        "endpoint_sha256",
+        "bucket_sha256",
+        "region_sha256",
+        "s3_key",
+        "s3_key_secret",
+        "cipher_pass",
+    }
+    if set(value) != required:
+        raise GenerationError("repository secret capability fields are not exact")
+    expected = {
+        "endpoint_sha256": hashlib.sha256(
+            state.repository_endpoint.encode("ascii")
+        ).hexdigest(),
+        "bucket_sha256": hashlib.sha256(
+            state.repository_bucket.encode("ascii")
+        ).hexdigest(),
+        "region_sha256": hashlib.sha256(
+            state.repository_region.encode("ascii")
+        ).hexdigest(),
+    }
+    if value["schema_version"] != 1 or any(
+        value.get(key) != item for key, item in expected.items()
+    ):
+        raise GenerationError("repository secret capability target is not exact")
+    secrets = {
+        "PGBACKREST_REPO1_S3_KEY": value["s3_key"],
+        "PGBACKREST_REPO1_S3_KEY_SECRET": value["s3_key_secret"],
+        "PGBACKREST_REPO1_CIPHER_PASS": value["cipher_pass"],
+    }
+    if any(not isinstance(item, str) or not SAFE_SECRET.fullmatch(item) for item in secrets.values()):
+        raise GenerationError("repository secret capability value is malformed")
+    return secrets
+
+
+def create_restore_secret_env(
+    state: GenerationState, directory_fd: int
+) -> tuple[int, dict[str, str], str]:
+    payload = read_secured_once(REPOSITORY_SECRET, "repository secret capability")
+    secrets = validate_repository_secret(payload, state)
+    env_payload = "".join(
+        f"{key}={secrets[key]}\n" for key in sorted(secrets)
+    ).encode("ascii")
+    fd = os.open(
+        "restore-secret.env",
+        os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=directory_fd,
+    )
+    try:
+        os.write(fd, env_payload)
+        os.fsync(fd)
+        os.lseek(fd, 0, os.SEEK_SET)
+        info = os.fstat(fd)
+        validate_owned_metadata(
+            uid=info.st_uid,
+            mode=info.st_mode,
+            expected_kind="file",
+            is_symlink=False,
+        )
+    except Exception:
+        os.close(fd)
+        raise
+    public_identity = {
+        "endpoint_sha256": hashlib.sha256(
+            state.repository_endpoint.encode("ascii")
+        ).hexdigest(),
+        "bucket_sha256": hashlib.sha256(
+            state.repository_bucket.encode("ascii")
+        ).hexdigest(),
+        "region_sha256": hashlib.sha256(
+            state.repository_region.encode("ascii")
+        ).hexdigest(),
+        "key_attestation_sha256": state.restore_key_attestation_sha256,
+        "secret_keys": sorted(secrets),
+    }
+    return fd, secrets, hashlib.sha256(canonical_json(public_identity)).hexdigest()
+
+
 def project_state(packet: dict[str, Any]) -> GenerationState:
     required = {
         "generation",
         "procedure_manifest_sha256",
         "image_config_id",
+        "image_repo_digest",
+        "image_environment_sha256",
         "recovery_container",
         "final_container",
         "volume",
         "bootstrap_network",
         "locked_network",
         "restore_pg1_path",
-        "repository_config_path",
-        "repository_config_sha256",
-        "restore_env_path",
-        "restore_env_sha256",
+        "repository_endpoint",
+        "repository_bucket",
+        "repository_region",
+        "repository_path",
+        "restore_key_attestation_sha256",
         "stanza",
         "repo",
         "selected_set_ref_sha256",
@@ -276,10 +428,153 @@ def project_state(packet: dict[str, Any]) -> GenerationState:
 
 
 def run_checked(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+    kwargs.setdefault("env", CLEAN_ENVIRONMENT)
     try:
         return subprocess.run(command, check=True, **kwargs)
     except (OSError, subprocess.CalledProcessError) as exc:
         raise GenerationError(f"command failed: {command[0]}") from exc
+
+
+def exact_environment(entries: Any, label: str) -> tuple[list[str], dict[str, str]]:
+    if not isinstance(entries, list):
+        raise GenerationError(f"{label} environment is not exact")
+    values: dict[str, str] = {}
+    ordered: list[str] = []
+    for item in entries:
+        if not isinstance(item, str) or "=" not in item:
+            raise GenerationError(f"{label} environment is malformed")
+        key, value = item.split("=", 1)
+        if not key or key in values:
+            raise GenerationError(f"{label} environment contains duplicate keys")
+        values[key] = value
+        ordered.append(item)
+    return ordered, values
+
+
+def validate_restore_container(
+    *,
+    container: dict[str, Any],
+    image: dict[str, Any],
+    state: GenerationState,
+    container_id: str,
+    container_name: str,
+    restore_command: list[str],
+    config_path: Path,
+    secrets: dict[str, str],
+) -> dict[str, Any]:
+    config = container.get("Config", {})
+    host = container.get("HostConfig", {})
+    networks = container.get("NetworkSettings", {}).get("Networks")
+    mounts = container.get("Mounts")
+    image_environment, _ = exact_environment(
+        image.get("Config", {}).get("Env"), "restore image"
+    )
+    container_environment, container_values = exact_environment(
+        config.get("Env"), "restore container"
+    )
+    if (
+        hashlib.sha256(canonical_json(image_environment)).hexdigest()
+        != state.image_environment_sha256
+        or image.get("Id") != state.image_config_id
+        or image.get("RepoDigests") != [state.image_repo_digest]
+        or container.get("Id") != container_id
+        or container.get("Name") != f"/{container_name}"
+        or container.get("Image") != state.image_config_id
+        or container.get("State", {}).get("Running") is not False
+        or container.get("Path") != "pgbackrest"
+        or container.get("Args") != restore_command
+        or config.get("Image") != state.image_repo_digest
+        or config.get("Hostname") != container_name
+        or config.get("User") != image.get("Config", {}).get("User")
+        or config.get("Entrypoint") != ["pgbackrest"]
+        or config.get("Cmd") != restore_command
+        or host.get("NetworkMode") != state.bootstrap_network
+        or host.get("PortBindings") not in (None, {})
+        or host.get("Privileged") is not False
+        or not isinstance(networks, dict)
+        or set(networks) != {state.bootstrap_network}
+        or not isinstance(mounts, list)
+        or len(mounts) != 2
+    ):
+        raise GenerationError("restore container identity/command/isolation is not exact")
+    host_isolation_shape(host)
+
+    secret_keys = set(secrets)
+    if set(container_values) != {
+        *(item.split("=", 1)[0] for item in image_environment),
+        *secret_keys,
+    } or any(container_values.get(key) != value for key, value in secrets.items()):
+        raise GenerationError("restore container environment is not exact")
+    public_environment = [
+        item
+        for item in container_environment
+        if item.split("=", 1)[0] not in secret_keys
+    ]
+    if public_environment != image_environment:
+        raise GenerationError("restore container inherited environment changed")
+
+    normalized_mounts = {
+        (
+            str(mount.get("Type")),
+            str(mount.get("Source", "")) if mount.get("Type") == "bind" else "",
+            str(mount.get("Name", "")) if mount.get("Type") == "volume" else "",
+            str(mount.get("Destination")),
+            bool(mount.get("RW")),
+        )
+        for mount in mounts
+    }
+    expected_mounts = {
+        ("volume", "", state.volume, state.restore_pg1_path, True),
+        (
+            "bind",
+            str(config_path),
+            "",
+            "/etc/pgbackrest/pgbackrest.conf",
+            False,
+        ),
+    }
+    if normalized_mounts != expected_mounts or "docker.sock" in str(mounts):
+        raise GenerationError("restore container mount identity is not exact")
+
+    identity = {
+        "container_id_sha256": hashlib.sha256(container_id.encode("ascii")).hexdigest(),
+        "container_name": container_name,
+        "image_config_id": state.image_config_id,
+        "image_repo_digest": state.image_repo_digest,
+        "image_environment_sha256": state.image_environment_sha256,
+        "command_sha256": hashlib.sha256(canonical_json(restore_command)).hexdigest(),
+        "public_environment_sha256": hashlib.sha256(
+            canonical_json(public_environment)
+        ).hexdigest(),
+        "secret_keys": sorted(secret_keys),
+        "network": state.bootstrap_network,
+        "mounts_sha256": hashlib.sha256(
+            canonical_json(sorted(normalized_mounts))
+        ).hexdigest(),
+        "published_ports": 0,
+        "docker_socket_mounts": 0,
+    }
+    return identity
+
+
+def docker_inspect_one(kind: str, reference: str) -> dict[str, Any]:
+    completed = run_checked(
+        ["docker", kind, "inspect", reference],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    try:
+        values = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise GenerationError(f"Docker {kind} inspection is invalid JSON") from exc
+    if (
+        not isinstance(values, list)
+        or len(values) != 1
+        or not isinstance(values[0], dict)
+    ):
+        raise GenerationError(f"Docker {kind} inspection is ambiguous")
+    return values[0]
 
 
 def capture_guard_packet(args: argparse.Namespace) -> bytes:
@@ -306,6 +601,30 @@ def capture_guard_packet(args: argparse.Namespace) -> bytes:
         args.procedure_manifest_sha256,
     ]
     return run_checked(command, capture_output=True).stdout
+
+
+def acquire_host_lock() -> int:
+    if fcntl is None:
+        raise GenerationError("scratch-host locking requires POSIX flock")
+    require_root_owned(STATE_ROOT, "directory")
+    fd = os.open(
+        STATE_ROOT / "active-host.lock",
+        os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+        0o600,
+    )
+    try:
+        info = os.fstat(fd)
+        validate_owned_metadata(
+            uid=info.st_uid,
+            mode=info.st_mode,
+            expected_kind="file",
+            is_symlink=False,
+        )
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fd
+    except Exception:
+        os.close(fd)
+        raise GenerationError("another restore operation holds the scratch-host lock")
 
 
 def load_provider_policy(value: dict[str, Any]) -> ProviderPolicy:
@@ -437,6 +756,10 @@ def validate_restore_acceptance(
         "inventory_exporter_manifest_sha256",
         "weekly_cadence_seconds",
         "weekly_slot_count",
+        "repository_write_capability_sha256",
+        "capability_inventory_sha256",
+        "full_job_identity_sha256",
+        "differential_job_identity_sha256",
     }
     if set(accepted) != required:
         raise GenerationError("accepted retention packet fields are not exact")
@@ -676,7 +999,8 @@ def wait_postgres(container: str, attempts: int) -> None:
                 container,
                 "/usr/lib/postgresql/16/bin/pg_isready",
                 "--quiet",
-            ]
+            ],
+            env=CLEAN_ENVIRONMENT,
         )
         if completed.returncode == 0:
             return
@@ -684,27 +1008,49 @@ def wait_postgres(container: str, attempts: int) -> None:
     raise GenerationError("PostgreSQL did not become ready")
 
 
-def assert_recovery_complete(container: str) -> None:
+def validate_recovery_evidence(evidence: dict[str, str]) -> dict[str, str]:
+    required = {
+        "measured_runner_identity_sha256",
+        "database_container_identity_sha256",
+        "pre_sql_host_inventory_sha256",
+        "post_sql_host_inventory_sha256",
+        "pre_sql_provider_inventory_sha256",
+        "post_sql_provider_inventory_sha256",
+        "runner_exit",
+    }
+    if not required <= set(evidence) or evidence.get("runner_exit") != "0":
+        raise GenerationError("sealed recovery assertion evidence is incomplete")
+    return evidence
+
+
+def assert_recovery_complete(
+    generation: str, target_kind: str, procedure_manifest_sha256: str
+) -> dict[str, str]:
     sql = (
         "DO $assert$ BEGIN IF pg_is_in_recovery() THEN "
         "RAISE EXCEPTION 'restore is still in recovery'; END IF; END $assert$;\n"
     ).encode("ascii")
-    run_checked(
+    completed = run_checked(
         [
-            "docker",
-            "exec",
-            "-i",
-            "-u",
-            "postgres",
-            container,
-            "/usr/lib/postgresql/16/bin/psql",
-            "--dbname=adapteng_ops",
-            "--no-psqlrc",
-            "-v",
-            "ON_ERROR_STOP=1",
+            sys.executable,
+            str(RUNNER),
+            "assert-recovery",
+            "--generation",
+            generation,
+            "--target-kind",
+            target_kind,
+            "--procedure-manifest-sha256",
+            procedure_manifest_sha256,
         ],
         input=sql,
+        capture_output=True,
     )
+    evidence: dict[str, str] = {}
+    for line in completed.stderr.decode("utf-8").splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            evidence[key] = value
+    return validate_recovery_evidence(evidence)
 
 
 def execute(args: argparse.Namespace) -> dict[str, str]:
@@ -715,9 +1061,11 @@ def execute(args: argparse.Namespace) -> dict[str, str]:
         accepted,
         accepted_sha256,
     ) = load_approved_inputs(args)
+    host_lock_fd = acquire_host_lock()
     directory, directory_fd = create_generation_directory(args.generation)
     guard_fd = -1
     provider_fd = -1
+    secret_env_fd = -1
     try:
         write_owned_bytes(
             directory_fd,
@@ -733,28 +1081,33 @@ def execute(args: argparse.Namespace) -> dict[str, str]:
             raise GenerationError("guard generation changed")
         if accepted.get("completed_at") != state.completed_at:
             raise GenerationError("accepted retention completion differs from backup")
-        staged_config = stage_secured_input(
-            Path(state.repository_config_path),
-            state.repository_config_sha256,
-            directory,
-            directory_fd,
-            "pgbackrest.conf",
-        )
-        staged_env = stage_secured_input(
-            Path(state.restore_env_path),
-            state.restore_env_sha256,
-            directory,
-            directory_fd,
-            "restore.env",
-        )
-
-        run_checked(
+        config_raw = build_pgbackrest_config(state)
+        write_owned_bytes(directory_fd, "pgbackrest.conf", config_raw)
+        staged_config = directory / "pgbackrest.conf"
+        (
+            secret_env_fd,
+            restore_secrets,
+            repository_capability_sha256,
+        ) = create_restore_secret_env(state, directory_fd)
+        restore_name = f"adapteng-pgbackrest-{args.generation.lower()}"
+        restore_command = [
+            "--config=/etc/pgbackrest/pgbackrest.conf",
+            f"--stanza={state.stanza}",
+            f"--repo={state.repo}",
+            f"--pg1-path={state.restore_pg1_path}",
+            f"--set={args.selected_set}",
+            "--type=immediate",
+            "--target-action=promote",
+            "restore",
+        ]
+        created = run_checked(
             [
                 "docker",
-                "run",
-                "--rm",
+                "create",
                 "--name",
-                f"adapteng-pgbackrest-{args.generation.lower()}",
+                restore_name,
+                "--hostname",
+                restore_name,
                 "--network",
                 state.bootstrap_network,
                 "--mount",
@@ -765,20 +1118,55 @@ def execute(args: argparse.Namespace) -> dict[str, str]:
                     "dst=/etc/pgbackrest/pgbackrest.conf,readonly"
                 ),
                 "--env-file",
-                str(staged_env),
+                f"/proc/self/fd/{secret_env_fd}",
                 "--entrypoint",
                 "pgbackrest",
-                state.image_config_id,
-                "--config=/etc/pgbackrest/pgbackrest.conf",
-                f"--stanza={state.stanza}",
-                f"--repo={state.repo}",
-                f"--pg1-path={state.restore_pg1_path}",
-                f"--set={args.selected_set}",
-                "--type=immediate",
-                "--target-action=promote",
-                "restore",
-            ]
+                state.image_repo_digest,
+                *restore_command,
+            ],
+            capture_output=True,
+            pass_fds=(secret_env_fd,),
         )
+        restore_id = created.stdout.decode("ascii").strip()
+        if not restore_id:
+            raise GenerationError("Docker did not return the restore container ID")
+        restore_container = docker_inspect_one("container", restore_id)
+        restore_image = docker_inspect_one(
+            "image", str(restore_container.get("Image", ""))
+        )
+        restore_identity = validate_restore_container(
+            container=restore_container,
+            image=restore_image,
+            state=state,
+            container_id=restore_id,
+            container_name=restore_name,
+            restore_command=restore_command,
+            config_path=staged_config,
+            secrets=restore_secrets,
+        )
+        restore_reinspection = docker_inspect_one("container", restore_id)
+        if (
+            validate_restore_container(
+                container=restore_reinspection,
+                image=docker_inspect_one(
+                    "image", str(restore_reinspection.get("Image", ""))
+                ),
+                state=state,
+                container_id=restore_id,
+                container_name=restore_name,
+                restore_command=restore_command,
+                config_path=staged_config,
+                secrets=restore_secrets,
+            )
+            != restore_identity
+        ):
+            raise GenerationError("restore container identity changed before start")
+        restore_container_identity_sha256 = hashlib.sha256(
+            canonical_json(restore_identity)
+        ).hexdigest()
+        run_checked(["docker", "start", "--attach", restore_id])
+        run_checked(["docker", "rm", restore_id])
+        run_checked(["docker", "network", "rm", state.bootstrap_network])
 
         provider_bytes, provider_packet = wait_for_locked_provider_state(
             args.generation,
@@ -807,7 +1195,9 @@ def execute(args: argparse.Namespace) -> dict[str, str]:
         )
         run_checked(["docker", "start", state.recovery_container])
         wait_postgres(state.recovery_container, 120)
-        assert_recovery_complete(state.recovery_container)
+        recovery_runner = assert_recovery_complete(
+            args.generation, "recovery", state.procedure_manifest_sha256
+        )
         run_checked(["docker", "stop", "--time", "30", state.recovery_container])
         run_checked(["docker", "rm", state.recovery_container])
 
@@ -825,7 +1215,9 @@ def execute(args: argparse.Namespace) -> dict[str, str]:
         )
         run_checked(["docker", "start", state.final_container])
         wait_postgres(state.final_container, 60)
-        assert_recovery_complete(state.final_container)
+        final_runner = assert_recovery_complete(
+            args.generation, "final", state.procedure_manifest_sha256
+        )
 
         locked_inventory = {
             "schema_version": 1,
@@ -834,6 +1226,8 @@ def execute(args: argparse.Namespace) -> dict[str, str]:
             "provider_isolation_sha256": provider_sha256,
             "recovery": recovery_locked,
             "final": final_locked,
+            "recovery_runner": recovery_runner,
+            "final_runner": final_runner,
         }
         locked_inventory_raw = canonical_json(locked_inventory)
         locked_inventory_sha256 = hashlib.sha256(locked_inventory_raw).hexdigest()
@@ -849,6 +1243,13 @@ def execute(args: argparse.Namespace) -> dict[str, str]:
                 provider_manifest_raw
             ).hexdigest(),
             "accepted_retention_packet_sha256": accepted_sha256,
+            "repository_configuration_sha256": hashlib.sha256(
+                config_raw
+            ).hexdigest(),
+            "repository_capability_identity_sha256": repository_capability_sha256,
+            "restore_container_identity_sha256": (
+                restore_container_identity_sha256
+            ),
             "locked_local_inventory_sha256": locked_inventory_sha256,
             "inventory_sha256": state.inventory_sha256,
             "measured_image_identity_sha256": (
@@ -860,7 +1261,7 @@ def execute(args: argparse.Namespace) -> dict[str, str]:
             "status": "RESTORED_LOCKED_READY",
         }
     finally:
-        for fd in (provider_fd, guard_fd, directory_fd):
+        for fd in (secret_env_fd, provider_fd, guard_fd, directory_fd, host_lock_fd):
             if fd >= 0:
                 os.close(fd)
 
