@@ -193,16 +193,23 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   backup, the 2026-07-25 Coolify logical backup is insufficient, and the Baserow
   all-in-one backup is unrelated. Follow
   [`runbooks/backup-and-restore.md`](../runbooks/backup-and-restore.md): land the
-  separately reviewed compatible images/collectors/status harness/scheduler,
-  approve the complete provider quote, require bucket Object Lock disabled,
-  take a fresh full, pass post-backup `check` and parsed selected-set `verify`,
-  and prove 12-full expiry beyond 21 + 35 + 14 days. Rehearse independent A/B/C
-  restores: A exact pre-migration baseline; B exact 007 + Drive-008 plus an
-  explicit post-migration DML transaction rollback with zero durable synthetic
-  state; C a fresh re-restore ending in the exact B migrated catalog state.
-  Record digest-only evidence, capture C final exact status before cleanup, then
-  delete the host/volumes and revoke the read-only key. Do not dispatch
-  approved-assets before a reviewed sanitized `PASS`.
+  separately reviewed compatible image manifests/build, collectors, status
+  harness and scheduler; approve the complete provider quote; require bucket
+  Object Lock disabled; take a fresh full; and pass post-backup `check` plus
+  parsed selected-set `verify`. Use only the tracked guarded A/B/C restore
+  entrypoint, Docker-measured image identity and digest-verified transaction
+  probe. Prove retention from authentic selected-set completion and fresh
+  scheduler/repository inventories at rollout authorization. Rehearse A exact
+  pre-migration baseline; B exact 007 + Drive-008 plus DML transaction rollback
+  with zero durable synthetic state; and independent C ending in B's exact
+  migrated catalog state. Record digest-only evidence, capture C final exact
+  status before cleanup, then delete the host/volumes and revoke the read-only
+  key. Automation evidence schema v2 at
+  `4afc3b13668e6a07187db2ee50ee4a283833d16d` rejects the new procedure/image/
+  inventory/retention fields; its separately reviewed schema, validator,
+  fixtures and consumer update is an explicit blocker. Do not dispatch
+  approved-assets before that dependency merges and a reviewed sanitized
+  `PASS` validates.
 - [ ] **Migrations not live:** 002 (run ledger), 003 (approval/outbox), 005 (AI
   gateway), 006 (integrity), 007 (source-identity reservation) and Drive-008
   (replay reservations) are repo-only and unapplied. The approved-source pair
