@@ -401,14 +401,31 @@ class RealHostSchedulerSurfaceTests(unittest.TestCase):
         }
         roots = tuple(root for root in SCHEDULER_ROOTS if root not in excluded)
         self.assertNotEqual(roots, ())
+        run_user = Path("/run/user")
+        # The transient per-session roots are derived inside scheduler_records
+        # and cannot be excluded there, so assert they are measurable rather
+        # than let a future image turn this into an opaque STOP.
+        self.assertEqual(
+            [
+                reason
+                for root in user_unit_roots(set(), run_user)
+                for path in scheduler_candidates(root)
+                if (reason := self.unmeasurable(path)) is not None
+            ],
+            [],
+        )
         with patch.object(inventory_exporter, "command_bytes", lambda arguments: b""):
             records = scheduler_records(
                 set(),
                 account_homes=set(),
                 scheduler_roots=roots,
-                run_user=Path("/run/user"),
+                run_user=run_user,
             )
-        walked = [path for root in roots for path in scheduler_candidates(root)]
+        walked = [
+            path
+            for root in (*roots, *user_unit_roots(set(), run_user))
+            for path in scheduler_candidates(root)
+        ]
         self.assertEqual(
             sorted(record["path_sha256"] for record in records),
             sorted(path_digest(path) for path in walked),
