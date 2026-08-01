@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import configparser
+import errno
 import hashlib
 import json
 import os
@@ -20,11 +21,13 @@ try:
     from postgres_restore_host_inventory import (
         HostInventoryError,
         container_execution_identity,
+        strict_docker_json,
     )
 except ModuleNotFoundError:  # pragma: no cover - package import in unit tests
     from scripts.postgres_restore_host_inventory import (
         HostInventoryError,
         container_execution_identity,
+        strict_docker_json,
     )
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -370,6 +373,8 @@ def writer_process_identity(record: dict[str, Any]) -> dict[str, Any]:
     runtime_only = {
         "mountinfo_sha256",
         "open_fd_target_sha256s",
+        "process_ref_sha256",
+        "process_start_time_ticks_sha256",
         "task_security_inventory_sha256",
         "task_count",
     }
@@ -678,20 +683,26 @@ def container_records() -> list[dict[str, Any]]:
     ).decode("ascii").split()
     if not ids:
         return []
-    inspected = json.loads(
-        command_bytes(["docker", "container", "inspect", *ids])
-    )
+    try:
+        inspected = strict_docker_json(
+            command_bytes(["docker", "container", "inspect", *ids])
+        )
+    except HostInventoryError as exc:
+        raise ExporterError("Docker capability inventory is malformed") from exc
     if not isinstance(inspected, list):
         raise ExporterError("Docker capability inventory is malformed")
     records = []
     for container in inspected:
         if not isinstance(container, dict):
             raise ExporterError("Docker capability entry is malformed")
-        image = json.loads(
-            command_bytes(
-                ["docker", "image", "inspect", str(container.get("Image", ""))]
+        try:
+            image = strict_docker_json(
+                command_bytes(
+                    ["docker", "image", "inspect", str(container.get("Image", ""))]
+                )
             )
-        )
+        except HostInventoryError as exc:
+            raise ExporterError("container image identity is malformed") from exc
         if not isinstance(image, list) or len(image) != 1:
             raise ExporterError("container image identity is ambiguous")
         records.append(container_capability_record(container, image[0]))
@@ -712,7 +723,7 @@ def canonical_executable_target(value: str) -> Path:
     return executable
 
 
-def descriptor_payload(path: Path) -> bytes:
+def descriptor_identity(path: Path) -> tuple[bytes, str | None]:
     descriptor = os.open(path, os.O_RDONLY)
     try:
         info = os.fstat(descriptor)
@@ -721,7 +732,22 @@ def descriptor_payload(path: Path) -> bytes:
         payload = bytearray()
         while chunk := os.read(descriptor, 1024 * 1024):
             payload.extend(chunk)
-        return bytes(payload)
+        try:
+            value = os.getxattr(descriptor, "security.capability")
+        except OSError as exc:
+            if exc.errno in {errno.ENODATA, errno.ENOTSUP, errno.EOPNOTSUPP}:
+                capability_sha256 = None
+            else:
+                raise ExporterError(
+                    "writer process executable capability state is unreadable"
+                ) from exc
+        else:
+            if not value or len(value) > 64:
+                raise ExporterError(
+                    "writer process executable capability state is malformed"
+                )
+            capability_sha256 = sha256_bytes(value)
+        return bytes(payload), capability_sha256
     finally:
         os.close(descriptor)
 
@@ -756,32 +782,59 @@ def process_fd_targets(path: Path) -> tuple[list[str], list[str]]:
 def process_security_state(
     status: str, *, writer_uid: int, docker_gid: int
 ) -> dict[str, Any]:
-    def values(name: str) -> list[int]:
-        line = next(
-            item for item in status.splitlines() if item.startswith(f"{name}:")
-        )
-        return [int(value) for value in line.split()[1:]]
+    lines = status.splitlines()
 
-    uids = values("Uid")
-    gids = values("Gid") + values("Groups")
-    capability_sets = {
-        name: int(
-            next(
-                line
-                for line in status.splitlines()
-                if line.startswith(f"{name}:")
-            ).split()[1],
-            16,
-        )
-        for name in ("CapInh", "CapPrm", "CapEff", "CapAmb")
+    def field(name: str) -> str:
+        matches = [
+            item.split(":", 1)[1].strip()
+            for item in lines
+            if item.startswith(f"{name}:")
+        ]
+        if len(matches) != 1:
+            raise ExporterError("process security status field is absent/duplicated")
+        return matches[0]
+
+    def identifiers(
+        name: str, count: int | None, *, allow_empty: bool = False
+    ) -> list[int]:
+        values = field(name).split()
+        if (
+            (count is not None and len(values) != count)
+            or (not allow_empty and not values)
+            or any(not value.isdecimal() for value in values)
+        ):
+            raise ExporterError("process UID/GID status field is malformed")
+        parsed = [int(value) for value in values]
+        if any(value < 0 or value > 2**32 - 1 for value in parsed):
+            raise ExporterError("process UID/GID status field is out of range")
+        return parsed
+
+    uids = identifiers("Uid", 4)
+    gids = identifiers("Gid", 4) + identifiers("Groups", None, allow_empty=True)
+    capability_sets: dict[str, int] = {}
+    for name in ("CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"):
+        value = field(name)
+        if not re.fullmatch(r"[0-9A-Fa-f]{16}", value):
+            raise ExporterError("process capability status field is malformed")
+        capability_sets[name] = int(value, 16)
+    no_new_privs_raw = field("NoNewPrivs")
+    if no_new_privs_raw not in {"0", "1"}:
+        raise ExporterError("process no-new-privileges field is malformed")
+    no_new_privs = no_new_privs_raw == "1"
+    current_capabilities = {
+        name: value for name, value in capability_sets.items() if name != "CapBnd"
     }
     return {
         "uids": uids,
         "gids": sorted(set(gids)),
         "capability_sets": capability_sets,
+        "no_new_privs": no_new_privs,
         "root_or_writer": 0 in uids or writer_uid in uids,
         "docker_admin": docker_gid in gids,
-        "privileged_capability": any(capability_sets.values()),
+        "privileged_capability": any(current_capabilities.values()),
+        "bounded_privilege_acquisition": (
+            capability_sets["CapBnd"] != 0 and not no_new_privs
+        ),
     }
 
 
@@ -790,6 +843,17 @@ def aggregate_task_security(
 ) -> dict[str, Any]:
     if not task_states:
         raise ExporterError("process has no non-kernel task security inventory")
+    acquisition_states = {
+        (
+            security["capability_sets"]["CapBnd"],
+            security["no_new_privs"],
+        )
+        for _, security in task_states
+    }
+    if len(acquisition_states) != 1:
+        raise ExporterError(
+            "process threads disagree on privilege-acquisition state"
+        )
     shapes = sorted(
         {
             canonical_json(
@@ -797,11 +861,12 @@ def aggregate_task_security(
                     "uids": security["uids"],
                     "gids": security["gids"],
                     "capability_sets": {
-                        key: f"{value:x}"
+                        key: f"{value:016x}"
                         for key, value in sorted(
                             security["capability_sets"].items()
                         )
                     },
+                    "no_new_privs": security["no_new_privs"],
                 }
             ).decode("ascii").strip()
             for _, security in task_states
@@ -816,6 +881,7 @@ def aggregate_task_security(
                         "uids": security["uids"],
                         "gids": security["gids"],
                         "capability_sets": security["capability_sets"],
+                        "no_new_privs": security["no_new_privs"],
                     }
                 )
             ),
@@ -835,20 +901,57 @@ def aggregate_task_security(
         "privileged_capability": any(
             security["privileged_capability"] for _, security in task_states
         ),
+        "bounded_privilege_acquisition": any(
+            security["bounded_privilege_acquisition"]
+            for _, security in task_states
+        ),
+        "capability_bounding_set": f"{next(iter(acquisition_states))[0]:016x}",
+        "no_new_privs": next(iter(acquisition_states))[1],
     }
 
 
-def writer_process_records(capability: dict[str, Any]) -> list[dict[str, Any]]:
-    records = []
-    for entry in sorted(Path("/proc").iterdir(), key=lambda path: path.name):
-        if not entry.name.isdigit():
-            continue
+def numeric_proc_names(root: Path) -> list[str]:
+    return sorted(path.name for path in root.iterdir() if path.name.isdigit())
+
+
+def process_start_time(path: Path) -> str:
+    raw = path.read_text(encoding="utf-8")
+    closing = raw.rfind(")")
+    fields = raw[closing + 1 :].split() if closing >= 0 else []
+    if len(fields) < 20 or not fields[19].isdecimal():
+        raise ExporterError("process start identity is malformed")
+    return fields[19]
+
+
+def process_instance_snapshot(entry: Path) -> tuple[str, tuple[str, ...]]:
+    start_time = process_start_time(entry / "stat")
+    tasks = tuple(numeric_proc_names(entry / "task"))
+    if not tasks:
+        raise ExporterError("process has no task inventory")
+    return start_time, tasks
+
+
+def process_snapshot(root: Path) -> dict[str, tuple[str, tuple[str, ...]]]:
+    snapshot: dict[str, tuple[str, tuple[str, ...]]] = {}
+    for process_name in numeric_proc_names(root):
+        entry = root / process_name
         try:
-            task_paths = sorted(
-                (entry / "task").iterdir(), key=lambda path: path.name
-            )
-        except (FileNotFoundError, ProcessLookupError):
-            continue
+            snapshot[process_name] = process_instance_snapshot(entry)
+        except (FileNotFoundError, ProcessLookupError) as exc:
+            raise ExporterError(
+                "process/thread set changed during capability inventory"
+            ) from exc
+    return snapshot
+
+
+def writer_process_records(
+    capability: dict[str, Any], *, proc_root: Path = Path("/proc")
+) -> list[dict[str, Any]]:
+    records = []
+    initial_snapshot = process_snapshot(proc_root)
+    for process_name, (initial_start_time, initial_tasks) in initial_snapshot.items():
+        entry = proc_root / process_name
+        task_paths = [entry / "task" / task_name for task_name in initial_tasks]
         try:
             task_states: list[tuple[str, dict[str, Any]]] = []
             for task in task_paths:
@@ -866,6 +969,13 @@ def writer_process_records(capability: dict[str, Any]) -> list[dict[str, Any]]:
                     )
                 )
             if not task_states:
+                if process_instance_snapshot(entry) != (
+                    initial_start_time,
+                    initial_tasks,
+                ):
+                    raise ExporterError(
+                        "process/thread set changed during capability inventory"
+                    )
                 continue
             security = aggregate_task_security(task_states)
             environment_keys = process_environment_keys(entry / "environ")
@@ -892,17 +1002,31 @@ def writer_process_records(capability: dict[str, Any]) -> list[dict[str, Any]]:
             root_or_writer = security["root_or_writer"]
             docker_admin = security["docker_admin"]
             privileged_capability = security["privileged_capability"]
+            bounded_privilege_acquisition = security[
+                "bounded_privilege_acquisition"
+            ]
+            if process_instance_snapshot(entry) != (
+                initial_start_time,
+                initial_tasks,
+            ):
+                raise ExporterError(
+                    "process/thread set changed during capability inventory"
+                )
             if not (
                 root_or_writer
                 or docker_admin
                 or privileged_capability
+                or bounded_privilege_acquisition
                 or sensitive_environment
                 or path_capability
             ):
                 continue
             executable_link = entry / "exe"
             executable = canonical_executable_target(os.readlink(executable_link))
-            executable_payload = descriptor_payload(executable_link)
+            (
+                executable_payload,
+                executable_capability_sha256,
+            ) = descriptor_identity(executable_link)
             argv = [
                 item.decode("utf-8")
                 for item in (entry / "cmdline").read_bytes().split(b"\x00")
@@ -926,6 +1050,19 @@ def writer_process_records(capability: dict[str, Any]) -> list[dict[str, Any]]:
                     "task_security_inventory_sha256": security[
                         "task_security_inventory_sha256"
                     ],
+                    "process_ref_sha256": sha256_bytes(
+                        process_name.encode("ascii")
+                    ),
+                    "process_start_time_ticks_sha256": sha256_bytes(
+                        initial_start_time.encode("ascii")
+                    ),
+                    "capability_bounding_set": security[
+                        "capability_bounding_set"
+                    ],
+                    "no_new_privs": security["no_new_privs"],
+                    "executable_file_capability_sha256": (
+                        executable_capability_sha256
+                    ),
                     "cgroup_sha256": sha256_bytes(cgroup),
                     "environment_keys": environment_keys,
                     "mountinfo_sha256": sha256_bytes(mountinfo),
@@ -934,6 +1071,9 @@ def writer_process_records(capability: dict[str, Any]) -> list[dict[str, Any]]:
                         "root_or_writer_uid": root_or_writer,
                         "docker_admin_group": docker_admin,
                         "privileged_kernel_capability": privileged_capability,
+                        "bounded_privilege_acquisition_surface": (
+                            bounded_privilege_acquisition
+                        ),
                         "sensitive_environment_keys": sensitive_environment,
                         "credential_or_admin_path": path_capability,
                     },
@@ -949,6 +1089,8 @@ def writer_process_records(capability: dict[str, Any]) -> list[dict[str, Any]]:
             raise ExporterError(
                 "writer process identity disappeared during capability inventory"
             ) from exc
+    if process_snapshot(proc_root) != initial_snapshot:
+        raise ExporterError("process/thread set changed during capability inventory")
     return records
 
 

@@ -13,6 +13,11 @@
   "readonly_paths": null,
   "readonly_rootfs": true,
   "tmpfs": null,
+  "healthcheck": null,
+  "log_config": {
+    "Type": "json-file",
+    "Config": {}
+  },
   "execution_gate_entrypoint": "/usr/local/libexec/adapteng-postgres-restore-exec-gate",
   "psql_entrypoint": "/usr/lib/postgresql/16/bin/psql",
   "probe_argv": [
@@ -93,6 +98,11 @@
     "masked_paths": null,
     "readonly_paths": null,
     "readonly_rootfs": true,
-    "tmpfs": null
+    "tmpfs": null,
+    "healthcheck": null,
+    "log_config": {
+      "Type": "json-file",
+      "Config": {}
+    }
   }
 }

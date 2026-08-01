@@ -49,6 +49,8 @@ MANIFEST_KEYS = {
     "readonly_paths",
     "readonly_rootfs",
     "tmpfs",
+    "healthcheck",
+    "log_config",
     "execution_gate_entrypoint",
     "psql_entrypoint",
     "probe_argv",
@@ -99,6 +101,10 @@ def load_sealed_dependencies() -> None:
             "HostInventoryError": host.HostInventoryError,
             "collect_docker_inventory": host.collect_docker_inventory,
             "container_execution_identity": host.container_execution_identity,
+            "healthcheck_shape": host.healthcheck_shape,
+            "log_config_shape": host.log_config_shape,
+            "strict_docker_json": host.strict_docker_json,
+            "validate_target_policy": host.validate_target_policy,
             "validate_sealed_target": host.validate_sealed_target,
             "validate_host_inventory": host.validate_host_inventory,
             "collect_provider_operation": isolation.collect_provider_operation,
@@ -199,7 +205,7 @@ def verify_procedure(expected_sha256: str) -> dict[str, Any]:
 
 def load_manifest() -> tuple[dict[str, Any], str]:
     raw = secure_member_bytes(MANIFEST_PATH, "runner manifest")
-    manifest = json.loads(raw)
+    manifest = strict_json_object(raw, "runner manifest")
     if (
         not isinstance(manifest, dict)
         or set(manifest) != MANIFEST_KEYS
@@ -208,6 +214,11 @@ def load_manifest() -> tuple[dict[str, Any], str]:
         raise RunnerError("runner manifest is not exact v3")
     if manifest.get("status") != "APPROVED":
         raise RunnerError("runner manifest is NOT_CONFIGURED")
+    try:
+        healthcheck_shape(manifest["healthcheck"])
+        log_config_shape(manifest["log_config"])
+    except HostInventoryError as exc:
+        raise RunnerError("runner health/log policy is not exact") from exc
     for field in ("repo_digest",):
         if not DIGEST.fullmatch(str(manifest.get(field))):
             raise RunnerError(f"runner {field} is not approved")
@@ -247,25 +258,10 @@ def load_manifest() -> tuple[dict[str, Any], str]:
         ):
             raise RunnerError("approved image environment contains an override")
     target = manifest.get("target")
-    if not isinstance(target, dict) or set(target) != {
-        "repo_digest",
-        "config_id",
-        "path",
-        "entrypoint",
-        "cmd",
-        "user",
-        "working_dir",
-        "image_environment",
-        "labels",
-        "hostname_template",
-        "runtime",
-        "apparmor_profile",
-        "masked_paths",
-        "readonly_paths",
-        "readonly_rootfs",
-        "tmpfs",
-    }:
-        raise RunnerError("target identity policy is not exact")
+    try:
+        target = validate_target_policy(target)
+    except HostInventoryError as exc:
+        raise RunnerError("target identity policy is not exact") from exc
     if (
         not DIGEST.fullmatch(str(target["repo_digest"]))
         or not CONFIG_ID.fullmatch(str(target["config_id"]))
@@ -404,7 +400,10 @@ def inspect_one(
         encoding="utf-8",
         env=CLEAN_ENVIRONMENT,
     )
-    value = json.loads(completed.stdout)
+    try:
+        value = strict_docker_json(completed.stdout)
+    except HostInventoryError as exc:
+        raise RunnerError("Docker inspection returned invalid JSON") from exc
     if not isinstance(value, list) or len(value) != 1 or not isinstance(value[0], dict):
         raise RunnerError("Docker inspection did not return one object")
     return value[0]
@@ -486,6 +485,7 @@ def validate_runner_inspection(
         or config.get("Tty") is not False
         or config.get("OpenStdin") is not True
         or config.get("StdinOnce") is not False
+        or config.get("Healthcheck") != manifest["healthcheck"]
         or config.get("Entrypoint") != [manifest["execution_gate_entrypoint"]]
         or config.get("Cmd") != [entrypoint, *argv]
         or config.get("Labels") != {
@@ -501,6 +501,7 @@ def validate_runner_inspection(
         or host.get("ReadonlyPaths") != manifest["readonly_paths"]
         or host.get("ReadonlyRootfs") is not manifest["readonly_rootfs"]
         or host.get("Tmpfs") != manifest["tmpfs"]
+        or host.get("LogConfig") != manifest["log_config"]
         or container.get("Mounts") not in (None, [])
         or not isinstance(networks, dict)
         or set(networks) != {"pg-rehearsal"}

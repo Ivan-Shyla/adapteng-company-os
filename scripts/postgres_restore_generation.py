@@ -575,8 +575,18 @@ def docker_inspect_one(kind: str, reference: str) -> dict[str, Any]:
         encoding="utf-8",
     )
     try:
-        values = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
+        try:
+            from postgres_restore_host_inventory import (
+                HostInventoryError,
+                strict_docker_json,
+            )
+        except ModuleNotFoundError:  # pragma: no cover - package import in tests
+            from scripts.postgres_restore_host_inventory import (
+                HostInventoryError,
+                strict_docker_json,
+            )
+        values = strict_docker_json(completed.stdout)
+    except HostInventoryError as exc:
         raise GenerationError(f"Docker {kind} inspection is invalid JSON") from exc
     if (
         not isinstance(values, list)
@@ -591,29 +601,23 @@ def load_target_policy(state: GenerationState) -> tuple[dict[str, Any], str]:
     raw = read_secured_once(RUNNER_MANIFEST, "runner manifest")
     manifest = strict_json_object(raw, "runner manifest")
     target = manifest.get("target")
-    required = {
-        "repo_digest",
-        "config_id",
-        "path",
-        "entrypoint",
-        "cmd",
-        "user",
-        "working_dir",
-        "image_environment",
-        "labels",
-        "hostname_template",
-        "runtime",
-        "apparmor_profile",
-        "masked_paths",
-        "readonly_paths",
-        "readonly_rootfs",
-        "tmpfs",
-    }
+    try:
+        try:
+            from postgres_restore_host_inventory import (
+                HostInventoryError,
+                validate_target_policy,
+            )
+        except ModuleNotFoundError:  # pragma: no cover - package import in tests
+            from scripts.postgres_restore_host_inventory import (
+                HostInventoryError,
+                validate_target_policy,
+            )
+        target = validate_target_policy(target)
+    except HostInventoryError as exc:
+        raise GenerationError("runner target image policy is not exact") from exc
     if (
         manifest.get("schema_version") != 3
         or manifest.get("status") != "APPROVED"
-        or not isinstance(target, dict)
-        or set(target) != required
         or target.get("repo_digest") != state.image_repo_digest
         or target.get("config_id") != state.image_config_id
         or not isinstance(target.get("path"), str)

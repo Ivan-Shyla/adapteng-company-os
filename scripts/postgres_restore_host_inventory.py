@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import subprocess
 from collections.abc import Callable
@@ -27,6 +28,10 @@ TIMESTAMP = "%Y-%m-%dT%H:%M:%SZ"
 CONTAINER_ID = re.compile(r"^[0-9a-f]{64}$")
 ZERO_TIME = {"", "0001-01-01T00:00:00Z"}
 DOCKER_INSPECT_SCHEMA_VERSION = 1
+DOCKER_JSON_MAX_BYTES = 16 * 1024 * 1024
+DOCKER_JSON_MAX_DEPTH = 64
+DOCKER_JSON_MAX_ITEMS = 16384
+DOCKER_JSON_MAX_STRING = 1024 * 1024
 MOUNT_KEYS = {
     "Type", "Name", "Source", "Destination", "Driver", "Mode", "RW", "Propagation"
 }
@@ -68,6 +73,26 @@ KNOWN_HOST_SECURITY_KEYS = {
     "StorageOpt", "Sysctls", "Tmpfs", "UTSMode", "Ulimits", "UsernsMode",
     "VolumeDriver", "VolumesFrom",
 }
+TARGET_POLICY_KEYS = {
+    "repo_digest",
+    "config_id",
+    "path",
+    "entrypoint",
+    "cmd",
+    "user",
+    "working_dir",
+    "image_environment",
+    "labels",
+    "hostname_template",
+    "runtime",
+    "apparmor_profile",
+    "masked_paths",
+    "readonly_paths",
+    "readonly_rootfs",
+    "tmpfs",
+    "healthcheck",
+    "log_config",
+}
 
 
 class HostInventoryError(RuntimeError):
@@ -80,6 +105,63 @@ def canonical_json(value: Any) -> bytes:
         .encode("ascii")
         + b"\n"
     )
+
+
+def strict_docker_json(payload: bytes | str) -> Any:
+    raw = payload if isinstance(payload, bytes) else payload.encode("utf-8")
+    if not raw or len(raw) > DOCKER_JSON_MAX_BYTES:
+        raise HostInventoryError("Docker inspection JSON size is invalid")
+
+    def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+        if len(items) > DOCKER_JSON_MAX_ITEMS:
+            raise HostInventoryError("Docker inspection object is too large")
+        result: dict[str, Any] = {}
+        for key, value in items:
+            if (
+                key in result
+                or len(key) > 1024
+                or any(ord(character) < 0x20 for character in key)
+            ):
+                raise HostInventoryError(
+                    "Docker inspection object keys are invalid/duplicated"
+                )
+            result[key] = value
+        return result
+
+    def reject_constant(_value: str) -> None:
+        raise HostInventoryError("Docker inspection JSON number is invalid")
+
+    try:
+        value = json.loads(
+            raw,
+            object_pairs_hook=pairs,
+            parse_constant=reject_constant,
+        )
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise HostInventoryError("Docker inspection JSON is invalid") from exc
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    nodes = 0
+    while stack:
+        item, depth = stack.pop()
+        nodes += 1
+        if nodes > DOCKER_JSON_MAX_ITEMS * 8 or depth > DOCKER_JSON_MAX_DEPTH:
+            raise HostInventoryError("Docker inspection JSON structure is too large")
+        if isinstance(item, dict):
+            stack.extend((child, depth + 1) for child in item.values())
+        elif isinstance(item, list):
+            if len(item) > DOCKER_JSON_MAX_ITEMS:
+                raise HostInventoryError("Docker inspection array is too large")
+            stack.extend((child, depth + 1) for child in item)
+        elif isinstance(item, str) and (
+            len(item) > DOCKER_JSON_MAX_STRING
+            or any(ord(character) < 0x20 for character in item)
+        ):
+            raise HostInventoryError("Docker inspection string is invalid")
+        elif isinstance(item, float) and not math.isfinite(item):
+            raise HostInventoryError("Docker inspection JSON number is invalid")
+        elif item is not None and not isinstance(item, (str, int, float, bool)):
+            raise HostInventoryError("Docker inspection value type is unsupported")
+    return value
 
 
 def ref_sha256(value: Any) -> str:
@@ -109,6 +191,31 @@ def environment_shape(values: Any) -> list[dict[str, str]]:
             }
         )
     return sorted(result, key=lambda item: item["key"])
+
+
+def healthcheck_shape(value: Any) -> None:
+    if value is not None:
+        raise HostInventoryError("container healthcheck is not disabled")
+    return None
+
+
+def log_config_shape(value: Any) -> dict[str, Any]:
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"Type", "Config"}
+        or value.get("Type") != "json-file"
+        or value.get("Config") != {}
+    ):
+        raise HostInventoryError("container log configuration is not the sealed default")
+    return {"Type": value["Type"], "Config": value["Config"]}
+
+
+def validate_target_policy(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != TARGET_POLICY_KEYS:
+        raise HostInventoryError("target policy fields are not exact")
+    healthcheck_shape(value["healthcheck"])
+    log_config_shape(value["log_config"])
+    return value
 
 
 def host_isolation_shape(host: dict[str, Any]) -> dict[str, Any]:
@@ -178,6 +285,7 @@ def host_isolation_shape(host: dict[str, Any]) -> dict[str, Any]:
         for paths in (masked_paths, readonly_paths)
     ):
         raise HostInventoryError("container masked/readonly paths are malformed")
+    log_config = log_config_shape(host.get("LogConfig"))
     return {
         "privileged": host["Privileged"],
         "cap_add": host.get("CapAdd"),
@@ -201,6 +309,7 @@ def host_isolation_shape(host: dict[str, Any]) -> dict[str, Any]:
         "publish_all_ports": host["PublishAllPorts"],
         "auto_remove": host["AutoRemove"],
         "restart_policy": restart,
+        "log_config": log_config,
     }
 
 
@@ -218,6 +327,7 @@ def container_execution_identity(container: dict[str, Any]) -> dict[str, Any]:
         raise HostInventoryError("container annotations are not empty")
     if set(config) - CONFIG_KEYS or set(network_settings) - NETWORK_SETTINGS_KEYS:
         raise HostInventoryError("container Config/NetworkSettings schema is unknown")
+    healthcheck = healthcheck_shape(config.get("Healthcheck"))
     networks = network_settings.get("Networks")
     mounts = container.get("Mounts")
     if not isinstance(networks, dict) or not isinstance(mounts, list):
@@ -270,6 +380,7 @@ def container_execution_identity(container: dict[str, Any]) -> dict[str, Any]:
         "hostname_sha256": ref_sha256(config.get("Hostname", "")),
         "labels": config.get("Labels") or {},
         "environment": environment_shape(config.get("Env") or []),
+        "healthcheck": healthcheck,
         "network_mode": host.get("NetworkMode"),
         "host_isolation": host_isolation_shape(host),
         "port_bindings": host.get("PortBindings") or {},
@@ -332,26 +443,7 @@ def validate_sealed_target(
     if container.get("RestartCount") not in (0, None):
         raise HostInventoryError("target container has restarted")
 
-    required_policy = {
-        "repo_digest",
-        "config_id",
-        "path",
-        "entrypoint",
-        "cmd",
-        "user",
-        "working_dir",
-        "image_environment",
-        "labels",
-        "hostname_template",
-        "runtime",
-        "apparmor_profile",
-        "masked_paths",
-        "readonly_paths",
-        "readonly_rootfs",
-        "tmpfs",
-    }
-    if not isinstance(target_policy, dict) or set(target_policy) != required_policy:
-        raise HostInventoryError("target policy fields are not exact")
+    validate_target_policy(target_policy)
     config = container.get("Config")
     host = container.get("HostConfig")
     if not isinstance(config, dict) or not isinstance(host, dict):
@@ -376,6 +468,7 @@ def validate_sealed_target(
         "Tty": False,
         "OpenStdin": False,
         "StdinOnce": False,
+        "Healthcheck": target_policy["healthcheck"],
     }
     if container.get("Image") != target_policy["config_id"]:
         raise HostInventoryError("target image config ID is not approved")
@@ -388,6 +481,7 @@ def validate_sealed_target(
         or host.get("ReadonlyPaths") != target_policy["readonly_paths"]
         or host.get("ReadonlyRootfs") is not target_policy["readonly_rootfs"]
         or host.get("Tmpfs") != target_policy["tmpfs"]
+        or host.get("LogConfig") != target_policy["log_config"]
     ):
         raise HostInventoryError("target runtime/security profile is not approved")
     if any(config.get(key) != value for key, value in exact_config.items()):
@@ -582,7 +676,7 @@ def docker_json(
         encoding="utf-8",
         env=CLEAN_ENVIRONMENT,
     )
-    return json.loads(completed.stdout)
+    return strict_docker_json(completed.stdout)
 
 
 def docker_lines(

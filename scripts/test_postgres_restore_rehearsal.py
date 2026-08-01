@@ -15,7 +15,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import scripts.postgres_restore_inventory_exporter as inventory_exporter
+import scripts.postgres_restore_generation as restore_generation
 import scripts.postgres_restore_provider_inventory as provider_inventory
+import scripts.postgres_restore_runner as restore_runner
 from scripts.postgres_restore_generation import (
     CLEAN_ENVIRONMENT,
     GenerationError,
@@ -49,6 +51,7 @@ from scripts.postgres_restore_guard import (
 from scripts.postgres_restore_host_inventory import (
     HostInventoryError,
     container_execution_identity,
+    strict_docker_json,
     validate_host_inventory,
     validate_sealed_target,
 )
@@ -158,6 +161,8 @@ def approved_runner_manifest() -> dict[str, object]:
         "readonly_paths": ["/proc/asound"],
         "readonly_rootfs": True,
         "tmpfs": None,
+        "healthcheck": None,
+        "log_config": {"Type": "json-file", "Config": {}},
         "execution_gate_entrypoint": "/usr/local/libexec/adapteng-postgres-restore-exec-gate",
         "psql_entrypoint": "/usr/lib/postgresql/16/bin/psql",
         "probe_argv": ["--no-psqlrc", "-v", "ON_ERROR_STOP=1"],
@@ -233,6 +238,8 @@ def approved_runner_manifest() -> dict[str, object]:
                 "/tmp": "rw,noexec,nosuid,nodev,size=64m,mode=1777",
                 "/var/run/postgresql": "rw,noexec,nosuid,nodev,size=16m,mode=3775",
             },
+            "healthcheck": None,
+            "log_config": {"Type": "json-file", "Config": {}},
         },
     }
 
@@ -351,6 +358,7 @@ def safe_host_config(
         "Ulimits": None,
         "CgroupParent": "",
         "Runtime": "runc",
+        "LogConfig": {"Type": "json-file", "Config": {}},
         "MaskedPaths": ["/proc/kcore"],
         "ReadonlyPaths": ["/proc/asound"],
     }
@@ -1428,6 +1436,98 @@ class RunnerLifecycleTests(unittest.TestCase):
                 self.container, changed, "runner container"
             )
 
+    def test_runner_rejects_healthcheck_and_external_logging(self) -> None:
+        for section, field, value in (
+            ("Config", "Healthcheck", {"Test": ["CMD-SHELL", "id"]}),
+            (
+                "HostConfig",
+                "LogConfig",
+                {"Type": "syslog", "Config": {"syslog-address": "tcp://example"}},
+            ),
+        ):
+            attack = json.loads(json.dumps(self.container))
+            attack[section][field] = value
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(
+                    RunnerError, "identity/command/isolation is not exact"
+                ) as caught:
+                    validate_runner_inspection(
+                        attack,
+                        self.runner_image,
+                        self.manifest,
+                        expected_id="runner-id",
+                        expected_name="adapteng-runner-a-probe",
+                        entrypoint=str(self.manifest["psql_entrypoint"]),
+                        argv=list(self.manifest["probe_argv"]),
+                        environment=self.environment,
+                    )
+                self.assertNotIn("tcp://example", str(caught.exception))
+
+    def test_production_manifest_loaders_accept_only_sealed_health_log_policy(
+        self,
+    ) -> None:
+        manifest = approved_runner_manifest()
+        raw = canonical_json(manifest)
+        with patch.object(
+            restore_runner, "secure_member_bytes", return_value=raw
+        ):
+            loaded, _ = restore_runner.load_manifest()
+        self.assertIsNone(loaded["target"]["healthcheck"])
+        self.assertEqual(
+            loaded["target"]["log_config"],
+            {"Type": "json-file", "Config": {}},
+        )
+        with patch.object(
+            restore_generation, "read_secured_once", return_value=raw
+        ):
+            target, _ = restore_generation.load_target_policy(generation_state())
+        self.assertEqual(target, manifest["target"])
+        duplicate = raw.replace(
+            b'"healthcheck":null,',
+            b'"healthcheck":null,"healthcheck":{"Test":["CMD","id"]},',
+            1,
+        )
+        with patch.object(
+            restore_runner, "secure_member_bytes", return_value=duplicate
+        ):
+            with self.assertRaisesRegex(RunnerError, "duplicate key"):
+                restore_runner.load_manifest()
+
+        for section, field, value in (
+            ("target", "healthcheck", {"Test": ["CMD", "id"]}),
+            (
+                "target",
+                "log_config",
+                {"Type": "gelf", "Config": {}},
+            ),
+            ("runner", "healthcheck", {"Test": ["CMD-SHELL", "id"]}),
+            (
+                "runner",
+                "log_config",
+                {"Type": "json-file", "Config": {"max-size": "1m"}},
+            ),
+        ):
+            attack = json.loads(json.dumps(manifest))
+            destination = attack["target"] if section == "target" else attack
+            destination[field] = value
+            attack_raw = canonical_json(attack)
+            with self.subTest(section=section, field=field):
+                with patch.object(
+                    restore_runner,
+                    "secure_member_bytes",
+                    return_value=attack_raw,
+                ):
+                    with self.assertRaises(RunnerError):
+                        restore_runner.load_manifest()
+                if section == "target":
+                    with patch.object(
+                        restore_generation,
+                        "read_secured_once",
+                        return_value=attack_raw,
+                    ):
+                        with self.assertRaises(GenerationError):
+                            restore_generation.load_target_policy(generation_state())
+
     def test_target_validation_binds_image_command_and_container_id(self) -> None:
         measured = self.validate_target(self.target)
         self.assertEqual(measured["container_id"], "d" * 64)
@@ -1462,6 +1562,89 @@ class RunnerLifecycleTests(unittest.TestCase):
         for attack in attacks:
             with self.assertRaises(RunnerError):
                 self.validate_target(attack)
+
+    def test_healthcheck_and_log_redirection_fail_before_target_start(self) -> None:
+        baseline = target_container(running=False)
+        self.validate_target(
+            baseline,
+            expected_running=False,
+            expected_network="pg-rehearsal",
+        )
+        attacks = [
+            (
+                "Healthcheck",
+                {
+                    "Test": ["CMD-SHELL", "id >/tmp/unapproved-healthcheck"],
+                    "Interval": 1,
+                    "Timeout": 1,
+                    "StartPeriod": 0,
+                    "Retries": 1,
+                },
+            ),
+            ("Healthcheck", {"Test": ["CMD", "id"]}),
+            ("Healthcheck", {"Test": ["NONE"], "Future": 1}),
+        ]
+        for field, value in attacks:
+            attack = json.loads(json.dumps(baseline))
+            attack["Config"][field] = value
+            with self.subTest(field=field, value=value):
+                with self.assertRaisesRegex(
+                    RunnerError, "identity/command/isolation is not exact"
+                ) as caught:
+                    self.validate_target(
+                        attack,
+                        expected_running=False,
+                        expected_network="pg-rehearsal",
+                    )
+                self.assertNotIn("unapproved-healthcheck", str(caught.exception))
+                with self.assertRaises(ExporterError):
+                    container_capability_record(attack, self.target_image)
+        for driver in ("syslog", "gelf", "fluentd", "splunk", "awslogs"):
+            attack = json.loads(json.dumps(baseline))
+            attack["HostConfig"]["LogConfig"] = {
+                "Type": driver,
+                "Config": {"endpoint": "attacker"},
+            }
+            with self.subTest(driver=driver):
+                with self.assertRaises(RunnerError):
+                    self.validate_target(
+                        attack,
+                        expected_running=False,
+                        expected_network="pg-rehearsal",
+                    )
+                with self.assertRaises(ExporterError):
+                    container_capability_record(attack, self.target_image)
+        nested = json.loads(json.dumps(baseline))
+        nested["HostConfig"]["LogConfig"] = {
+            "Type": "json-file",
+            "Config": {"Future": {"nested": "value"}},
+        }
+        with self.assertRaises(RunnerError):
+            self.validate_target(
+                nested,
+                expected_running=False,
+                expected_network="pg-rehearsal",
+            )
+        post_start = json.loads(json.dumps(baseline))
+        post_start["Config"]["Healthcheck"] = {"Test": ["CMD-SHELL", "id"]}
+        with self.assertRaises(RunnerError):
+            require_unchanged_execution_identity(
+                baseline, post_start, "target container"
+            )
+        for payload in (
+            b'[{"Config":{"Healthcheck":null,"Healthcheck":{"Test":["CMD","id"]}}}]',
+            b'[{"HostConfig":{"LogConfig":{"Type":"syslog","Type":"json-file",'
+            b'"Config":{}}}}]',
+            b'[{"HostConfig":{"LogConfig":{"Type":"json-file","Config":{'
+            b'"Future":{"nested":{"deeper":"value"}}}}}}]',
+            b'[{"HostConfig":{"LogConfig":{"Type":"json-file","Config":{'
+            b'"key":"\\u0000"}}}}]',
+            b"NaN",
+            b"1e999",
+        ):
+            with self.assertRaises(HostInventoryError):
+                value = strict_docker_json(payload)
+                container_execution_identity(value[0])
 
     def test_stopped_final_peer_remains_on_none_during_recovery_assertion(self) -> None:
         peer = json.loads(json.dumps(self.target))
@@ -1892,7 +2075,9 @@ class CapabilityInventoryTests(unittest.TestCase):
             "CapInh:\t0000000000000000\n"
             "CapPrm:\t0000000000000000\n"
             "CapEff:\t0000000000000000\n"
+            "CapBnd:\t000001ffffffffff\n"
             "CapAmb:\t0000000000000000\n"
+            "NoNewPrivs:\t0\n"
         )
         primary = process_security_state(base, writer_uid=1002, docker_gid=998)
         self.assertTrue(primary["docker_admin"])
@@ -1911,6 +2096,191 @@ class CapabilityInventoryTests(unittest.TestCase):
         self.assertTrue(aggregate["docker_admin"])
         self.assertTrue(aggregate["privileged_capability"])
         self.assertEqual(aggregate["task_count"], 2)
+
+    def test_bounding_set_and_no_new_privs_are_strict_and_canonically_bound(self) -> None:
+        base = (
+            "Uid:\t1001\t1001\t1001\t1001\n"
+            "Gid:\t1001\t1001\t1001\t1001\n"
+            "Groups:\t1001\n"
+            "CapInh:\t0000000000000000\n"
+            "CapPrm:\t0000000000000000\n"
+            "CapEff:\t0000000000000000\n"
+            "CapBnd:\t000001ffffffffff\n"
+            "CapAmb:\t0000000000000000\n"
+            "NoNewPrivs:\t0\n"
+        )
+        bounded = process_security_state(base, writer_uid=1002, docker_gid=998)
+        self.assertFalse(bounded["privileged_capability"])
+        self.assertTrue(bounded["bounded_privilege_acquisition"])
+        aggregate = aggregate_task_security([("10", bounded)])
+        self.assertEqual(aggregate["capability_bounding_set"], "000001ffffffffff")
+        self.assertFalse(aggregate["no_new_privs"])
+        self.assertTrue(aggregate["bounded_privilege_acquisition"])
+
+        blocked = process_security_state(
+            base.replace("NoNewPrivs:\t0", "NoNewPrivs:\t1"),
+            writer_uid=1002,
+            docker_gid=998,
+        )
+        self.assertFalse(blocked["bounded_privilege_acquisition"])
+        no_groups = process_security_state(
+            base.replace("Groups:\t1001", "Groups:\t"),
+            writer_uid=1002,
+            docker_gid=998,
+        )
+        self.assertEqual(no_groups["gids"], [1001])
+        for attack in (
+            base.replace("CapBnd:\t000001ffffffffff\n", ""),
+            base.replace("CapBnd:\t000001ffffffffff", "CapBnd:\txyz"),
+            base.replace("CapBnd:\t000001ffffffffff", "CapBnd:\t00001ffffffffff"),
+            base.replace("CapBnd:\t000001ffffffffff", "CapBnd:\t000001fffffffzzzz"),
+            base.replace(
+                "CapBnd:\t000001ffffffffff",
+                "CapBnd:\t00000000000000000",
+            ),
+            base.replace("NoNewPrivs:\t0\n", ""),
+            base.replace("NoNewPrivs:\t0", "NoNewPrivs:\t2"),
+        ):
+            with self.assertRaises(ExporterError):
+                process_security_state(attack, writer_uid=1002, docker_gid=998)
+        with self.assertRaisesRegex(
+            ExporterError, "threads disagree on privilege-acquisition state"
+        ):
+            aggregate_task_security([("10", bounded), ("11", blocked)])
+        different_bound = process_security_state(
+            base.replace(
+                "CapBnd:\t000001ffffffffff",
+                "CapBnd:\t0000000000000001",
+            ),
+            writer_uid=1002,
+            docker_gid=998,
+        )
+        with self.assertRaisesRegex(
+            ExporterError, "threads disagree on privilege-acquisition state"
+        ):
+            aggregate_task_security([("10", bounded), ("11", different_bound)])
+
+        record = {
+            "capability_bounding_set": aggregate["capability_bounding_set"],
+            "no_new_privs": aggregate["no_new_privs"],
+            "task_security_shapes": aggregate["security_shapes"],
+            "executable_file_capability_sha256": None,
+        }
+        capability = {
+            "allowed_scheduler_sources": [],
+            "allowed_containers": [],
+            "allowed_writer_processes": [record_sha256(record)],
+        }
+        packet = validate_capability_inventory(
+            scheduler_records=[],
+            container_records=[],
+            writer_process_records=[record],
+            capability=capability,
+        )
+        self.assertEqual(packet["writer_processes_count"], 1)
+        changed = {**record, "no_new_privs": True}
+        with self.assertRaises(ExporterError):
+            validate_capability_inventory(
+                scheduler_records=[],
+                container_records=[],
+                writer_process_records=[changed],
+                capability=capability,
+            )
+
+    def test_capbnd_only_process_traverses_production_inventory(self) -> None:
+        status = (
+            "Uid:\t1001\t1001\t1001\t1001\n"
+            "Gid:\t1001\t1001\t1001\t1001\n"
+            "Groups:\t1001\n"
+            "CapInh:\t0000000000000000\n"
+            "CapPrm:\t0000000000000000\n"
+            "CapEff:\t0000000000000000\n"
+            "CapBnd:\t000001ffffffffff\n"
+            "CapAmb:\t0000000000000000\n"
+            "NoNewPrivs:\t0\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            proc = Path(temporary)
+            process = proc / "100"
+            task = process / "task" / "100"
+            task.mkdir(parents=True)
+            (task / "status").write_text(status, encoding="utf-8")
+            (process / "stat").write_text(
+                "100 (worker) "
+                + " ".join(["S", *(["0"] * 18), "123"])
+                + "\n",
+                encoding="utf-8",
+            )
+            (process / "environ").write_bytes(b"LANG=C\x00")
+            (process / "fd").mkdir()
+            (process / "mountinfo").write_bytes(b"")
+            (process / "cgroup").write_bytes(b"0::/worker\n")
+            (process / "cmdline").write_bytes(b"/usr/bin/worker\x00")
+            capability = {
+                "uid": 1002,
+                "docker_gid": 998,
+                "credential_path": "/run/private/credential",
+                "config_path": "/etc/private/config",
+            }
+            with (
+                patch.object(
+                    inventory_exporter.os,
+                    "readlink",
+                    return_value="/usr/bin/worker",
+                ),
+                patch.object(
+                    inventory_exporter,
+                    "canonical_executable_target",
+                    return_value=Path("/usr/bin/worker"),
+                ),
+                patch.object(
+                    inventory_exporter,
+                    "descriptor_identity",
+                    return_value=(b"worker", None),
+                ),
+            ):
+                records = inventory_exporter.writer_process_records(
+                    capability, proc_root=proc
+                )
+            def add_thread(
+                _path: Path,
+            ) -> tuple[bytes, None]:
+                added = process / "task" / "101"
+                added.mkdir()
+                (added / "status").write_text(status, encoding="utf-8")
+                return b"worker", None
+
+            with (
+                patch.object(
+                    inventory_exporter.os,
+                    "readlink",
+                    return_value="/usr/bin/worker",
+                ),
+                patch.object(
+                    inventory_exporter,
+                    "canonical_executable_target",
+                    return_value=Path("/usr/bin/worker"),
+                ),
+                patch.object(
+                    inventory_exporter,
+                    "descriptor_identity",
+                    side_effect=add_thread,
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    ExporterError, "process/thread set changed"
+                ):
+                    inventory_exporter.writer_process_records(
+                        capability, proc_root=proc
+                    )
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["capability_bounding_set"], "000001ffffffffff")
+        self.assertFalse(records[0]["no_new_privs"])
+        self.assertTrue(
+            records[0]["capability_reasons"][
+                "bounded_privilege_acquisition_surface"
+            ]
+        )
 
     def test_container_security_identity_rejects_admin_and_binds_user(self) -> None:
         container = runner_container()
