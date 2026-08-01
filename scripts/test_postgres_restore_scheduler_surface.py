@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import inspect
 import os
-import pwd
 import stat
 import tempfile
 import unittest
@@ -255,6 +254,30 @@ class SchedulerSurfaceRecordTests(unittest.TestCase):
                 capability=capability,
             )
 
+    def test_account_user_unit_roots_are_walked_from_the_injected_homes(self) -> None:
+        home = self.sandbox / "home" / "operator"
+        unit = self.write(home / ".config/systemd/user/backup.service")
+        link = home / ".local/share/systemd/user" / "backup.service"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(unit)
+        with patch.object(inventory_exporter, "command_bytes", lambda arguments: b""):
+            records = scheduler_records(
+                set(),
+                account_homes={home},
+                scheduler_roots=(),
+                run_user=self.sandbox / "absent-run-user",
+            )
+        self.assertIn(home / ".config/systemd/user", user_unit_roots({home}))
+        self.assertEqual(
+            sorted((record["source_type"], record["path_sha256"]) for record in records),
+            sorted(
+                [
+                    ("scheduler-file", path_digest(unit)),
+                    ("scheduler-link", path_digest(link)),
+                ]
+            ),
+        )
+
     def test_the_default_scheduler_roots_stay_the_absolute_host_roots(self) -> None:
         self.assertIs(
             inspect.signature(scheduler_records).parameters["scheduler_roots"].default,
@@ -274,17 +297,17 @@ class SchedulerSurfaceRecordTests(unittest.TestCase):
 
 
 class RealHostSchedulerSurfaceTests(unittest.TestCase):
+    # These exercise the 32 hardcoded host roots - the surface with no
+    # injection point, which is what made the defect unreachable by any test.
+    # They deliberately pass account_homes=set(): per-account user-unit roots
+    # require traversing other accounts' home directories, and the CI job runs
+    # unprivileged. /home/packer on the runner image is mode 0700, so
+    # Path.is_dir() raises EACCES there - pathlib only ignores ENOENT, ENOTDIR,
+    # EBADF and ELOOP. That is a real property of the walk, reported in the PR
+    # rather than hidden, and it is why the account-home branch stays
+    # unexercised here.
     def host_walk(self) -> list[Path]:
-        homes = {
-            Path(account.pw_dir)
-            for account in pwd.getpwall()
-            if account.pw_dir.startswith("/")
-        }
-        return [
-            path
-            for root in (*SCHEDULER_ROOTS, *user_unit_roots(homes))
-            for path in scheduler_candidates(root)
-        ]
+        return [path for root in SCHEDULER_ROOTS for path in scheduler_candidates(root)]
 
     def test_no_real_scheduler_surface_is_writable_by_a_non_owner(self) -> None:
         # The precondition the exporter enforces, asserted separately so that a
@@ -307,14 +330,14 @@ class RealHostSchedulerSurfaceTests(unittest.TestCase):
 
     def test_scheduler_records_completes_against_the_real_host_roots(self) -> None:
         # The regression guard for the whole class: no injected roots, no
-        # sandbox, the production call from main() with only systemctl stubbed.
+        # sandbox, the production call path with only systemctl stubbed.
         # It fails with "scheduler source contains a symlink chain" on any
         # ordinary Linux host before the fix, because enabled units are
         # symlinks. It runs as the unprivileged CI user, so directories only
         # root can read - /var/spool/cron/crontabs - are silently skipped by
         # rglob and stay unexercised here.
         with patch.object(inventory_exporter, "command_bytes", lambda arguments: b""):
-            records = scheduler_records(set())
+            records = scheduler_records(set(), account_homes=set())
         walked = self.host_walk()
         self.assertNotEqual(walked, [])
         self.assertEqual(
