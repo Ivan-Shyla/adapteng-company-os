@@ -17,6 +17,7 @@ from __future__ import annotations
 import inspect
 import os
 import pwd
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -273,6 +274,37 @@ class SchedulerSurfaceRecordTests(unittest.TestCase):
 
 
 class RealHostSchedulerSurfaceTests(unittest.TestCase):
+    def host_walk(self) -> list[Path]:
+        homes = {
+            Path(account.pw_dir)
+            for account in pwd.getpwall()
+            if account.pw_dir.startswith("/")
+        }
+        return [
+            path
+            for root in (*SCHEDULER_ROOTS, *user_unit_roots(homes))
+            for path in scheduler_candidates(root)
+        ]
+
+    def test_no_real_scheduler_surface_is_writable_by_a_non_owner(self) -> None:
+        # The precondition the exporter enforces, asserted separately so that a
+        # host which violates it names the offending path instead of stopping
+        # the walk with an opaque error. Reported as a list, not first-failure,
+        # so one run shows every offender.
+        offenders = []
+        for path in self.host_walk():
+            try:
+                info = os.stat(path)
+            except OSError:
+                continue
+            if stat.S_ISREG(info.st_mode) and info.st_mode & 0o022:
+                offenders.append(
+                    f"{path} -> {path.resolve()} "
+                    f"uid={info.st_uid} gid={info.st_gid} "
+                    f"mode={stat.S_IMODE(info.st_mode):04o}"
+                )
+        self.assertEqual(sorted(offenders), [])
+
     def test_scheduler_records_completes_against_the_real_host_roots(self) -> None:
         # The regression guard for the whole class: no injected roots, no
         # sandbox, the production call from main() with only systemctl stubbed.
@@ -283,16 +315,7 @@ class RealHostSchedulerSurfaceTests(unittest.TestCase):
         # rglob and stay unexercised here.
         with patch.object(inventory_exporter, "command_bytes", lambda arguments: b""):
             records = scheduler_records(set())
-        homes = {
-            Path(account.pw_dir)
-            for account in pwd.getpwall()
-            if account.pw_dir.startswith("/")
-        }
-        walked = [
-            path
-            for root in (*SCHEDULER_ROOTS, *user_unit_roots(homes))
-            for path in scheduler_candidates(root)
-        ]
+        walked = self.host_walk()
         self.assertNotEqual(walked, [])
         self.assertEqual(
             sorted(record["path_sha256"] for record in records),
