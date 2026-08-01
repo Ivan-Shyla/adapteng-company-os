@@ -9,7 +9,7 @@
 #   repo-merged-not-live     - code merged to main, no live deploy/wiring yet
 #   planned                  - designed, not built
 version: 1
-updated: 2026-07-29
+updated: 2026-07-31
 
 excluded_personal_projects:
   status: excluded-from-company-os
@@ -90,8 +90,33 @@ services:
       and 008_drive_bridge_replay_reservations.sql are repository-merged via
       automation PR #89 / dbcf806ea7714b8e2a7415ae6cd788491924178d, but
       live:false and unapplied. Unrelated 008_ai_gateway_runtime_hardening.sql
-      is forbidden for approved-source import. Before apply: managed backup,
-      isolated restore proof and exact-migration staging rehearsal.
+      is forbidden for approved-source import. Proposed operator-managed pinned
+      pgBackRest 2.59.0 physical/WAL backup using provider-managed B2 EU object
+      storage plus clean PostgreSQL-only restore is documented but not configured.
+      The tracked guarded restore/probe/retention artifacts exist but have not
+      touched Docker or a provider. The proposed path now requires wrapper-
+      generated exact restore config, fixed descriptor-only secrets, one
+      measured-and-executed runner container ID, authoritative never-started
+      target IDs, fresh challenge-bound signed provider broker proof of exact
+      firewall plus empty private_net, complete Docker inventory before/after
+      SQL, and a declared dedicated-host capability inventory covering user
+      manager/linger absence, every scheduler source and all root/admin/writer-
+      capable processes. The current shared Coolify host scope is not accepted
+      without a separately reviewed exclusive-broker replacement. Before apply:
+      separately reviewed
+      Docker-measured image/runner manifests and build, signed fresh Hetzner
+      isolation measurement, descriptor-bound procedure state, and exact
+      runtime/catalog compatibility; post-backup check and parsed selected-set
+      verify; canonical accepted retention packet plus fresh authorization-time
+      12-full expiry and provider-cost proofs; guarded independent-host A
+      baseline, B exact apply plus streamed digest-verified DML transaction
+      rollback, C final exact
+      migrated state; cleanup; reviewed digest-only PASS; and a separately merged
+      automation evidence-lifecycle schema/validator/consumer contract that
+      validates exactly the five sanitized fields. No final schema version or
+      compatibility is claimed; that separate PR is an explicit blocker.
+      Rollout authorization is
+      NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR.
 
   - id: adapteng-baserow-adapter
     repo: adapteng-automation-platform

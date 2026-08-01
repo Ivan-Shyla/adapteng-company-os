@@ -1,9 +1,9 @@
 # Runbooks — repeatable operational procedures
 
-Step-by-step procedures for operating the AdaptEng Company OS safely. Each
-runbook captures a task that has actually been performed against live systems,
-including the non-obvious gotchas, so the next person (human or AI teammate)
-can repeat it without rediscovering them.
+Step-by-step procedures for operating the AdaptEng Company OS safely. A runbook
+either captures a task performed against live systems or marks an approved
+fail-closed procedure as **proposed, not configured** until its owner evidence
+exists. Never infer live capability from documentation alone.
 
 **Golden rules**
 
@@ -22,6 +22,6 @@ can repeat it without rediscovering them.
 | [`company-drive.md`](company-drive.md) | Deciding where photos, case files, drafts and approved artifacts belong; migrating safely from personal Drive. |
 | [`n8n-operations.md`](n8n-operations.md) | Building, activating, or debugging a governed n8n workflow via the API. |
 | [`apply-migration.md`](apply-migration.md) | Applying a Postgres migration to live `adapteng_ops`. |
-| [`backup-and-restore.md`](backup-and-restore.md) | Backing up / restoring `adapteng_ops` before a change. |
+| [`backup-and-restore.md`](backup-and-restore.md) | Proposed physical/WAL backup, isolated restore and exact 007/Drive-008 rehearsal for `adapteng_ops`; not configured until owner evidence says otherwise. |
 | [`secret-rotation.md`](secret-rotation.md) | Rotating a Baserow / n8n / Coolify / provider token. |
 | [`incident-response.md`](incident-response.md) | A webhook, adapter, or workflow is misbehaving in production. |

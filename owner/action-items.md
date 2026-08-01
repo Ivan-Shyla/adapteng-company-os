@@ -185,14 +185,57 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
 
 ## ⚪ Standing / Definition-of-Done
 
-- [ ] **Restore drill:** restore an `adapteng_ops` backup into a scratch target
-  and prove readability (§13 DoD). Backup last verified 2026-07-25 13:31.
+- [ ] **Configure and prove the approved `adapteng_ops` physical backup path.**
+  The selected design is operator-managed pinned pgBackRest 2.59.0 physical
+  base backups + continuous WAL using provider-managed Backblaze B2 EU Central
+  object storage, with a clean disposable Hetzner PostgreSQL-only restore host.
+  It is **proposed, not configured**; it is not provider-managed PostgreSQL
+  backup, the 2026-07-25 Coolify logical backup is insufficient, and the Baserow
+  all-in-one backup is unrelated. Follow
+  [`runbooks/backup-and-restore.md`](../runbooks/backup-and-restore.md): land the
+  separately reviewed compatible image manifests/build, collectors, status
+  harness and scheduler; approve the complete provider quote; require bucket
+  Object Lock disabled; take a fresh full; and pass post-backup `check` plus
+  parsed selected-set `verify`. Populate and independently review the exact
+  image, single-container runner, challenge-bound provider broker/signature and capability-complete
+  inventory-exporter manifests; their current `NOT_CONFIGURED` state must stop
+  execution. Establish the declared dedicated PostgreSQL/backup host scope
+  (or separately review an exclusive broker replacement); the current shared
+  Coolify scope is not accepted. The exporter must prove no user manager/linger,
+  pin the exclusive repository-write principal,
+  encrypted credential, direct full/differential jobs and every other
+  installed/loaded/generated/transient systemd unit, per-user unit source,
+  cron/anacron/at spool, container and all-UID capability-bearing process
+  identity; unknown,
+  deleted, opaque or Docker-socket-capable surfaces fail. Use only the tracked
+  guarded entrypoint on three independent clean A/B/C hosts, fresh one-use
+  provider operations that prove empty `private_net`, authoritative ID-only
+  never-started target validation, Docker-measured image/runner identity and
+  descriptor-streamed transaction probe. Prove retention from the canonical
+  fixed accepted packet and fresh scheduler/repository inventories. Rehearse A exact
+  pre-migration baseline; B exact 007 + Drive-008 plus DML transaction rollback
+  with zero durable synthetic state; and independent C ending in B's exact
+  migrated catalog state. Record digest-only evidence, capture C final exact
+  status before cleanup, then delete the host/volumes and revoke the read-only
+  key. A separately reviewed automation evidence-lifecycle schema, validator,
+  fixtures and consumer PR is an explicit blocker; no final schema version or
+  compatibility is claimed. Current
+  status is `NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR`; rollout
+  authorization remains blocked until that PR merges and validates these
+  exact local fields: `completed_at`, `selected_set_info_sha256`,
+  `scheduler_inventory_sha256`, `scheduler_inventory_observed_at`, and
+  `retention_valid_until`. Do not dispatch
+  approved-assets before that dependency merges and a reviewed sanitized
+  `PASS` validates.
 - [ ] **Migrations not live:** 002 (run ledger), 003 (approval/outbox), 005 (AI
-  gateway), 006 (integrity) and 007 (source-identity reservation) are repo-only
-  and unapplied. Migration 007 is currently in open automation-platform PR #80
-  (`6c8d7830461ba5dcfcd261330f89c30d9b5d8c62`). Apply only after review, fresh
-  backup and a real consumer (`runbooks/apply-migration.md`); 007 also requires
-  adapter redeploy.
+  gateway), 006 (integrity), 007 (source-identity reservation) and Drive-008
+  (replay reservations) are repo-only and unapplied. The approved-source pair
+  was merged by automation-platform PR #89 at
+  `dbcf806ea7714b8e2a7415ae6cd788491924178d`; apply it to live only after the
+  physical-backup rehearsal above, rollout review and explicit owner go/no-go.
+  Follow [`runbooks/apply-migration.md`](../runbooks/apply-migration.md), require
+  a real consumer, and redeploy the adapter for 007. Unrelated
+  `008_ai_gateway_runtime_hardening.sql` remains forbidden for this rollout.
 - [ ] **Baserow off-host export/restore** completion; **Google Workspace**
   Manager/recovery acceptance.
 - [ ] **Workspace recovery/break-glass acceptance:** verify Ivan is Manager of

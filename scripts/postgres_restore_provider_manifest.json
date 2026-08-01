@@ -1,0 +1,16 @@
+{
+  "schema_version": 3,
+  "status": "NOT_CONFIGURED",
+  "collector_id": "company-os-hetzner-locked-inventory",
+  "collector_version": 2,
+  "collector_sha256": null,
+  "broker_id": "company-os-hetzner-inventory-broker",
+  "broker_version": 1,
+  "signature_algorithm": "ed25519",
+  "public_key_pem": null,
+  "public_key_pem_sha256": null,
+  "owner_ssh_cidr_sha256": null,
+  "account_context_sha256": null,
+  "provider_target_config_sha256": null,
+  "max_age_seconds": 30
+}

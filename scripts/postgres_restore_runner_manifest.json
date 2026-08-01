@@ -1,0 +1,108 @@
+{
+  "schema_version": 3,
+  "status": "NOT_CONFIGURED",
+  "repo_digest": null,
+  "config_id": null,
+  "os": "linux",
+  "architecture": null,
+  "image_environment": null,
+  "image_labels": null,
+  "runtime": "runc",
+  "apparmor_profile": null,
+  "masked_paths": null,
+  "readonly_paths": null,
+  "readonly_rootfs": true,
+  "tmpfs": null,
+  "healthcheck": null,
+  "log_config": {
+    "Type": "json-file",
+    "Config": {}
+  },
+  "execution_gate_entrypoint": "/usr/local/libexec/adapteng-postgres-restore-exec-gate",
+  "psql_entrypoint": "/usr/lib/postgresql/16/bin/psql",
+  "probe_argv": [
+    "--no-psqlrc",
+    "-v",
+    "ON_ERROR_STOP=1"
+  ],
+  "database_environment": {
+    "runner_fixed": {
+      "PGDATABASE": "adapteng_ops",
+      "PGPORT": "5432",
+      "PGOPTIONS": "-c role=postgres",
+      "PGSSLMODE": "disable",
+      "PGUSER": "postgres_restore_runner"
+    },
+    "bootstrap_fixed": {
+      "PGDATABASE": "postgres",
+      "PGPORT": "5432",
+      "PGOPTIONS": "",
+      "PGSSLMODE": "disable",
+      "PGUSER": "postgres"
+    },
+    "host_template": "adapteng-db-{generation_lower}"
+  },
+  "migration_entrypoint": null,
+  "collector_entrypoint": null,
+  "bootstrap_entrypoint": "/usr/lib/postgresql/16/bin/psql",
+  "bootstrap_argv": [
+    "--dbname=postgres",
+    "--no-psqlrc",
+    "-v",
+    "ON_ERROR_STOP=1"
+  ],
+  "migration_commands": {
+    "status": [
+      "migration-status"
+    ],
+    "apply-007": [
+      "-m",
+      "scripts.migrations.apply_source_identity_007",
+      "apply"
+    ],
+    "apply-drive-008": [
+      "-m",
+      "scripts.migrations.apply_drive_bridge_008",
+      "apply"
+    ]
+  },
+  "collector_commands": {
+    "capture-runtime": [
+      "capture-runtime-signature",
+      "--database",
+      "adapteng_ops",
+      "--output",
+      "-"
+    ],
+    "capture-catalog": [
+      "capture-catalog-signature",
+      "--database",
+      "adapteng_ops",
+      "--output",
+      "-"
+    ]
+  },
+  "target": {
+    "repo_digest": null,
+    "config_id": null,
+    "path": null,
+    "entrypoint": null,
+    "cmd": null,
+    "user": null,
+    "working_dir": null,
+    "image_environment": null,
+    "labels": null,
+    "hostname_template": "{target_name}",
+    "runtime": "runc",
+    "apparmor_profile": null,
+    "masked_paths": null,
+    "readonly_paths": null,
+    "readonly_rootfs": true,
+    "tmpfs": null,
+    "healthcheck": null,
+    "log_config": {
+      "Type": "json-file",
+      "Config": {}
+    }
+  }
+}
