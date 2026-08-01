@@ -471,12 +471,33 @@ def command_bytes(arguments: list[str]) -> bytes:
     ).stdout
 
 
-def scheduler_content_record(path: Path) -> dict[str, Any]:
+def scheduler_location(path: Path, reached_from: Path | None) -> str:
+    """Name the artifact an operator has to act on, and how the walk reached it.
+
+    A refusal is only actionable if it says which file and, for a redirect,
+    which approved path pointed at it - fixing the target and removing the link
+    are different remedies.
+    """
+    if reached_from is None or reached_from == path:
+        return f"{path}"
+    return f"{reached_from} -> {path}"
+
+
+def scheduler_content_record(
+    path: Path, reached_from: Path | None = None
+) -> dict[str, Any]:
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o022:
-            raise ExporterError("scheduler file ownership/mode permits replacement")
+        location = scheduler_location(path, reached_from)
+        if not stat.S_ISREG(info.st_mode):
+            raise ExporterError(f"scheduler source is not a regular file: {location}")
+        if info.st_mode & 0o022:
+            raise ExporterError(
+                "scheduler file ownership/mode permits replacement: "
+                f"{location} uid={info.st_uid} gid={info.st_gid} "
+                f"mode={stat.S_IMODE(info.st_mode):04o}"
+            )
         payload = bytearray()
         while chunk := os.read(descriptor, 65536):
             payload.extend(chunk)
@@ -489,14 +510,17 @@ def scheduler_content_record(path: Path) -> dict[str, Any]:
     }
 
 
-def scheduler_resolved_record(resolved: Path) -> dict[str, Any]:
+def scheduler_resolved_record(resolved: Path, reached_from: Path) -> dict[str, Any]:
     try:
         info = os.lstat(resolved)
     except OSError:
         return {"resolved_state": "absent"}
     if not stat.S_ISREG(info.st_mode):
         return {"resolved_state": "not-a-regular-file"}
-    return {"resolved_state": "regular-file", **scheduler_content_record(resolved)}
+    return {
+        "resolved_state": "regular-file",
+        **scheduler_content_record(resolved, reached_from),
+    }
 
 
 def scheduler_file_record(path: Path) -> dict[str, Any]:
@@ -513,7 +537,7 @@ def scheduler_file_record(path: Path) -> dict[str, Any]:
     try:
         resolved = path.resolve()
     except (OSError, RuntimeError) as exc:
-        raise ExporterError("scheduler source path does not resolve") from exc
+        raise ExporterError(f"scheduler source path does not resolve: {path}") from exc
     if not path.is_symlink() and resolved == path:
         return {
             "source_type": "scheduler-file",
@@ -528,7 +552,7 @@ def scheduler_file_record(path: Path) -> dict[str, Any]:
             os.readlink(path).encode("utf-8") if path.is_symlink() else b""
         ),
         "resolved_path_sha256": sha256_bytes(resolved.as_posix().encode("utf-8")),
-        **scheduler_resolved_record(resolved),
+        **scheduler_resolved_record(resolved, path),
     }
 
 

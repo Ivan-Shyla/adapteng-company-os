@@ -175,8 +175,9 @@ class SchedulerSurfaceRecordTests(unittest.TestCase):
         second = self.root / "loop-b.service"
         first.symlink_to(second)
         second.symlink_to(first)
-        with self.assertRaises(ExporterError):
+        with self.assertRaises(ExporterError) as caught:
             scheduler_file_record(first)
+        self.assertIn(str(first), str(caught.exception))
 
     def test_a_group_or_world_writable_scheduler_file_still_fails_closed(self) -> None:
         direct = self.write(self.root / "writable.service", mode=0o666)
@@ -186,6 +187,40 @@ class SchedulerSurfaceRecordTests(unittest.TestCase):
         for path in (direct, link):
             with self.assertRaises(ExporterError):
                 scheduler_file_record(path)
+
+    def test_a_refusal_names_the_file_the_operator_has_to_fix(self) -> None:
+        # main() reports a stop as "STOP: {exc}" and nothing else, so the
+        # message is the whole report. A refusal that names the violation but
+        # not the artifact turns a 32-root walk into a search.
+        direct = self.write(self.root / "writable.service", mode=0o666)
+        with self.assertRaises(ExporterError) as caught:
+            scheduler_file_record(direct)
+        self.assertEqual(
+            str(caught.exception),
+            "scheduler file ownership/mode permits replacement: "
+            f"{direct} uid={os.getuid()} gid={os.getgid()} mode=0666",
+        )
+        target = self.write(self.outside / "writable.service", mode=0o664)
+        link = self.root / "writable-link.service"
+        link.symlink_to(target)
+        with self.assertRaises(ExporterError) as caught:
+            scheduler_file_record(link)
+        # A redirect names both ends: fixing the target and removing the link
+        # are different remedies, and the operator has to be able to tell.
+        self.assertEqual(
+            str(caught.exception),
+            "scheduler file ownership/mode permits replacement: "
+            f"{link} -> {target} uid={os.getuid()} gid={os.getgid()} mode=0664",
+        )
+
+    def test_a_non_regular_scheduler_source_is_named_and_refused(self) -> None:
+        fifo = self.root / "queue.service"
+        os.mkfifo(fifo)
+        with self.assertRaises(ExporterError) as caught:
+            scheduler_file_record(fifo)
+        self.assertEqual(
+            str(caught.exception), f"scheduler source is not a regular file: {fifo}"
+        )
 
     def test_a_parent_directory_redirect_is_recorded_with_the_resolved_path(
         self,
