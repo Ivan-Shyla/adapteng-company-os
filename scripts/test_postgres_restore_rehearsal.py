@@ -1473,6 +1473,11 @@ class IsolationMeasurementTests(unittest.TestCase):
                 actual = provider_inventory.os.fstat(descriptor.fileno())
                 metadata = list(actual)
                 metadata[0] = stat.S_IFREG | 0o600
+                # st_uid as well. secure_read_fd() requires uid 0, and leaving
+                # the real uid in place only passed because Windows reports 0
+                # for every file. On POSIX the simulated descriptor has to
+                # claim uid 0 or this never exercises the success path.
+                metadata[4] = 0
                 with (
                     patch.object(
                         provider_inventory.os,
@@ -2284,8 +2289,43 @@ class CapabilityInventoryTests(unittest.TestCase):
                 )
             raise AssertionError(joined)
 
-        with patch.object(inventory_exporter, "command_bytes", fake_command):
-            records = inventory_exporter.scheduler_records(set(), account_homes=set())
+        # scheduler_records() also walks absolute system roots (/etc/cron.d,
+        # /usr/lib/systemd/user, /run/user/*/systemd/user, ...), so mocking
+        # command_bytes alone does not isolate this test from the host it runs
+        # on. Redirect those roots into an empty sandbox: on Linux the real
+        # roots exist and contain symlinked units, which makes
+        # scheduler_file_record fail closed before the assertions below are
+        # ever reached. scheduler_file_record is deliberately NOT stubbed -- it
+        # is the code under test and still runs for real on anything found
+        # under the sandbox. user_unit_roots is called through the run_user
+        # injection point it already exposes, not replaced.
+        real_user_unit_roots = inventory_exporter.user_unit_roots
+
+        with tempfile.TemporaryDirectory() as directory:
+            sandbox = Path(directory)
+
+            def sandboxed_path(value: str) -> Path:
+                return sandbox / value.lstrip("/")
+
+            def sandboxed_user_unit_roots(
+                account_homes: set[Path],
+            ) -> tuple[Path, ...]:
+                return real_user_unit_roots(
+                    account_homes, run_user=sandbox / "run/user"
+                )
+
+            with (
+                patch.object(inventory_exporter, "command_bytes", fake_command),
+                patch.object(inventory_exporter, "Path", sandboxed_path),
+                patch.object(
+                    inventory_exporter,
+                    "user_unit_roots",
+                    sandboxed_user_unit_roots,
+                ),
+            ):
+                records = inventory_exporter.scheduler_records(
+                    set(), account_homes=set()
+                )
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["source_type"], "systemd-system-unit")
         self.assertRegex(records[0]["effective_properties_sha256"], r"^[0-9a-f]{64}$")
