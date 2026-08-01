@@ -47,6 +47,12 @@ CONFIG_KEYS = {
     "OpenStdin", "Shell", "StdinOnce", "StopSignal", "StopTimeout", "Tty",
     "User", "Volumes", "WorkingDir",
 }
+IMAGE_INSPECT_KEYS = {
+    "Architecture", "Author", "Comment", "Config", "Container",
+    "ContainerConfig", "Created", "Descriptor", "DockerVersion", "GraphDriver",
+    "Id", "Metadata", "Os", "OsVersion", "Parent", "RepoDigests", "RepoTags",
+    "RootFS", "Size", "Variant", "VirtualSize",
+}
 NETWORK_SETTINGS_KEYS = {
     "Bridge", "EndpointID", "Gateway", "GlobalIPv6Address",
     "GlobalIPv6PrefixLen", "HairpinMode", "IPAddress", "IPPrefixLen",
@@ -389,6 +395,35 @@ def container_execution_identity(container: dict[str, Any]) -> dict[str, Any]:
             normalized_mounts,
             key=lambda item: (str(item["destination"]), str(item["name_sha256"])),
         ),
+    }
+
+
+def image_execution_identity(image: dict[str, Any]) -> dict[str, Any]:
+    config = image.get("Config")
+    if (
+        not isinstance(image, dict)
+        or set(image) - IMAGE_INSPECT_KEYS
+        or not isinstance(config, dict)
+        or set(config) - CONFIG_KEYS
+    ):
+        raise HostInventoryError("image inspection schema is unknown")
+    repo_digests = image.get("RepoDigests")
+    if not isinstance(repo_digests, list) or len(repo_digests) != 1:
+        raise HostInventoryError("image has absent/multiple RepoDigests")
+    healthcheck = healthcheck_shape(config.get("Healthcheck"))
+    return {
+        "docker_inspect_schema_version": DOCKER_INSPECT_SCHEMA_VERSION,
+        "raw_inspect_sha256": hashlib.sha256(canonical_json(image)).hexdigest(),
+        "config_id": image.get("Id"),
+        "repo_digest": repo_digests[0],
+        "os": image.get("Os"),
+        "architecture": image.get("Architecture"),
+        "user": config.get("User"),
+        "working_dir": config.get("WorkingDir"),
+        "entrypoint": config.get("Entrypoint"),
+        "cmd": config.get("Cmd"),
+        "environment": environment_shape(config.get("Env") or []),
+        "healthcheck": healthcheck,
     }
 
 

@@ -24,7 +24,12 @@ try:
         sha256_file,
         validate_manifest,
     )
-    from postgres_restore_host_inventory import HostInventoryError, host_isolation_shape
+    from postgres_restore_host_inventory import (
+        HostInventoryError,
+        container_execution_identity,
+        host_isolation_shape,
+        strict_docker_json,
+    )
 except ModuleNotFoundError:  # pragma: no cover - package import in unit tests
     from scripts.postgres_restore_image_identity import (
         IdentityError,
@@ -35,7 +40,9 @@ except ModuleNotFoundError:  # pragma: no cover - package import in unit tests
     )
     from scripts.postgres_restore_host_inventory import (
         HostInventoryError,
+        container_execution_identity,
         host_isolation_shape,
+        strict_docker_json,
     )
 
 
@@ -198,9 +205,9 @@ def docker_json(*args: str) -> Any:
                 "LC_ALL": "C",
             },
         )
-        return json.loads(completed.stdout)
-    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
-        raise GuardError(f"docker {' '.join(args)} failed: {exc}") from exc
+        return strict_docker_json(completed.stdout)
+    except (OSError, subprocess.CalledProcessError, HostInventoryError) as exc:
+        raise GuardError(f"docker {' '.join(args)} failed") from exc
 
 
 def docker_text(*args: str) -> str:
@@ -538,9 +545,9 @@ def validate_container(
         raise GuardError("expected generation container is not pristine/never-started")
     host = container.get("HostConfig", {})
     try:
-        host_isolation_shape(host)
+        container_execution_identity(container)
     except HostInventoryError as exc:
-        raise GuardError("container host isolation is unsafe") from exc
+        raise GuardError("container execution identity is unsafe") from exc
     if host.get("NetworkMode") != expected_network:
         raise GuardError("container network mode is not exact")
     port_bindings = host.get("PortBindings")

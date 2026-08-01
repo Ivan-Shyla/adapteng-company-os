@@ -15,6 +15,21 @@ from pathlib import Path
 from collections.abc import Callable
 from typing import Any
 
+try:
+    from postgres_restore_host_inventory import (
+        HostInventoryError,
+        healthcheck_shape,
+        image_execution_identity,
+        strict_docker_json,
+    )
+except ModuleNotFoundError:  # pragma: no cover - package import in unit tests
+    from scripts.postgres_restore_host_inventory import (
+        HostInventoryError,
+        healthcheck_shape,
+        image_execution_identity,
+        strict_docker_json,
+    )
+
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 DOCKER_DIGEST = re.compile(r"^[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$")
@@ -28,6 +43,7 @@ MANIFEST_KEYS = {
     "os",
     "architecture",
     "image_environment",
+    "healthcheck",
     "postgres_pgdata",
     "postgres_version",
     "pgbackrest_version",
@@ -97,9 +113,9 @@ def docker_json(
             encoding="utf-8",
             env=CLEAN_ENVIRONMENT,
         )
-        return json.loads(completed.stdout)
-    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
-        raise IdentityError(f"docker {' '.join(args)} failed: {exc}") from exc
+        return strict_docker_json(completed.stdout)
+    except (OSError, subprocess.CalledProcessError, HostInventoryError) as exc:
+        raise IdentityError(f"docker {' '.join(args)} failed") from exc
 
 
 def one_inspect(value: Any, label: str) -> dict[str, Any]:
@@ -138,6 +154,10 @@ def validate_manifest(
         raise IdentityError("approved image manifest has missing or unknown fields")
     if manifest["schema_version"] != 1 or manifest["status"] != "APPROVED":
         raise IdentityError("approved image manifest is not an approved v1 manifest")
+    try:
+        healthcheck_shape(manifest["healthcheck"])
+    except HostInventoryError as exc:
+        raise IdentityError("approved image healthcheck is not disabled") from exc
     if manifest["image_reference"] != manifest["repo_digest"]:
         raise IdentityError("approved image reference must equal its immutable repo digest")
     if not DOCKER_DIGEST.fullmatch(str(manifest["repo_digest"])):
@@ -197,6 +217,11 @@ def measure_container(
         inspect("image", "inspect", str(container.get("Image", ""))),
         "image inspection",
     )
+    try:
+        healthcheck_shape(container.get("Config", {}).get("Healthcheck"))
+        measured_image = image_execution_identity(image)
+    except HostInventoryError as exc:
+        raise IdentityError("container/image healthcheck identity is not exact") from exc
 
     if container.get("Image") != manifest["config_id"]:
         raise IdentityError("container .Image does not match approved image config ID")
@@ -240,6 +265,8 @@ def measure_container(
         "os": manifest["os"],
         "architecture": manifest["architecture"],
         "image_environment_sha256": hashlib.sha256(canonical_json(env)).hexdigest(),
+        "healthcheck": measured_image["healthcheck"],
+        "image_raw_inspect_sha256": measured_image["raw_inspect_sha256"],
         "postgres_pgdata": manifest["postgres_pgdata"],
         "postgres_version": manifest["postgres_version"],
         "pgbackrest_version": manifest["pgbackrest_version"],

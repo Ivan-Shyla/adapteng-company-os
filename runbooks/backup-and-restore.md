@@ -109,10 +109,13 @@ production, merge a separate implementation PR that supplies these immutable
 artifacts:
 
 1. A backup image derived from the exact current PostgreSQL 16 image digest.
-   It must preserve the upstream entrypoint, health check, PostgreSQL binary
-   bytes, `$PGDATA`, UID/GID, libc/locale packages, extensions, architecture,
-   and tablespace behavior. It may add pgBackRest 2.59.0 and only its reviewed
-   dependencies; it must not upgrade PostgreSQL, libc, locale, or extensions.
+   It must preserve the upstream entrypoint, PostgreSQL binary bytes, `$PGDATA`,
+   UID/GID, libc/locale packages, extensions, architecture and tablespace
+   behavior, but its reviewed image manifest must require
+   `Config.Healthcheck=null`; runtime database monitoring must be supplied
+   separately and must never be inherited by a credential-bearing restore
+   container. It may add pgBackRest 2.59.0 and only its reviewed dependencies;
+   it must not upgrade PostgreSQL, libc, locale, or extensions.
 2. A migration-runner image containing automation commit
    `dbcf806ea7714b8e2a7415ae6cd788491924178d`, tree
    `8fc649a97963f38ce0a7592001a7fea4834eceea`, exact PostgreSQL 16 `psql`,
@@ -173,7 +176,7 @@ artifacts:
    procedure is loaded only after the pinned manifest and every enumerated
    on-disk member byte-matches those immutable blob identities. The reviewed
    raw Git-blob procedure manifest SHA-256 is
-   `b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9`;
+   `389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6`;
    the transaction-probe SHA-256 is
    `0d9e668726ea70d67621ccd62d357e23b4e2d6cd4c74216365ef86c2d034d785`.
    Any mismatch is a stop condition. Maintainers must use this exact two-phase
@@ -253,7 +256,7 @@ implementation:
   runtime_compatibility_assertion_sha256: "<sha256>"
   selected_full_assertion_sha256: "<sha256>"
   migration_status_harness_sha256: "<sha256>"
-  restore_procedure_manifest_sha256: "b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9"
+  restore_procedure_manifest_sha256: "389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6"
   runner_manifest_sha256: "<sha256>"
   provider_manifest_sha256: "<sha256>"
   host_inventory_collector_sha256: "<sha256>"
@@ -804,6 +807,15 @@ its reviewed manifest, writes it only to an anonymous memfd, and passes
 `/proc/self/fd/<fd>` to Docker. Only non-secret target/identity digests enter
 evidence.
 
+The initial guard and the later credential-bearing pgBackRest restore admission
+both use the same closed Docker parser/projector. The approved image, stopped
+restore container and both pre-start inspections must have exactly no
+healthcheck. The restore identity binds the projected container/image identities
+and their raw inspect digests; an inherited command, empty object, case-variant
+field, duplicate key, unsupported nested field or any between-inspect drift
+stops before `docker start`. Diagnostics and evidence contain no healthcheck
+command or credential value.
+
 For the host's single generation, create exactly one new local Docker volume
 with the exact purpose/generation/new labels. Pre-create the recovery and final
 containers **stopped on Docker network `none`** from the approved repo digest.
@@ -940,7 +952,7 @@ scripts/postgres_restore_generation.sh \
   --approved-image-manifest-sha256 "$BACKUP_IMAGE_MANIFEST_SHA256" \
   --recovery-container-id "$RECOVERY_CONTAINER_ID" \
   --final-container-id "$FINAL_CONTAINER_ID" \
-  --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9 \
+  --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6 \
   --accepted-retention-packet-sha256 "$ACCEPTED_RETENTION_PACKET_SHA256"
 ```
 
@@ -1054,14 +1066,14 @@ For generation A:
    cmp -s /secure/source-runtime.json /secure/a-runtime.json
    cmp -s /secure/source-catalog.json /secure/a-pre-catalog.json
    python3 scripts/postgres_restore_runner.py bootstrap-role --generation A \
-     --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9
+     --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6
    scripts/postgres_restore_status_gate.sh --generation A \
-     --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9 \
+     --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6 \
      --expect-output absent \
      --expect 007=absent --expect drive-008=absent
    sha256sum /secure/a-runtime.json /secure/a-pre-catalog.json
    python3 scripts/postgres_restore_runner.py drop-role --generation A \
-     --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9
+     --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6
    ```
 
 Any comparison or status mismatch exits nonzero. Generation A proves only the
@@ -1085,9 +1097,9 @@ mv /secure/b-catalog.json /secure/b-pre-catalog.json
 cmp -s /secure/source-runtime.json /secure/b-runtime.json
 cmp -s /secure/source-catalog.json /secure/b-pre-catalog.json
 python3 scripts/postgres_restore_runner.py bootstrap-role --generation B \
-  --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9
+  --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9 \
+  --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6 \
   --expect-output absent \
   --expect 007=absent --expect drive-008=absent
 ```
@@ -1097,23 +1109,23 @@ Apply only the exact fixed runners from the pinned automation tree:
 ```bash
 set -euo pipefail
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9 \
+  --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6 \
   --expect-output absent \
   --expect 007=absent --expect drive-008=absent
 python3 scripts/postgres_restore_runner.py apply-007 --generation B \
-  --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9 \
+  --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6 \
   >/dev/null
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9 \
+  --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6 \
   --expect-output exact \
   --expect 007=exact --expect drive-008=absent
 
 # Drive-008 contains its own BEGIN/COMMIT. Never wrap, edit, or reseal it.
 python3 scripts/postgres_restore_runner.py apply-drive-008 --generation B \
-  --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9 \
+  --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6 \
   >/dev/null
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9 \
+  --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6 \
   --expect-output exact \
   --expect 007=exact --expect drive-008=exact
 ```
@@ -1310,7 +1322,7 @@ resolves a probe bind path:
 ```bash
 set -euo pipefail
 scripts/postgres_restore_transaction_probe.sh \
-  --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9
+  --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6
 ```
 
 Only a zero exit from the complete script permits
@@ -1324,11 +1336,11 @@ statuses are captured.
 
 ```bash
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9 \
+  --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6 \
   --expect-output exact \
   --expect 007=exact --expect drive-008=exact
 python3 scripts/postgres_restore_runner.py drop-role --generation B \
-  --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9
+  --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6
 ```
 
 ## Phase 8 - independent generation C final exact state
@@ -1362,23 +1374,23 @@ mv /secure/c-catalog.json /secure/c-pre-catalog.json
 cmp -s /secure/source-runtime.json /secure/c-runtime.json
 cmp -s /secure/source-catalog.json /secure/c-pre-catalog.json
 python3 scripts/postgres_restore_runner.py bootstrap-role --generation C \
-  --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9
+  --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6
 scripts/postgres_restore_status_gate.sh --generation C \
-  --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9 \
+  --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6 \
   --expect-output absent \
   --expect 007=absent --expect drive-008=absent
 python3 scripts/postgres_restore_runner.py apply-007 --generation C \
-  --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9 \
+  --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6 \
   >/dev/null
 scripts/postgres_restore_status_gate.sh --generation C \
-  --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9 \
+  --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6 \
   --expect-output exact \
   --expect 007=exact --expect drive-008=absent
 python3 scripts/postgres_restore_runner.py apply-drive-008 --generation C \
-  --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9 \
+  --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6 \
   >/dev/null
 scripts/postgres_restore_status_gate.sh --generation C \
-  --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9 \
+  --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6 \
   --expect-output exact \
   --expect 007=exact --expect drive-008=exact
 python3 scripts/postgres_restore_runner.py capture-catalog --generation C \
@@ -1386,17 +1398,17 @@ python3 scripts/postgres_restore_runner.py capture-catalog --generation C \
   >/secure/c-final-catalog.json
 
 python3 scripts/postgres_restore_c_final_assert.py \
-  --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9
+  --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6
 
 cmp -s /secure/source-runtime.json /secure/c-runtime.json
 cmp -s /secure/source-catalog.json /secure/c-pre-catalog.json
 cmp -s /secure/b-post-catalog.json /secure/c-final-catalog.json
 scripts/postgres_restore_status_gate.sh --generation C \
-  --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9 \
+  --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6 \
   --expect-output exact \
   --expect 007=exact --expect drive-008=exact
 python3 scripts/postgres_restore_runner.py drop-role --generation C \
-  --procedure-manifest-sha256 b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9
+  --procedure-manifest-sha256 389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6
 sha256sum \
   /secure/c-runtime.json \
   /secure/c-pre-catalog.json \
@@ -1500,7 +1512,7 @@ implementation_artifacts:
   runtime_compatibility_assertion_sha256: "<sha256>"
   selected_full_assertion_sha256: "<sha256>"
   migration_status_harness_sha256: "<sha256>"
-  restore_procedure_manifest_sha256: "b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9"
+  restore_procedure_manifest_sha256: "389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6"
   transaction_probe_sha256: "0d9e668726ea70d67621ccd62d357e23b4e2d6cd4c74216365ef86c2d034d785"
 compatibility:
   source_image_identity_sha256: "<sha256>"
@@ -1581,7 +1593,7 @@ cost:
   quote_accessed_at_utc: "<RFC3339>"
   nonzero_costs_included: true
 isolation:
-  procedure_manifest_sha256: "b81b88f28e51c3841caf7b3f7055c59eb293e1d54bed78ebccba3ff5c3abc0f9"
+  procedure_manifest_sha256: "389cddca3c091c71e85739f2c3d043fe6508c48c8d1fda6c3a9b210b630019a6"
   approved_image_manifest_sha256: "<sha256>"
   measured_image_identity_sha256: "<sha256>"
   generation_a_inventory_sha256: "<sha256>"

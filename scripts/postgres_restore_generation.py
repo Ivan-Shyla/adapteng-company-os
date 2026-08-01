@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -472,6 +473,25 @@ def validate_restore_container(
     config_path: Path,
     secrets: dict[str, str],
 ) -> dict[str, Any]:
+    try:
+        try:
+            from postgres_restore_host_inventory import (
+                HostInventoryError,
+                container_execution_identity,
+                image_execution_identity,
+            )
+        except ModuleNotFoundError:  # pragma: no cover - package import in tests
+            from scripts.postgres_restore_host_inventory import (
+                HostInventoryError,
+                container_execution_identity,
+                image_execution_identity,
+            )
+        execution_identity = container_execution_identity(container)
+        image_identity = image_execution_identity(image)
+    except HostInventoryError as exc:
+        raise GenerationError(
+            "restore container/image execution identity is not supported"
+        ) from exc
     config = container.get("Config", {})
     host = container.get("HostConfig", {})
     networks = container.get("NetworkSettings", {}).get("Networks")
@@ -563,12 +583,25 @@ def validate_restore_container(
         ).hexdigest(),
         "published_ports": 0,
         "docker_socket_mounts": 0,
+        "container_raw_inspect_sha256": execution_identity["raw_inspect_sha256"],
+        "container_execution_identity_sha256": hashlib.sha256(
+            canonical_json(execution_identity)
+        ).hexdigest(),
+        "image_raw_inspect_sha256": image_identity["raw_inspect_sha256"],
+        "image_execution_identity_sha256": hashlib.sha256(
+            canonical_json(image_identity)
+        ).hexdigest(),
     }
     return identity
 
 
-def docker_inspect_one(kind: str, reference: str) -> dict[str, Any]:
-    completed = run_checked(
+def docker_inspect_one(
+    kind: str,
+    reference: str,
+    *,
+    execute: Callable[..., subprocess.CompletedProcess[Any]] = run_checked,
+) -> dict[str, Any]:
+    completed = execute(
         ["docker", kind, "inspect", reference],
         capture_output=True,
         text=True,
@@ -595,6 +628,44 @@ def docker_inspect_one(kind: str, reference: str) -> dict[str, Any]:
     ):
         raise GenerationError(f"Docker {kind} inspection is ambiguous")
     return values[0]
+
+
+def admit_restore_container(
+    *,
+    state: GenerationState,
+    container_id: str,
+    container_name: str,
+    restore_command: list[str],
+    config_path: Path,
+    secrets: dict[str, str],
+    inspect: Callable[[str, str], dict[str, Any]] = docker_inspect_one,
+) -> dict[str, Any]:
+    container = inspect("container", container_id)
+    image = inspect("image", str(container.get("Image", "")))
+    identity = validate_restore_container(
+        container=container,
+        image=image,
+        state=state,
+        container_id=container_id,
+        container_name=container_name,
+        restore_command=restore_command,
+        config_path=config_path,
+        secrets=secrets,
+    )
+    container_again = inspect("container", container_id)
+    image_again = inspect("image", str(container_again.get("Image", "")))
+    if validate_restore_container(
+        container=container_again,
+        image=image_again,
+        state=state,
+        container_id=container_id,
+        container_name=container_name,
+        restore_command=restore_command,
+        config_path=config_path,
+        secrets=secrets,
+    ) != identity:
+        raise GenerationError("restore container identity changed before start")
+    return identity
 
 
 def load_target_policy(state: GenerationState) -> tuple[dict[str, Any], str]:
@@ -1291,13 +1362,7 @@ def execute(args: argparse.Namespace) -> dict[str, str]:
         restore_id = created.stdout.decode("ascii").strip()
         if not restore_id:
             raise GenerationError("Docker did not return the restore container ID")
-        restore_container = docker_inspect_one("container", restore_id)
-        restore_image = docker_inspect_one(
-            "image", str(restore_container.get("Image", ""))
-        )
-        restore_identity = validate_restore_container(
-            container=restore_container,
-            image=restore_image,
+        restore_identity = admit_restore_container(
             state=state,
             container_id=restore_id,
             container_name=restore_name,
@@ -1305,23 +1370,6 @@ def execute(args: argparse.Namespace) -> dict[str, str]:
             config_path=staged_config,
             secrets=restore_secrets,
         )
-        restore_reinspection = docker_inspect_one("container", restore_id)
-        if (
-            validate_restore_container(
-                container=restore_reinspection,
-                image=docker_inspect_one(
-                    "image", str(restore_reinspection.get("Image", ""))
-                ),
-                state=state,
-                container_id=restore_id,
-                container_name=restore_name,
-                restore_command=restore_command,
-                config_path=staged_config,
-                secrets=restore_secrets,
-            )
-            != restore_identity
-        ):
-            raise GenerationError("restore container identity changed before start")
         restore_container_identity_sha256 = hashlib.sha256(
             canonical_json(restore_identity)
         ).hexdigest()

