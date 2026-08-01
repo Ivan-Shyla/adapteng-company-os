@@ -50,6 +50,40 @@ SHELL_EXECUTABLES = {
     "/usr/bin/sh",
 }
 SENSITIVE_ENV_PREFIXES = ("AWS_", "B2_", "PGBACKREST_")
+SCHEDULER_ROOTS = (
+    Path("/etc/crontab"),
+    Path("/etc/anacrontab"),
+    Path("/etc/cron.d"),
+    Path("/etc/cron.hourly"),
+    Path("/etc/cron.daily"),
+    Path("/etc/cron.weekly"),
+    Path("/etc/cron.monthly"),
+    Path("/etc/cron.allow"),
+    Path("/etc/cron.deny"),
+    Path("/etc/at.allow"),
+    Path("/etc/at.deny"),
+    Path("/var/spool/cron/crontabs"),
+    Path("/var/spool/cron"),
+    Path("/var/spool/cron/atjobs"),
+    Path("/var/spool/anacron"),
+    Path("/var/spool/at"),
+    Path("/var/spool/atjobs"),
+    Path("/etc/systemd/user"),
+    Path("/etc/xdg/systemd/user"),
+    Path("/run/systemd/user"),
+    Path("/usr/lib/systemd/user"),
+    Path("/usr/share/systemd/user"),
+    Path("/usr/local/lib/systemd/user"),
+    Path("/usr/local/share/systemd/user"),
+    Path("/run/systemd/user-generators"),
+    Path("/etc/systemd/user-generators"),
+    Path("/usr/local/lib/systemd/user-generators"),
+    Path("/usr/lib/systemd/user-generators"),
+    Path("/run/systemd/user-environment-generators"),
+    Path("/etc/systemd/user-environment-generators"),
+    Path("/usr/local/lib/systemd/user-environment-generators"),
+    Path("/usr/lib/systemd/user-environment-generators"),
+)
 
 
 class ExporterError(RuntimeError):
@@ -437,10 +471,8 @@ def command_bytes(arguments: list[str]) -> bytes:
     ).stdout
 
 
-def scheduler_file_record(path: Path) -> dict[str, Any]:
-    if path.is_symlink() or path.resolve(strict=True) != path:
-        raise ExporterError("scheduler source contains a symlink chain")
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+def scheduler_content_record(path: Path) -> dict[str, Any]:
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o022:
@@ -451,12 +483,66 @@ def scheduler_file_record(path: Path) -> dict[str, Any]:
     finally:
         os.close(descriptor)
     return {
-        "source_type": "scheduler-file",
-        "path_sha256": sha256_bytes(path.as_posix().encode("utf-8")),
         "owner_uid": info.st_uid,
         "mode": stat.S_IMODE(info.st_mode),
         "content_sha256": sha256_bytes(payload),
     }
+
+
+def scheduler_resolved_record(resolved: Path) -> dict[str, Any]:
+    try:
+        info = os.lstat(resolved)
+    except OSError:
+        return {"resolved_state": "absent"}
+    if not stat.S_ISREG(info.st_mode):
+        return {"resolved_state": "not-a-regular-file"}
+    return {"resolved_state": "regular-file", **scheduler_content_record(resolved)}
+
+
+def scheduler_file_record(path: Path) -> dict[str, Any]:
+    """Measure one scheduler surface, keeping a redirect visible instead of fatal.
+
+    Enabled systemd units are symlinks by construction, so refusing to look at a
+    symlink stops the whole export on any ordinary host and leaves the retention
+    authorization with no scheduler evidence at all. A redirect is therefore
+    recorded - literal link text, fully resolved location, and the digest of the
+    bytes actually read - and rejecting an unapproved one stays where that
+    judgement belongs, in validate_capability_inventory, which compares every
+    record digest against allowed_scheduler_sources.
+    """
+    try:
+        resolved = path.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise ExporterError("scheduler source path does not resolve") from exc
+    if not path.is_symlink() and resolved == path:
+        return {
+            "source_type": "scheduler-file",
+            "path_sha256": sha256_bytes(path.as_posix().encode("utf-8")),
+            **scheduler_content_record(path),
+        }
+    return {
+        "source_type": "scheduler-link",
+        "path_sha256": sha256_bytes(path.as_posix().encode("utf-8")),
+        "redirect_kind": "symlink" if path.is_symlink() else "parent-symlink",
+        "link_text_sha256": sha256_bytes(
+            os.readlink(path).encode("utf-8") if path.is_symlink() else b""
+        ),
+        "resolved_path_sha256": sha256_bytes(resolved.as_posix().encode("utf-8")),
+        **scheduler_resolved_record(resolved),
+    }
+
+
+def scheduler_candidates(root: Path) -> list[Path]:
+    if root.is_dir():
+        return [
+            *([root] if root.is_symlink() else []),
+            *[
+                path
+                for path in sorted(root.rglob("*"))
+                if path.is_file() or path.is_symlink()
+            ],
+        ]
+    return [root] if root.is_file() or root.is_symlink() else []
 
 
 def user_unit_roots(
@@ -542,7 +628,11 @@ def host_scope_state(scope: dict[str, Any], capability: dict[str, Any]) -> dict[
 
 
 def scheduler_records(
-    approved_units: set[str], *, account_homes: set[Path] | None = None
+    approved_units: set[str],
+    *,
+    account_homes: set[Path] | None = None,
+    scheduler_roots: tuple[Path, ...] = SCHEDULER_ROOTS,
+    run_user: Path = Path("/run/user"),
 ) -> list[dict[str, Any]]:
     if account_homes is None:
         try:
@@ -596,52 +686,10 @@ def scheduler_records(
                 "effective_properties_sha256": sha256_bytes(effective),
             }
         )
-    account_user_unit_roots = user_unit_roots(account_homes)
-    for root in (
-        Path("/etc/crontab"),
-        Path("/etc/anacrontab"),
-        Path("/etc/cron.d"),
-        Path("/etc/cron.hourly"),
-        Path("/etc/cron.daily"),
-        Path("/etc/cron.weekly"),
-        Path("/etc/cron.monthly"),
-        Path("/etc/cron.allow"),
-        Path("/etc/cron.deny"),
-        Path("/etc/at.allow"),
-        Path("/etc/at.deny"),
-        Path("/var/spool/cron/crontabs"),
-        Path("/var/spool/cron"),
-        Path("/var/spool/cron/atjobs"),
-        Path("/var/spool/anacron"),
-        Path("/var/spool/at"),
-        Path("/var/spool/atjobs"),
-        Path("/etc/systemd/user"),
-        Path("/etc/xdg/systemd/user"),
-        Path("/run/systemd/user"),
-        Path("/usr/lib/systemd/user"),
-        Path("/usr/share/systemd/user"),
-        Path("/usr/local/lib/systemd/user"),
-        Path("/usr/local/share/systemd/user"),
-        Path("/run/systemd/user-generators"),
-        Path("/etc/systemd/user-generators"),
-        Path("/usr/local/lib/systemd/user-generators"),
-        Path("/usr/lib/systemd/user-generators"),
-        Path("/run/systemd/user-environment-generators"),
-        Path("/etc/systemd/user-environment-generators"),
-        Path("/usr/local/lib/systemd/user-environment-generators"),
-        Path("/usr/lib/systemd/user-environment-generators"),
-        *account_user_unit_roots,
-    ):
-        candidates = (
-            [root]
-            if root.is_file()
-            else sorted(root.rglob("*"))
-            if root.is_dir()
-            else []
-        )
-        for path in candidates:
-            if path.is_file():
-                records.append(scheduler_file_record(path))
+    account_user_unit_roots = user_unit_roots(account_homes, run_user)
+    for root in (*scheduler_roots, *account_user_unit_roots):
+        for path in scheduler_candidates(root):
+            records.append(scheduler_file_record(path))
     return records
 
 

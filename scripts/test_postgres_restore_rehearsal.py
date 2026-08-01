@@ -2289,50 +2289,31 @@ class CapabilityInventoryTests(unittest.TestCase):
                 )
             raise AssertionError(joined)
 
-        # scheduler_records() also walks absolute system roots (/etc/cron.d,
+        # scheduler_records() also walks the absolute host roots (/etc/cron.d,
         # /usr/lib/systemd/user, /run/user/*/systemd/user, ...), so mocking
         # command_bytes alone does not isolate this test from the host it runs
-        # on. Redirect those roots into an empty sandbox: on Linux the real
-        # roots exist and contain symlinked units, which makes
-        # scheduler_file_record fail closed before the assertions below are
-        # ever reached. That is a defect in the exporter, not in this test,
-        # and it is tracked in issue #18. user_unit_roots is called through
-        # the run_user injection point it already exposes, not replaced.
+        # on. Those roots are a separate subject with its own POSIX-only suite
+        # in scripts/test_postgres_restore_scheduler_surface.py; this test is
+        # about unit enumeration, so it injects an empty root set through the
+        # scheduler_roots/run_user parameters. It deliberately does not point
+        # the real roots at an empty sandbox: doing that is what kept the
+        # exporter's Linux symlink defect invisible.
         #
-        # scheduler_file_record gets NO coverage from this test. The sandbox
-        # is empty, so the walk at postgres_restore_inventory_exporter.py:644
-        # never appends and the function is never called here. It is left
-        # unstubbed deliberately -- so it would exercise the real path if the
-        # sandbox were ever populated, and so nobody "simplifies" the code
-        # under test into a stub -- but do not read that as coverage.
-        # Real-path behaviour is tracked in issue #18, not asserted here.
-        real_user_unit_roots = inventory_exporter.user_unit_roots
-
-        with tempfile.TemporaryDirectory() as directory:
-            sandbox = Path(directory)
-
-            def sandboxed_path(value: str) -> Path:
-                return sandbox / value.lstrip("/")
-
-            def sandboxed_user_unit_roots(
-                account_homes: set[Path],
-            ) -> tuple[Path, ...]:
-                return real_user_unit_roots(
-                    account_homes, run_user=sandbox / "run/user"
-                )
-
-            with (
-                patch.object(inventory_exporter, "command_bytes", fake_command),
-                patch.object(inventory_exporter, "Path", sandboxed_path),
-                patch.object(
-                    inventory_exporter,
-                    "user_unit_roots",
-                    sandboxed_user_unit_roots,
-                ),
-            ):
-                records = inventory_exporter.scheduler_records(
-                    set(), account_homes=set()
-                )
+        # fb76f821 corrected an earlier version of this comment for claiming
+        # coverage of scheduler_file_record that an empty sandbox could not
+        # give. That correction was right and its point is kept here: this
+        # test still gives that function no coverage, and it no longer implies
+        # otherwise. The coverage now exists, in the suite named above --
+        # SchedulerSurfaceRecordTests calls scheduler_file_record directly and
+        # RealHostSchedulerSurfaceTests runs the walk against the real host
+        # roots, which is what issue #18 asked for.
+        with patch.object(inventory_exporter, "command_bytes", fake_command):
+            records = inventory_exporter.scheduler_records(
+                set(),
+                account_homes=set(),
+                scheduler_roots=(),
+                run_user=Path("/nonexistent-run-user-root"),
+            )
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["source_type"], "systemd-system-unit")
         self.assertRegex(records[0]["effective_properties_sha256"], r"^[0-9a-f]{64}$")
