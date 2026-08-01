@@ -297,54 +297,131 @@ class SchedulerSurfaceRecordTests(unittest.TestCase):
 
 
 class RealHostSchedulerSurfaceTests(unittest.TestCase):
-    # These exercise the 32 hardcoded host roots - the surface with no
-    # injection point, which is what made the defect unreachable by any test.
-    # They deliberately pass account_homes=set(): per-account user-unit roots
-    # require traversing other accounts' home directories, and the CI job runs
-    # unprivileged. /home/packer on the runner image is mode 0700, so
-    # Path.is_dir() raises EACCES there - pathlib only ignores ENOENT, ENOTDIR,
-    # EBADF and ELOOP. That is a real property of the walk, reported in the PR
-    # rather than hidden, and it is why the account-home branch stays
-    # unexercised here.
+    """The regression guard for the whole class, against the real filesystem.
+
+    No sandbox and no injected roots: these walk the 32 hardcoded absolute
+    roots, the surface that had no injection point and therefore no test. Every
+    one of them fails on an ordinary Linux host before this change, with
+    ``ExporterError: scheduler source contains a symlink chain``, because an
+    enabled systemd unit is a symlink. On Windows they would pass vacuously,
+    which is exactly how the defect survived.
+
+    They pass ``account_homes=set()``. Per-account user-unit roots need to
+    traverse other accounts' home directories: ``/home/packer`` on the runner
+    image is mode 0700, and ``Path.is_dir()`` raises ``EACCES`` there because
+    pathlib ignores only ENOENT, ENOTDIR, EBADF and ELOOP. That branch is
+    covered hermetically instead, by
+    ``test_account_user_unit_roots_are_walked_from_the_injected_homes``.
+    """
+
     def host_walk(self) -> list[Path]:
         return [path for root in SCHEDULER_ROOTS for path in scheduler_candidates(root)]
 
-    def test_no_real_scheduler_surface_is_writable_by_a_non_owner(self) -> None:
-        # The precondition the exporter enforces, asserted separately so that a
-        # host which violates it names the offending path instead of stopping
-        # the walk with an opaque error. Reported as a list, not first-failure,
-        # so one run shows every offender.
-        offenders = []
-        for path in self.host_walk():
-            try:
-                info = os.stat(path)
-            except OSError:
-                continue
-            if stat.S_ISREG(info.st_mode) and info.st_mode & 0o022:
-                offenders.append(
-                    f"{path} -> {path.resolve()} "
-                    f"uid={info.st_uid} gid={info.st_gid} "
-                    f"mode={stat.S_IMODE(info.st_mode):04o}"
-                )
-        self.assertEqual(sorted(offenders), [])
+    def unmeasurable(self, path: Path) -> str | None:
+        """Why an unprivileged process cannot measure this surface, if it cannot.
 
-    def test_scheduler_records_completes_against_the_real_host_roots(self) -> None:
-        # The regression guard for the whole class: no injected roots, no
-        # sandbox, the production call path with only systemctl stubbed.
-        # It fails with "scheduler source contains a symlink chain" on any
-        # ordinary Linux host before the fix, because enabled units are
-        # symlinks. It runs as the unprivileged CI user, so directories only
-        # root can read - /var/spool/cron/crontabs - are silently skipped by
-        # rglob and stay unexercised here.
-        with patch.object(inventory_exporter, "command_bytes", lambda arguments: b""):
-            records = scheduler_records(set(), account_homes=set())
+        Only two reasons are legitimate, and both are properties of the host
+        rather than of the exporter: the surface is writable by someone other
+        than its owner, which the exporter refuses by design, or this process
+        cannot read it, which root would not hit.
+        """
+        try:
+            info = os.stat(path)
+        except OSError as exc:
+            return None if path.is_symlink() else f"{path}: stat {exc.strerror}"
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        if info.st_mode & 0o022:
+            return (
+                f"{path} -> {path.resolve()} uid={info.st_uid} gid={info.st_gid} "
+                f"mode={stat.S_IMODE(info.st_mode):04o}"
+            )
+        if not os.access(path, os.R_OK):
+            return f"{path}: unreadable by uid {os.getuid()}"
+        return None
+
+    def test_the_real_host_walk_stops_only_on_surfaces_it_must_refuse(self) -> None:
+        # The invariant that holds on any host: the set of real scheduler
+        # surfaces the exporter will not record is exactly the set it is
+        # required not to record. A symlink is no longer in that set - that is
+        # the fix - so anything else that stops the walk shows up here by name
+        # instead of as an opaque STOP.
         walked = self.host_walk()
         self.assertNotEqual(walked, [])
+        self.assertNotEqual([path for path in walked if path.is_symlink()], [])
+        refused: list[str] = []
+        recorded: dict[Path, dict[str, object]] = {}
+        for path in walked:
+            try:
+                recorded[path] = scheduler_file_record(path)
+            except (ExporterError, OSError) as exc:
+                # Classified, never ignored: every refusal is asserted below.
+                refused.append(self.unmeasurable(path) or f"{path}: unexplained {exc}")
+        self.assertEqual(
+            sorted(refused),
+            sorted(
+                reason
+                for path in walked
+                if (reason := self.unmeasurable(path)) is not None
+            ),
+        )
+        links = [path for path in recorded if path.is_symlink()]
+        self.assertNotEqual(links, [])
+        for link in links:
+            record = recorded[link]
+            self.assertEqual(record["source_type"], "scheduler-link")
+            self.assertEqual(record["redirect_kind"], "symlink")
+            self.assertEqual(
+                record["link_text_sha256"],
+                sha256_bytes(os.readlink(link).encode("utf-8")),
+            )
+            self.assertEqual(
+                record["resolved_path_sha256"], path_digest(link.resolve())
+            )
+            self.assertIn(
+                record["resolved_state"],
+                {"regular-file", "absent", "not-a-regular-file"},
+            )
+
+    def test_scheduler_records_completes_over_the_conformant_real_host_roots(
+        self,
+    ) -> None:
+        # Completion, proved against the real filesystem rather than a sandbox.
+        # Roots holding a surface this process must refuse or cannot read are
+        # excluded by name, not by shape - on the GitHub image that is
+        # /etc/cron.daily, which ships /etc/cron.daily/microsoft-edge as a
+        # symlink to a mode 0777 root-owned script. Every other real root is
+        # exported, symlinks and all, and the export is asserted to contain
+        # real redirects so it cannot pass vacuously.
+        excluded = {
+            root
+            for root in SCHEDULER_ROOTS
+            for path in scheduler_candidates(root)
+            if self.unmeasurable(path) is not None
+        }
+        roots = tuple(root for root in SCHEDULER_ROOTS if root not in excluded)
+        self.assertNotEqual(roots, ())
+        with patch.object(inventory_exporter, "command_bytes", lambda arguments: b""):
+            records = scheduler_records(
+                set(),
+                account_homes=set(),
+                scheduler_roots=roots,
+                run_user=Path("/run/user"),
+            )
+        walked = [path for root in roots for path in scheduler_candidates(root)]
         self.assertEqual(
             sorted(record["path_sha256"] for record in records),
             sorted(path_digest(path) for path in walked),
         )
-        self.assertNotEqual([path for path in walked if path.is_symlink()], [])
+        self.assertNotEqual(
+            [
+                record
+                for record in records
+                if record["source_type"] == "scheduler-link"
+                and record["resolved_state"] == "regular-file"
+            ],
+            [],
+        )
         self.assertEqual(
             sorted(
                 record["path_sha256"]
@@ -357,11 +434,6 @@ class RealHostSchedulerSurfaceTests(unittest.TestCase):
                 if path.is_symlink() or path.resolve() != path
             ),
         )
-        for record in records:
-            self.assertRegex(record["path_sha256"], r"^[0-9a-f]{64}$")
-            self.assertIn(
-                record["source_type"], {"scheduler-file", "scheduler-link"}
-            )
 
 
 if __name__ == "__main__":
