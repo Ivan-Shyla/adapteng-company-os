@@ -2295,10 +2295,17 @@ class CapabilityInventoryTests(unittest.TestCase):
         # on. Redirect those roots into an empty sandbox: on Linux the real
         # roots exist and contain symlinked units, which makes
         # scheduler_file_record fail closed before the assertions below are
-        # ever reached. scheduler_file_record is deliberately NOT stubbed -- it
-        # is the code under test and still runs for real on anything found
-        # under the sandbox. user_unit_roots is called through the run_user
-        # injection point it already exposes, not replaced.
+        # ever reached. That is a defect in the exporter, not in this test,
+        # and it is tracked in issue #18. user_unit_roots is called through
+        # the run_user injection point it already exposes, not replaced.
+        #
+        # scheduler_file_record gets NO coverage from this test. The sandbox
+        # is empty, so the walk at postgres_restore_inventory_exporter.py:644
+        # never appends and the function is never called here. It is left
+        # unstubbed deliberately -- so it would exercise the real path if the
+        # sandbox were ever populated, and so nobody "simplifies" the code
+        # under test into a stub -- but do not read that as coverage.
+        # Real-path behaviour is tracked in issue #18, not asserted here.
         real_user_unit_roots = inventory_exporter.user_unit_roots
 
         with tempfile.TemporaryDirectory() as directory:
