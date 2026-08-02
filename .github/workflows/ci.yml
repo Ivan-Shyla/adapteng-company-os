@@ -55,3 +55,4 @@ jobs:
           scripts.test_validate_sensitive_references
           scripts.test_postgres_restore_rehearsal
           scripts.test_postgres_restore_scheduler_surface
+          scripts.test_rehearsal_contour

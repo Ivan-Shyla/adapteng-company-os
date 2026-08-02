@@ -1,0 +1,673 @@
+name: PostgreSQL backup and restore rehearsal
+
+# A real pgBackRest full backup to Backblaze B2, and a restore of that backup
+# that is checked against what was backed up rather than against its own exit
+# code.
+#
+# What is real here: the credentials, the object store, pgBackRest, client-side
+# repository encryption, WAL archiving, and the restore. What is deliberately
+# disposable is the database. Restoring into production is forbidden by owner
+# rule, so this contour is built so it could not do it even if it were told to:
+#
+#   * no production database credential is used, referenced, or in fact exists
+#     in this repository, and scripts/rehearsal_isolation_guard.py fails the job
+#     if any production connection configuration appears in the environment;
+#   * every cluster is created inside the runner's temporary directory with
+#     `listen_addresses` empty, so it has no TCP listener at all and is reachable
+#     only through a unix socket that exists for the life of the job;
+#   * the rehearsal writes to a run-scoped repository prefix that must share no
+#     path lineage with the production pgBackRest repository path, asserted
+#     before the first byte is written and again before anything is deleted; and
+#   * the source data directory is destroyed before any restore runs, so the
+#     restored bytes can only have come out of Backblaze B2.
+#
+# The comparison is the point of the exercise. The backup is taken, the source
+# is then deliberately changed, and the restore must reproduce the pre-change
+# state exactly -- same tables, same row counts, same per-table content
+# checksums -- while a second restore that replays the archived WAL must instead
+# reproduce the post-change state. A restore that silently returned live data,
+# or an empty cluster, or the wrong point in time, fails all of that.
+#
+# No live resource identifier is hardcoded: the bucket, endpoint, region and
+# production repository path come from repository variables and the credentials
+# from repository secrets, exactly as verify-b2-connectivity.yml consumes them.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/postgres-backup-rehearsal.yml
+      - scripts/rehearsal_*
+
+permissions:
+  contents: read
+
+concurrency:
+  group: postgres-backup-rehearsal
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  rehearse:
+    name: Back up to B2 and restore into a disposable instance
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # These are the pgBackRest repository credentials and nothing else. There
+      # is no database credential in this job because there is no production
+      # database credential in this repository.
+      PGBACKREST_REPO1_S3_KEY: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
+      PGBACKREST_REPO1_S3_KEY_SECRET: ${{ secrets.PGBACKREST_REPO1_S3_KEY_SECRET }}
+      PGBACKREST_REPO1_CIPHER_PASS: ${{ secrets.PGBACKREST_REPO1_CIPHER_PASS }}
+      PGBACKREST_REPO1_TYPE: ${{ vars.PGBACKREST_REPO1_TYPE }}
+      PGBACKREST_REPO1_S3_BUCKET: ${{ vars.PGBACKREST_REPO1_S3_BUCKET }}
+      PGBACKREST_REPO1_S3_ENDPOINT: ${{ vars.PGBACKREST_REPO1_S3_ENDPOINT }}
+      PGBACKREST_REPO1_S3_REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
+      PGBACKREST_REPO1_S3_KEY_TYPE: ${{ vars.PGBACKREST_REPO1_S3_KEY_TYPE }}
+      PGBACKREST_REPO1_S3_URI_STYLE: ${{ vars.PGBACKREST_REPO1_S3_URI_STYLE }}
+      PGBACKREST_REPO1_CIPHER_TYPE: ${{ vars.PGBACKREST_REPO1_CIPHER_TYPE }}
+      # PGBACKREST_REPO1_PATH is deliberately NOT exported with the production
+      # value. pgBackRest consumes every PGBACKREST_<OPTION> variable directly,
+      # so exporting the production repository path here is exactly how a
+      # rehearsal would end up writing into the production repository. The
+      # production value is carried separately, for comparison only.
+      PRODUCTION_REPO_PATH: ${{ vars.PGBACKREST_REPO1_PATH }}
+      REHEARSAL_SCOPE: ${{ github.run_id }}-${{ github.run_attempt }}
+      PGBACKREST_REPO1_PATH: /restore-rehearsal/${{ github.run_id }}-${{ github.run_attempt }}
+      REHEARSAL_STANZA: rehearsal
+      PGBIN: /usr/lib/postgresql/16/bin
+      SOURCE_PORT: '55432'
+      RESTORE_IMMEDIATE_PORT: '55433'
+      RESTORE_LATEST_PORT: '55434'
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Verify the configuration contract is complete
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in \
+            PGBACKREST_REPO1_S3_KEY PGBACKREST_REPO1_S3_KEY_SECRET \
+            PGBACKREST_REPO1_CIPHER_PASS PGBACKREST_REPO1_TYPE \
+            PGBACKREST_REPO1_S3_BUCKET PGBACKREST_REPO1_S3_ENDPOINT \
+            PGBACKREST_REPO1_S3_REGION PGBACKREST_REPO1_S3_KEY_TYPE \
+            PGBACKREST_REPO1_S3_URI_STYLE PRODUCTION_REPO_PATH \
+            PGBACKREST_REPO1_CIPHER_TYPE
+          do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} )); then
+            printf '::error title=Incomplete backup configuration::Missing: %s\n' "${missing[*]}"
+            exit 1
+          fi
+          # Lengths and booleans only. A secret's value is never printed.
+          printf 'repository key length: %s\n' "${#PGBACKREST_REPO1_S3_KEY}"
+          printf 'repository cipher passphrase set: %s\n' \
+            "$([ -n "$PGBACKREST_REPO1_CIPHER_PASS" ] && echo true || echo false)"
+          printf 'client-side encryption requested: %s\n' "$PGBACKREST_REPO1_CIPHER_TYPE"
+          case "$PGBACKREST_REPO1_CIPHER_TYPE" in
+            none|'')
+              echo "::error title=Repository encryption is off::The rehearsal refuses to write an unencrypted repository."
+              exit 1
+              ;;
+          esac
+          case "$PRODUCTION_REPO_PATH" in
+            /*) ;;
+            *)
+              echo "::error title=Repository path is not absolute::PGBACKREST_REPO1_PATH must start with a slash."
+              exit 1
+              ;;
+          esac
+
+      - name: Lay out the ephemeral rehearsal root
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/pg-rehearsal"
+          mkdir -p "$root/sockets/source" "$root/sockets/restore-immediate" \
+                   "$root/sockets/restore-latest" "$root/logs" "$root/locks" \
+                   "$root/evidence"
+          {
+            echo "REHEARSAL_ROOT=$root"
+            echo "SOURCE_PGDATA=$root/source"
+            echo "RESTORE_IMMEDIATE_PGDATA=$root/restore-immediate"
+            echo "RESTORE_LATEST_PGDATA=$root/restore-latest"
+            echo "SOURCE_SOCKET=$root/sockets/source"
+            echo "RESTORE_IMMEDIATE_SOCKET=$root/sockets/restore-immediate"
+            echo "RESTORE_LATEST_SOCKET=$root/sockets/restore-latest"
+            echo "REHEARSAL_CONF=$root/pgbackrest.conf"
+            echo "EVIDENCE=$root/evidence"
+          } >>"$GITHUB_ENV"
+
+      - name: Install PostgreSQL 16 and pgBackRest
+        run: |
+          set -euo pipefail
+          . /etc/os-release
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc]" \
+               "https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql-16 pgbackrest
+
+          # The distribution packages create and start a cluster of their own.
+          # Removing it leaves exactly the clusters this job creates, so nothing
+          # else on the runner can be confused for the rehearsal source.
+          while read -r version cluster _; do
+            [ -n "${version:-}" ] || continue
+            sudo pg_dropcluster --stop "$version" "$cluster"
+          done < <(pg_lsclusters --no-header || true)
+          if [ -n "$(pg_lsclusters --no-header || true)" ]; then
+            echo "::error title=Unexpected PostgreSQL cluster::A packaged cluster survived removal."
+            exit 1
+          fi
+
+          echo "$PGBIN" >>"$GITHUB_PATH"
+          "$PGBIN/postgres" --version | tee "$EVIDENCE/postgres-version.txt"
+          pgbackrest version | tee "$EVIDENCE/pgbackrest-version.txt"
+
+      - name: Create the disposable source cluster
+        run: |
+          set -euo pipefail
+          "$PGBIN/initdb" \
+            --pgdata="$SOURCE_PGDATA" --username=postgres --auth=trust \
+            --encoding=UTF8 --locale=C --data-checksums >/dev/null
+
+          # Appended last, so these win over the generated defaults. An empty
+          # listen_addresses is the structural part: the cluster never opens a
+          # TCP socket, so nothing outside this job can connect to it and it
+          # cannot be mistaken for a network-reachable database.
+          cat >>"$SOURCE_PGDATA/postgresql.conf" <<CONF
+          listen_addresses = ''
+          unix_socket_directories = '$SOURCE_SOCKET'
+          port = $SOURCE_PORT
+          wal_level = replica
+          archive_mode = on
+          archive_command = 'pgbackrest --config=$REHEARSAL_CONF --stanza=$REHEARSAL_STANZA archive-push %p'
+          archive_timeout = 60
+          log_min_messages = warning
+          CONF
+
+          # Only non-secret options are written to disk. The repository
+          # credentials and the cipher passphrase reach pgBackRest through the
+          # PGBACKREST_<OPTION> environment variables the owner already
+          # configured, so no secret material is ever written to a file.
+          umask 077
+          cat >"$REHEARSAL_CONF" <<CONF
+          [global]
+          repo1-storage-verify-tls=y
+          repo1-retention-full=12
+          repo1-retention-full-type=count
+          repo1-retention-archive=12
+          repo1-retention-archive-type=full
+          compress-type=zst
+          start-fast=y
+          log-path=$REHEARSAL_ROOT/logs
+          lock-path=$REHEARSAL_ROOT/locks
+          log-level-console=info
+          log-level-file=detail
+
+          [$REHEARSAL_STANZA]
+          pg1-path=$SOURCE_PGDATA
+          pg1-port=$SOURCE_PORT
+          pg1-socket-path=$SOURCE_SOCKET
+          pg1-user=postgres
+          CONF
+
+      - name: Prove the rehearsal cannot reach production
+        run: |
+          set -euo pipefail
+          python scripts/rehearsal_isolation_guard.py \
+            --production-repo-path "$PRODUCTION_REPO_PATH" \
+            --rehearsal-repo-path "$PGBACKREST_REPO1_PATH" \
+            --scope-token "$REHEARSAL_SCOPE" \
+            --ephemeral-root "$REHEARSAL_ROOT" \
+            --cluster "source=$SOURCE_PGDATA" \
+            --restore-target "restore-immediate=$RESTORE_IMMEDIATE_PGDATA" \
+            --restore-target "restore-latest=$RESTORE_LATEST_PGDATA" \
+            --cluster-config "source=$SOURCE_PGDATA/postgresql.conf" \
+            --pgbackrest-config "$REHEARSAL_CONF" \
+            --output "$EVIDENCE/isolation-preflight.json"
+
+          # Negative control. The same guard, given the production repository
+          # path as the rehearsal target, must refuse. A gate that passes
+          # whatever it is handed is not a gate.
+          echo "--- negative control: production repository path must be refused ---"
+          if python scripts/rehearsal_isolation_guard.py \
+            --production-repo-path "$PRODUCTION_REPO_PATH" \
+            --rehearsal-repo-path "$PRODUCTION_REPO_PATH" \
+            --scope-token "$REHEARSAL_SCOPE" \
+            --ephemeral-root "$REHEARSAL_ROOT" \
+            --cluster "source=$SOURCE_PGDATA" \
+            >/dev/null 2>&1
+          then
+            echo "::error title=Isolation guard is inert::The guard accepted the production repository path."
+            exit 1
+          fi
+          echo "The guard refused the production repository path, as required."
+
+      - name: Record what the production repository holds before the rehearsal
+        run: |
+          set -euo pipefail
+          prefix="${PRODUCTION_REPO_PATH#/}"
+          count=$(aws s3api list-objects-v2 \
+            --endpoint-url "https://$PGBACKREST_REPO1_S3_ENDPOINT" \
+            --bucket "$PGBACKREST_REPO1_S3_BUCKET" \
+            --prefix "${prefix}/" \
+            --query 'length(Contents || `[]`)' --output text)
+          if [ "$count" = "None" ]; then count=0; fi
+          echo "$count" >"$EVIDENCE/production-objects-before.txt"
+          echo "Objects under the production repository path before this run: $count"
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PGBACKREST_REPO1_S3_KEY_SECRET }}
+          AWS_DEFAULT_REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
+          AWS_DEFAULT_OUTPUT: json
+
+      - name: Start the source cluster and create the stanza
+        run: |
+          set -euo pipefail
+          "$PGBIN/pg_ctl" --pgdata="$SOURCE_PGDATA" --log="$REHEARSAL_ROOT/logs/source.log" \
+            --wait --timeout=60 start
+          pgbackrest --config="$REHEARSAL_CONF" --stanza="$REHEARSAL_STANZA" stanza-create
+          # `check` is the fail-closed part: it validates the repository and
+          # forces a WAL segment through archive_command, so a repository that
+          # authenticates but cannot be written to is caught here.
+          pgbackrest --config="$REHEARSAL_CONF" --stanza="$REHEARSAL_STANZA" check
+
+      - name: Seed deterministic content and capture the pre-backup digest
+        run: |
+          set -euo pipefail
+          psql --no-psqlrc --quiet --host="$SOURCE_SOCKET" --port="$SOURCE_PORT" \
+            --username=postgres --dbname=postgres \
+            --set=ON_ERROR_STOP=1 \
+            --set=run_id="$GITHUB_RUN_ID" --set=run_attempt="$GITHUB_RUN_ATTEMPT" \
+            --file=scripts/rehearsal_seed.sql
+          bash scripts/rehearsal_capture_digest.sh \
+            "$SOURCE_SOCKET" "$SOURCE_PORT" "$EVIDENCE/digest-pre-backup.txt"
+          cat "$EVIDENCE/digest-pre-backup.txt"
+
+      - name: Take a real pgBackRest full backup to Backblaze B2
+        run: |
+          set -euo pipefail
+          pgbackrest --config="$REHEARSAL_CONF" --stanza="$REHEARSAL_STANZA" \
+            backup --type=full
+          pgbackrest --config="$REHEARSAL_CONF" --stanza="$REHEARSAL_STANZA" \
+            info --output=json >"$EVIDENCE/backup-info.json"
+
+          status_code=$(jq -r '.[0].status.code' "$EVIDENCE/backup-info.json")
+          status_message=$(jq -r '.[0].status.message' "$EVIDENCE/backup-info.json")
+          backup_count=$(jq -r '.[0].backup | length' "$EVIDENCE/backup-info.json")
+          backup_type=$(jq -r '.[0].backup[-1].type' "$EVIDENCE/backup-info.json")
+          backup_label=$(jq -r '.[0].backup[-1].label' "$EVIDENCE/backup-info.json")
+          repository_cipher=$(jq -r '.[0].repo[0].cipher' "$EVIDENCE/backup-info.json")
+
+          echo "stanza status: $status_code / $status_message"
+          echo "backups: $backup_count, latest: $backup_label ($backup_type)"
+          echo "repository cipher: $repository_cipher"
+
+          if [ "$status_code" != "0" ] || [ "$status_message" != "ok" ]; then
+            echo "::error title=Stanza is not ok::pgBackRest reports status $status_code ($status_message)."
+            exit 1
+          fi
+          if [ "$backup_count" != "1" ] || [ "$backup_type" != "full" ]; then
+            echo "::error title=Unexpected backup set::Expected exactly one full backup."
+            exit 1
+          fi
+          if [ "$repository_cipher" != "$PGBACKREST_REPO1_CIPHER_TYPE" ]; then
+            echo "::error title=Repository is not encrypted as configured::Expected $PGBACKREST_REPO1_CIPHER_TYPE, the repository reports $repository_cipher."
+            exit 1
+          fi
+          echo "$backup_label" >"$EVIDENCE/backup-label.txt"
+
+      - name: Verify the repository and confirm the bytes are in B2
+        run: |
+          set -euo pipefail
+          pgbackrest --config="$REHEARSAL_CONF" --stanza="$REHEARSAL_STANZA" verify \
+            2>&1 | tee "$EVIDENCE/verify.log"
+          if grep -qE '\bERROR\b' "$EVIDENCE/verify.log"; then
+            echo "::error title=Repository verification reported errors::See the verify log."
+            exit 1
+          fi
+
+          # pgBackRest reporting success is one witness. Listing the objects
+          # through a different client is a second, independent one.
+          prefix="${PGBACKREST_REPO1_PATH#/}"
+          count=$(aws s3api list-objects-v2 \
+            --endpoint-url "https://$PGBACKREST_REPO1_S3_ENDPOINT" \
+            --bucket "$PGBACKREST_REPO1_S3_BUCKET" --prefix "${prefix}/" \
+            --query 'length(Contents || `[]`)' --output text)
+          if [ "$count" = "None" ] || [ "$count" -lt 1 ]; then
+            echo "::error title=No repository objects in B2::pgBackRest reported success but the prefix is empty."
+            exit 1
+          fi
+          bytes=$(aws s3api list-objects-v2 \
+            --endpoint-url "https://$PGBACKREST_REPO1_S3_ENDPOINT" \
+            --bucket "$PGBACKREST_REPO1_S3_BUCKET" --prefix "${prefix}/" \
+            --query 'sum(Contents[].Size || `[0]`)' --output text)
+          echo "$count" >"$EVIDENCE/rehearsal-objects.txt"
+          echo "$bytes" >"$EVIDENCE/rehearsal-bytes.txt"
+          echo "Backblaze B2 holds $count objects ($bytes bytes) under the rehearsal prefix."
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PGBACKREST_REPO1_S3_KEY_SECRET }}
+          AWS_DEFAULT_REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
+          AWS_DEFAULT_OUTPUT: json
+
+      - name: Change the source after the backup and archive the change
+        run: |
+          set -euo pipefail
+          psql --no-psqlrc --quiet --host="$SOURCE_SOCKET" --port="$SOURCE_PORT" \
+            --username=postgres --dbname=postgres --set=ON_ERROR_STOP=1 \
+            --file=scripts/rehearsal_mutate.sql
+          bash scripts/rehearsal_capture_digest.sh \
+            "$SOURCE_SOCKET" "$SOURCE_PORT" "$EVIDENCE/digest-post-backup.txt"
+
+          # The two states must be distinguishable, or the restore comparison
+          # later would prove nothing.
+          python scripts/rehearsal_digest_compare.py \
+            --left "$EVIDENCE/digest-pre-backup.txt" --left-label pre_backup \
+            --right "$EVIDENCE/digest-post-backup.txt" --right-label post_backup \
+            --expect different --min-tables 4 --min-rows 40000 \
+            --output "$EVIDENCE/compare-source-states.json"
+
+          query() {
+            psql --no-psqlrc --quiet --no-align --tuples-only \
+              --host="$SOURCE_SOCKET" --port="$SOURCE_PORT" \
+              --username=postgres --dbname=postgres --command="$1"
+          }
+          target=$(query "SELECT pg_walfile_name(pg_switch_wal())")
+          echo "Waiting for WAL segment $target to reach the repository."
+          archived=""
+          for _ in $(seq 1 90); do
+            failed=$(query "SELECT failed_count FROM pg_stat_archiver")
+            if [ "$failed" != "0" ]; then
+              echo "::error title=WAL archiving is failing::pg_stat_archiver reports $failed failures."
+              exit 1
+            fi
+            archived=$(query "SELECT coalesce(last_archived_wal, '')")
+            if [ -n "$archived" ] && [[ "$archived" > "$target" || "$archived" == "$target" ]]; then
+              break
+            fi
+            sleep 2
+          done
+          if [ -z "$archived" ] || [[ "$archived" < "$target" ]]; then
+            echo "::error title=WAL was not archived::Segment $target never reached the repository."
+            exit 1
+          fi
+          echo "Archived through $archived with zero archiver failures."
+
+      - name: Destroy the source cluster so only the backup remains
+        run: |
+          set -euo pipefail
+          "$PGBIN/pg_ctl" --pgdata="$SOURCE_PGDATA" --wait --timeout=60 --mode=fast stop
+          rm -rf "$SOURCE_PGDATA"
+          if [ -e "$SOURCE_PGDATA" ]; then
+            echo "::error title=Source cluster survived::The source data directory still exists."
+            exit 1
+          fi
+          echo "The source data directory is gone; Backblaze B2 is now the only copy."
+
+      - name: Restore the backup into a disposable instance
+        run: |
+          set -euo pipefail
+          sed -i "s|^pg1-path=.*|pg1-path=$RESTORE_IMMEDIATE_PGDATA|" "$REHEARSAL_CONF"
+          mkdir -p "$RESTORE_IMMEDIATE_PGDATA"
+          python scripts/rehearsal_isolation_guard.py \
+            --production-repo-path "$PRODUCTION_REPO_PATH" \
+            --rehearsal-repo-path "$PGBACKREST_REPO1_PATH" \
+            --scope-token "$REHEARSAL_SCOPE" \
+            --ephemeral-root "$REHEARSAL_ROOT" \
+            --cluster "restore-immediate=$RESTORE_IMMEDIATE_PGDATA" \
+            --restore-target "restore-immediate=$RESTORE_IMMEDIATE_PGDATA" \
+            --restore-target "restore-latest=$RESTORE_LATEST_PGDATA" \
+            --pgbackrest-config "$REHEARSAL_CONF" \
+            --output "$EVIDENCE/isolation-restore-immediate.json"
+
+          # --type=immediate stops recovery as soon as the backup is consistent,
+          # so this instance holds the backed-up state and nothing later.
+          # --archive-mode=off keeps the restored instance from pushing a new
+          # timeline into the repository the second restore has to read.
+          pgbackrest --config="$REHEARSAL_CONF" --stanza="$REHEARSAL_STANZA" \
+            restore --type=immediate --target-action=promote --archive-mode=off
+
+          cat >>"$RESTORE_IMMEDIATE_PGDATA/postgresql.conf" <<CONF
+          listen_addresses = ''
+          unix_socket_directories = '$RESTORE_IMMEDIATE_SOCKET'
+          port = $RESTORE_IMMEDIATE_PORT
+          CONF
+
+          python scripts/rehearsal_isolation_guard.py \
+            --production-repo-path "$PRODUCTION_REPO_PATH" \
+            --rehearsal-repo-path "$PGBACKREST_REPO1_PATH" \
+            --scope-token "$REHEARSAL_SCOPE" \
+            --ephemeral-root "$REHEARSAL_ROOT" \
+            --cluster "restore-immediate=$RESTORE_IMMEDIATE_PGDATA" \
+            --cluster-config "restore-immediate=$RESTORE_IMMEDIATE_PGDATA/postgresql.conf" \
+            --cluster-config "restore-immediate=$RESTORE_IMMEDIATE_PGDATA/postgresql.auto.conf" \
+            --output "$EVIDENCE/isolation-restore-immediate-started.json"
+
+          "$PGBIN/pg_ctl" --pgdata="$RESTORE_IMMEDIATE_PGDATA" \
+            --log="$REHEARSAL_ROOT/logs/restore-immediate.log" --wait --timeout=120 start
+          state=unavailable
+          for _ in $(seq 1 60); do
+            state=$(psql --no-psqlrc --quiet --no-align --tuples-only \
+              --host="$RESTORE_IMMEDIATE_SOCKET" --port="$RESTORE_IMMEDIATE_PORT" \
+              --username=postgres --dbname=postgres \
+              --command="SELECT pg_is_in_recovery()" 2>/dev/null || echo unavailable)
+            if [ "$state" = "f" ]; then break; fi
+            sleep 2
+          done
+          if [ "$state" != "f" ]; then
+            echo "::error title=Restored instance never left recovery::pg_is_in_recovery() stayed true."
+            exit 1
+          fi
+          bash scripts/rehearsal_capture_digest.sh \
+            "$RESTORE_IMMEDIATE_SOCKET" "$RESTORE_IMMEDIATE_PORT" \
+            "$EVIDENCE/digest-restored-immediate.txt"
+
+      - name: Check the restored data against what was backed up
+        run: |
+          set -euo pipefail
+          python scripts/rehearsal_digest_compare.py \
+            --left "$EVIDENCE/digest-pre-backup.txt" --left-label backed_up \
+            --right "$EVIDENCE/digest-restored-immediate.txt" --right-label restored \
+            --expect equal --min-tables 4 --min-rows 40000 \
+            --output "$EVIDENCE/compare-restore-immediate.json"
+
+          # The restore must also be this run's backup rather than an older one
+          # that happened to be lying in the repository.
+          marker=$(psql --no-psqlrc --quiet --no-align --tuples-only \
+            --host="$RESTORE_IMMEDIATE_SOCKET" --port="$RESTORE_IMMEDIATE_PORT" \
+            --username=postgres --dbname=postgres \
+            --command="SELECT run_id || ' ' || run_attempt || ' ' || phase FROM rehearsal.run_marker")
+          echo "restored marker: $marker"
+          if [ "$marker" != "$GITHUB_RUN_ID $GITHUB_RUN_ATTEMPT pre-backup" ]; then
+            echo "::error title=Restored marker is wrong::The restored instance does not carry this run's pre-backup marker."
+            exit 1
+          fi
+
+          # Negative control. The restored state must NOT match the state the
+          # source was left in after the backup, or the comparison above would
+          # also pass on live data.
+          echo "--- negative control: restored state must differ from the post-backup source ---"
+          python scripts/rehearsal_digest_compare.py \
+            --left "$EVIDENCE/digest-post-backup.txt" --left-label post_backup \
+            --right "$EVIDENCE/digest-restored-immediate.txt" --right-label restored \
+            --expect different --min-tables 4 --min-rows 40000 \
+            --output "$EVIDENCE/compare-restore-immediate-negative.json"
+
+          # And the comparator itself must be capable of failing.
+          echo "--- negative control: the comparator must reject a mismatch ---"
+          if python scripts/rehearsal_digest_compare.py \
+            --left "$EVIDENCE/digest-pre-backup.txt" \
+            --right "$EVIDENCE/digest-post-backup.txt" \
+            --expect equal >/dev/null 2>&1
+          then
+            echo "::error title=Comparator is inert::It reported two different database states as equal."
+            exit 1
+          fi
+          echo "The comparator rejected the mismatch, as required."
+
+      - name: Restore again to the end of the archived WAL
+        run: |
+          set -euo pipefail
+          "$PGBIN/pg_ctl" --pgdata="$RESTORE_IMMEDIATE_PGDATA" --wait --timeout=60 --mode=fast stop
+          sed -i "s|^pg1-path=.*|pg1-path=$RESTORE_LATEST_PGDATA|" "$REHEARSAL_CONF"
+          mkdir -p "$RESTORE_LATEST_PGDATA"
+          python scripts/rehearsal_isolation_guard.py \
+            --production-repo-path "$PRODUCTION_REPO_PATH" \
+            --rehearsal-repo-path "$PGBACKREST_REPO1_PATH" \
+            --scope-token "$REHEARSAL_SCOPE" \
+            --ephemeral-root "$REHEARSAL_ROOT" \
+            --cluster "restore-latest=$RESTORE_LATEST_PGDATA" \
+            --restore-target "restore-latest=$RESTORE_LATEST_PGDATA" \
+            --pgbackrest-config "$REHEARSAL_CONF" \
+            --output "$EVIDENCE/isolation-restore-latest.json"
+
+          pgbackrest --config="$REHEARSAL_CONF" --stanza="$REHEARSAL_STANZA" \
+            restore --type=default --archive-mode=off
+
+          cat >>"$RESTORE_LATEST_PGDATA/postgresql.conf" <<CONF
+          listen_addresses = ''
+          unix_socket_directories = '$RESTORE_LATEST_SOCKET'
+          port = $RESTORE_LATEST_PORT
+          CONF
+
+          python scripts/rehearsal_isolation_guard.py \
+            --production-repo-path "$PRODUCTION_REPO_PATH" \
+            --rehearsal-repo-path "$PGBACKREST_REPO1_PATH" \
+            --scope-token "$REHEARSAL_SCOPE" \
+            --ephemeral-root "$REHEARSAL_ROOT" \
+            --cluster "restore-latest=$RESTORE_LATEST_PGDATA" \
+            --cluster-config "restore-latest=$RESTORE_LATEST_PGDATA/postgresql.conf" \
+            --cluster-config "restore-latest=$RESTORE_LATEST_PGDATA/postgresql.auto.conf" \
+            --output "$EVIDENCE/isolation-restore-latest-started.json"
+
+          "$PGBIN/pg_ctl" --pgdata="$RESTORE_LATEST_PGDATA" \
+            --log="$REHEARSAL_ROOT/logs/restore-latest.log" --wait --timeout=180 start
+          state=unavailable
+          for _ in $(seq 1 90); do
+            state=$(psql --no-psqlrc --quiet --no-align --tuples-only \
+              --host="$RESTORE_LATEST_SOCKET" --port="$RESTORE_LATEST_PORT" \
+              --username=postgres --dbname=postgres \
+              --command="SELECT pg_is_in_recovery()" 2>/dev/null || echo unavailable)
+            if [ "$state" = "f" ]; then break; fi
+            sleep 2
+          done
+          if [ "$state" != "f" ]; then
+            echo "::error title=WAL replay never completed::pg_is_in_recovery() stayed true."
+            exit 1
+          fi
+          bash scripts/rehearsal_capture_digest.sh \
+            "$RESTORE_LATEST_SOCKET" "$RESTORE_LATEST_PORT" \
+            "$EVIDENCE/digest-restored-latest.txt"
+
+          # Replaying the archived WAL must reproduce the state the source was
+          # left in, which is what makes the WAL archive worth keeping.
+          python scripts/rehearsal_digest_compare.py \
+            --left "$EVIDENCE/digest-post-backup.txt" --left-label post_backup \
+            --right "$EVIDENCE/digest-restored-latest.txt" --right-label restored_to_latest \
+            --expect equal --min-tables 5 --min-rows 40000 \
+            --output "$EVIDENCE/compare-restore-latest.json"
+
+      - name: Remove the rehearsal repository from B2 and prove it is gone
+        if: always()
+        run: |
+          set -euo pipefail
+          # Stop every cluster first. A running instance with archiving enabled
+          # would keep writing into the prefix after it had been emptied.
+          for pgdata in "$SOURCE_PGDATA" "$RESTORE_IMMEDIATE_PGDATA" "$RESTORE_LATEST_PGDATA"; do
+            if [ -f "$pgdata/postmaster.pid" ]; then
+              "$PGBIN/pg_ctl" --pgdata="$pgdata" --wait --timeout=60 --mode=immediate stop || true
+            fi
+          done
+
+          # Deletion is allowed only against a prefix the guard has just agreed
+          # is run-scoped and shares no lineage with the production repository.
+          python scripts/rehearsal_isolation_guard.py \
+            --production-repo-path "$PRODUCTION_REPO_PATH" \
+            --rehearsal-repo-path "$PGBACKREST_REPO1_PATH" \
+            --scope-token "$REHEARSAL_SCOPE" \
+            --ephemeral-root "$REHEARSAL_ROOT" \
+            --cluster "restore-latest=$RESTORE_LATEST_PGDATA"
+
+          prefix="${PGBACKREST_REPO1_PATH#/}"
+          aws s3 rm "s3://$PGBACKREST_REPO1_S3_BUCKET/$prefix/" --recursive \
+            --endpoint-url "https://$PGBACKREST_REPO1_S3_ENDPOINT" >/dev/null
+          remaining=$(aws s3api list-objects-v2 \
+            --endpoint-url "https://$PGBACKREST_REPO1_S3_ENDPOINT" \
+            --bucket "$PGBACKREST_REPO1_S3_BUCKET" --prefix "${prefix}/" \
+            --query 'length(Contents || `[]`)' --output text)
+          if [ "$remaining" != "None" ] && [ "$remaining" != "0" ]; then
+            echo "::error title=Rehearsal repository survived cleanup::$remaining objects remain."
+            exit 1
+          fi
+          echo "The rehearsal prefix is empty."
+
+          production_prefix="${PRODUCTION_REPO_PATH#/}"
+          after=$(aws s3api list-objects-v2 \
+            --endpoint-url "https://$PGBACKREST_REPO1_S3_ENDPOINT" \
+            --bucket "$PGBACKREST_REPO1_S3_BUCKET" --prefix "${production_prefix}/" \
+            --query 'length(Contents || `[]`)' --output text)
+          if [ "$after" = "None" ]; then after=0; fi
+          echo "$after" >"$EVIDENCE/production-objects-after.txt"
+          before=$(cat "$EVIDENCE/production-objects-before.txt" 2>/dev/null || echo "$after")
+          if [ "$after" != "$before" ]; then
+            echo "::error title=Production repository changed::It held $before objects before this run and $after after."
+            exit 1
+          fi
+          echo "The production repository path is unchanged at $after objects."
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PGBACKREST_REPO1_S3_KEY_SECRET }}
+          AWS_DEFAULT_REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
+          AWS_DEFAULT_OUTPUT: json
+
+      - name: Publish the sanitized evidence
+        if: always()
+        run: |
+          set -euo pipefail
+          summary() { printf '%s\n' "$1" >>"$GITHUB_STEP_SUMMARY"; }
+          read_or() { if [ -f "$1" ]; then cat "$1"; else printf '%s' "$2"; fi; }
+          field() {
+            if [ -f "$1" ]; then jq -r "$2" "$1"; else printf 'not reached'; fi
+          }
+
+          summary "## PostgreSQL backup and restore rehearsal"
+          summary ""
+          summary "Run \`${GITHUB_RUN_ID}\` attempt \`${GITHUB_RUN_ATTEMPT}\`."
+          summary ""
+          summary "| Fact | Value |"
+          summary "| --- | --- |"
+          summary "| PostgreSQL | \`$(read_or "$EVIDENCE/postgres-version.txt" 'not installed')\` |"
+          summary "| pgBackRest | \`$(read_or "$EVIDENCE/pgbackrest-version.txt" 'not installed')\` |"
+          summary "| Backup label | \`$(read_or "$EVIDENCE/backup-label.txt" 'no backup taken')\` |"
+          summary "| Objects written to B2 | $(read_or "$EVIDENCE/rehearsal-objects.txt" 'none') |"
+          summary "| Bytes written to B2 | $(read_or "$EVIDENCE/rehearsal-bytes.txt" 'none') |"
+          summary "| Production repository objects before | $(read_or "$EVIDENCE/production-objects-before.txt" 'not read') |"
+          summary "| Production repository objects after | $(read_or "$EVIDENCE/production-objects-after.txt" 'not read') |"
+          summary "| Tables compared | $(field "$EVIDENCE/compare-restore-immediate.json" '.restored.tables') |"
+          summary "| Rows compared | $(field "$EVIDENCE/compare-restore-immediate.json" '.restored.rows') |"
+          summary "| Backed-up content checksum | \`$(field "$EVIDENCE/compare-restore-immediate.json" '.backed_up.set_sha256')\` |"
+          summary "| Restored content checksum | \`$(field "$EVIDENCE/compare-restore-immediate.json" '.restored.set_sha256')\` |"
+          summary "| WAL-replayed content checksum | \`$(field "$EVIDENCE/compare-restore-latest.json" '.restored_to_latest.set_sha256')\` |"
+          summary "| Post-backup source checksum | \`$(field "$EVIDENCE/compare-restore-latest.json" '.post_backup.set_sha256')\` |"
+          summary "| Preflight isolation evidence | \`$(field "$EVIDENCE/isolation-preflight.json" '.evidence_sha256')\` |"
+          summary ""
+          summary "The backed-up and restored content checksums above are the whole claim:"
+          summary "identical checksums mean the restored instance holds the same tables, the"
+          summary "same row counts and the same row contents as the database that was backed up."
+          summary "The WAL-replayed checksum matches the post-backup source instead, which is"
+          summary "what shows the archived WAL is restorable rather than merely written."
