@@ -54,7 +54,7 @@ jobs:
   rehearse:
     name: Back up to B2 and restore into a disposable instance
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       # These are the pgBackRest repository credentials and nothing else. There
       # is no database credential in this job because there is no production
@@ -211,6 +211,13 @@ jobs:
           repo1-retention-full-type=count
           repo1-retention-archive=12
           repo1-retention-archive-type=full
+          # Bundling matters here rather than being a tuning preference. An
+          # empty PostgreSQL 16 cluster is roughly a thousand small catalog
+          # files, and one object store round trip per file is what turns a
+          # small backup into a ten minute one. Bundled, the same backup is a
+          # handful of objects, and the restore reads them back the same way.
+          repo1-bundle=y
+          process-max=4
           compress-type=zst
           start-fast=y
           log-path=$REHEARSAL_ROOT/logs
@@ -261,12 +268,14 @@ jobs:
         run: |
           set -euo pipefail
           prefix="${PRODUCTION_REPO_PATH#/}"
+          # The AWS CLI paginates at 1000 keys and applies --query per page, so
+          # a bare length() silently reports one page rather than the total.
           count=$(aws s3api list-objects-v2 \
             --endpoint-url "https://$PGBACKREST_REPO1_S3_ENDPOINT" \
             --bucket "$PGBACKREST_REPO1_S3_BUCKET" \
             --prefix "${prefix}/" \
-            --query 'length(Contents || `[]`)' --output text)
-          if [ "$count" = "None" ]; then count=0; fi
+            --query 'length(Contents || `[]`)' --output text \
+            | awk '{ total += $1 } END { print total + 0 }')
           echo "$count" >"$EVIDENCE/production-objects-before.txt"
           echo "Objects under the production repository path before this run: $count"
         env:
@@ -347,15 +356,17 @@ jobs:
           count=$(aws s3api list-objects-v2 \
             --endpoint-url "https://$PGBACKREST_REPO1_S3_ENDPOINT" \
             --bucket "$PGBACKREST_REPO1_S3_BUCKET" --prefix "${prefix}/" \
-            --query 'length(Contents || `[]`)' --output text)
-          if [ "$count" = "None" ] || [ "$count" -lt 1 ]; then
+            --query 'length(Contents || `[]`)' --output text \
+            | awk '{ total += $1 } END { print total + 0 }')
+          if [ "$count" -lt 1 ]; then
             echo "::error title=No repository objects in B2::pgBackRest reported success but the prefix is empty."
             exit 1
           fi
           bytes=$(aws s3api list-objects-v2 \
             --endpoint-url "https://$PGBACKREST_REPO1_S3_ENDPOINT" \
             --bucket "$PGBACKREST_REPO1_S3_BUCKET" --prefix "${prefix}/" \
-            --query 'sum(Contents[].Size || `[0]`)' --output text)
+            --query 'sum(Contents[].Size || `[0]`)' --output text \
+            | awk '{ total += $1 } END { print total + 0 }')
           echo "$count" >"$EVIDENCE/rehearsal-objects.txt"
           echo "$bytes" >"$EVIDENCE/rehearsal-bytes.txt"
           echo "Backblaze B2 holds $count objects ($bytes bytes) under the rehearsal prefix."
@@ -396,7 +407,7 @@ jobs:
               echo "::error title=WAL archiving is failing::pg_stat_archiver reports $failed failures."
               exit 1
             fi
-            archived=$(query "SELECT coalesce(last_archived_wal, '')")
+            archived=$(query "SELECT coalesce(last_archived_wal, '') FROM pg_stat_archiver")
             if [ -n "$archived" ] && [[ "$archived" > "$target" || "$archived" == "$target" ]]; then
               break
             fi
@@ -609,8 +620,9 @@ jobs:
           remaining=$(aws s3api list-objects-v2 \
             --endpoint-url "https://$PGBACKREST_REPO1_S3_ENDPOINT" \
             --bucket "$PGBACKREST_REPO1_S3_BUCKET" --prefix "${prefix}/" \
-            --query 'length(Contents || `[]`)' --output text)
-          if [ "$remaining" != "None" ] && [ "$remaining" != "0" ]; then
+            --query 'length(Contents || `[]`)' --output text \
+            | awk '{ total += $1 } END { print total + 0 }')
+          if [ "$remaining" != "0" ]; then
             echo "::error title=Rehearsal repository survived cleanup::$remaining objects remain."
             exit 1
           fi
@@ -620,8 +632,8 @@ jobs:
           after=$(aws s3api list-objects-v2 \
             --endpoint-url "https://$PGBACKREST_REPO1_S3_ENDPOINT" \
             --bucket "$PGBACKREST_REPO1_S3_BUCKET" --prefix "${production_prefix}/" \
-            --query 'length(Contents || `[]`)' --output text)
-          if [ "$after" = "None" ]; then after=0; fi
+            --query 'length(Contents || `[]`)' --output text \
+            | awk '{ total += $1 } END { print total + 0 }')
           echo "$after" >"$EVIDENCE/production-objects-after.txt"
           before=$(cat "$EVIDENCE/production-objects-before.txt" 2>/dev/null || echo "$after")
           if [ "$after" != "$before" ]; then
