@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  sensitive-references:
+    name: Sensitive-reference validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The default fetch-depth of 1 is sufficient. validate_sensitive_references.py
+      # shells out to `git ls-files -z`, which reads the index of the checked-out
+      # tree and never inspects commit history, so fetch-depth: 0 is not needed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      # No dependency install step: the repository has no requirements.txt,
+      # pyproject.toml or setup.py, and every import under scripts/ resolves to
+      # the Python standard library.
+      - name: Reject sensitive resource and credential references
+        run: python scripts/validate_sensitive_references.py
+
+  unit-tests:
+    name: Python unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      # The suites are unittest-based (there is no pytest anywhere in the tree)
+      # and they import their subjects as `scripts.<module>`, so they must run
+      # from the repository root. `unittest discover` cannot be used: scripts/
+      # has no __init__.py, so it is a namespace package and discovery fails
+      # with "Start directory is not importable". The modules are therefore
+      # named explicitly, and any new suite must be added to this list.
+      - name: Run unittest suites
+        run: >-
+          python -m unittest
+          scripts.test_validate_sensitive_references
+          scripts.test_postgres_restore_rehearsal
