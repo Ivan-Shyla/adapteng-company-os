@@ -92,7 +92,11 @@ services:
       live:false and unapplied. Unrelated 008_ai_gateway_runtime_hardening.sql
       is forbidden for approved-source import. Proposed operator-managed pinned
       pgBackRest 2.59.0 physical/WAL backup using provider-managed B2 EU object
-      storage plus clean PostgreSQL-only restore is documented but not configured.
+      storage plus clean PostgreSQL-only restore is documented, and the object
+      store is now proven reachable (run 30752237109, 2026-08-02: write,
+      byte-compared read-back, delete and verified absence), but the backup
+      itself is still not configured - no stanza, no full, no WAL archive and
+      no restore exist.
       The tracked guarded restore/probe/retention artifacts exist but have not
       touched Docker or a provider. The proposed path now requires wrapper-
       generated exact restore config, fixed descriptor-only secrets, one

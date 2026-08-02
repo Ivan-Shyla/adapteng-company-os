@@ -3,7 +3,7 @@
 # Precedence (ADR-0011 platform layer map):
 #   Postgres = operational truth | Baserow = structured collaboration | Drive = document/media evidence
 version: 1
-updated: 2026-07-31
+updated: 2026-08-02
 
 baserow:
   service: baserow-self-hosted (https://baserow.adapteng.com)
@@ -54,7 +54,16 @@ postgres_adapteng_ops:
     last_verified_contract_status: insufficient-logical-backup
     management: "operator-managed pgBackRest using provider-managed Backblaze B2 object storage; not provider-managed PostgreSQL backup"
     proposed_design: "pinned pgBackRest 2.59.0 physical base backup + continuous WAL, client-side encrypted to private Backblaze B2 EU Central; weekly full, daily differential, 12-full count retention"
-    proposed_design_status: documented-not-configured
+    proposed_design_status: object-store-connectivity-verified-backup-not-configured
+    object_store_connectivity:
+      status: verified
+      verified: 2026-08-02
+      evidence_run: 30752237109
+      evidence_workflow: ".github/workflows/verify-b2-connectivity.yml at 7f5f3585588da8b330e4ae9779f0b6343e1156eb (workflow_dispatch, conclusion success, 2026-08-02T14:30:06Z)"
+      proven: "the configured credentials authenticate against the private Backblaze B2 EU Central bucket, and a probe object was written, read back and byte-compared, deleted, then asserted absent with head-object - so writes land, reads return the same bytes, deletes really delete, and bucket Object Lock is not silently retaining objects and making retention unenforceable"
+      not_proven: "NO BACKUP EXISTS. Nothing in that run touched PostgreSQL: no pgBackRest install, no stanza, no full or differential backup, no WAL archive, no check, no verify, no restore. The probe object was written under a connectivity-check/ prefix outside the pgBackRest repository path. Reaching the object store is a precondition of the backup design, not evidence of it."
+      configuration_home: "GitHub repository variables PGBACKREST_REPO1_* (8) plus 3 repository secrets; the values are deliberately not recorded in Git, so the variables are the single source of truth for bucket, endpoint, region, key type, URI style, repository path and cipher type"
+      reverify: "re-dispatch the Verify B2 connectivity workflow; it is dispatch-only, mutates no database, and writes only outside the pgBackRest repository path"
     compatibility_gate: "separately reviewed source/derived image manifests; Docker-measured .Image/config ID/sole RepoDigest/platform/PGDATA; exact runtime signature; pinned PostgreSQL/pgBackRest binaries; complete canonical catalog signature; A/B/C must match source before migration"
     integrity_gate: "fresh selected full; post-backup pgBackRest check plus selected-set verify parsed to exactly status: ok; healthy WAL archive; digest-only set reference; tracked procedure/probe digests"
     restore_design: "sole tracked guarded A|B|C entrypoint on three independently created clean Hetzner PostgreSQL-only hosts; wrapper-generated exact pgBackRest config plus fixed descriptor-only secrets; authoritative private target IDs with complete never-started config validation and ID-only start; one-use target-bound provider challenges through the pinned signed owner broker proving exact firewall and empty private_net before target start/SQL and after cleanup; same-ID sealed runner plus complete live Docker inventory; no production snapshot/app clone, public DB, Docker socket or production credentials"
@@ -117,7 +126,7 @@ google_drive:
       repository_variables_present: [GOOGLE_WORKSPACE_ADMIN]
       dispatch_safe: false
       note: "Read-only GitHub metadata only; no secret values or live provider access."
-    backup_readiness: "Operator-managed pgBackRest 2.59.0 physical/WAL using provider-managed B2 EU storage is documented but not configured; the 2026-07-25 Coolify logical backup is insufficient. Tracked guarded restore/probe/retention artifacts now exist, but approved measured-image manifests/build, signed provider broker, dedicated-host or separately reviewed exclusive-broker scheduler scope, runtime/catalog collectors, backup acceptance, authentic authorization-time retention, provider quote, independent A/B/C results and reviewed digest-only PASS are absent. The separate automation evidence-lifecycle consumer PR remains an explicit blocker; no final schema version or compatibility is claimed."
+    backup_readiness: "Operator-managed pgBackRest 2.59.0 physical/WAL using provider-managed B2 EU storage is documented and its object store is now reachable, but the backup itself is not configured: run 30752237109 (2026-08-02) proved write/read-back/delete/verify-absent against the private B2 bucket and nothing more, and the 2026-07-25 Coolify logical backup remains insufficient. Tracked guarded restore/probe/retention artifacts now exist, but approved measured-image manifests/build, signed provider broker, dedicated-host or separately reviewed exclusive-broker scheduler scope, runtime/catalog collectors, backup acceptance, authentic authorization-time retention, provider quote, independent A/B/C results and reviewed digest-only PASS are absent. The separate automation evidence-lifecycle consumer PR remains an explicit blocker; no final schema version or compatibility is claimed."
     next_gates: "configure and accept the documented physical backup path; create environment-scoped least-privilege rollout configuration; zero-write preflight; reviewed expected writes; five-phase controlled run; zero-duplicate replay"
   cutover: base structure complete; approved-source foundation merged but not live; no controlled import has begun; workflow rewiring and owner recovery/break-glass acceptance remain pending
   operating_guide: runbooks/company-drive.md

@@ -107,6 +107,63 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
 
 ## 🟡 Unblock the next build steps
 
+- [ ] **Reconcile the Backblaze B2 backup configuration with the runbook.**
+  Object-store connectivity is proven: dispatch-only run
+  [`30752237109`](https://github.com/Ivan-Shyla/adapteng-company-os/actions/runs/30752237109)
+  (`Verify B2 connectivity`, `workflow_dispatch`, conclusion `success`,
+  2026-08-02T14:30:06Z, head `7f5f3585588da8b330e4ae9779f0b6343e1156eb`) wrote a
+  probe object to the private bucket, read it back and compared the bytes,
+  deleted it, then asserted with `head-object` that it was gone. Credentials
+  authenticate and deletes really delete, so bucket Object Lock is not silently
+  making retention unenforceable. **No backup exists** — nothing in that run
+  touched PostgreSQL. Three follow-ups remain, and none of them can be done from
+  a pull request:
+  1. **`PGBACKREST_REPO1_S3_URI_STYLE` — keep the configured value `host`; no
+     variable change needed.** The runbook previously specified `path`; that was
+     the error and it is now corrected in
+     [`runbooks/backup-and-restore.md`](../runbooks/backup-and-restore.md).
+     pgBackRest documents `host` as its default and defines `path` for stores
+     that cannot serve `bucket.endpoint`
+     (<https://pgbackrest.org/configuration.html>); Backblaze documents that its
+     S3-compatible API accepts the bucket name in either the hostname or the
+     path
+     (<https://www.backblaze.com/docs/cloud-storage-call-the-s3-compatible-api>),
+     so B2 does not require `path`. Checked independently on 2026-08-02: the
+     virtual-hosted name for the configured bucket resolves, TLS validates and
+     B2 answers `403` rather than a DNS or certificate error, and run
+     `30752237109` used the AWS CLI with only `--endpoint-url`, whose
+     `addressing_style` default is `auto` and prefers virtual-hosted
+     (<https://docs.aws.amazon.com/cli/latest/topic/s3-config.html>).
+  2. **`PGBACKREST_REPO1_PATH` — keep the configured value; verify the B2
+     scopes match it.** The value is only a prefix inside the bucket and is free
+     to choose: at `7f5f3585588da8b330e4ae9779f0b6343e1156eb` nothing reads a
+     literal — `scripts/postgres_restore_generation.py` takes it from the guard
+     packet, and `.github/workflows/verify-b2-connectivity.yml` only asserts it
+     is absolute. The runbook's stale literal has been replaced by a
+     placeholder, and the exact value is deliberately not written into Git
+     because the runbook's own evidence policy lists repository paths as
+     forbidden. **Owner check in the B2 console:** the hidden-version deletion
+     (35 days) and unfinished-large-file cancellation (7 days) lifecycle rules,
+     and the application key's prefix restriction, must be scoped to the value
+     the variable actually holds. A lifecycle rule left on the runbook's old
+     prefix would silently stop expiring hidden versions — a retention and cost
+     defect that no pgBackRest command reports.
+  3. **The application key is broader than the runbook prescribes.** Phase 2
+     step 3 requires a key restricted to the bucket *and the pgBackRest
+     repository prefix*, but run `30752237109` wrote and deleted under a
+     `connectivity-check/` prefix outside it and succeeded. Decide explicitly:
+     either accept a bucket-scoped key and record that decision, or narrow the
+     key to the repository prefix and accept that the connectivity workflow then
+     needs its own allowed prefix. Do not leave it undecided.
+  4. **Separate code fix, not an owner console action:**
+     `scripts/postgres_restore_generation.py` hardcodes
+     `repo1-s3-uri-style=path` and never reads
+     `PGBACKREST_REPO1_S3_URI_STYLE`, so the generated restore configuration
+     will disagree with the backup-side configuration and the variable has no
+     effect on restore. B2 accepts both styles, so this is a consistency defect
+     rather than an outage, but it should be fixed in a pull request that owns
+     `scripts/`.
+
 - [x] **Provide Google service-account credentials.** ✅ **DONE 2026-07-26** — SA
   `adapteng-ai-operator@adapteng-workspace-automation.iam.gserviceaccount.com`
   (project `adapteng-workspace-automation`), domain-wide delegation for
@@ -189,7 +246,10 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   The selected design is operator-managed pinned pgBackRest 2.59.0 physical
   base backups + continuous WAL using provider-managed Backblaze B2 EU Central
   object storage, with a clean disposable Hetzner PostgreSQL-only restore host.
-  It is **proposed, not configured**; it is not provider-managed PostgreSQL
+  The object store is reachable and its delete path is proven (run
+  `30752237109`, 2026-08-02), and the non-secret configuration now lives in the
+  `PGBACKREST_REPO1_*` repository variables; **the backup itself is still not
+  configured**. It is not provider-managed PostgreSQL
   backup, the 2026-07-25 Coolify logical backup is insufficient, and the Baserow
   all-in-one backup is unrelated. Follow
   [`runbooks/backup-and-restore.md`](../runbooks/backup-and-restore.md): land the
