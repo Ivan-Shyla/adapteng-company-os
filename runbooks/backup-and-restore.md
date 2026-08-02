@@ -20,6 +20,22 @@ Docker storage, internal network only, and no public database port.
 > consumer dependency has not merged; no schema version, compatibility,
 > configuration, execution, or readiness is claimed.
 
+> **Verified 2026-08-02 - the object store, and only the object store.** The
+> private Backblaze B2 EU Central bucket this design targets is reachable and
+> behaves correctly. Run
+> [`30752237109`](https://github.com/Ivan-Shyla/adapteng-company-os/actions/runs/30752237109)
+> of `.github/workflows/verify-b2-connectivity.yml` (`workflow_dispatch`,
+> conclusion `success`, head `7f5f3585588da8b330e4ae9779f0b6343e1156eb`) wrote a
+> probe object, read it back and compared the bytes, deleted it, and then
+> asserted with `head-object` that it was gone. That establishes three things:
+> the configured credentials authenticate, writes and reads work, and - the part
+> retention depends on - deletes really delete, so bucket Object Lock is not
+> silently retaining objects. It establishes nothing about PostgreSQL. There is
+> no pgBackRest installation, stanza, full backup, WAL archive, `check`, `verify`
+> or restore. **A reachable bucket is not a backup**, and the probe object was
+> written under a `connectivity-check/` prefix outside the pgBackRest repository
+> path so it can never be mistaken for repository content.
+
 ## Decision
 
 Use an immutable PostgreSQL 16 image containing exactly pgBackRest **2.59.0**
@@ -373,6 +389,46 @@ is enabled, encryption is off, lifecycle overlaps outside the repository
 prefix, a broad/master key is proposed, or the cipher passphrase lacks a
 separate recovery copy.
 
+### Where this configuration lives
+
+The bucket, endpoint, region and repository prefix are **live configuration, not
+documentation**. They are held in GitHub repository variables and the three
+credentials in repository secrets; Git records the names only, never the values.
+Those variables are therefore the single source of truth, and this runbook must
+not restate a competing literal:
+
+| pgBackRest option | Repository variable |
+|---|---|
+| `repo1-type` | `PGBACKREST_REPO1_TYPE` |
+| `<private-bucket-name>` | `PGBACKREST_REPO1_S3_BUCKET` |
+| `<B2-S3-endpoint>` | `PGBACKREST_REPO1_S3_ENDPOINT` |
+| `<B2-region>` | `PGBACKREST_REPO1_S3_REGION` |
+| `repo1-s3-key-type` | `PGBACKREST_REPO1_S3_KEY_TYPE` |
+| `repo1-s3-uri-style` | `PGBACKREST_REPO1_S3_URI_STYLE` |
+| `<PGBACKREST_REPO1_PATH>` | `PGBACKREST_REPO1_PATH` |
+| `repo1-cipher-type` | `PGBACKREST_REPO1_CIPHER_TYPE` |
+
+That is all eight non-secret variables; `repo1-s3-key-type` selects how the
+credentials are presented and so has no line of its own in the config block
+below.
+
+The three credentials are repository secrets, named in
+`.github/workflows/verify-b2-connectivity.yml` and never printed.
+
+Two operational consequences follow, and both are owner checks rather than
+repository edits:
+
+- the B2 lifecycle rules from step 2 and the application key prefix restriction
+  from step 3 must be scoped to whatever `PGBACKREST_REPO1_PATH` actually holds.
+  A lifecycle rule scoped to a stale prefix silently stops expiring hidden
+  versions, which is a cost and retention defect that no pgBackRest command
+  reports; and
+- the connectivity workflow deliberately writes its probe **outside** that
+  prefix, so a key restricted strictly to the repository prefix cannot run it.
+  Run `30752237109` succeeded, which means the key in use today is not confined
+  to the pgBackRest repository prefix that step 3 prescribes. Decide explicitly
+  which scope that key has instead of discovering it during an incident.
+
 ## Phase 3 - configure, capture source signatures, and take the full
 
 The reviewed non-secret configuration must have this shape:
@@ -380,11 +436,11 @@ The reviewed non-secret configuration must have this shape:
 ```ini
 [global]
 repo1-type=s3
-repo1-path=/postgres-physical-backup
+repo1-path=<PGBACKREST_REPO1_PATH>
 repo1-s3-bucket=<private-bucket-name>
 repo1-s3-endpoint=<B2-S3-endpoint>
 repo1-s3-region=<B2-region>
-repo1-s3-uri-style=path
+repo1-s3-uri-style=host
 repo1-storage-verify-tls=y
 repo1-cipher-type=aes-256-cbc
 repo1-retention-full=12
@@ -398,6 +454,58 @@ start-fast=y
 pg1-path=<verified-PGDATA>
 pg1-port=5432
 ```
+
+Two of those lines contradicted the configuration that was actually created,
+until this was reconciled on 2026-08-02. Both are worth stating explicitly so
+the next reader does not re-open the question:
+
+- **`repo1-s3-uri-style=host`, not `path`.** pgBackRest defines `host` as
+  "connect to `bucket.endpoint` host" and `path` as "connect to endpoint host
+  and prepend bucket to URIs", and its documented default is `host`
+  ([pgBackRest configuration reference, S3 Repository URI Style
+  Option](https://pgbackrest.org/configuration.html)). Backblaze documents that
+  its S3-compatible API "supports specifying the bucket name in the hostname of
+  the URL or in the path section of the URL" and gives both forms as valid
+  ([How to Call the Backblaze B2 S3-Compatible
+  API](https://www.backblaze.com/docs/cloud-storage-call-the-s3-compatible-api)),
+  so B2 is **not** one of the stores that force `path`. `path` is the value you
+  need for object stores that cannot serve `bucket.endpoint` at all; carrying it
+  here was a copied default, not a B2 requirement. Independently checked on
+  2026-08-02: the virtual-hosted name for the configured bucket resolves, the
+  TLS handshake succeeds, and B2 answers `403` (authentication required) rather
+  than a DNS or certificate error - and the round trip in run `30752237109` ran
+  through the AWS CLI with only `--endpoint-url` set, whose `addressing_style`
+  default is `auto`, which "will attempt to use `virtual` where possible"
+  ([AWS CLI S3 configuration](https://docs.aws.amazon.com/cli/latest/topic/s3-config.html)).
+  Host style is therefore both the pgBackRest default and the style already
+  exercised successfully against this bucket.
+- **`repo1-path` is a placeholder, not a literal.** For an S3 repository this is
+  simply the prefix inside the bucket under which pgBackRest keeps its
+  repository; pgBackRest only requires that it start with `/`, contain no `//`
+  and have no trailing `/`. Nothing depends on the specific string: at
+  `7f5f3585588da8b330e4ae9779f0b6343e1156eb`,
+  `scripts/postgres_restore_generation.py` emits `repo1-path` from the guard
+  packet field `repository_path` (which `scripts/postgres_restore_guard.py`
+  takes from `repository["repo_path"]`), the only literal anywhere in `scripts/`
+  is a unit-test fixture, and `.github/workflows/verify-b2-connectivity.yml`
+  asserts only that `PGBACKREST_REPO1_PATH` is absolute. The value is free to
+  choose, so the configured variable wins and this runbook stops asserting a
+  competing one - which also matches this runbook's own evidence policy, where
+  repository paths are on the forbidden list rather than the recorded list. What
+  is **not** free is consistency: the same prefix must be
+  used for backup and for every restore, and it must match the B2 lifecycle-rule
+  scope and the application key prefix restriction from Phase 2.
+
+**Known open defect, recorded rather than papered over.** At
+`7f5f3585588da8b330e4ae9779f0b6343e1156eb` the tracked restore generator
+`scripts/postgres_restore_generation.py` writes `repo1-s3-uri-style=path` as a
+hardcoded value and never reads `PGBACKREST_REPO1_S3_URI_STYLE`. Because B2
+accepts both styles this does not by itself break a restore, but the
+restore-side configuration will not match the backup-side configuration and the
+configured variable has no effect on restore. That fix is a code change in
+`scripts/` and is tracked in
+[`owner/action-items.md`](../owner/action-items.md); until it lands, treat the
+generated restore config as divergent from this runbook on that one line.
 
 The reviewed PostgreSQL settings are:
 

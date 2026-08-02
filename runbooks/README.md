@@ -22,6 +22,6 @@ exists. Never infer live capability from documentation alone.
 | [`company-drive.md`](company-drive.md) | Deciding where photos, case files, drafts and approved artifacts belong; migrating safely from personal Drive. |
 | [`n8n-operations.md`](n8n-operations.md) | Building, activating, or debugging a governed n8n workflow via the API. |
 | [`apply-migration.md`](apply-migration.md) | Applying a Postgres migration to live `adapteng_ops`. |
-| [`backup-and-restore.md`](backup-and-restore.md) | Proposed physical/WAL backup, isolated restore and exact 007/Drive-008 rehearsal for `adapteng_ops`; not configured until owner evidence says otherwise. |
+| [`backup-and-restore.md`](backup-and-restore.md) | Proposed physical/WAL backup, isolated restore and exact 007/Drive-008 rehearsal for `adapteng_ops`. B2 object-store connectivity is verified (run `30752237109`, 2026-08-02); the backup itself is not configured. |
 | [`secret-rotation.md`](secret-rotation.md) | Rotating a Baserow / n8n / Coolify / provider token. |
 | [`incident-response.md`](incident-response.md) | A webhook, adapter, or workflow is misbehaving in production. |
