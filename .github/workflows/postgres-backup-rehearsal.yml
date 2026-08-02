@@ -135,7 +135,7 @@ jobs:
           root="$RUNNER_TEMP/pg-rehearsal"
           mkdir -p "$root/sockets/source" "$root/sockets/restore-immediate" \
                    "$root/sockets/restore-latest" "$root/logs" "$root/locks" \
-                   "$root/evidence"
+                   "$root/spool" "$root/evidence"
           {
             echo "REHEARSAL_ROOT=$root"
             echo "SOURCE_PGDATA=$root/source"
@@ -222,6 +222,9 @@ jobs:
           start-fast=y
           log-path=$REHEARSAL_ROOT/logs
           lock-path=$REHEARSAL_ROOT/locks
+          # Restore clears the stanza's spool directory, and the default lives
+          # under /var/spool, which the runner user cannot write.
+          spool-path=$REHEARSAL_ROOT/spool
           log-level-console=info
           log-level-file=detail
 
