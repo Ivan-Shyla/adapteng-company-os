@@ -1,0 +1,52 @@
+name: Bootstrap branch rulesets
+
+# Applies the `main` ruleset to every target repository using an owner-scoped
+# administration credential held as a repository secret. The credential is
+# passed to the script through the environment and is never printed.
+#
+# `plan` reads and reports. `apply` writes and then re-reads every repository to
+# confirm the stored ruleset matches what was requested, so a silent partial
+# write cannot be mistaken for success.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "plan reports the delta, apply writes it"
+        required: true
+        default: plan
+        type: choice
+        options:
+          - plan
+          - apply
+      confirm_phrase:
+        description: "Type APPLY RULESETS to permit apply mode"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bootstrap-rulesets
+  cancel-in-progress: false
+
+jobs:
+  rulesets:
+    name: Bootstrap branch rulesets
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      # bootstrap_rulesets.py imports only the standard library, matching every
+      # other script in this repository, so there is no dependency install step.
+      - name: Apply and verify branch rulesets
+        env:
+          ADMIN_CREDENTIAL: ${{ secrets.RULESET_ADMIN_TOKEN }}
+          MODE: ${{ inputs.mode }}
+          CONFIRM: ${{ inputs.confirm_phrase }}
+        run: python scripts/bootstrap_rulesets.py
