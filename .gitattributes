@@ -4,5 +4,6 @@ scripts/postgres_restore_*.sql text eol=lf
 scripts/postgres_restore_*_manifest.json text eol=lf
 scripts/postgres_restore_procedure_manifest.json text eol=lf
 scripts/test_postgres_restore_rehearsal.py text eol=lf
+scripts/test_postgres_restore_scheduler_surface.py text eol=lf
 runbooks/backup-and-restore.md text eol=lf
 .gitattributes text eol=lf

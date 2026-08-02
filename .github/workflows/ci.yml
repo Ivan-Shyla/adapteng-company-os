@@ -43,8 +43,15 @@ jobs:
       # has no __init__.py, so it is a namespace package and discovery fails
       # with "Start directory is not importable". The modules are therefore
       # named explicitly, and any new suite must be added to this list.
+      #
+      # test_postgres_restore_scheduler_surface is POSIX-only by subject:
+      # scheduler_file_record opens with os.O_NOFOLLOW, which Windows does not
+      # have, and its fixtures need os.symlink, which Windows refuses without
+      # SeCreateSymbolicLinkPrivilege. It carries no skip marker; this job is
+      # where it runs, on the platform the exporter runs on in production.
       - name: Run unittest suites
         run: >-
           python -m unittest
           scripts.test_validate_sensitive_references
           scripts.test_postgres_restore_rehearsal
+          scripts.test_postgres_restore_scheduler_surface

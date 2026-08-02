@@ -72,6 +72,7 @@ runtime-дампов и копий реализации из других реп
 ```bash
 python scripts/validate_sensitive_references.py
 python -m unittest scripts.test_validate_sensitive_references scripts.test_postgres_restore_rehearsal
+python -m unittest scripts.test_postgres_restore_scheduler_surface  # только POSIX
 ```
 
 Первая команда — это то, что делает проверяемым обещание из начала файла: она
@@ -80,3 +81,9 @@ python -m unittest scripts.test_validate_sensitive_references scripts.test_postg
 Вторая — регрессионные наборы к ней и к процедуре восстановления PostgreSQL.
 `unittest discover` не используется: в `scripts/` нет `__init__.py`, поэтому
 модули перечисляются явно, а запуск обязателен из корня репозитория.
+
+Третья команда работает только на POSIX и на Windows не запустится: её предмет —
+`scheduler_file_record`, который открывает файлы с `os.O_NOFOLLOW` (на Windows
+такого флага нет), а фикстуры используют `os.symlink` (Windows требует
+привилегию). Маркеров пропуска в ней нет: набор целиком выполняется в CI на
+`ubuntu-latest` — на той платформе, где экспортёр и работает.
