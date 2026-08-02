@@ -1,0 +1,154 @@
+name: Verify B2 connectivity
+
+# A write/read/delete round trip against the backup object store, on demand only.
+#
+# This proves the three things the backup path depends on before any of it is
+# built: the credentials authenticate, the bucket accepts writes, and deletes
+# actually delete. The last one matters most and is the easiest to assume --
+# retention is unenforceable if delete silently does nothing, and Object Lock
+# left enabled would produce exactly that failure while every write still
+# succeeded.
+#
+# Nothing here touches PostgreSQL, and nothing here restores anything. The probe
+# object is written outside the pgBackRest repository path so it can never be
+# mistaken for repository content by a later expire.
+#
+# No value is hardcoded. Bucket, endpoint and region are read from repository
+# variables and the credentials from repository secrets, so this file stays free
+# of live resource identifiers and the configuration has exactly one home.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-b2-connectivity
+  cancel-in-progress: false
+
+jobs:
+  round-trip:
+    name: Object store round trip
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # No checkout step: every input arrives through the environment, so the job
+    # needs no repository content and is given none.
+    steps:
+      - name: Verify the configuration contract is complete
+        env:
+          REPO1_S3_KEY: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
+          REPO1_S3_KEY_SECRET: ${{ secrets.PGBACKREST_REPO1_S3_KEY_SECRET }}
+          REPO1_CIPHER_PASS: ${{ secrets.PGBACKREST_REPO1_CIPHER_PASS }}
+          REPO1_TYPE: ${{ vars.PGBACKREST_REPO1_TYPE }}
+          REPO1_S3_BUCKET: ${{ vars.PGBACKREST_REPO1_S3_BUCKET }}
+          REPO1_S3_ENDPOINT: ${{ vars.PGBACKREST_REPO1_S3_ENDPOINT }}
+          REPO1_S3_REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
+          REPO1_S3_KEY_TYPE: ${{ vars.PGBACKREST_REPO1_S3_KEY_TYPE }}
+          REPO1_S3_URI_STYLE: ${{ vars.PGBACKREST_REPO1_S3_URI_STYLE }}
+          REPO1_PATH: ${{ vars.PGBACKREST_REPO1_PATH }}
+          REPO1_CIPHER_TYPE: ${{ vars.PGBACKREST_REPO1_CIPHER_TYPE }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in \
+            REPO1_S3_KEY REPO1_S3_KEY_SECRET REPO1_CIPHER_PASS \
+            REPO1_TYPE REPO1_S3_BUCKET REPO1_S3_ENDPOINT REPO1_S3_REGION \
+            REPO1_S3_KEY_TYPE REPO1_S3_URI_STYLE REPO1_PATH REPO1_CIPHER_TYPE
+          do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} )); then
+            printf '::error title=Incomplete backup configuration::Missing: %s\n' "${missing[*]}"
+            exit 1
+          fi
+
+          # The endpoint must be a host name. A bare region here resolves to
+          # nothing, and every later pgBackRest call would fail with a DNS error
+          # that looks like a network problem rather than a configuration one.
+          case "$REPO1_S3_ENDPOINT" in
+            *.*) ;;
+            *)
+              echo "::error title=Endpoint is not a host name::PGBACKREST_REPO1_S3_ENDPOINT must be a host name, not a region."
+              exit 1
+              ;;
+          esac
+
+          # The repository path is what separates backup content from everything
+          # else in the bucket, so an unanchored value is rejected rather than
+          # silently reinterpreted as relative to the bucket root.
+          case "$REPO1_PATH" in
+            /*) ;;
+            *)
+              echo "::error title=Repository path is not absolute::PGBACKREST_REPO1_PATH must start with a slash."
+              exit 1
+              ;;
+          esac
+
+          echo "Configuration contract complete: 3 secrets and 8 variables present."
+
+      - name: Write, read back and delete a probe object
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PGBACKREST_REPO1_S3_KEY_SECRET }}
+          AWS_DEFAULT_REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
+          AWS_DEFAULT_OUTPUT: json
+          BUCKET: ${{ vars.PGBACKREST_REPO1_S3_BUCKET }}
+          ENDPOINT: ${{ vars.PGBACKREST_REPO1_S3_ENDPOINT }}
+          PROBE_KEY: connectivity-check/${{ github.run_id }}-${{ github.run_attempt }}.txt
+        run: |
+          set -euo pipefail
+          endpoint="https://$ENDPOINT"
+          sent="$RUNNER_TEMP/probe-sent.txt"
+          received="$RUNNER_TEMP/probe-received.txt"
+          printf 'adapteng b2 connectivity probe run=%s attempt=%s\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >"$sent"
+
+          echo "--- write ---"
+          aws s3api put-object \
+            --endpoint-url "$endpoint" --bucket "$BUCKET" --key "$PROBE_KEY" \
+            --body "$sent" >/dev/null
+          echo "Wrote $PROBE_KEY"
+
+          echo "--- read ---"
+          aws s3api get-object \
+            --endpoint-url "$endpoint" --bucket "$BUCKET" --key "$PROBE_KEY" \
+            "$received" >/dev/null
+          # Comparing bytes rather than trusting a 200: a read that returns the
+          # wrong object would still be a successful HTTP call.
+          cmp "$sent" "$received"
+          echo "Read back $(wc -c <"$received" | tr -d ' ') bytes, identical to what was written."
+
+          echo "--- delete ---"
+          aws s3api delete-object \
+            --endpoint-url "$endpoint" --bucket "$BUCKET" --key "$PROBE_KEY" >/dev/null
+
+          # Asserted, not assumed. If Object Lock were enabled the write and the
+          # delete would both report success while the object survived, and
+          # retention would be quietly unenforceable.
+          if aws s3api head-object \
+            --endpoint-url "$endpoint" --bucket "$BUCKET" --key "$PROBE_KEY" >/dev/null 2>&1
+          then
+            echo "::error title=Probe object survived deletion::Delete reported success but the object is still present, so retention cannot be enforced."
+            exit 1
+          fi
+          echo "Probe object is gone."
+          echo "Write, read and delete all work against the backup bucket."
+
+      - name: Remove the probe object if the round trip did not
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PGBACKREST_REPO1_S3_KEY_SECRET }}
+          AWS_DEFAULT_REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
+          BUCKET: ${{ vars.PGBACKREST_REPO1_S3_BUCKET }}
+          ENDPOINT: ${{ vars.PGBACKREST_REPO1_S3_ENDPOINT }}
+          PROBE_KEY: connectivity-check/${{ github.run_id }}-${{ github.run_attempt }}.txt
+        run: |
+          # A failure between write and delete would otherwise leave litter in a
+          # bucket whose whole purpose is to contain exactly one known thing.
+          aws s3api delete-object \
+            --endpoint-url "https://$ENDPOINT" --bucket "$BUCKET" --key "$PROBE_KEY" \
+            >/dev/null 2>&1 || true
