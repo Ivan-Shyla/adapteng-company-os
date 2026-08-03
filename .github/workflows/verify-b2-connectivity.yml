@@ -152,3 +152,158 @@ jobs:
           aws s3api delete-object \
             --endpoint-url "https://$ENDPOINT" --bucket "$BUCKET" --key "$PROBE_KEY" \
             >/dev/null 2>&1 || true
+
+  operation-classes:
+    name: Which operations the key can actually perform
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The round-trip job above answers "do the credentials work". That turned
+    # out to be too coarse: on 2026-08-03 the backup rehearsal began failing at
+    # `pgbackrest stanza-create` with HTTP 403 on a HEAD, in runs where listing
+    # and deleting through the same key in the same job still succeeded. A
+    # single pass/fail for "connectivity" cannot describe that, so this job
+    # classifies each operation the backup path depends on separately.
+    #
+    # Object stores charge and permission reads, writes and listings
+    # differently, so "the credentials work" is not one fact but several, and
+    # the backup path needs all of them.
+    steps:
+      - name: Classify every operation the backup path depends on
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PGBACKREST_REPO1_S3_KEY_SECRET }}
+          AWS_DEFAULT_REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
+          AWS_DEFAULT_OUTPUT: json
+          BUCKET: ${{ vars.PGBACKREST_REPO1_S3_BUCKET }}
+          ENDPOINT: ${{ vars.PGBACKREST_REPO1_S3_ENDPOINT }}
+          REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
+        run: |
+          # Deliberately no `set -e`. Every command here is a measurement and a
+          # failure is a result, not an accident.
+          set -uo pipefail
+
+          scope="operation-class-probe/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          present_key="$scope/present.txt"
+          absent_key="$scope/absent.txt"
+          body="$RUNNER_TEMP/response.xml"
+          payload="$RUNNER_TEMP/payload.txt"
+          printf 'operation class probe\n' >"$payload"
+
+          # Credentials are fed to curl through a config file on stdin so they
+          # never appear in a process argument list.
+          signed() {
+            local method="$1" url="$2"
+            local -a verb
+            if [ "$method" = HEAD ]; then verb=(--head); else verb=(--request "$method"); fi
+            printf '%s\n' \
+              "user = \"$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY\"" \
+              "aws-sigv4 = \"aws:amz:$REGION:s3\"" \
+              | curl --silent --show-error --config - "${verb[@]}" \
+                  --output "$body" --write-out '%{http_code}' "$url"
+          }
+
+          report() {
+            local label="$1" method="$2" url="$3"
+            local status
+            status=$(signed "$method" "$url")
+            printf '\n=== %s\n' "$label"
+            printf '    %s -> HTTP %s\n' "$method" "$status"
+            # A HEAD response carries no body by definition, which is exactly
+            # why the failing pgBackRest log could show a content-length for an
+            # XML error it never received. Only GET can show the reason.
+            if [ "$method" != HEAD ] && [ -s "$body" ]; then
+              echo "    --- response body verbatim ---"
+              sed 's/^/    /' "$body"
+              printf '\n    --- end of body ---\n'
+            fi
+            printf '%s %s\n' "$label" "$status" >>"$RUNNER_TEMP/classification.txt"
+          }
+
+          virtual="https://$BUCKET.$ENDPOINT"
+          path="https://$ENDPOINT/$BUCKET"
+          : >"$RUNNER_TEMP/classification.txt"
+
+          echo "### Writing one probe object, so that a read of something that exists can be told"
+          echo "### apart from a read of something that does not."
+          aws s3api put-object --endpoint-url "https://$ENDPOINT" \
+            --bucket "$BUCKET" --key "$present_key" --body "$payload" >/dev/null 2>&1
+          echo "awscli put-object exit: $?"
+
+          report "head-present-virtual"  HEAD "$virtual/$present_key"
+          report "get-present-virtual"   GET  "$virtual/$present_key"
+          report "head-absent-virtual"   HEAD "$virtual/$absent_key"
+          report "get-absent-virtual"    GET  "$virtual/$absent_key"
+          report "get-absent-path"       GET  "$path/$absent_key"
+          report "list-prefix-virtual"   GET  "$virtual/?list-type=2&prefix=$scope/"
+
+          echo ""
+          echo "### The same operations through the AWS CLI, which is the client that"
+          echo "### succeeds inside the failing rehearsal job."
+          for op in "head-object --key $present_key" "head-object --key $absent_key"; do
+            printf '\n=== awscli %s\n' "$op"
+            # shellcheck disable=SC2086
+            aws s3api $op --endpoint-url "https://$ENDPOINT" --bucket "$BUCKET" 2>&1 \
+              | sed 's/^/    /'
+          done
+          printf '\n=== awscli list-objects-v2\n'
+          aws s3api list-objects-v2 --endpoint-url "https://$ENDPOINT" \
+            --bucket "$BUCKET" --prefix "$scope/" --query 'length(Contents || `[]`)' \
+            --output text 2>&1 | sed 's/^/    /'
+
+          echo ""
+          echo "### Classification"
+          cat "$RUNNER_TEMP/classification.txt"
+
+          aws s3api delete-object --endpoint-url "https://$ENDPOINT" \
+            --bucket "$BUCKET" --key "$present_key" >/dev/null 2>&1 || true
+
+      - name: Reproduce the failure with pgBackRest itself, both addressing styles
+        if: always()
+        env:
+          PGBACKREST_REPO1_S3_KEY: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
+          PGBACKREST_REPO1_S3_KEY_SECRET: ${{ secrets.PGBACKREST_REPO1_S3_KEY_SECRET }}
+          PGBACKREST_REPO1_CIPHER_PASS: ${{ secrets.PGBACKREST_REPO1_CIPHER_PASS }}
+          PGBACKREST_REPO1_TYPE: ${{ vars.PGBACKREST_REPO1_TYPE }}
+          PGBACKREST_REPO1_S3_BUCKET: ${{ vars.PGBACKREST_REPO1_S3_BUCKET }}
+          PGBACKREST_REPO1_S3_ENDPOINT: ${{ vars.PGBACKREST_REPO1_S3_ENDPOINT }}
+          PGBACKREST_REPO1_S3_REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
+          PGBACKREST_REPO1_S3_KEY_TYPE: ${{ vars.PGBACKREST_REPO1_S3_KEY_TYPE }}
+          PGBACKREST_REPO1_CIPHER_TYPE: ${{ vars.PGBACKREST_REPO1_CIPHER_TYPE }}
+          PGBACKREST_REPO1_PATH: /operation-class-probe/${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -uo pipefail
+          . /etc/os-release
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc]" \
+               "https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq pgbackrest
+          pgbackrest version
+
+          root="$RUNNER_TEMP/probe"
+          mkdir -p "$root/logs" "$root/locks"
+          conf="$root/pgbackrest.conf"
+
+          # `info` reads the repository and nothing else, so it reproduces the
+          # failing read without needing a PostgreSQL cluster at all. The
+          # rehearsal fails on a HEAD of archive.info; this issues the same
+          # class of request against the same repository.
+          for style in host path; do
+            printf '\n=== pgbackrest info with repo1-s3-uri-style=%s\n' "$style"
+            cat >"$conf" <<CONF
+          [global]
+          repo1-s3-uri-style=$style
+          repo1-storage-verify-tls=y
+          log-path=$root/logs
+          lock-path=$root/locks
+          log-level-console=detail
+
+          [probe]
+          pg1-path=$root/pgdata
+          CONF
+            pgbackrest --config="$conf" --stanza=probe info 2>&1 | sed 's/^/    /'
+            printf '    exit: %s\n' "${PIPESTATUS[0]}"
+          done
