@@ -178,56 +178,65 @@ jobs:
           ENDPOINT: ${{ vars.PGBACKREST_REPO1_S3_ENDPOINT }}
           REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
         run: |
-          # Deliberately no `set -e`. Every command here is a measurement and a
-          # failure is a result, not an accident.
+          # Actions runs this with `bash -e`, so `-e` has to be turned off
+          # explicitly rather than merely not turned on. Every probe below is a
+          # measurement and a failure is a result, not an accident; an earlier
+          # revision only omitted `set -e`, inherited it anyway, and died at the
+          # first failing probe with the summary and the cleanup unreached.
+          set +e
           set -uo pipefail
 
           scope="operation-class-probe/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           present_key="$scope/present.txt"
           absent_key="$scope/absent.txt"
-          body="$RUNNER_TEMP/response.xml"
+          bodies="$RUNNER_TEMP/bodies"
+          results="$RUNNER_TEMP/classification.txt"
           payload="$RUNNER_TEMP/payload.txt"
+          mkdir -p "$bodies"
+          : >"$results"
           printf 'operation class probe\n' >"$payload"
 
           # Credentials are fed to curl through a config file on stdin so they
           # never appear in a process argument list.
           signed() {
-            local method="$1" url="$2"
+            local method="$1" url="$2" out="$3"
             local -a verb
             if [ "$method" = HEAD ]; then verb=(--head); else verb=(--request "$method"); fi
             printf '%s\n' \
               "user = \"$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY\"" \
               "aws-sigv4 = \"aws:amz:$REGION:s3\"" \
               | curl --silent --show-error --config - "${verb[@]}" \
-                  --output "$body" --write-out '%{http_code}' "$url"
+                  --output "$out" --write-out '%{http_code}' "$url"
           }
 
           report() {
             local label="$1" method="$2" url="$3"
-            local status
-            status=$(signed "$method" "$url")
+            local status out="$bodies/$1"
+            status=$(signed "$method" "$url" "$out")
             printf '\n=== %s\n' "$label"
             printf '    %s -> HTTP %s\n' "$method" "$status"
             # A HEAD response carries no body by definition, which is exactly
-            # why the failing pgBackRest log could show a content-length for an
-            # XML error it never received. Only GET can show the reason.
-            if [ "$method" != HEAD ] && [ -s "$body" ]; then
+            # why the failing pgBackRest log could report a content-length for
+            # an XML error it never received. Only GET can show the reason, so
+            # every read is issued both ways.
+            if [ "$method" != HEAD ] && [ -s "$out" ]; then
               echo "    --- response body verbatim ---"
-              sed 's/^/    /' "$body"
+              sed 's/^/    /' "$out"
               printf '\n    --- end of body ---\n'
             fi
-            printf '%s %s\n' "$label" "$status" >>"$RUNNER_TEMP/classification.txt"
+            printf '%s %s\n' "$label" "$status" >>"$results"
           }
 
           virtual="https://$BUCKET.$ENDPOINT"
           path="https://$ENDPOINT/$BUCKET"
-          : >"$RUNNER_TEMP/classification.txt"
 
-          echo "### Writing one probe object, so that a read of something that exists can be told"
-          echo "### apart from a read of something that does not."
+          echo "### A read of an object that exists has to be distinguishable from a read of"
+          echo "### one that does not, so write a probe object before reading anything."
           aws s3api put-object --endpoint-url "https://$ENDPOINT" \
             --bucket "$BUCKET" --key "$present_key" --body "$payload" >/dev/null 2>&1
-          echo "awscli put-object exit: $?"
+          put_exit=$?
+          printf 'put-present %s\n' "$put_exit" >>"$results"
+          echo "awscli put-object exit: $put_exit"
 
           report "head-present-virtual"  HEAD "$virtual/$present_key"
           report "get-present-virtual"   GET  "$virtual/$present_key"
@@ -237,8 +246,8 @@ jobs:
           report "list-prefix-virtual"   GET  "$virtual/?list-type=2&prefix=$scope/"
 
           echo ""
-          echo "### The same operations through the AWS CLI, which is the client that"
-          echo "### succeeds inside the failing rehearsal job."
+          echo "### The same operations through the AWS CLI, the client whose listing and"
+          echo "### deleting kept succeeding in the runs where pgBackRest could not read."
           for op in "head-object --key $present_key" "head-object --key $absent_key"; do
             printf '\n=== awscli %s\n' "$op"
             # shellcheck disable=SC2086
@@ -252,12 +261,61 @@ jobs:
 
           echo ""
           echo "### Classification"
-          cat "$RUNNER_TEMP/classification.txt"
+          printf '%-24s %s\n' operation result
+          while read -r label status; do printf '%-24s %s\n' "$label" "$status"; done <"$results"
 
-          aws s3api delete-object --endpoint-url "https://$ENDPOINT" \
-            --bucket "$BUCKET" --key "$present_key" >/dev/null 2>&1 || true
+          status_of() { awk -v k="$1" '$1 == k { print $2 }' "$results"; }
+          get_present=$(status_of get-present-virtual)
+          get_absent_virtual=$(status_of get-absent-virtual)
+          get_absent_path=$(status_of get-absent-path)
+          listing=$(status_of list-prefix-virtual)
 
-      - name: Reproduce the failure with pgBackRest itself, both addressing styles
+          capped=no
+          if grep -rqi 'cap exceeded' "$bodies" 2>/dev/null; then capped=yes; fi
+
+          echo ""
+          echo "### Verdict"
+          verdict=0
+
+          # Negative control: the two addressing styles must agree. If they ever
+          # disagree, the fault is in how the request is shaped and the style is
+          # worth changing. While they agree, changing it cannot help anything.
+          if [ "$get_absent_virtual" != "$get_absent_path" ]; then
+            echo "Addressing style CHANGES the outcome: virtual-hosted $get_absent_virtual" \
+                 "vs path $get_absent_path. Request shaping is implicated."
+            verdict=1
+          else
+            echo "Addressing style is not a factor: virtual-hosted and path both returned" \
+                 "$get_absent_virtual, so repo1-s3-uri-style cannot explain a read failure."
+          fi
+
+          if [ "$capped" = yes ]; then
+            echo "READS ARE CAPPED, NOT FORBIDDEN. The store answered 403 with a body saying a"
+            echo "cap has been reached. This is a quota on the account, not a permission on the"
+            echo "key: the same key wrote and listed in this job. Raise or remove the cap in the"
+            echo "storage provider's Caps and Alerts settings. Re-scoping the key would do"
+            echo "nothing, and neither would changing the client configuration."
+            verdict=1
+          elif [ "$put_exit" != 0 ] || [ "$listing" != 200 ]; then
+            echo "Writing or listing failed, so this is not a read-specific problem."
+            verdict=1
+          elif [ "$get_present" != 200 ]; then
+            echo "A read of an object that demonstrably exists was refused while writing and"
+            echo "listing succeeded, and nothing in the body mentions a cap. The key is missing"
+            echo "read permission on this bucket."
+            verdict=1
+          elif [ "$get_absent_virtual" = 403 ]; then
+            echo "Reads of existing objects succeed but a read of an absent key returns 403"
+            echo "rather than 404. That is the classic sign of a key without bucket-listing"
+            echo "scope, and it breaks pgBackRest, which probes for absent files by design."
+            verdict=1
+          else
+            echo "Every operation class the backup path depends on works: write, read of a"
+            echo "present object, read of an absent object, and listing."
+          fi
+          exit "$verdict"
+
+      - name: Reproduce the reads with pgBackRest itself, both addressing styles
         if: always()
         env:
           PGBACKREST_REPO1_S3_KEY: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
@@ -271,6 +329,7 @@ jobs:
           PGBACKREST_REPO1_CIPHER_TYPE: ${{ vars.PGBACKREST_REPO1_CIPHER_TYPE }}
           PGBACKREST_REPO1_PATH: /operation-class-probe/${{ github.run_id }}-${{ github.run_attempt }}
         run: |
+          set +e
           set -uo pipefail
           . /etc/os-release
           sudo install -d /usr/share/postgresql-common/pgdg
@@ -287,12 +346,17 @@ jobs:
           mkdir -p "$root/logs" "$root/locks"
           conf="$root/pgbackrest.conf"
 
-          # `info` reads the repository and nothing else, so it reproduces the
-          # failing read without needing a PostgreSQL cluster at all. The
-          # rehearsal fails on a HEAD of archive.info; this issues the same
-          # class of request against the same repository.
+          # The rehearsal fails on a read of archive.info, so read exactly that,
+          # through pgBackRest's own HTTP stack rather than the AWS CLI's. This
+          # needs no PostgreSQL cluster and creates nothing: `repo-get` is a
+          # plain read, and `info` alongside it is a listing, so the pair shows
+          # whether one client sees the two operation classes differently.
+          #
+          # Both addressing styles are run every time as a negative control. A
+          # probe that only ever exercises the configured style cannot notice
+          # that the style is irrelevant, which is precisely the mistake this
+          # job exists to prevent.
           for style in host path; do
-            printf '\n=== pgbackrest info with repo1-s3-uri-style=%s\n' "$style"
             cat >"$conf" <<CONF
           [global]
           repo1-s3-uri-style=$style
@@ -304,6 +368,39 @@ jobs:
           [probe]
           pg1-path=$root/pgdata
           CONF
+            printf '\n=== repo1-s3-uri-style=%s: listing (the operation that kept working)\n' "$style"
             pgbackrest --config="$conf" --stanza=probe info 2>&1 | sed 's/^/    /'
             printf '    exit: %s\n' "${PIPESTATUS[0]}"
+
+            printf '\n=== repo1-s3-uri-style=%s: reading archive.info (the operation that failed)\n' "$style"
+            pgbackrest --config="$conf" --stanza=probe \
+              repo-get "archive/probe/archive.info" 2>&1 | sed 's/^/    /'
+            printf '    exit: %s\n' "${PIPESTATUS[0]}"
           done
+
+      - name: Remove the probe object whatever the classification concluded
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PGBACKREST_REPO1_S3_KEY_SECRET }}
+          AWS_DEFAULT_REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
+          BUCKET: ${{ vars.PGBACKREST_REPO1_S3_BUCKET }}
+          ENDPOINT: ${{ vars.PGBACKREST_REPO1_S3_ENDPOINT }}
+        run: |
+          # Cleanup cannot live at the end of the classification step, because
+          # that step is expected to end in failure whenever it has something
+          # to report. Deletion is also the one operation class that stayed
+          # available throughout the incident, so this can be relied on.
+          set -uo pipefail
+          scope="operation-class-probe/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          aws s3 rm "s3://$BUCKET/$scope/" --recursive \
+            --endpoint-url "https://$ENDPOINT" || true
+          left=$(aws s3api list-objects-v2 --endpoint-url "https://$ENDPOINT" \
+            --bucket "$BUCKET" --prefix "$scope/" \
+            --query 'length(Contents || `[]`)' --output text 2>/dev/null \
+            | awk '{ total += $1 } END { print total + 0 }')
+          echo "Objects remaining under $scope/: $left"
+          if [ "$left" != 0 ]; then
+            echo "::error::The probe left $left object(s) behind under $scope/."
+            exit 1
+          fi
