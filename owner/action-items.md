@@ -116,8 +116,8 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   deleted it, then asserted with `head-object` that it was gone. Credentials
   authenticate and deletes really delete, so bucket Object Lock is not silently
   making retention unenforceable. **No backup exists** — nothing in that run
-  touched PostgreSQL. Three follow-ups remain, and none of them can be done from
-  a pull request:
+  touched PostgreSQL. Four follow-ups remain, and only the code fix can be done
+  from a pull request:
   1. **`PGBACKREST_REPO1_S3_URI_STYLE` — keep the configured value `host`; no
      variable change needed.** The runbook previously specified `path`; that was
      the error and it is now corrected in
@@ -154,15 +154,39 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
      `connectivity-check/` prefix outside it and succeeded. Decide explicitly:
      either accept a bucket-scoped key and record that decision, or narrow the
      key to the repository prefix and accept that the connectivity workflow then
-     needs its own allowed prefix. Do not leave it undecided.
-  4. **Separate code fix, not an owner console action:**
-     `scripts/postgres_restore_generation.py` hardcodes
-     `repo1-s3-uri-style=path` and never reads
-     `PGBACKREST_REPO1_S3_URI_STYLE`, so the generated restore configuration
-     will disagree with the backup-side configuration and the variable has no
-     effect on restore. B2 accepts both styles, so this is a consistency defect
-     rather than an outage, but it should be fixed in a pull request that owns
-     `scripts/`.
+     needs its own allowed prefix. Do not leave it undecided. This also bears on
+     the `403` the restore rehearsal is currently failing on: because run
+     `30752237109` succeeded under a prefix *outside* the pgBackRest repository
+     prefix, the key in use is demonstrably not narrowly prefix-restricted,
+     which is evidence against "the key cannot see that prefix" as the
+     explanation for the `403`.
+  4. **Code fix — done, no owner action.**
+     `scripts/postgres_restore_generation.py` hardcoded
+     `repo1-s3-uri-style=path` and never consumed
+     `PGBACKREST_REPO1_S3_URI_STYLE`, so that variable had no effect on
+     restore and the restore side disagreed with the backup side. Three of its
+     neighbours were the same shape: `repo1-type` and `repo1-cipher-type` were
+     also hardcoded, and `repo1-s3-key-type` was never emitted at all — four of
+     the eight non-secret variables were set but ignored. All four now flow
+     from the guard packet, an unset setting falls back to pgBackRest's own
+     default rather than to the copied `path`, and a value the procedure cannot
+     honour stops the run instead of being silently overridden.
+  5. **`PGBACKREST_REPO1_PATH` does not match the value the restore guard
+     pins, and only you can change the variable.** `validate_repository` in
+     `scripts/postgres_restore_guard.py` fails closed unless the repository
+     prefix is exactly `/adapteng-ops` — hyphen-separated, matching the stanza
+     name `adapteng-ops` that the same check pins and that the runbook, the
+     generated config and the unit tests all use. The configured variable uses
+     an underscore instead, so a restore wired to it would stop at the guard
+     with `repository stanza/repo is not exact`. **Recommendation: change the
+     variable to `/adapteng-ops`, not the guard.** Three reasons: the guard's
+     literal is the value every other surface in the repository already agrees
+     on; the pin is a deliberate fail-closed control and relaxing it would
+     remove a check rather than fix a mismatch; and no backup has ever been
+     written under either prefix, so there is nothing to migrate and this is the
+     cheapest moment it will ever be to correct. Whichever way you decide, the
+     lifecycle rules and key scope in item 2 must be scoped to the value you
+     settle on.
 
 - [x] **Provide Google service-account credentials.** ✅ **DONE 2026-07-26** — SA
   `adapteng-ai-operator@adapteng-workspace-automation.iam.gserviceaccount.com`

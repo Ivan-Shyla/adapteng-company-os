@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -41,6 +42,8 @@ from scripts.postgres_restore_generation import (
 )
 from scripts.postgres_restore_guard import (
     GuardError,
+    REPOSITORY_SETTING_ALLOWED as GUARD_SETTING_ALLOWED,
+    REPOSITORY_SETTING_DEFAULTS,
     parse_selected_info_value,
     scan_forbidden_identifiers,
     stable_image_identity,
@@ -297,6 +300,10 @@ def generation_state() -> GenerationState:
         repository_bucket="rehearsal",
         repository_region="eu-central-003",
         repository_path="/adapteng-ops",
+        repository_type="s3",
+        repository_s3_key_type="shared",
+        repository_s3_uri_style="host",
+        repository_cipher_type="aes-256-cbc",
         restore_key_attestation_sha256="7" * 64,
         stanza="adapteng-ops",
         repo="1",
@@ -652,8 +659,52 @@ class RestoreConfigurationTests(unittest.TestCase):
         self.assertIn("repo1-type=s3", config)
         self.assertIn("repo1-path=/adapteng-ops", config)
         self.assertIn("repo1-cipher-type=aes-256-cbc", config)
+        self.assertIn("repo1-s3-key-type=shared", config)
+        self.assertIn("repo1-s3-uri-style=host", config)
         self.assertIn("[adapteng-ops]", config)
         self.assertNotIn("PGBACKREST_", config)
+
+    def test_configured_uri_style_reaches_the_generated_config(self) -> None:
+        for style in ("host", "path"):
+            with self.subTest(style=style):
+                config = build_pgbackrest_config(
+                    replace(self.state, repository_s3_uri_style=style)
+                ).decode("ascii")
+                self.assertIn(f"repo1-s3-uri-style={style}", config)
+
+    def test_repository_settings_are_consumed_not_hardcoded(self) -> None:
+        # A hardcoded setting ignores the state, so a value the restore cannot
+        # honour would be silently overridden and a config still produced.
+        for field, rejected in (
+            ("repository_type", "posix"),
+            ("repository_s3_key_type", "auto"),
+            ("repository_s3_uri_style", "vhost"),
+            ("repository_cipher_type", "none"),
+        ):
+            with self.subTest(field=field):
+                with self.assertRaises(GenerationError):
+                    build_pgbackrest_config(replace(self.state, **{field: rejected}))
+
+    def test_guard_repository_setting_defaults_match_pgbackrest_defaults(self) -> None:
+        # An unset repository variable must fall back to what pgBackRest itself
+        # defaults to, so it cannot disagree with the backup side in silence.
+        # https://pgbackrest.org/configuration.html
+        self.assertEqual(REPOSITORY_SETTING_DEFAULTS["s3_uri_style"], "host")
+        self.assertEqual(REPOSITORY_SETTING_DEFAULTS["s3_key_type"], "shared")
+        self.assertEqual(REPOSITORY_SETTING_DEFAULTS["type"], "s3")
+        self.assertEqual(
+            {f"repository_{key}" for key in REPOSITORY_SETTING_DEFAULTS},
+            set(restore_generation.REPOSITORY_SETTING_ALLOWED),
+        )
+        for key, default in REPOSITORY_SETTING_DEFAULTS.items():
+            with self.subTest(key=key):
+                self.assertEqual(
+                    GUARD_SETTING_ALLOWED[key],
+                    restore_generation.REPOSITORY_SETTING_ALLOWED[
+                        f"repository_{key}"
+                    ],
+                )
+                self.assertIn(default, GUARD_SETTING_ALLOWED[key])
 
     def test_secret_capability_accepts_only_exact_json_map(self) -> None:
         values = validate_repository_secret(

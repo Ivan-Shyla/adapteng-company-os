@@ -44,6 +44,18 @@ CLEAN_ENVIRONMENT = {
 }
 PROVIDER_BROKER_REQUEST_FD = 197
 PROVIDER_BROKER_RESPONSE_FD = 198
+# The owner configures these non-secret pgBackRest repository settings as
+# repository variables. They reach this script through the guard packet, which
+# is the only authenticated channel: ambient PGBACKREST_* environment is
+# scrubbed on purpose, so reading os.environ here would defeat that control.
+# Each value is emitted as configured rather than hardcoded, and a value this
+# procedure cannot honour stops the run instead of being silently overridden.
+REPOSITORY_SETTING_ALLOWED = {
+    "repository_type": {"s3"},
+    "repository_s3_key_type": {"shared"},
+    "repository_s3_uri_style": {"host", "path"},
+    "repository_cipher_type": {"aes-256-cbc"},
+}
 
 
 class GenerationError(RuntimeError):
@@ -106,6 +118,10 @@ class GenerationState:
     repository_bucket: str
     repository_region: str
     repository_path: str
+    repository_type: str
+    repository_s3_key_type: str
+    repository_s3_uri_style: str
+    repository_cipher_type: str
     restore_key_attestation_sha256: str
     stanza: str
     repo: str
@@ -298,15 +314,21 @@ def stage_secured_input(
 
 
 def build_pgbackrest_config(state: GenerationState) -> bytes:
+    for field, allowed in REPOSITORY_SETTING_ALLOWED.items():
+        if getattr(state, field) not in allowed:
+            raise GenerationError(
+                f"repository {field} is not a value this restore can honour"
+            )
     values = {
-        "repo1-type": "s3",
+        "repo1-type": state.repository_type,
         "repo1-path": state.repository_path,
         "repo1-s3-endpoint": state.repository_endpoint,
         "repo1-s3-bucket": state.repository_bucket,
         "repo1-s3-region": state.repository_region,
-        "repo1-s3-uri-style": "path",
+        "repo1-s3-key-type": state.repository_s3_key_type,
+        "repo1-s3-uri-style": state.repository_s3_uri_style,
         "repo1-storage-verify-tls": "y",
-        "repo1-cipher-type": "aes-256-cbc",
+        "repo1-cipher-type": state.repository_cipher_type,
         "repo1-retention-full": "12",
         "repo1-retention-full-type": "count",
         "repo1-retention-archive": "12",
@@ -422,6 +444,10 @@ def project_state(packet: dict[str, Any]) -> GenerationState:
         "repository_bucket",
         "repository_region",
         "repository_path",
+        "repository_type",
+        "repository_s3_key_type",
+        "repository_s3_uri_style",
+        "repository_cipher_type",
         "restore_key_attestation_sha256",
         "stanza",
         "repo",
