@@ -47,18 +47,20 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   complete. Repair MM-20/MM-24 approval, dependency and idempotency controls and
   make MM-07 allowlist logging redacted. Personal-project workflow work is
   outside the Company OS operational roadmap.
-- [ ] **Enable minimal solo-safe `main` protection in repository Settings/Rules.**
-  Re-verified 2026-07-27: `main` is **unprotected** in
-  `Ivan-Shyla/adapteng-company-os`, `adapteng-automation-platform`,
-  `ai-dev-loop-control-plane`, `adapteng-marketing`, `adapteng-website` and
-  legacy `PalinaRuban/adapteng`. The active repositories remain under the
-  personal `Ivan-Shyla` namespace; company ownership is not yet evidenced. An
-  administration-API attempt to apply the minimal contract to Company OS
-  returned 404; **no setting changed and protection is not enabled**. In the
-  five active repositories, require a pull request with 0 required approvals,
-  require conversation resolution and linear history, block force-push and
-  deletion, and pin no required checks yet. Apply the same contract to the
-  legacy repository only after containment.
+- [x] **Enable minimal solo-safe `main` protection in repository Settings/Rules.**
+  ✅ **DONE, re-verified read-only 2026-08-03** — an active `main-protected`
+  GitHub ruleset now exists on all five active repositories
+  (`adapteng-company-os` id `20236724`, `adapteng-automation-platform`
+  `20236725`, `ai-dev-loop-control-plane` `20236728`, `adapteng-marketing`
+  `20236729`, `adapteng-website` `20236726`; created 2026-08-02T15:30 CEST via
+  automation-platform PR #58/company-os PR #19 and its siblings), each
+  requiring a pull request (0 required approvals) plus per-repository required
+  status checks, and blocking force-push and deletion. Thread resolution and
+  linear history are **not** enforced (left off). Legacy `PalinaRuban/adapteng`
+  still cannot be checked via the rulesets API (403: below GitHub Pro), so its
+  protection state remains unverified this cycle; apply the same contract there
+  only after containment is otherwise complete. Consider adding required
+  conversation-thread resolution if desired.
 - [ ] **Isolate the shared deploy key.** Inventory deploy-key bindings by
   non-secret identifier, replace the shared key with per-repository/service
   least-privilege credentials, and prove deploy/rollback continuity without
@@ -116,8 +118,19 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   deleted it, then asserted with `head-object` that it was gone. Credentials
   authenticate and deletes really delete, so bucket Object Lock is not silently
   making retention unenforceable. **No backup exists** — nothing in that run
-  touched PostgreSQL. Three follow-ups remain, and none of them can be done from
-  a pull request:
+  touched PostgreSQL. **A real rehearsal was dispatched repeatedly on
+  2026-08-03** (`PostgreSQL backup and restore rehearsal`, e.g. run
+  `30785005169`), and every run so far fails the same way: the workflow's own
+  preflight/isolation guards pass, but `pgbackrest ... stanza-create` fails
+  with `ERROR: [039]: HTTP request failed with 403` against
+  `s3.eu-central-003.backblazeb2.com`. This is a narrower permission gap than
+  the proven read/write/delete connectivity above — the application key that
+  can write/read/delete an object apparently cannot complete pgBackRest's
+  stanza-create call. **Owner check:** confirm in the B2 console whether the
+  application key has the bucket-level permissions pgBackRest's protocol needs
+  for stanza creation (as distinct from plain object PUT/GET/DELETE), and
+  reconcile with item 3 below before re-dispatching. Three further follow-ups
+  remain, and none of them can be done from a pull request:
   1. **`PGBACKREST_REPO1_S3_URI_STYLE` — keep the configured value `host`; no
      variable change needed.** The runbook previously specified `path`; that was
      the error and it is now corrected in
@@ -184,8 +197,10 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   Review PR-A first. Only then stack PR-B with the authenticated internal HTTP
   service. Deployment and any controlled copy require separate approval.
 - [ ] **`drive-folder-usage-notes` — approve live `START HERE` placement
-  separately.** PR #11 defines only the repository contract; it performs no live
-  Drive write. Put exactly one concise versioned note in every canonical work
+  separately.** PR #11 defines only the repository contract; automation-platform
+  PR #91 (`427dd7f5...`, merged 2026-07-30) then repository-merged the
+  planner/apply capability, but it performs no live Drive write. Put exactly
+  one concise versioned note in every canonical work
   area and generated `AE-CAS`/`AE-CGR` folder, prioritizing `01_Inbox`,
   `30_Projects_Cases`, then `40_Content`. Require purpose, allowed/disallowed
   inputs, naming/metadata, one placeholder-only example, current
@@ -199,15 +214,22 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   Finding→Action adapter, the n8n workflow, live manifest wiring, and deployed
   credentials. Keep **migration 006 unapplied** until backup/restore planning.
   Nothing here should be forced by an agent.
-- [ ] **AI runtime readiness — REJECT_LIVE.** Control-plane main
-  `affe6ea1e4d522be0df0641e98a08e20a84549ae` contains deterministic
-  AG-001/002/003/006/007 only; there is no business worker, real provider or
-  Drive runtime. AG-008 must close the reproduced optional/unvalidated-envelope,
-  missing-`no_external_action` plus synthetic-`approval_id`, and over-cap and
-  negative-budget P0 bypasses. Separately, automation-platform must deploy and
-  wire persistent Postgres cost reservation/reconciliation, the EU Vertex
-  adapter, Drive adapters, orchestration, canonical approval and runtime.
-  Repository components are not deployed/working business AI.
+- [ ] **AI runtime readiness — REJECT_LIVE, but AG-008 is repository-merged.**
+  Control-plane main advanced to `edadb09125f7fb5d173d5f595181d1384050b6b5` via
+  PR #38 (`c6a5b509...`, merged 2026-07-30) and PR #39 (`edadb091...`, merged
+  2026-08-02): PR #38 requires a mandatory schema-valid task envelope, enforces
+  `no_external_action: true` with recursive rejection of approval/publish/
+  send/action/execute fields and IDs, and makes model-gateway cost accounting
+  atomic and cap-bounded — closing the optional/unvalidated-envelope,
+  missing-`no_external_action`/synthetic-`approval_id`, and over-cap/negative-
+  budget bypasses this action item previously flagged. PR #39 closed a related
+  gap in the general JSON validator. `agent/NEXT_TASK.md` self-declares
+  `status: done` and CI is green, but no independent third-party review of this
+  exact head is recorded — get one before relying on it. Separately,
+  automation-platform must still deploy and wire persistent Postgres cost
+  reservation/reconciliation, the EU Vertex adapter, Drive adapters,
+  orchestration, canonical approval and runtime. Repository components are not
+  deployed/working business AI.
 - [ ] **AI-001 exact first live model proof.** Use only the already-approved and
   published July public article-radar package `ART-2026-001` with source set
   `SRC-2026-001` for the first live model-backed Company Drive proof. Its prior
@@ -222,18 +244,33 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   blocker above. Then one measured, inactive EU Vertex
   `gemini-3.1-flash-lite` call may run through the canonical gateway. Never
   reactivate or route around frozen direct-model workflow MM-22.
-- [ ] **Website producer (website PR #78)** stays draft/held. Head
-  `b0e3a656cf6659b893810e11a15b9f515527ab79` is historical last-reviewed
-  evidence only. Head `1baedaf732088edcc3fa4e40892d23d42b140d7b` is the
-  historical seven-issue-blocked delivery/data-race head. Current GitHub head
-  `a23b194fb72aed51941d9cb1c288cbc7eb2f66a0` remains draft, unmerged and
-  undeployed and awaits fresh independent review. No review-clean or
+- [ ] **Website producer (WEB-001, website PR #78) — repository-merged, not
+  deployed.** Head `b0e3a656cf6659b893810e11a15b9f515527ab79` is historical
+  last-reviewed evidence only; `1baedaf732088edcc3fa4e40892d23d42b140d7b` is the
+  historical seven-issue-blocked delivery/data-race head. PR #78 (`feat(lead-
+  intake): versioned lead.created v1 contract with PII separation (WEB-001)`)
+  merged 2026-08-01T22:54:57Z as `6770e749fbf1345bfe15f260e574da93fa4df329`,
+  superseding the stale `a23b194f` draft reference, and adds the
+  `lead.created` v1 schema/docs plus a WordPress producer plugin
+  (`wp-content/plugins/adapteng-core/includes/lead-intake.php`). The manual,
+  confirmation-phrase-gated `Deploy to Cloudways` plugin workflow that would
+  ship `adapteng-core` live has run repeatedly, but every recorded run (last
+  success `30720691975`, 2026-08-01T22:10:23Z) predates this merge — no plugin
+  deploy is evidenced to carry the lead-intake code. No review-clean or
   cutover-ready claim is made. Require an exact-head independent review-clean
-  result before following the [producer cutover
+  result on `6770e749` before following the [producer cutover
   sequence](../runbooks/n8n-operations.md#website-producer-cutover-safety):
   actual WordPress/Fluent Forms producer T1–T4, atomic mode switch with no
   dual-write, seven-day reconciliation and rollback proof; MM-18 retirement
   last. Keep model-provider legal placeholders unpublished.
+  Separately, a **theme-only** deployment track (unrelated to WEB-001) was
+  authorized by the owner and merged as PRs #121–#130; `main` now carries an
+  active `main-protected` ruleset (all five active repos, 2026-08-02T15:30
+  CEST), and the `Deploy theme to Cloudways` workflow's run `30766896787`
+  (head `18767bd1...`, 2026-08-02T21:00:26Z) completed with its snapshot,
+  deploy and production-smoke-test steps all `success` per GitHub Actions
+  metadata — independently re-verify the live site before treating that as
+  accepted.
 - [ ] **self-hosted n8n cutover:** repoint the Coolify source from branch
   `palinaruban-repo-status-review` to `main`, verify auto-deploy, then complete
   the inactive company-workflow shadow. n8n Cloud remains the authority for
