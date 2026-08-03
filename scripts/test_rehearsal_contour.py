@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import shutil
+import subprocess
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -513,6 +516,268 @@ class CompareCommandTests(unittest.TestCase):
                 "equal",
             ]
             self.assertEqual(self.run_main(argv), 2)
+
+
+def workflow_step_script(workflow: str, step_name: str) -> str:
+    """Return the shell body of one workflow step.
+
+    The parsing is deliberately literal rather than YAML-aware: CI installs no
+    dependencies, so every import here has to resolve to the standard library.
+    """
+    path = ROOT.joinpath(".github", "workflows", workflow)
+    lines = path.read_text(encoding="utf-8").splitlines()
+
+    start = None
+    for index, line in enumerate(lines):
+        if line.strip() == f"- name: {step_name}":
+            start = index
+            break
+    if start is None:
+        raise AssertionError(f"{workflow} has no step named {step_name!r}")
+
+    run_at = None
+    for index in range(start + 1, len(lines)):
+        if lines[index].strip() == "- name:":
+            break
+        if lines[index].lstrip().startswith("- name: "):
+            break
+        if lines[index].strip() == "run: |":
+            run_at = index
+            break
+    if run_at is None:
+        raise AssertionError(f"step {step_name!r} in {workflow} has no literal run block")
+
+    body: list[str] = []
+    body_indent = None
+    for index in range(run_at + 1, len(lines)):
+        line = lines[index]
+        if not line.strip():
+            body.append("")
+            continue
+        indent = len(line) - len(line.lstrip())
+        if body_indent is None:
+            body_indent = indent
+        if indent < body_indent:
+            break
+        body.append(line[body_indent:])
+    return "\n".join(body).rstrip("\n") + "\n"
+
+
+def working_bash() -> str | None:
+    """Locate a bash that actually runs.
+
+    On Windows `bash` on PATH is frequently the WSL launcher, which exits
+    non-zero when no distribution is installed, so each candidate is proved
+    before it is used.
+    """
+    candidates = []
+    discovered = shutil.which("bash")
+    if discovered:
+        candidates.append(discovered)
+    candidates.extend(
+        (
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files\Git\usr\bin\bash.exe",
+        )
+    )
+    for candidate in candidates:
+        if not Path(candidate).exists():
+            continue
+        try:
+            proof = subprocess.run(
+                [candidate, "-c", "echo ok"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except OSError:  # pragma: no cover - candidate is not executable here
+            continue
+        if proof.returncode == 0 and proof.stdout.strip() == "ok":
+            return candidate
+    return None
+
+
+BASH = working_bash()
+
+CAP_MESSAGE = (
+    "An error occurred (AccessDenied) when calling the GetObject operation: "
+    "Cannot download file, download bandwidth or transaction (Class B) cap "
+    "exceeded. See the Caps & Alerts page to increase your cap."
+)
+
+# A stand-in for the object store. SCENARIO chooses which transaction classes it
+# is willing to serve, which is the distinction the probes exist to draw.
+AWS_STUB = """#!/usr/bin/env bash
+op="$2"
+key=""
+prev=""
+for argument in "$@"; do
+  if [ "$prev" = "--key" ]; then key="$argument"; fi
+  prev="$argument"
+done
+case "$op" in
+  put-object|delete-object)
+    echo '{"ETag":"\\"probe\\""}'
+    exit 0
+    ;;
+  list-objects-v2)
+    echo '{"KeyCount":1}'
+    exit 0
+    ;;
+esac
+absent=no
+case "$key" in
+  *absent*|*archive.info) absent=yes ;;
+esac
+case "$SCENARIO" in
+  healthy)
+    if [ "$absent" = yes ]; then
+      echo "An error occurred (404) when calling the ${op} operation: Not Found" >&2
+      exit 254
+    fi
+    echo '{"ContentLength":42}'
+    exit 0
+    ;;
+  cap)
+    if [ "$op" = head-object ]; then
+      echo "An error occurred (403) when calling the HeadObject operation: Forbidden" >&2
+    else
+      echo "__CAP__" >&2
+    fi
+    exit 254
+    ;;
+  refused)
+    if [ "$op" = head-object ]; then
+      echo "An error occurred (403) when calling the HeadObject operation: Forbidden" >&2
+    else
+      echo "An error occurred (AccessDenied) when calling the GetObject operation: Access Denied" >&2
+    fi
+    exit 254
+    ;;
+esac
+exit 9
+"""
+
+WRAPPER = """#!/usr/bin/env bash
+here="$(cd "$(dirname "$0")" && pwd)"
+PATH="$here/bin:$PATH"
+export PATH
+exec bash "$here/step.sh"
+"""
+
+
+@unittest.skipUnless(BASH, "no working bash interpreter is available")
+class ObjectStoreRefusalProbeTests(unittest.TestCase):
+    """Negative controls for the probes that read a refusal from the store.
+
+    These branches only execute when the object store misbehaves, which is
+    precisely when they cannot be exercised on demand. Six rehearsals failed on
+    an unexplained 403 that was read as a credential fault; the probes exist to
+    make that reading impossible, so they are given each refusal here and their
+    verdict is asserted.
+    """
+
+    def run_step(self, script: str, scenario: str, extra_env: dict[str, str]) -> tuple[int, str]:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            binaries = root / "bin"
+            binaries.mkdir()
+            stub = binaries / "aws"
+            stub.write_text(AWS_STUB.replace("__CAP__", CAP_MESSAGE), encoding="utf-8", newline="\n")
+            os.chmod(stub, 0o755)
+            (root / "step.sh").write_text(script, encoding="utf-8", newline="\n")
+            wrapper = root / "wrapper.sh"
+            wrapper.write_text(WRAPPER, encoding="utf-8", newline="\n")
+            os.chmod(wrapper, 0o755)
+
+            environment = dict(os.environ)
+            environment["SCENARIO"] = scenario
+            environment["RUNNER_TEMP"] = str(root).replace("\\", "/")
+            environment["GITHUB_STEP_SUMMARY"] = str(root / "summary.md").replace("\\", "/")
+            environment.update(extra_env)
+
+            completed = subprocess.run(
+                [str(BASH), str(wrapper).replace("\\", "/")],
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=120,
+            )
+            return completed.returncode, completed.stdout + completed.stderr
+
+    def preflight(self, scenario: str) -> tuple[int, str]:
+        return self.run_step(
+            workflow_step_script(
+                "postgres-backup-rehearsal.yml",
+                "Prove the object store still answers download-class requests",
+            ),
+            scenario,
+            {
+                "PGBACKREST_REPO1_PATH": REHEARSAL_REPO_PATH,
+                "REHEARSAL_STANZA": "rehearsal",
+                "PGBACKREST_REPO1_S3_ENDPOINT": "endpoint.invalid",
+                "PGBACKREST_REPO1_S3_BUCKET": "bucket",
+            },
+        )
+
+    def classifier(self, scenario: str) -> tuple[int, str]:
+        return self.run_step(
+            workflow_step_script(
+                "verify-b2-connectivity.yml",
+                "Classify which transaction classes the object store still serves",
+            ),
+            scenario,
+            {
+                "ENDPOINT": "endpoint.invalid",
+                "BUCKET": "bucket",
+                "CLASS_PROBE_KEY": "connectivity-check/1-1-class-probe.txt",
+                "GITHUB_RUN_ID": "1",
+                "GITHUB_RUN_ATTEMPT": "1",
+            },
+        )
+
+    def test_absent_archive_info_is_the_healthy_answer(self) -> None:
+        # 404 means the stanza has not been created yet, which is exactly the
+        # state the rehearsal starts from. The preflight must not object to it.
+        code, output = self.preflight("healthy")
+        self.assertEqual(code, 0, output)
+        self.assertIn("serves download-class requests", output)
+        self.assertNotIn("::error", output)
+
+    def test_preflight_names_a_cap_rather_than_the_credentials(self) -> None:
+        code, output = self.preflight("cap")
+        self.assertEqual(code, 1, output)
+        self.assertIn("because a cap is reached", output)
+        self.assertIn("not a credential, permission or URI-style fault", output)
+
+    def test_preflight_does_not_blame_a_cap_for_an_unexplained_refusal(self) -> None:
+        # The opposite failure matters just as much: a refusal that says nothing
+        # about a cap must not be reported as one.
+        code, output = self.preflight("refused")
+        self.assertEqual(code, 1, output)
+        self.assertIn("refused a repository read", output)
+        self.assertNotIn("cap is reached", output)
+
+    def test_classifier_passes_only_when_downloads_are_served(self) -> None:
+        code, output = self.classifier("healthy")
+        self.assertEqual(code, 0, output)
+        self.assertIn("All three transaction classes are being served", output)
+        self.assertNotIn("::error", output)
+
+    def test_classifier_reports_the_cap_and_the_classes_that_still_work(self) -> None:
+        code, output = self.classifier("cap")
+        self.assertEqual(code, 1, output)
+        self.assertIn("because a cap is reached", output)
+        # The neighbouring classes are the whole point: they are what makes the
+        # refusal look like a credential fault when they are not reported.
+        self.assertIn("Class A is served and class C is served", output)
+
+    def test_classifier_rules_out_key_prefix_and_uri_style(self) -> None:
+        code, output = self.classifier("refused")
+        self.assertEqual(code, 1, output)
+        self.assertIn("refuses download-class requests", output)
+        self.assertIn("not about a missing key", output)
+        self.assertNotIn("cap is reached", output)
 
 
 class TrackedRehearsalFileTests(unittest.TestCase):

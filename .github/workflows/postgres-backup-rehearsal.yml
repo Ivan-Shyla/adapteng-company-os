@@ -148,6 +148,78 @@ jobs:
             echo "EVIDENCE=$root/evidence"
           } >>"$GITHUB_ENV"
 
+      - name: Prove the object store still answers download-class requests
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PGBACKREST_REPO1_S3_KEY_SECRET }}
+          AWS_DEFAULT_REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
+          AWS_DEFAULT_OUTPUT: json
+        run: |
+          set -euo pipefail
+          # pgBackRest's very first repository call is a HEAD on archive.info,
+          # and a HEAD carries no response body. So when the store refuses,
+          # pgBackRest can only report `HTTP request failed with 403` and a
+          # content-length for a body that was announced and never sent. Six
+          # rehearsals died exactly there and the bare 403 was read as a
+          # credential fault, which it is not: the same key lists objects in the
+          # next step and deletes them in the last one, in the same job, with
+          # the same secrets.
+          #
+          # This asks the same question twice before anything expensive is
+          # installed. HEAD gives the status code pgBackRest will see. GET gives
+          # the body it cannot, which is the only place the reason is written.
+          #
+          # An object store does not fail as a unit. Backblaze bills uploads and
+          # deletes, downloads, and listings as separate transaction classes and
+          # can refuse one while still serving the other two, so "the
+          # credentials work" is not an answer to "why was this refused".
+          #
+          # Nothing is written and nothing is deleted here. This reads a key
+          # that does not exist yet, so it is outside what the isolation guard
+          # exists to gate, which is deletion.
+          probe_key="${PGBACKREST_REPO1_PATH#/}/archive/$REHEARSAL_STANZA/archive.info"
+          endpoint="https://$PGBACKREST_REPO1_S3_ENDPOINT"
+          echo "Download-class probe: HEAD ${probe_key}"
+
+          head_out=''
+          if head_out=$(aws s3api head-object --endpoint-url "$endpoint" \
+            --bucket "$PGBACKREST_REPO1_S3_BUCKET" --key "$probe_key" 2>&1)
+          then
+            # Defensive rather than expected: the rehearsal prefix is unique per
+            # run and attempt, so archive.info should not exist yet. If it does,
+            # the store still answered a download-class request, which is the
+            # only question this step asks.
+            echo "The key is already present, so download-class requests are being served."
+            exit 0
+          fi
+          code=$(printf '%s\n' "$head_out" \
+            | sed -n 's/.*An error occurred (\([^)]*\)).*/\1/p' | head -n 1)
+          echo "HEAD ${probe_key} -> ${code:-unparsed error}"
+
+          # 404 is the healthy answer. The stanza has not been created yet, so
+          # archive.info is genuinely absent and the store said so plainly.
+          if [ "$code" = "404" ]; then
+            echo "The repository serves download-class requests; archive.info is simply not there yet."
+            exit 0
+          fi
+
+          # Any other answer is a refusal, and only the body says why.
+          echo "--- the same request as GET, which does return a body ---"
+          get_out=$(aws s3api get-object --endpoint-url "$endpoint" \
+            --bucket "$PGBACKREST_REPO1_S3_BUCKET" --key "$probe_key" \
+            /dev/null 2>&1 || true)
+          printf '%s\n' "$get_out"
+          reason=$(printf '%s' "$get_out" | tr '\n' ' ')
+
+          case "$get_out" in
+            *"cap exceeded"*|*"Cap Exceeded"*|*"cap Exceeded"*)
+              echo "::error title=Backblaze B2 is refusing downloads because a cap is reached::${reason} This is not a credential, permission or URI-style fault: the same key still lists and deletes, and this workflow passed unchanged earlier. Downloads resume when the cap is raised on the Backblaze Caps and Alerts page or when the cap window rolls over. Nothing in this repository can work around it, because every restore reads the repository back."
+              exit 1
+              ;;
+          esac
+          echo "::error title=The object store refused a repository read::HEAD returned ${code:-an unparsed error} and the download-class request was refused for the reason printed above. Listing and deleting are billed separately from downloading, so check that reason before concluding anything about the credentials."
+          exit 1
+
       - name: Install PostgreSQL 16 and pgBackRest
         run: |
           set -euo pipefail

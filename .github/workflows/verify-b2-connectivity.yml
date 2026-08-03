@@ -89,6 +89,121 @@ jobs:
 
           echo "Configuration contract complete: 3 secrets and 8 variables present."
 
+      - name: Classify which transaction classes the object store still serves
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PGBACKREST_REPO1_S3_KEY_SECRET }}
+          AWS_DEFAULT_REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
+          AWS_DEFAULT_OUTPUT: json
+          BUCKET: ${{ vars.PGBACKREST_REPO1_S3_BUCKET }}
+          ENDPOINT: ${{ vars.PGBACKREST_REPO1_S3_ENDPOINT }}
+          CLASS_PROBE_KEY: connectivity-check/${{ github.run_id }}-${{ github.run_attempt }}-class-probe.txt
+        run: |
+          set -euo pipefail
+          # An S3-compatible store does not fail as a unit, and this one bills
+          # in three separate transaction classes: uploads and deletes,
+          # downloads, and listings. It can refuse one class outright while
+          # serving the other two, which is exactly what makes such a refusal
+          # unreadable. Every credential check still passes, every listing still
+          # works, and a single operation returns 403 for a reason that has
+          # nothing to do with the credential.
+          #
+          # A bare 403 is therefore not a diagnosis. This step turns it into one
+          # by exercising each class separately and naming which of them the
+          # store is currently willing to serve.
+          #
+          # The decisive probe is the download of an object written moments
+          # earlier in this same step. A refusal there cannot be about a missing
+          # key, a prefix the key is not scoped to, or a URI style, because the
+          # object demonstrably exists and the write that created it was
+          # accepted over the same connection with the same credential.
+          endpoint="https://$ENDPOINT"
+          sample="$RUNNER_TEMP/class-probe.txt"
+          received="$RUNNER_TEMP/class-probe-received.txt"
+          absent_key="connectivity-check/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-absent/archive/rehearsal/archive.info"
+          printf 'transaction class probe run=%s attempt=%s\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >"$sample"
+
+          # Callers read $probe_rc and $probe_out rather than the return value,
+          # so a refusal never trips `set -e` before it has been reported.
+          probe() {
+            label="$1"
+            shift
+            probe_out=''
+            probe_rc=0
+            probe_out=$("$@" 2>&1) || probe_rc=$?
+            if [ "$probe_rc" -eq 0 ]; then
+              printf '  %-38s served\n' "$label"
+            else
+              printf '  %-38s REFUSED: %s\n' \
+                "$label" "$(printf '%s' "$probe_out" | tr '\n' ' ')"
+            fi
+          }
+
+          echo "### Class A -- uploads and deletes"
+          probe "put-object" aws s3api put-object --endpoint-url "$endpoint" \
+            --bucket "$BUCKET" --key "$CLASS_PROBE_KEY" --body "$sample"
+          class_a=$probe_rc
+
+          echo "### Class C -- listings"
+          probe "list-objects-v2" aws s3api list-objects-v2 \
+            --endpoint-url "$endpoint" --bucket "$BUCKET" \
+            --prefix "$CLASS_PROBE_KEY"
+          class_c=$probe_rc
+
+          echo "### Class B -- downloads, the class pgBackRest needs first"
+          probe "get-object, key present" aws s3api get-object \
+            --endpoint-url "$endpoint" --bucket "$BUCKET" \
+            --key "$CLASS_PROBE_KEY" "$received"
+          class_b=$probe_rc
+          class_b_reason=$(printf '%s' "$probe_out" | tr '\n' ' ')
+
+          # pgBackRest reaches the repository with HEAD, not GET, and a HEAD
+          # response carries no body at all. Whatever the store wants to say
+          # about a refusal is announced in content-length and never sent, which
+          # is why the same refusal is unreadable from inside pgBackRest and
+          # readable here.
+          probe "head-object, key present" aws s3api head-object \
+            --endpoint-url "$endpoint" --bucket "$BUCKET" --key "$CLASS_PROBE_KEY"
+          head_present=$probe_rc
+
+          probe "head-object, key absent" aws s3api head-object \
+            --endpoint-url "$endpoint" --bucket "$BUCKET" --key "$absent_key"
+          absent_code=$(printf '%s\n' "$probe_out" \
+            | sed -n 's/.*An error occurred (\([^)]*\)).*/\1/p' | head -n 1)
+          echo "  head-object on an absent key answered ${absent_code:-nothing parseable}; 404 is the healthy answer."
+
+          aws s3api delete-object --endpoint-url "$endpoint" \
+            --bucket "$BUCKET" --key "$CLASS_PROBE_KEY" >/dev/null 2>&1 || true
+
+          state() { if [ "$1" -eq 0 ]; then printf 'served'; else printf 'refused'; fi; }
+          {
+            echo "## Backblaze B2 transaction classes"
+            echo ""
+            echo "| Class | Operation | Result |"
+            echo "| --- | --- | --- |"
+            echo "| A | upload / delete | $(state "$class_a") |"
+            echo "| B | download of an object that exists | $(state "$class_b") |"
+            echo "| B | HEAD of an object that exists | $(state "$head_present") |"
+            echo "| C | listing | $(state "$class_c") |"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+          if [ "$class_b" -eq 0 ] && [ "$head_present" -eq 0 ]; then
+            echo "All three transaction classes are being served."
+            exit 0
+          fi
+
+          # Class B is refused. Say so in the terms that distinguish it from the
+          # three things it is habitually mistaken for.
+          case "$class_b_reason" in
+            *"cap exceeded"*|*"Cap Exceeded"*|*"cap Exceeded"*)
+              echo "::error title=Backblaze B2 is refusing downloads because a cap is reached::${class_b_reason} Class A is $(state "$class_a") and class C is $(state "$class_c") on the same credential in the same second, so this is a spend or transaction cap and not a credential, permission or URI-style fault. It clears when the cap is raised on the Backblaze Caps and Alerts page or when the cap window rolls over."
+              exit 1
+              ;;
+          esac
+          echo "::error title=The object store refuses download-class requests::${class_b_reason} The object was written and listed successfully in this same step, so the refusal is not about a missing key, a prefix restriction or a URI style."
+          exit 1
+
       - name: Write, read back and delete a probe object
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
@@ -137,7 +252,7 @@ jobs:
           echo "Probe object is gone."
           echo "Write, read and delete all work against the backup bucket."
 
-      - name: Remove the probe object if the round trip did not
+      - name: Remove the probe objects if the round trip did not
         if: always()
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
@@ -146,9 +261,14 @@ jobs:
           BUCKET: ${{ vars.PGBACKREST_REPO1_S3_BUCKET }}
           ENDPOINT: ${{ vars.PGBACKREST_REPO1_S3_ENDPOINT }}
           PROBE_KEY: connectivity-check/${{ github.run_id }}-${{ github.run_attempt }}.txt
+          CLASS_PROBE_KEY: connectivity-check/${{ github.run_id }}-${{ github.run_attempt }}-class-probe.txt
         run: |
           # A failure between write and delete would otherwise leave litter in a
           # bucket whose whole purpose is to contain exactly one known thing.
-          aws s3api delete-object \
-            --endpoint-url "https://$ENDPOINT" --bucket "$BUCKET" --key "$PROBE_KEY" \
-            >/dev/null 2>&1 || true
+          # Deleting is a class A operation, so this still works on a run that
+          # failed because class B downloads were refused.
+          for key in "$PROBE_KEY" "$CLASS_PROBE_KEY"; do
+            aws s3api delete-object \
+              --endpoint-url "https://$ENDPOINT" --bucket "$BUCKET" --key "$key" \
+              >/dev/null 2>&1 || true
+          done
