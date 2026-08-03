@@ -25,10 +25,12 @@ external/high-impact actions.
   reservation/reconciliation with cross-process spend accounting and latch
   persistence); real EU Vertex and Drive adapters; orchestration, canonical
   approval and deployment; privacy (ZDR), cache-off, Vertex IAM and FX.
-  Never use the local in-memory test seam as budget authority. The AG-008
-  deterministic envelope / no-external-action / cost items are now closed at
-  the control plane — see the status below for what that does and does not
-  buy. See `owner/action-items.md`.
+  Never use the local in-memory test seam as budget authority — that warning
+  **stands unchanged**, and P0 #3 below is precisely why it is not obsolete.
+  AG-008 has closed the envelope and no-external-action items at the control
+  plane. The **cost** item is closed only *within a process* and is therefore
+  **not** a durable authority, so this gate remains unsatisfied. See the status
+  below and `owner/action-items.md`.
 - **Status:** **REJECT_LIVE** — judged per P0 below, not as one global verdict.
   Re-assessed **2026-08-03** against control-plane main
   `edadb09125f7fb5d173d5f595181d1384050b6b5`, which is the merge commit of
@@ -39,7 +41,9 @@ external/high-impact actions.
   hardening*, merged 2026-07-30. This **supersedes** the 2026-07-25 assessment
   pinned to `affe6ea1e4d522be0df0641e98a08e20a84549ae` (control-plane PR #36),
   which is kept visible here because the record is corrected in place, not
-  erased.
+  erased. Control-plane `main` has since moved to `327fc4b6` (PR #40, the
+  audit record for this assessment), which adds tests and documentation only
+  and changes no behaviour under judgement here.
 
   **Read the invariant, not the hash.** The claim here is *"P0 #1 and #2 are
   closed as of AG-008, which is merged on control-plane `main`"*; the SHAs
@@ -54,16 +58,16 @@ external/high-impact actions.
   and re-ran the identical probe at `edadb091`, re-sealing mutated artifacts
   with each tree's own `evidence_digest()` / `artifact_envelope_sha256()` so a
   refusal reflects the policy under test rather than a stale hash. No model
-  call, no spend. **PR #40 is unmerged**, so its merge state must be read
-  precisely: it changes no source file — only `README.md`, agent logs,
-  `context/CURRENT_STATUS.md`, `docs/AG008_P0_AUDIT.md` and tests — therefore
-  the closures below are properties of control-plane **`main` at `edadb091`**,
-  delivered by the already-merged PR #38, and are *not* contingent on PR #40
-  landing. What is not yet on `main` is the regression guard
-  `tests/test_ag008_p0_regression.py`: until PR #40 merges, `main` has the
-  fixed behaviour with **no test pinning it there**, so these closures are
-  currently unprotected against silent re-introduction. Verdicts on the three
-  P0s this file previously held open:
+  call, no spend. PR #40 **merged 2026-08-03** as `327fc4b6`, which is now
+  control-plane `main`. Its merge changes no behaviour: it touches no source
+  file — only `README.md`, agent logs, `context/CURRENT_STATUS.md`,
+  `docs/AG008_P0_AUDIT.md` and tests. The closures below were therefore
+  already properties of `main` at `edadb091`, delivered by PR #38, and never
+  depended on PR #40 landing. What PR #40 adds is the regression guard
+  `tests/test_ag008_p0_regression.py`, so the two closures are now **pinned by
+  a test on `main`** rather than merely true of it — they are no longer exposed
+  to silent re-introduction. Verdicts on the three P0s this file previously
+  held open:
   - **P0 #1 — optional/unvalidated task envelope: CLOSED.** At `affe6ea`,
     `evaluate_artifact` returned `ready=True` with no envelope at all and
     `check_task_completion.py` exited `0`; the help text read
@@ -92,8 +96,10 @@ external/high-impact actions.
     process-equivalent budget built from that same config, `spent: 0` and
     `reconciliation_required carried over?: False`. So any process restart
     erases both the spend total and the refusal that is supposed to protect
-    it. This cannot be ticked off inside the control plane: the budget is held
-    in process memory, that repository holds no database driver and no durable
+    it. Stated exactly: **the in-repo gateway is correct *within* a process; it
+    is not an authority *across* processes.** This cannot be ticked off inside
+    the control plane: the budget is held in process memory, that repository
+    holds no database driver and no durable
     spend store by design — a codebase-wide search there for `psycopg` /
     `postgres` / `sqlalchemy` / `DATABASE_URL` returns nothing — and its only
     ledger is an append-only JSONL run ledger, which is not a monetary
@@ -112,11 +118,13 @@ external/high-impact actions.
   no longer "three deterministic P0s plus runtime": it is **a durable cost
   authority that survives process restart**. That cannot be built in the
   control plane, which has no persistent store by design; it lives in
-  `adapteng-automation-platform` (`005_ai_gateway.sql` and the AI-gateway
-  runtime hardening migration), together with the EU Vertex adapter and the
-  Drive adapters. Those migrations were confirmed to *exist*; their behaviour
-  has not been exercised, so durable spend authority is an open ask, not a
-  proven capability. Status stays `REJECT_LIVE`: two of three P0s closing does
+  `adapteng-automation-platform` (`005_ai_gateway.sql` and
+  `008_ai_gateway_runtime_hardening.sql`), together with the EU Vertex adapter
+  and the Drive adapters. Those two migrations were confirmed to *exist* and
+  were **not** exercised, so this is an **open ask against that repository, not
+  a defect finding about it** — a different claim with a different owner and a
+  different evidence bar. Durable spend authority is therefore not a proven
+  capability here. Status stays `REJECT_LIVE`: two of three P0s closing does
   not authorize a live model call, and P0 #3 is explicitly PARTIAL. AG-008's
   deterministic fixes have landed on control-plane `main` via PR #38;
   automation-platform still owns the persistent runtime. Scope note: PR #40
