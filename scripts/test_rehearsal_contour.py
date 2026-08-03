@@ -565,6 +565,43 @@ class ObjectStoreRefusalTests(unittest.TestCase):
     def test_an_unrecognised_refusal_is_not_guessed(self) -> None:
         self.assertEqual(b2probe.classify(254, "connection reset"), b2probe.UNKNOWN)
 
+    def test_the_witness_that_explains_most_is_the_one_believed(self) -> None:
+        # Measured, not imagined: in run 30799068761 head-object answered
+        # `(403) Forbidden` and get-object answered the cap sentence, for the
+        # same key in the same second. Believing whichever answered first is
+        # what turned a metering refusal back into a permission refusal.
+        head = b2probe.Probe(
+            name="head", transaction_class="B", operation="head-object",
+            reason=b2probe.ACCESS_DENIED, returncode=254, message=self.DENIED,
+        )
+        get = b2probe.Probe(
+            name="get", transaction_class="B", operation="get-object",
+            reason=b2probe.CAP_EXCEEDED, returncode=254, message=self.CAP,
+        )
+        self.assertIs(b2probe.strongest_refusal([head, get]), get)
+        self.assertIs(b2probe.strongest_refusal([get, head]), get)
+
+    def test_a_bodiless_verb_loses_to_one_that_can_explain_itself(self) -> None:
+        # Same reason, different verb. HEAD cannot carry a body at all, so its
+        # message is empty and quoting it would say nothing.
+        head = b2probe.Probe(
+            name="head", transaction_class="B", operation="head-object",
+            reason=b2probe.ACCESS_DENIED, returncode=254, message="",
+        )
+        get = b2probe.Probe(
+            name="get", transaction_class="B", operation="get-object",
+            reason=b2probe.ACCESS_DENIED, returncode=254, message=self.DENIED,
+        )
+        self.assertIs(b2probe.strongest_refusal([head, get]), get)
+
+    def test_a_run_with_nothing_refused_has_no_witness(self) -> None:
+        succeeded = b2probe.Probe(
+            name="get", transaction_class="B", operation="get-object",
+            reason=b2probe.SUCCEEDED, returncode=0,
+        )
+        self.assertIsNone(b2probe.strongest_refusal([succeeded]))
+        self.assertIsNone(b2probe.strongest_refusal([]))
+
 
 class ScriptedObjectStore:
     """Stands in for the AWS CLI so the probe's decision tree can be driven.
@@ -603,7 +640,14 @@ class ScriptedObjectStore:
         else:
             # archive.info is the key pgBackRest probes before it has created
             # anything; the .txt key is the object the probe just wrote.
-            name = "present" if key.endswith(".txt") else "missing"
+            subject = "present" if key.endswith(".txt") else "missing"
+            # HEAD and GET are scriptable apart because B2 answers them apart:
+            # HTTP forbids a response body on HEAD, so only the GET can carry
+            # the sentence that names the cause.
+            verb = "head" if operation == "head-object" else "get"
+            name = subject
+            if f"{subject}_{verb}" in self.outcomes:
+                name = f"{subject}_{verb}"
 
         returncode, stderr = self.outcome(name)
         if returncode == 0 and operation == "get-object" and name == "present":
@@ -678,6 +722,37 @@ class CapabilityProbeTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertEqual(self.verdict(output), "class_b_read_refused")
 
+    def test_a_capped_head_beside_an_explaining_get_is_still_a_cap(self) -> None:
+        # The shape B2 actually produced in run 30799068761: every HEAD said
+        # `(403) Forbidden` and every GET said the cap sentence. An earlier
+        # version of this probe read the HEAD first and reported a permission
+        # refusal, which is the original misdiagnosis reproduced inside the
+        # instrument built to prevent it.
+        store = ScriptedObjectStore(
+            missing_head=(254, self.DENIED),
+            missing_get=(254, self.CAP),
+            present_head=(254, self.DENIED),
+            present_get=(254, self.CAP),
+        )
+        status, output = self.probe(store)
+        self.assertEqual(status, 1)
+        self.assertEqual(self.verdict(output), "class_b_read_refused_cap_exceeded")
+        self.assertIn("Caps & Alerts", output)
+        # Named from the missing-key pair alone, before spending a write.
+        self.assertNotIn("put-object", [operation for operation, _ in store.calls])
+
+    def test_a_signature_refusal_on_a_readable_bucket_names_the_credentials(self) -> None:
+        # Listing works, so the key exists and is scoped to the prefix, but the
+        # reads are rejected as unsignable. That is neither a cap nor a scope
+        # problem and saying so is the whole point of quoting B2.
+        status, output = self.probe(
+            ScriptedObjectStore(
+                missing_head=(254, self.DENIED), missing_get=(254, self.UNSIGNABLE)
+            )
+        )
+        self.assertEqual(status, 1)
+        self.assertEqual(self.verdict(output), "credentials_rejected")
+
     def test_a_key_that_cannot_probe_an_absent_object_is_caught(self) -> None:
         # Reads of a present object succeed, so the store is not capped; only
         # the not-yet-created key is refused, which is the request
@@ -702,7 +777,11 @@ class CapabilityProbeTests(unittest.TestCase):
         self.assertEqual(self.verdict(output), "class_a_write_refused")
 
     def test_the_probe_object_is_always_deleted_again(self) -> None:
-        store = ScriptedObjectStore(missing=(254, self.CAP), present=(254, self.CAP))
+        # The reads fail, so the probe exits early; the object it wrote to make
+        # those reads possible must still be removed on the way out.
+        store = ScriptedObjectStore(
+            missing=(254, self.ABSENT), present=(254, self.DENIED)
+        )
         self.probe(store)
         deletes = [key for operation, key in store.calls if operation == "delete-object"]
         self.assertEqual(len(deletes), 1)

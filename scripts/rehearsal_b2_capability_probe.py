@@ -68,6 +68,22 @@ SUCCEEDED = "succeeded"
 
 VERDICT_OK = "ok"
 
+# Which refusal to believe when several arrive at once. A cap message and a
+# signature message name a cause; a bare 403 names only a status. HTTP forbids a
+# response body on HEAD, so head-object can never say more than "Forbidden" and
+# is the weakest witness available even when it is the first to answer. Reading
+# the weakest witness first is the exact misreading this probe exists to
+# prevent, so the strongest is selected deliberately rather than by arrival.
+REASON_PRECEDENCE = (
+    CAP_EXCEEDED,
+    BAD_CREDENTIALS,
+    ACCESS_DENIED,
+    NOT_FOUND,
+    UNKNOWN,
+)
+SELF_DESCRIBING = (CAP_EXCEEDED, BAD_CREDENTIALS)
+BODYLESS_OPERATIONS = ("head-object",)
+
 
 def classify(returncode: int, stderr: str) -> str:
     """Map one AWS CLI outcome onto the reason B2 actually gave.
@@ -173,12 +189,72 @@ def annotate(title: str, body: str) -> None:
     print(f"::error title={title}::{flattened}")
 
 
+def strongest_refusal(probes: "list[Probe]") -> "Probe | None":
+    """The refusal that explains the most, not the one that answered first."""
+    refusals = [probe for probe in probes if not probe.succeeded]
+    if not refusals:
+        return None
+
+    def rank(probe: Probe) -> tuple[int, int]:
+        try:
+            reason = REASON_PRECEDENCE.index(probe.reason)
+        except ValueError:
+            reason = len(REASON_PRECEDENCE)
+        return (reason, 1 if probe.operation in BODYLESS_OPERATIONS else 0)
+
+    return min(refusals, key=rank)
+
+
 def fail(report: Report, verdict: str, probe: Probe, title: str, body: str) -> Report:
     report.verdict = verdict
     report.reason = probe.reason
     report.detail = probe.message
     annotate(title, f"{body} B2 said: {probe.message or '(no message)'}")
     return report
+
+
+CAP_EXPLANATION = (
+    "Backblaze meters put and delete (Class A), get and head (Class B) and list"
+    " (Class C) against separate daily caps, and refuses an exhausted one with"
+    " the same 403 AccessDenied it uses for a permission problem. Class A writes"
+    " and Class C listings still succeed here, which is why any check built only"
+    " from listings looks healthy. pgBackRest needs a Class B read for the very"
+    " first repository call it makes, so no stanza-create, backup, verify or"
+    " restore can run until the cap resets at 00:00 GMT or the owner raises it on"
+    " the Backblaze Caps & Alerts page. This is a billing setting, not a bucket"
+    " permission and not a defective key."
+)
+
+CREDENTIAL_EXPLANATION = (
+    "B2 rejected the signature or the key id itself, so this is a credential"
+    " problem rather than a scope, metering or request-shaping one."
+)
+
+
+def fail_on_self_describing(report: Report, probe: Probe) -> "Report | None":
+    """Honour a refusal that states its own cause, whichever key provoked it.
+
+    A cap message and a signature message are about the account and the
+    credentials, not about the object asked for, so they are conclusive wherever
+    they appear and do not need corroborating by a second probe.
+    """
+    if probe.reason == CAP_EXCEEDED:
+        return fail(
+            report,
+            "class_b_read_refused_cap_exceeded",
+            probe,
+            "Backblaze B2 daily cap is exhausted",
+            CAP_EXPLANATION,
+        )
+    if probe.reason == BAD_CREDENTIALS:
+        return fail(
+            report,
+            "credentials_rejected",
+            probe,
+            "Backblaze B2 rejected the credentials",
+            CREDENTIAL_EXPLANATION,
+        )
+    return None
 
 
 def run_probe(
@@ -251,6 +327,15 @@ def run_probe(
     # with GET purely to make B2 state its reason in words.
     report.probes.append(missing_get)
 
+    # A cap or a signature refusal describes the account, not the key, so it is
+    # answered here rather than after a Class A write that would only confirm
+    # what has already been said in plain words.
+    conclusive = strongest_refusal([missing_head, missing_get])
+    if conclusive is not None and conclusive.reason in SELF_DESCRIBING:
+        settled = fail_on_self_describing(report, conclusive)
+        if settled is not None:
+            return settled
+
     with tempfile.TemporaryDirectory() as raw:
         directory = Path(raw)
         sent = directory / "probe-sent.txt"
@@ -290,33 +375,23 @@ def run_probe(
             )
             report.probes.append(removed)
 
-        for probe in (present, fetched):
-            if probe.succeeded:
-                continue
-            if probe.reason == CAP_EXCEEDED:
-                return fail(
-                    report,
-                    "class_b_read_refused_cap_exceeded",
-                    probe,
-                    "Backblaze B2 daily cap is exhausted",
-                    "An object this probe had just written, and just listed,"
-                    " cannot be read back, so this is a metering refusal and not"
-                    " a missing object or a bad key. Class A writes and Class C"
-                    " listings still succeed, which is why list-only checks look"
-                    " healthy. pgBackRest needs a Class B read for the very first"
-                    " repository call, so no stanza-create, backup, verify or"
-                    " restore can run until the cap resets at 00:00 GMT or the"
-                    " owner raises it on the Backblaze Caps & Alerts page. This"
-                    " is a billing setting, not a bucket permission.",
-                )
+        # Adjudicated over both reads together. Taking the first refusal would
+        # take head-object's contentless "Forbidden" over get-object's sentence
+        # naming the cap, which is the misreading in miniature.
+        refused = strongest_refusal([present, fetched])
+        if refused is not None:
+            settled = fail_on_self_describing(report, refused)
+            if settled is not None:
+                return settled
             return fail(
                 report,
                 "class_b_read_refused",
-                probe,
+                refused,
                 "Backblaze B2 refuses Class B reads",
-                "An object this probe had just written cannot be read back,"
-                " while Class A writes and Class C listings succeed, so this key"
-                " can write the repository but not read it.",
+                "An object this probe had just written, and just listed, cannot"
+                " be read back, so this is not a missing object. Class A writes"
+                " and Class C listings succeed, so this key can write the"
+                " repository but not read it.",
             )
 
         if received.read_bytes() != sent.read_bytes():
@@ -363,11 +438,20 @@ def run_probe(
         )
         return report
 
-    if missing_head.reason not in (NOT_FOUND, SUCCEEDED):
+    # pgBackRest issues HEAD, so a refusal there blocks it even if GET answers
+    # cleanly; either probe refusing is reported, and whichever of them explains
+    # itself best is the one quoted.
+    unhealthy = [
+        probe
+        for probe in (missing_head, missing_get)
+        if probe.reason not in (NOT_FOUND, SUCCEEDED)
+    ]
+    offender = strongest_refusal(unhealthy)
+    if offender is not None:
         return fail(
             report,
             "missing_key_probe_refused",
-            missing_head,
+            offender,
             "Backblaze B2 refuses the key pgBackRest probes first",
             "Class B reads work on an object that exists, but the absent"
             f" {missing_key} answers with a refusal instead of 404, so this key"
