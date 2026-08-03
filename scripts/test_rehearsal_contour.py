@@ -638,7 +638,15 @@ class ScriptedObjectStore:
 
         if operation == "list-objects-v2":
             returncode, stderr = self.outcome("list")
-            stdout = self.listing_output if prefix.endswith(".txt") else ""
+            # The real CLI echoes the requested --prefix back inside its
+            # response body, so this double does too. A fixture politer than
+            # the tool it stands for hides precisely the defects that matter:
+            # while this returned "", a substring check for the key in the raw
+            # output looked like it distinguished present from absent, and in
+            # production it matched the echo every time.
+            stdout = json.dumps({"Prefix": prefix, "MaxKeys": 1, "KeyCount": 0})
+            if prefix.endswith(".txt") and self.listing_output:
+                stdout = self.listing_output
             return returncode, stdout, stderr
         if operation == "put-object":
             self.body = Path(args[args.index("--body") + 1])
@@ -694,6 +702,11 @@ class CapabilityProbeTests(unittest.TestCase):
             with redirect_stdout(captured), redirect_stderr(io.StringIO()):
                 status = b2probe.main(argv)
         return status, captured.getvalue()
+
+    def probe_key(self) -> str:
+        return (
+            f"{REHEARSAL_REPO_PATH.strip('/')}/capability-probe/{SCOPE_TOKEN}.txt"
+        )
 
     def verdict(self, output: str) -> str:
         for line in output.splitlines():
@@ -841,6 +854,28 @@ class CapabilityProbeTests(unittest.TestCase):
                 self.assertTrue(key.startswith(REHEARSAL_REPO_PATH.strip("/") + "/"))
                 self.assertFalse(key.startswith(PRODUCTION_REPO_PATH.strip("/")))
 
+    def test_an_echoed_prefix_is_not_mistaken_for_a_surviving_object(self) -> None:
+        # list-objects-v2 returns the prefix it was asked about, so the probe
+        # key appears in the response text of a listing that enumerated nothing
+        # at all. Asking whether the key occurs anywhere in that text is true
+        # whenever the call succeeds: a check that cannot pass, which is exactly
+        # as useless as the check that could not fail this branch set out to
+        # close, and worse because it blocks the rehearsal on a healthy store.
+        store = ScriptedObjectStore(missing=(254, self.ABSENT))
+        _, listing, _ = store("list-objects-v2", "--prefix", self.probe_key())
+        self.assertIn(self.probe_key(), listing)
+        self.assertEqual(b2probe.listed_keys(listing), [])
+
+        status, output = self.probe(store)
+        self.assertEqual(status, 0)
+        self.assertEqual(self.verdict(output), "ok")
+
+    def test_an_unreadable_listing_is_not_read_as_absence(self) -> None:
+        # Absence has to be established, not inferred from a listing that could
+        # not be understood.
+        self.assertNotEqual(b2probe.listed_keys("<html>gateway timeout</html>"), [])
+        self.assertEqual(b2probe.listed_keys(""), [])
+
     def test_a_delete_that_did_not_delete_is_caught(self) -> None:
         # Cleanup is confirmed with a listing rather than head-object on
         # purpose, so that a capped account cannot mistake litter it is unable
@@ -876,6 +911,39 @@ class TrackedRehearsalFileTests(unittest.TestCase):
         self.assertTrue(scripts, "no rehearsal scripts were found")
         self.assertTrue(workflows, "no workflows were found")
         return scripts + workflows
+
+    def probe_step(self) -> str:
+        """Return the body of the rehearsal's capability-probe step."""
+
+        text = ROOT.joinpath(
+            ".github", "workflows", "postgres-backup-rehearsal.yml"
+        ).read_text(encoding="utf-8")
+        start = text.index("- name: Probe what Backblaze B2 will actually serve")
+        end = text.index("\n      - name: ", start + 1)
+        step = text[start:end]
+        self.assertIn("rehearsal_b2_capability_probe.py", step)
+        return step
+
+    def test_the_negative_control_runs_before_the_probe_it_qualifies(self) -> None:
+        # Ordering is the whole of this control's value. Placed after the real
+        # probe it is skipped by `set -e` on precisely the runs where the probe
+        # failed, so it can only ever run when its verdict is least needed --
+        # and a control that is absent whenever the thing it qualifies goes
+        # wrong is not a control. Pinned because nothing else would notice the
+        # two blocks being reordered.
+        step = self.probe_step()
+        control = step.index("--scope \"$REHEARSAL_SCOPE-control\"")
+        real = step.index("--scope \"$REHEARSAL_SCOPE\"")
+        self.assertLess(control, real)
+        self.assertIn("AWS_SECRET_ACCESS_KEY=wrong-on-purpose", step[:real])
+
+    def test_the_negative_control_is_not_guarded_by_the_probe_succeeding(self) -> None:
+        step = self.probe_step()
+        control = step.index("AWS_SECRET_ACCESS_KEY=wrong-on-purpose")
+        # A positive control on the assertion above: prove the slice examined is
+        # really the head of the step and not the whole of it.
+        self.assertGreater(len(step), control)
+        self.assertNotIn("if [ \"$probe_status\"", step[:control])
 
     def test_files_are_lf_only_and_free_of_a_byte_order_mark(self) -> None:
         for path in self.rehearsal_files():
