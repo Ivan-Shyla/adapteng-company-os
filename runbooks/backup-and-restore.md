@@ -408,9 +408,10 @@ not restate a competing literal:
 | `<PGBACKREST_REPO1_PATH>` | `PGBACKREST_REPO1_PATH` |
 | `repo1-cipher-type` | `PGBACKREST_REPO1_CIPHER_TYPE` |
 
-That is all eight non-secret variables; `repo1-s3-key-type` selects how the
-credentials are presented and so has no line of its own in the config block
-below.
+That is all eight non-secret variables. `repo1-s3-key-type` selects how the
+credentials are presented and has no line of its own in the config block below,
+because the block states only what an operator types; the generated restore
+config emits it explicitly so the variable cannot be set and then ignored.
 
 The three credentials are repository secrets, named in
 `.github/workflows/verify-b2-connectivity.yml` and never printed.
@@ -479,33 +480,56 @@ the next reader does not re-open the question:
   ([AWS CLI S3 configuration](https://docs.aws.amazon.com/cli/latest/topic/s3-config.html)).
   Host style is therefore both the pgBackRest default and the style already
   exercised successfully against this bucket.
-- **`repo1-path` is a placeholder, not a literal.** For an S3 repository this is
-  simply the prefix inside the bucket under which pgBackRest keeps its
-  repository; pgBackRest only requires that it start with `/`, contain no `//`
-  and have no trailing `/`. Nothing depends on the specific string: at
-  `7f5f3585588da8b330e4ae9779f0b6343e1156eb`,
-  `scripts/postgres_restore_generation.py` emits `repo1-path` from the guard
-  packet field `repository_path` (which `scripts/postgres_restore_guard.py`
-  takes from `repository["repo_path"]`), the only literal anywhere in `scripts/`
-  is a unit-test fixture, and `.github/workflows/verify-b2-connectivity.yml`
-  asserts only that `PGBACKREST_REPO1_PATH` is absolute. The value is free to
-  choose, so the configured variable wins and this runbook stops asserting a
-  competing one - which also matches this runbook's own evidence policy, where
-  repository paths are on the forbidden list rather than the recorded list. What
-  is **not** free is consistency: the same prefix must be
-  used for backup and for every restore, and it must match the B2 lifecycle-rule
-  scope and the application key prefix restriction from Phase 2.
+- **`repo1-path` is a placeholder, not a literal — but one literal does depend on
+  it.** For an S3 repository this is simply the prefix inside the bucket under
+  which pgBackRest keeps its repository; pgBackRest only requires that it start
+  with `/`, contain no `//` and have no trailing `/`. So B2 does not constrain
+  the choice, and this runbook stops asserting a competing value - which also
+  matches this runbook's own evidence policy, where repository paths are on the
+  forbidden list rather than the recorded list.
 
-**Known open defect, recorded rather than papered over.** At
+  **Correction.** An earlier revision of this section claimed that "the only
+  literal anywhere in `scripts/` is a unit-test fixture". That was wrong.
+  `scripts/postgres_restore_generation.py` does emit `repo1-path` from the guard
+  packet field `repository_path`, and `.github/workflows/verify-b2-connectivity.yml`
+  does assert only that `PGBACKREST_REPO1_PATH` is absolute — but
+  `validate_repository` in `scripts/postgres_restore_guard.py` compares the
+  prefix against a hardcoded literal and fails closed when it differs. That
+  comparison was added on 2026-08-01 in
+  [#15](https://github.com/Ivan-Shyla/adapteng-company-os/pull/15) (`e30da31`);
+  the original trace followed the generator and stopped before reaching the
+  guard. Treat the prefix as free to choose in B2 and **pinned inside this
+  repository** until the mismatch recorded in
+  [`owner/action-items.md`](../owner/action-items.md) is resolved.
+
+  What is **not** free is consistency: the same prefix must be used for backup
+  and for every restore, and it must match the B2 lifecycle-rule scope and the
+  application key prefix restriction from Phase 2.
+
+**Restore-side consumption of these variables.** At
 `7f5f3585588da8b330e4ae9779f0b6343e1156eb` the tracked restore generator
-`scripts/postgres_restore_generation.py` writes `repo1-s3-uri-style=path` as a
-hardcoded value and never reads `PGBACKREST_REPO1_S3_URI_STYLE`. Because B2
-accepts both styles this does not by itself break a restore, but the
-restore-side configuration will not match the backup-side configuration and the
-configured variable has no effect on restore. That fix is a code change in
-`scripts/` and is tracked in
-[`owner/action-items.md`](../owner/action-items.md); until it lands, treat the
-generated restore config as divergent from this runbook on that one line.
+`scripts/postgres_restore_generation.py` hardcoded `repo1-s3-uri-style=path`,
+`repo1-type` and `repo1-cipher-type`, and never emitted `repo1-s3-key-type` at
+all, so four of the eight non-secret variables had no effect on restore and the
+restore-side URI style disagreed with the backup side. That is now fixed: the
+generator emits all eight from the guard packet, an omitted setting falls back to
+pgBackRest's own default rather than to a copied one — `repo1-s3-uri-style`
+defaults to `host` — and a value this procedure cannot honour stops the run
+instead of being silently overridden. `test_configured_uri_style_reaches_the_generated_config`
+and `test_repository_settings_are_consumed_not_hardcoded` in
+`scripts/test_postgres_restore_rehearsal.py` fail if any of them is hardcoded
+again.
+
+Ambient `PGBACKREST_*` environment is scrubbed on purpose, so these values reach
+the generator through the guard config rather than the environment. Wiring the
+repository variables into that guard config is a change under
+`.github/workflows/`; until it lands the guard's defaults apply, and those
+defaults match pgBackRest's, not the old copied value.
+
+**Still open, and owner-only:** the guard pins the repository prefix to a literal
+that the configured `PGBACKREST_REPO1_PATH` does not match, so a wired restore
+would fail closed. Tracked in
+[`owner/action-items.md`](../owner/action-items.md).
 
 The reviewed PostgreSQL settings are:
 

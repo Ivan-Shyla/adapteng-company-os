@@ -34,6 +34,18 @@ name: PostgreSQL backup and restore rehearsal
 
 on:
   workflow_dispatch:
+  # A backup contour exercised only when somebody remembers to press a button
+  # is not a backup contour. The cost objection is now answered by measurement
+  # rather than by guess: a run stores about 9 MB and downloads it twice in
+  # order to verify it, so roughly 20 MB of egress, against a download cap with
+  # several thousand runs a day of headroom. The scarce resource here was never
+  # money. It was noticing.
+  #
+  # 03:17 UTC is off-peak for European working hours and deliberately off the
+  # hour. Every cron-triggered workflow on the platform queues at once, so runs
+  # scheduled on the hour are the ones most likely to be delayed under load.
+  schedule:
+    - cron: "17 3 * * *"
   push:
     paths:
       - .github/workflows/postgres-backup-rehearsal.yml
@@ -42,6 +54,10 @@ on:
 permissions:
   contents: read
 
+# Load-bearing rather than merely tidy now that a schedule exists: a nightly run
+# can collide with a dispatched one. Cancelling either would abandon a
+# half-written repository prefix, and worse, the cancelled run's cleanup could
+# delete a prefix while the surviving run is still reading it. Runs queue.
 concurrency:
   group: postgres-backup-rehearsal
   cancel-in-progress: false
@@ -78,6 +94,12 @@ jobs:
       REHEARSAL_SCOPE: ${{ github.run_id }}-${{ github.run_attempt }}
       PGBACKREST_REPO1_PATH: /restore-rehearsal/${{ github.run_id }}-${{ github.run_attempt }}
       REHEARSAL_STANZA: rehearsal
+      # Named PINNED_PGBACKREST_VERSION and not PGBACKREST_PINNED_VERSION on
+      # purpose. As the comment above says, pgBackRest reads every
+      # PGBACKREST_<OPTION> variable in the environment as configuration, so a
+      # variable in that namespace naming no real option would make every
+      # pgBackRest call in this job abort on an unknown option.
+      PINNED_PGBACKREST_VERSION: 2.59.0
       PGBIN: /usr/lib/postgresql/16/bin
       SOURCE_PORT: '55432'
       RESTORE_IMMEDIATE_PORT: '55433'
@@ -148,7 +170,7 @@ jobs:
             echo "EVIDENCE=$root/evidence"
           } >>"$GITHUB_ENV"
 
-      - name: Install PostgreSQL 16 and pgBackRest
+      - name: Install PostgreSQL 16 and the pinned pgBackRest
         run: |
           set -euo pipefail
           . /etc/os-release
@@ -159,7 +181,21 @@ jobs:
                "https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
             | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
           sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql-16 pgbackrest
+
+          # The tool that writes the backup has to be a known quantity, and
+          # recording its version after the fact only observes it. Resolve the
+          # package revision that carries the pinned upstream version rather
+          # than hardcoding the full Debian version string, because that string
+          # embeds the distribution codename and would break silently the next
+          # time the runner image changes.
+          pinned_package=$(apt-cache madison pgbackrest \
+            | awk -v want="$PINNED_PGBACKREST_VERSION" '$3 ~ "^" want "-" { print $3; exit }')
+          if [ -z "$pinned_package" ]; then
+            echo "::error title=Pinned pgBackRest unavailable::PGDG no longer offers $PINNED_PGBACKREST_VERSION for ${VERSION_CODENAME}."
+            exit 1
+          fi
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            postgresql-16 "pgbackrest=$pinned_package"
 
           # The distribution packages create and start a cluster of their own.
           # Removing it leaves exactly the clusters this job creates, so nothing
@@ -175,7 +211,37 @@ jobs:
 
           echo "$PGBIN" >>"$GITHUB_PATH"
           "$PGBIN/postgres" --version | tee "$EVIDENCE/postgres-version.txt"
-          pgbackrest version | tee "$EVIDENCE/pgbackrest-version.txt"
+
+          # Asking for a version is not the same as getting it. Nothing so far
+          # has verified that the binary now on PATH is the one that was asked
+          # for, so state the requirement and fail closed if it is not met.
+          installed=$(pgbackrest version)
+          if [ "$installed" != "pgBackRest $PINNED_PGBACKREST_VERSION" ]; then
+            echo "::error title=pgBackRest is not the pinned version::Asked for pgBackRest $PINNED_PGBACKREST_VERSION, but the binary on PATH reports '$installed'."
+            exit 1
+          fi
+          printf '%s\n' "$installed" >"$EVIDENCE/pgbackrest-version.txt"
+
+          # Recorded, not asserted, and the PR says so: the package revision and
+          # the bytes are evidence of what actually ran, not a constraint on it.
+          #
+          # State the boundary here rather than only in a report, because a
+          # reader who finds a version assertion above will reasonably assume
+          # more was pinned than actually was. The version string is asserted
+          # and fails this job closed. The bytes are not: the sha256 below is
+          # observed after the fact and compared against nothing, so PGDG could
+          # rebuild and republish 2.59.0 with different bytes and this job would
+          # still pass. Phase 0's immutability gate asks for the bytes, so this
+          # workflow does NOT satisfy it. Closing it needs a digest to compare
+          # against, supplied by the owner as a Phase 0 artifact.
+          binary=$(command -v pgbackrest)
+          {
+            printf 'asserted version: pgBackRest %s\n' "$PINNED_PGBACKREST_VERSION"
+            printf 'package revision: %s\n' "$pinned_package"
+            printf 'binary: %s\n' "$binary"
+            printf 'binary sha256: %s\n' "$(sha256sum "$binary" | cut -d' ' -f1)"
+            printf 'immutability gate: NOT satisfied - the version above is asserted, the bytes above are only recorded\n'
+          } | tee "$EVIDENCE/pgbackrest-provenance.txt"
 
       - name: Create the disposable source cluster
         run: |
@@ -595,6 +661,100 @@ jobs:
             --right "$EVIDENCE/digest-restored-latest.txt" --right-label restored_to_latest \
             --expect equal --min-tables 5 --min-rows 40000 \
             --output "$EVIDENCE/compare-restore-latest.json"
+
+      - name: Say why the object store refused, instead of leaving a bare status
+        if: failure()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PGBACKREST_REPO1_S3_KEY_SECRET }}
+          AWS_DEFAULT_REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
+        run: |
+          # This exists because of a real outage. A green contour began failing
+          # on an unchanged commit and stayed broken for eight hours, because
+          # the only thing any log contained was `HTTP request failed with 403`.
+          # The store had in fact sent a reason -- an account download cap had
+          # been reached -- but pgBackRest's first repository call is a HEAD,
+          # and a HEAD response carries no body by definition. The explanation
+          # was announced in a content-length and never transmitted.
+          #
+          # So: repeat the same reads as GETs, which do carry a body, and put
+          # the store's own words in the log. A rehearsal that runs unattended
+          # at 03:17 has to be able to say what went wrong without a person
+          # reproducing it by hand the next morning.
+          #
+          # Actions runs this under `bash -e`, so -e must be turned off rather
+          # than merely not turned on.
+          set +e
+          set -uo pipefail
+
+          bucket="$PGBACKREST_REPO1_S3_BUCKET"
+          endpoint="$PGBACKREST_REPO1_S3_ENDPOINT"
+          prefix="${PGBACKREST_REPO1_PATH#/}"
+          bodies="$RUNNER_TEMP/refusal"
+          mkdir -p "$bodies"
+
+          # Credentials reach curl through a config file on stdin, so they never
+          # appear in a process argument list. Only statuses and store-supplied
+          # bodies are ever printed.
+          status=""
+          probe() {
+            local label="$1" url="$2" out="$bodies/$1"
+            status=$(printf '%s\n' \
+              "user = \"$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY\"" \
+              "aws-sigv4 = \"aws:amz:$AWS_DEFAULT_REGION:s3\"" \
+              | curl --silent --show-error --config - --request GET \
+                  --output "$out" --write-out '%{http_code}' "$url")
+            printf '\n%s -> HTTP %s\n' "$label" "$status"
+            if [ "$status" != 200 ] && [ -s "$out" ]; then
+              echo "--- the store's own words ---"
+              sed 's/^/    /' "$out"
+              printf '\n--- end ---\n'
+            fi
+          }
+
+          # Reads only. This is a post-mortem of a failed run and it must not
+          # create anything, least of all in a prefix whose cleanup is the next
+          # step. Whether writes worked is already answered by the run above.
+          probe listing "https://$bucket.$endpoint/?list-type=2&prefix=$prefix/"
+          listing=$status
+          probe archive-info "https://$bucket.$endpoint/$prefix/archive/$REHEARSAL_STANZA/archive.info"
+          archive_info=$status
+          # Negative control. A key that certainly does not exist should answer
+          # 404. If it answers 403 while the listing works, the key lacks
+          # bucket-listing scope, which breaks pgBackRest specifically because
+          # pgBackRest probes for absent files by design.
+          probe absent "https://$bucket.$endpoint/$prefix/this-key-was-never-written"
+          absent=$status
+
+          verdict="The object store answered normally, so it is not implicated."
+          if grep -rqi 'cap exceeded' "$bodies" 2>/dev/null; then
+            verdict="A storage account cap has been reached. This is a quota, not a permission and not a credential: raise the cap in the storage provider's console. Re-scoping or rotating the key would achieve nothing."
+          elif [ "$listing" = 200 ] && [ "$archive_info" = 403 ]; then
+            verdict="Listing works but reading is refused, so the credential is valid and the fault is specific to reads."
+          elif [ "$listing" = 200 ] && [ "$absent" = 403 ]; then
+            verdict="An absent key answers 403 rather than 404, which is what a key without bucket-listing scope looks like."
+          elif [ "$listing" != 200 ]; then
+            verdict="Even listing failed, so this is not read-specific; treat it as a credential or connectivity fault."
+          fi
+
+          echo ""
+          echo "Verdict: $verdict"
+          {
+            echo "### The object store, at the moment this run failed"
+            echo ""
+            echo "| probe | HTTP |"
+            echo "| --- | --- |"
+            echo "| listing the rehearsal prefix | $listing |"
+            echo "| reading archive.info | $archive_info |"
+            echo "| reading a key that was never written | $absent |"
+            echo ""
+            echo "$verdict"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+          # Diagnostics explain, they do not judge. Exiting non-zero here would
+          # add a second error annotation and obscure which step actually
+          # failed, so this always succeeds.
+          exit 0
 
       - name: Remove the rehearsal repository from B2 and prove it is gone
         if: always()
