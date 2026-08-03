@@ -287,6 +287,55 @@ jobs:
           AWS_DEFAULT_REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
           AWS_DEFAULT_OUTPUT: json
 
+      - name: Probe what Backblaze B2 will actually serve
+        run: |
+          set -euo pipefail
+          # Placed before the first pgBackRest repository call on purpose.
+          # pgBackRest prints a refusal as a bare `HTTP request failed with 403`
+          # and drops the response body, so the reason B2 gave is lost exactly
+          # where it is needed. The AWS CLI prints it, and B2 meters put/delete
+          # (Class A), get/head (Class B) and list (Class C) against separate
+          # daily caps -- so Class C listings can succeed all day while every
+          # Class B read is refused, which is what makes a list-only check look
+          # like proof that the credentials are fine when it is nothing of the
+          # kind.
+          python scripts/rehearsal_b2_capability_probe.py \
+            --bucket "$PGBACKREST_REPO1_S3_BUCKET" \
+            --endpoint "$PGBACKREST_REPO1_S3_ENDPOINT" \
+            --prefix "$PGBACKREST_REPO1_PATH" \
+            --stanza "$REHEARSAL_STANZA" \
+            --scope "$REHEARSAL_SCOPE" \
+            --output "$EVIDENCE/b2-capability.json"
+
+          # Negative control. The same probe, given a secret that cannot sign,
+          # must refuse. A probe that reports health whatever it is handed would
+          # make every later step's success unfalsifiable.
+          echo "--- negative control: the probe must reject unusable credentials ---"
+          control="$REHEARSAL_ROOT/b2-capability-negative-control.txt"
+          if AWS_SECRET_ACCESS_KEY=wrong-on-purpose \
+            python scripts/rehearsal_b2_capability_probe.py \
+              --bucket "$PGBACKREST_REPO1_S3_BUCKET" \
+              --endpoint "$PGBACKREST_REPO1_S3_ENDPOINT" \
+              --prefix "$PGBACKREST_REPO1_PATH" \
+              --stanza "$REHEARSAL_STANZA" \
+              --scope "$REHEARSAL_SCOPE-control" >"$control" 2>&1
+          then
+            echo "::error title=Capability probe is inert::It reported healthy object store access using a secret that cannot sign."
+            exit 1
+          fi
+          verdict=$(sed -n 's/^probe-verdict: //p' "$control" | tail -n 1)
+          echo "negative control verdict: ${verdict:-none}"
+          if [ "${verdict:-}" = "ok" ] || [ -z "${verdict:-}" ]; then
+            echo "::error title=Capability probe is inert::The negative control did not produce a failing verdict."
+            exit 1
+          fi
+          echo "The probe refused unusable credentials, as required."
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PGBACKREST_REPO1_S3_KEY_SECRET }}
+          AWS_DEFAULT_REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
+          AWS_DEFAULT_OUTPUT: json
+
       - name: Start the source cluster and create the stanza
         run: |
           set -euo pipefail
@@ -668,6 +717,7 @@ jobs:
           summary "| --- | --- |"
           summary "| PostgreSQL | \`$(read_or "$EVIDENCE/postgres-version.txt" 'not installed')\` |"
           summary "| pgBackRest | \`$(read_or "$EVIDENCE/pgbackrest-version.txt" 'not installed')\` |"
+          summary "| Object store capability | \`$(field "$EVIDENCE/b2-capability.json" '.verdict')\` |"
           summary "| Backup label | \`$(read_or "$EVIDENCE/backup-label.txt" 'no backup taken')\` |"
           summary "| Objects written to B2 | $(read_or "$EVIDENCE/rehearsal-objects.txt" 'none') |"
           summary "| Bytes written to B2 | $(read_or "$EVIDENCE/rehearsal-bytes.txt" 'none') |"

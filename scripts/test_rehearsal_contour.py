@@ -16,11 +16,14 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 try:
+    from scripts import rehearsal_b2_capability_probe as b2probe
     from scripts import rehearsal_digest_compare as compare
     from scripts import rehearsal_isolation_guard as guard
 except ImportError:  # pragma: no cover - direct execution from scripts/
+    import rehearsal_b2_capability_probe as b2probe  # type: ignore[no-redef]
     import rehearsal_digest_compare as compare  # type: ignore[no-redef]
     import rehearsal_isolation_guard as guard  # type: ignore[no-redef]
 
@@ -513,6 +516,232 @@ class CompareCommandTests(unittest.TestCase):
                 "equal",
             ]
             self.assertEqual(self.run_main(argv), 2)
+
+
+class ObjectStoreRefusalTests(unittest.TestCase):
+    """Backblaze reports an exhausted daily cap as 403 AccessDenied.
+
+    That single fact is what made the rehearsal's 403 unreadable: the cap
+    message and a genuine permission refusal share a status code and an error
+    code, and only the sentence tells them apart. Reading it as a permission
+    problem cost six dispatches and produced an owner action item aimed at the
+    wrong console page, so the classification is pinned here rather than left to
+    be rediscovered.
+    """
+
+    CAP = (
+        "An error occurred (AccessDenied) when calling the GetObject operation: "
+        "Cannot download file, download bandwidth or transaction (Class B) cap "
+        "exceeded. See the Caps & Alerts page to increase your cap."
+    )
+    DENIED = (
+        "An error occurred (AccessDenied) when calling the HeadObject operation: "
+        "Forbidden"
+    )
+    ABSENT = (
+        "An error occurred (404) when calling the HeadObject operation: Not Found"
+    )
+    UNSIGNABLE = (
+        "An error occurred (SignatureDoesNotMatch) when calling the "
+        "ListObjectsV2 operation: The request signature we calculated does not "
+        "match the signature you provided."
+    )
+
+    def test_a_cap_refusal_is_not_read_as_a_permission_refusal(self) -> None:
+        self.assertEqual(b2probe.classify(254, self.CAP), b2probe.CAP_EXCEEDED)
+
+    def test_a_permission_refusal_is_not_read_as_a_cap(self) -> None:
+        self.assertEqual(b2probe.classify(254, self.DENIED), b2probe.ACCESS_DENIED)
+
+    def test_an_absent_object_is_recognised(self) -> None:
+        self.assertEqual(b2probe.classify(254, self.ABSENT), b2probe.NOT_FOUND)
+
+    def test_an_unusable_secret_is_recognised(self) -> None:
+        self.assertEqual(b2probe.classify(254, self.UNSIGNABLE), b2probe.BAD_CREDENTIALS)
+
+    def test_success_is_never_classified_from_text(self) -> None:
+        self.assertEqual(b2probe.classify(0, self.CAP), b2probe.SUCCEEDED)
+
+    def test_an_unrecognised_refusal_is_not_guessed(self) -> None:
+        self.assertEqual(b2probe.classify(254, "connection reset"), b2probe.UNKNOWN)
+
+
+class ScriptedObjectStore:
+    """Stands in for the AWS CLI so the probe's decision tree can be driven.
+
+    The probe's value is in what it concludes from a combination of answers, not
+    in any single call, so the combinations are scripted here instead of waiting
+    for Backblaze to be in the right state.
+    """
+
+    OK = (0, "")
+
+    def __init__(self, listing_output: str = "", **outcomes: tuple[int, str]) -> None:
+        self.outcomes = outcomes
+        self.listing_output = listing_output
+        self.body: Path | None = None
+        self.calls: list[tuple[str, str]] = []
+
+    def outcome(self, name: str) -> tuple[int, str]:
+        return self.outcomes.get(name, self.OK)
+
+    def __call__(self, operation: str, *arguments: str) -> tuple[int, str, str]:
+        args = list(arguments)
+        key = args[args.index("--key") + 1] if "--key" in args else ""
+        prefix = args[args.index("--prefix") + 1] if "--prefix" in args else ""
+        self.calls.append((operation, key))
+
+        if operation == "list-objects-v2":
+            returncode, stderr = self.outcome("list")
+            stdout = self.listing_output if prefix.endswith(".txt") else ""
+            return returncode, stdout, stderr
+        if operation == "put-object":
+            self.body = Path(args[args.index("--body") + 1])
+            name = "put"
+        elif operation == "delete-object":
+            name = "delete"
+        else:
+            # archive.info is the key pgBackRest probes before it has created
+            # anything; the .txt key is the object the probe just wrote.
+            name = "present" if key.endswith(".txt") else "missing"
+
+        returncode, stderr = self.outcome(name)
+        if returncode == 0 and operation == "get-object" and name == "present":
+            assert self.body is not None
+            Path(args[-1]).write_bytes(self.body.read_bytes())
+        return returncode, "", stderr
+
+
+class CapabilityProbeTests(unittest.TestCase):
+    ABSENT = ObjectStoreRefusalTests.ABSENT
+    CAP = ObjectStoreRefusalTests.CAP
+    DENIED = ObjectStoreRefusalTests.DENIED
+    UNSIGNABLE = ObjectStoreRefusalTests.UNSIGNABLE
+
+    def probe(self, store: ScriptedObjectStore, output: Path | None = None) -> tuple[int, str]:
+        argv = [
+            "--bucket",
+            "a-bucket",
+            "--endpoint",
+            "object-store.invalid",
+            "--prefix",
+            REHEARSAL_REPO_PATH,
+            "--stanza",
+            "rehearsal",
+            "--scope",
+            SCOPE_TOKEN,
+        ]
+        if output is not None:
+            argv += ["--output", str(output)]
+        captured = io.StringIO()
+        # `store` is an instance rather than a function, so it does not bind as
+        # a method: Aws.run(...) reaches __call__ without a self argument.
+        with mock.patch.object(b2probe.Aws, "run", store), mock.patch.object(
+            b2probe.shutil, "which", return_value="/usr/bin/aws"
+        ):
+            with redirect_stdout(captured), redirect_stderr(io.StringIO()):
+                status = b2probe.main(argv)
+        return status, captured.getvalue()
+
+    def verdict(self, output: str) -> str:
+        for line in output.splitlines():
+            if line.startswith("probe-verdict: "):
+                return line.split(": ", 1)[1]
+        raise AssertionError("the probe printed no machine-readable verdict")
+
+    def test_a_healthy_object_store_is_accepted(self) -> None:
+        with TemporaryDirectory() as raw:
+            evidence = Path(raw) / "b2-capability.json"
+            status, output = self.probe(
+                ScriptedObjectStore(missing=(254, self.ABSENT)), evidence
+            )
+            self.assertEqual(status, 0)
+            self.assertEqual(self.verdict(output), b2probe.VERDICT_OK)
+            payload = json.loads(evidence.read_text(encoding="utf-8"))
+            self.assertEqual(payload["verdict"], b2probe.VERDICT_OK)
+            self.assertTrue(
+                payload["missing_key"].endswith("/archive/rehearsal/archive.info")
+            )
+
+    def test_an_exhausted_cap_is_named_as_a_cap(self) -> None:
+        status, output = self.probe(
+            ScriptedObjectStore(missing=(254, self.CAP), present=(254, self.CAP))
+        )
+        self.assertEqual(status, 1)
+        self.assertEqual(self.verdict(output), "class_b_read_refused_cap_exceeded")
+        self.assertIn("Caps & Alerts", output)
+
+    def test_a_class_b_refusal_that_is_not_a_cap_is_reported_separately(self) -> None:
+        status, output = self.probe(
+            ScriptedObjectStore(missing=(254, self.DENIED), present=(254, self.DENIED))
+        )
+        self.assertEqual(status, 1)
+        self.assertEqual(self.verdict(output), "class_b_read_refused")
+
+    def test_a_key_that_cannot_probe_an_absent_object_is_caught(self) -> None:
+        # Reads of a present object succeed, so the store is not capped; only
+        # the not-yet-created key is refused, which is the request
+        # stanza-create makes before it creates anything.
+        status, output = self.probe(ScriptedObjectStore(missing=(254, self.DENIED)))
+        self.assertEqual(status, 1)
+        self.assertEqual(self.verdict(output), "missing_key_probe_refused")
+
+    def test_unusable_credentials_stop_at_the_listing(self) -> None:
+        store = ScriptedObjectStore(list=(254, self.UNSIGNABLE))
+        status, output = self.probe(store)
+        self.assertEqual(status, 1)
+        self.assertEqual(self.verdict(output), "class_c_list_refused")
+        # Nothing is written to the object store once it has refused to talk.
+        self.assertNotIn("put-object", [operation for operation, _ in store.calls])
+
+    def test_a_refused_write_is_reported_as_a_write(self) -> None:
+        status, output = self.probe(
+            ScriptedObjectStore(missing=(254, self.ABSENT), put=(254, self.DENIED))
+        )
+        self.assertEqual(status, 1)
+        self.assertEqual(self.verdict(output), "class_a_write_refused")
+
+    def test_the_probe_object_is_always_deleted_again(self) -> None:
+        store = ScriptedObjectStore(missing=(254, self.CAP), present=(254, self.CAP))
+        self.probe(store)
+        deletes = [key for operation, key in store.calls if operation == "delete-object"]
+        self.assertEqual(len(deletes), 1)
+        self.assertTrue(deletes[0].startswith(REHEARSAL_REPO_PATH.strip("/")))
+
+    def test_nothing_outside_the_rehearsal_prefix_is_touched(self) -> None:
+        store = ScriptedObjectStore(missing=(254, self.ABSENT))
+        self.probe(store)
+        for operation, key in store.calls:
+            if not key:
+                continue
+            with self.subTest(operation=operation, key=key):
+                self.assertTrue(key.startswith(REHEARSAL_REPO_PATH.strip("/") + "/"))
+                self.assertFalse(key.startswith(PRODUCTION_REPO_PATH.strip("/")))
+
+    def test_a_delete_that_did_not_delete_is_caught(self) -> None:
+        # Cleanup is confirmed with a listing rather than head-object on
+        # purpose, so that a capped account cannot mistake litter it is unable
+        # to read for litter that is not there.
+        store = ScriptedObjectStore(
+            missing=(254, self.ABSENT),
+            listing_output=(
+                '{"Contents": [{"Key": "restore-rehearsal/'
+                f'{SCOPE_TOKEN}/capability-probe/{SCOPE_TOKEN}.txt"' + "}]}"
+            ),
+        )
+        status, output = self.probe(store)
+        self.assertEqual(status, 1)
+        self.assertEqual(self.verdict(output), "probe_object_survived_delete")
+
+    def test_an_empty_prefix_is_refused_outright(self) -> None:
+        with self.assertRaises(SystemExit):
+            b2probe.run_probe(
+                bucket="a-bucket",
+                endpoint="https://object-store.invalid",
+                prefix="/",
+                stanza="rehearsal",
+                scope=SCOPE_TOKEN,
+            )
 
 
 class TrackedRehearsalFileTests(unittest.TestCase):
