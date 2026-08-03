@@ -41,7 +41,9 @@ external/high-impact actions.
   hardening*, merged 2026-07-30. This **supersedes** the 2026-07-25 assessment
   pinned to `affe6ea1e4d522be0df0641e98a08e20a84549ae` (control-plane PR #36),
   which is kept visible here because the record is corrected in place, not
-  erased.
+  erased. Control-plane `main` has since moved to `327fc4b6` (PR #40, the
+  audit record for this assessment), which adds tests and documentation only
+  and changes no behaviour under judgement here.
 
   **Read the invariant, not the hash.** The claim here is *"P0 #1 and #2 are
   closed as of AG-008, which is merged on control-plane `main`"*; the SHAs
@@ -56,16 +58,16 @@ external/high-impact actions.
   and re-ran the identical probe at `edadb091`, re-sealing mutated artifacts
   with each tree's own `evidence_digest()` / `artifact_envelope_sha256()` so a
   refusal reflects the policy under test rather than a stale hash. No model
-  call, no spend. **PR #40 is unmerged**, so its merge state must be read
-  precisely: it changes no source file — only `README.md`, agent logs,
-  `context/CURRENT_STATUS.md`, `docs/AG008_P0_AUDIT.md` and tests — therefore
-  the closures below are properties of control-plane **`main` at `edadb091`**,
-  delivered by the already-merged PR #38, and are *not* contingent on PR #40
-  landing. What is not yet on `main` is the regression guard
-  `tests/test_ag008_p0_regression.py`: until PR #40 merges, `main` has the
-  fixed behaviour with **no test pinning it there**, so these closures are
-  currently unprotected against silent re-introduction. Verdicts on the three
-  P0s this file previously held open:
+  call, no spend. PR #40 **merged 2026-08-03** as `327fc4b6`, which is now
+  control-plane `main`. Its merge changes no behaviour: it touches no source
+  file — only `README.md`, agent logs, `context/CURRENT_STATUS.md`,
+  `docs/AG008_P0_AUDIT.md` and tests. The closures below were therefore
+  already properties of `main` at `edadb091`, delivered by PR #38, and never
+  depended on PR #40 landing. What PR #40 adds is the regression guard
+  `tests/test_ag008_p0_regression.py`, so the two closures are now **pinned by
+  a test on `main`** rather than merely true of it — they are no longer exposed
+  to silent re-introduction. Verdicts on the three P0s this file previously
+  held open:
   - **P0 #1 — optional/unvalidated task envelope: CLOSED.** At `affe6ea`,
     `evaluate_artifact` returned `ready=True` with no envelope at all and
     `check_task_completion.py` exited `0`; the help text read
