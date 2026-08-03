@@ -3,7 +3,7 @@
 # Precedence (ADR-0011 platform layer map):
 #   Postgres = operational truth | Baserow = structured collaboration | Drive = document/media evidence
 version: 1
-updated: 2026-08-02
+updated: 2026-08-03
 
 baserow:
   service: baserow-self-hosted (https://baserow.adapteng.com)
@@ -54,16 +54,28 @@ postgres_adapteng_ops:
     last_verified_contract_status: insufficient-logical-backup
     management: "operator-managed pgBackRest using provider-managed Backblaze B2 object storage; not provider-managed PostgreSQL backup"
     proposed_design: "pinned pgBackRest 2.59.0 physical base backup + continuous WAL, client-side encrypted to private Backblaze B2 EU Central; weekly full, daily differential, 12-full count retention"
-    proposed_design_status: object-store-connectivity-verified-backup-not-configured
+    proposed_design_status: restore-rehearsal-passing-production-backup-not-configured
     object_store_connectivity:
       status: verified
       verified: 2026-08-02
       evidence_run: 30752237109
       evidence_workflow: ".github/workflows/verify-b2-connectivity.yml at 7f5f3585588da8b330e4ae9779f0b6343e1156eb (workflow_dispatch, conclusion success, 2026-08-02T14:30:06Z)"
       proven: "the configured credentials authenticate against the private Backblaze B2 EU Central bucket, and a probe object was written, read back and byte-compared, deleted, then asserted absent with head-object - so writes land, reads return the same bytes, deletes really delete, and bucket Object Lock is not silently retaining objects and making retention unenforceable"
-      not_proven: "NO BACKUP EXISTS. Nothing in that run touched PostgreSQL: no pgBackRest install, no stanza, no full or differential backup, no WAL archive, no check, no verify, no restore. The probe object was written under a connectivity-check/ prefix outside the pgBackRest repository path. Reaching the object store is a precondition of the backup design, not evidence of it."
+      not_proven: "NO PRODUCTION BACKUP EXISTED AS OF THAT RUN. Nothing in that run touched PostgreSQL: no pgBackRest install, no stanza, no full or differential backup, no WAL archive, no check, no verify, no restore. The probe object was written under a connectivity-check/ prefix outside the pgBackRest repository path. Reaching the object store is a precondition of the backup design, not evidence of it. For what has since been proven about the backup and restore contour itself, see restore_rehearsal below; production remains unbacked either way."
       configuration_home: "GitHub repository variables PGBACKREST_REPO1_* (8) plus 3 repository secrets; the values are deliberately not recorded in Git, so the variables are the single source of truth for bucket, endpoint, region, key type, URI style, repository path and cipher type"
       reverify: "re-dispatch the Verify B2 connectivity workflow; it is dispatch-only, mutates no database, and writes only outside the pgBackRest repository path"
+    restore_rehearsal:
+      status: passing
+      verified: 2026-08-03
+      evidence_run: 30811383748
+      evidence_workflow: ".github/workflows/postgres-backup-rehearsal.yml at 1f270cfb668c2ffaddd95f21db90ae17c811ef9a (workflow_dispatch, conclusion success, 2026-08-03T11:54:39Z to 2026-08-03T11:56:55Z, 23 of 23 steps succeeded with none skipped and none failed)"
+      proven: "PostgreSQL 16 and pgBackRest were installed, a stanza created, and a real full backup taken to the private Backblaze B2 EU Central bucket with client-side encryption (pgBackRest reported full backup size = 29.3MB, file total = 989; B2 then held 14 objects totalling 9437040 bytes under the run-scoped prefix). The repository was verified, WAL was archived, the source cluster was destroyed before any restore so the restored bytes could only have come out of B2, and two restores were performed: an immediate restore that reproduced the pre-backup state exactly (backed_up and restored identical across 4 tables and 45001 rows) and a second restore to the end of the archived WAL that reproduced the post-change state exactly (post_backup and restored_to_latest identical across 5 tables and 46203 rows). The rehearsal repository was then removed from B2 and the prefix asserted empty, so deletes really delete."
+      negative_control: "in the same job the immediate restore was also compared against the deliberately-changed post-backup source and correctly reported post_backup and restored differ in 6 ways, as required - the comparison was therefore demonstrated capable of returning a difference in the same run, which is what makes the two identity results evidence rather than a vacuous pass"
+      isolation: "65 isolation assertions fired across the job in six groups (15, 13, 9, 11, 9 and 8 checks), all established; every cluster was created inside the runner temporary directory with listen_addresses empty so it had no TCP listener, and the run-scoped repository prefix /restore-rehearsal/30811383748-1 shares no path lineage with the production repository path"
+      not_proven: "PRODUCTION IS STILL NOT BACKED UP. The rehearsal database is disposable and seeded with synthetic content; no production database was read, referenced, or in fact reachable. No production stanza, no schedule, no retention enforcement and no monitoring exist. A passing rehearsal proves the contour, the credentials and the object store - it does not prove that adapteng_ops has a recoverable backup."
+      egress_measured: "one complete rehearsal writes about 9.0 MB into B2 and downloads it twice for the two restores, so on the order of 20 MB of egress, about USD 0.0002 at the USD 0.01/GB list price; the USD 1.00/day download-bandwidth cap therefore permits roughly 5000 rehearsals per day and is not a practical constraint on this contour"
+      earlier_failure_cause: "the thirteen consecutive failures between 2026-08-03T01:39Z and 2026-08-03T09:05Z were NOT a code defect. The identical head 1f270cfb had already succeeded three times (runs 30774630135, 30774989967 and 30777047810, the last green at 01:31:03Z). Backblaze B2 was refusing download-class requests with AccessDenied 'Cannot download file, download bandwidth or transaction (Class B) cap exceeded'; a HEAD carries no response body, so pgBackRest could only ever surface a bare 403 with a content-length for a body it never received. Class A/B/C transactions are free on the account plan and the console exposes no Class B cap control, so the binding limit was the download-bandwidth cap. Raising it to USD 1.00/day cleared both workflows with no code change, on the same commit."
+      reverify: "re-dispatch the PostgreSQL backup and restore rehearsal workflow; it uses no production credential, creates every cluster in the runner temporary directory, writes only under a run-scoped prefix, and deletes that prefix before it finishes"
     compatibility_gate: "separately reviewed source/derived image manifests; Docker-measured .Image/config ID/sole RepoDigest/platform/PGDATA; exact runtime signature; pinned PostgreSQL/pgBackRest binaries; complete canonical catalog signature; A/B/C must match source before migration"
     integrity_gate: "fresh selected full; post-backup pgBackRest check plus selected-set verify parsed to exactly status: ok; healthy WAL archive; digest-only set reference; tracked procedure/probe digests"
     restore_design: "sole tracked guarded A|B|C entrypoint on three independently created clean Hetzner PostgreSQL-only hosts; wrapper-generated exact pgBackRest config plus fixed descriptor-only secrets; authoritative private target IDs with complete never-started config validation and ID-only start; one-use target-bound provider challenges through the pinned signed owner broker proving exact firewall and empty private_net before target start/SQL and after cleanup; same-ID sealed runner plus complete live Docker inventory; no production snapshot/app clone, public DB, Docker socket or production credentials"
