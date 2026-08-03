@@ -287,6 +287,150 @@ jobs:
           AWS_DEFAULT_REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
           AWS_DEFAULT_OUTPUT: json
 
+      - name: Prove the rehearsal repository is readable before pgBackRest needs it
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PGBACKREST_REPO1_S3_KEY_SECRET }}
+          AWS_DEFAULT_REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
+          AWS_DEFAULT_OUTPUT: json
+        run: |
+          # The step after this one is where the contour first touches the
+          # repository, and it touches it with a HEAD on archive.info. A HEAD
+          # response carries no body by protocol, so when the object store
+          # refuses that call the provider's explanation is discarded before
+          # pgBackRest can log it, and the whole run reduces to
+          # "HTTP request failed with 403" -- a status code with no cause
+          # attached, from which nothing can be repaired.
+          #
+          # This gate issues the same three metered operations the backup and
+          # the restore depend on, against the run's own prefix, using a client
+          # that reads the response body. It is not a permission check: the
+          # object store meters uploads, downloads and listings separately and
+          # can refuse exactly one of them, so which class is refused is the
+          # diagnosis and a single yes/no would hide it.
+          set -uo pipefail
+          endpoint="https://$PGBACKREST_REPO1_S3_ENDPOINT"
+          prefix="${PGBACKREST_REPO1_PATH#/}"
+          # Outside archive/ and backup/, so pgBackRest never sees it, and
+          # inside the run-scoped prefix the isolation guard has already agreed
+          # shares no lineage with the production repository.
+          readiness="${prefix}/readiness/${REHEARSAL_SCOPE}"
+          shaped="${prefix}/archive/${REHEARSAL_STANZA}/archive.info"
+          sent="$REHEARSAL_ROOT/readiness-sent.txt"
+          received="$REHEARSAL_ROOT/readiness-received.txt"
+          printf 'rehearsal readiness probe %s\n' "$REHEARSAL_SCOPE" >"$sent"
+          refused=0
+
+          report() {
+            class="$1"; label="$2"; status="$3"; detail="${4:-}"
+            printf '  %-7s  %-40s  %s%s\n' "$class" "$label" "$status" \
+              "${detail:+  $detail}"
+          }
+
+          echo "--- one probe per metered transaction class, on this run's own prefix ---"
+
+          if output=$(aws s3api list-objects-v2 --endpoint-url "$endpoint" \
+                --bucket "$PGBACKREST_REPO1_S3_BUCKET" --prefix "${prefix}/" \
+                --max-items 1 2>&1); then
+            report "Class C" "list the rehearsal prefix" "ALLOWED"
+          else
+            report "Class C" "list the rehearsal prefix" "REFUSED" \
+              "$(printf '%s' "$output" | tr '\n' ' ')"
+            refused=$((refused + 1))
+          fi
+
+          if output=$(aws s3api put-object --endpoint-url "$endpoint" \
+                --bucket "$PGBACKREST_REPO1_S3_BUCKET" --key "$readiness" \
+                --body "$sent" 2>&1); then
+            report "Class A" "upload a readiness object" "ALLOWED"
+          else
+            report "Class A" "upload a readiness object" "REFUSED" \
+              "$(printf '%s' "$output" | tr '\n' ' ')"
+            refused=$((refused + 1))
+          fi
+
+          # The positive control. Backup without restore is not a backup, so a
+          # download that returns the bytes that were just uploaded is the
+          # property this contour actually rests on -- and it is the property
+          # that makes "downloads are refused" a measurement rather than an
+          # inference from a missing object.
+          if output=$(aws s3api get-object --endpoint-url "$endpoint" \
+                --bucket "$PGBACKREST_REPO1_S3_BUCKET" --key "$readiness" \
+                "$received" 2>&1); then
+            if cmp -s "$sent" "$received"; then
+              report "Class B" "download it and compare the bytes" "ALLOWED"
+            else
+              report "Class B" "download it and compare the bytes" "WRONG BYTES"
+              refused=$((refused + 1))
+            fi
+          else
+            report "Class B" "download it and compare the bytes" "REFUSED" \
+              "$(printf '%s' "$output" | tr '\n' ' ')"
+            refused=$((refused + 1))
+          fi
+
+          # The exact call the next step makes. Not-found is the healthy answer
+          # here: the stanza does not exist yet, so archive.info must not either.
+          if output=$(aws s3api head-object --endpoint-url "$endpoint" \
+                --bucket "$PGBACKREST_REPO1_S3_BUCKET" --key "$shaped" 2>&1); then
+            report "Class B" "head the key stanza-create asks for" "PRESENT" \
+              "the prefix is not clean"
+            refused=$((refused + 1))
+          elif printf '%s' "$output" | grep -qE '\(404\)|Not Found'; then
+            report "Class B" "head the key stanza-create asks for" \
+              "ABSENT (404, healthy)"
+          else
+            report "Class B" "head the key stanza-create asks for" "REFUSED" \
+              "$(printf '%s' "$output" | tr '\n' ' ')"
+            refused=$((refused + 1))
+          fi
+
+          if ! aws s3api delete-object --endpoint-url "$endpoint" \
+                --bucket "$PGBACKREST_REPO1_S3_BUCKET" --key "$readiness" >/dev/null 2>&1
+          then
+            echo "::error title=Readiness object could not be deleted::The probe object under the rehearsal prefix could not be removed."
+            exit 1
+          fi
+          # Read the listing into a variable of its own before counting it. A
+          # failed list piped into awk still prints 0, and a zero that a failure
+          # can produce is not evidence of an empty prefix.
+          if ! listing=$(aws s3api list-objects-v2 --endpoint-url "$endpoint" \
+                --bucket "$PGBACKREST_REPO1_S3_BUCKET" --prefix "${prefix}/" \
+                --query 'length(Contents || `[]`)' --output text 2>&1)
+          then
+            echo "::error title=Rehearsal prefix could not be listed::$(printf '%s' "$listing" | tr '\n' ' ')"
+            exit 1
+          fi
+          left=$(printf '%s\n' "$listing" | awk '{ total += $1 } END { print total + 0 }')
+          if [ "$left" != "0" ]; then
+            echo "::error title=Rehearsal prefix is not clean::$left object(s) are under the rehearsal prefix before pgBackRest has written anything."
+            exit 1
+          fi
+          report "Class A" "delete it again and confirm the prefix is empty" "ALLOWED"
+
+          if [ "$refused" -eq 0 ]; then
+            echo "Uploads, downloads and listings all work on this run's prefix."
+            exit 0
+          fi
+
+          # Only reached on a refusal, and only then is a second request worth
+          # spending: the same URL as a GET, which does return a body, so the
+          # provider's own sentence ends up in this log instead of a bare 403.
+          echo
+          echo "--- the response body a HEAD cannot carry ---"
+          umask 077
+          curlrc="$REHEARSAL_ROOT/readiness.curlrc"
+          printf 'user = "%s:%s"\n' \
+            "$PGBACKREST_REPO1_S3_KEY" "$PGBACKREST_REPO1_S3_KEY_SECRET" >"$curlrc"
+          curl --config "$curlrc" --silent --show-error \
+            --aws-sigv4 "aws:amz:${PGBACKREST_REPO1_S3_REGION}:s3" \
+            --write-out '\n<<HTTP %{http_code}, %{size_download} body bytes read>>\n' \
+            "https://$PGBACKREST_REPO1_S3_BUCKET.$PGBACKREST_REPO1_S3_ENDPOINT/$shaped" \
+            | tee "$EVIDENCE/object-store-refusal.txt" || true
+          rm -f "$curlrc"
+          echo "::error title=Object store refused $refused of the classes this rehearsal needs::The table above says which class, and the response body above says why. pgBackRest would have reported only the status code."
+          exit 1
+
       - name: Start the source cluster and create the stanza
         run: |
           set -euo pipefail

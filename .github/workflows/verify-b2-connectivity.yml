@@ -137,7 +137,133 @@ jobs:
           echo "Probe object is gone."
           echo "Write, read and delete all work against the backup bucket."
 
-      - name: Remove the probe object if the round trip did not
+      - name: Classify the refusal by transaction class
+        # Always, because this step is at its most useful exactly when the round
+        # trip above has just failed. A single "403" says the object store said
+        # no; it does not say to what. Backblaze B2 meters uploads (Class A),
+        # downloads (Class B) and listings (Class C) separately and caps them
+        # separately, so "the credentials are broken" and "the download cap is
+        # spent" are the same status code and completely different repairs.
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PGBACKREST_REPO1_S3_KEY_SECRET }}
+          AWS_DEFAULT_REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
+          AWS_DEFAULT_OUTPUT: json
+          REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
+          BUCKET: ${{ vars.PGBACKREST_REPO1_S3_BUCKET }}
+          ENDPOINT: ${{ vars.PGBACKREST_REPO1_S3_ENDPOINT }}
+          SCOPE: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          # Deliberately not `set -e`. Every probe below must run even after one
+          # of them is refused, because the shape of the refusal across all
+          # three classes is the measurement; stopping at the first failure
+          # would destroy it.
+          set -uo pipefail
+          endpoint="https://$ENDPOINT"
+          present="connectivity-check/${SCOPE}-classify.txt"
+          absent="connectivity-check/${SCOPE}-absent.txt"
+          # Shaped exactly like the first repository object pgBackRest asks for
+          # during stanza-create, so this probe and that call differ in nothing
+          # but the client making them.
+          repository_shaped="restore-rehearsal/${SCOPE}/archive/rehearsal/archive.info"
+          body="$RUNNER_TEMP/classify-body.txt"
+          readback="$RUNNER_TEMP/classify-readback.txt"
+          printf 'transaction class probe %s\n' "$SCOPE" >"$body"
+          refused=0
+
+          # A probe that must succeed. Its failure is a refusal.
+          allow() {
+            label="$1"; class="$2"; shift 2
+            if output="$("$@" 2>&1)"; then
+              printf '  %-7s  %-38s  ALLOWED\n' "$class" "$label"
+              return 0
+            fi
+            printf '  %-7s  %-38s  REFUSED  %s\n' "$class" "$label" \
+              "$(printf '%s' "$output" | tr '\n' ' ')"
+            refused=$((refused + 1))
+          }
+
+          # A probe on a key that does not exist. Not-found is the healthy
+          # answer; forbidden is a refusal wearing the same status family.
+          expect_absent() {
+            label="$1"; class="$2"; shift 2
+            if output="$("$@" 2>&1)"; then
+              printf '  %-7s  %-38s  UNEXPECTEDLY PRESENT\n' "$class" "$label"
+              return 0
+            fi
+            if printf '%s' "$output" | grep -qE '\(404\)|Not Found'; then
+              printf '  %-7s  %-38s  ABSENT (404, healthy)\n' "$class" "$label"
+              return 0
+            fi
+            printf '  %-7s  %-38s  REFUSED  %s\n' "$class" "$label" \
+              "$(printf '%s' "$output" | tr '\n' ' ')"
+            refused=$((refused + 1))
+          }
+
+          echo "--- the same credential, one probe per transaction class ---"
+          allow "list the probe prefix" "Class C" \
+            aws s3api list-objects-v2 --endpoint-url "$endpoint" \
+              --bucket "$BUCKET" --prefix 'connectivity-check/' --max-items 1
+          allow "upload an object" "Class A" \
+            aws s3api put-object --endpoint-url "$endpoint" \
+              --bucket "$BUCKET" --key "$present" --body "$body"
+          # The positive control for every Class B line below it: a download of
+          # an object this run has just proven exists. Without it, "downloads
+          # are refused" would be indistinguishable from "there was nothing to
+          # download".
+          allow "download the object just uploaded" "Class B" \
+            aws s3api get-object --endpoint-url "$endpoint" \
+              --bucket "$BUCKET" --key "$present" "$readback"
+          allow "head the object just uploaded" "Class B" \
+            aws s3api head-object --endpoint-url "$endpoint" \
+              --bucket "$BUCKET" --key "$present"
+          expect_absent "head a key that does not exist" "Class B" \
+            aws s3api head-object --endpoint-url "$endpoint" \
+              --bucket "$BUCKET" --key "$absent"
+          expect_absent "head the key stanza-create asks for" "Class B" \
+            aws s3api head-object --endpoint-url "$endpoint" \
+              --bucket "$BUCKET" --key "$repository_shaped"
+          allow "delete the object just uploaded" "Class A" \
+            aws s3api delete-object --endpoint-url "$endpoint" \
+              --bucket "$BUCKET" --key "$present"
+
+          echo
+          if [ "$refused" -eq 0 ]; then
+            echo "No transaction class is refused: uploads, downloads and listings all work."
+            exit 0
+          fi
+
+          # Only spent on a refusal. Downloads are themselves a metered class,
+          # so an unconditional probe here would consume the resource it is
+          # trying to report on.
+          echo "--- the response body pgBackRest is unable to show ---"
+          # pgBackRest's first repository call is a HEAD, and a HEAD response
+          # carries no body by protocol, so the provider's explanation is
+          # discarded before pgBackRest can log it -- which is why the rehearsal
+          # can only report a bare status code. The identical request issued as
+          # a GET takes the same authorization decision and does return the
+          # body, so this is where the reason actually becomes readable. Both
+          # are issued here, in that order, so the difference is on the record.
+          umask 077
+          curlrc="$RUNNER_TEMP/classify.curlrc"
+          printf 'user = "%s:%s"\n' "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" >"$curlrc"
+          for method in HEAD GET; do
+            printf '\n%s https://%s/%s\n' "$method" "$BUCKET.$ENDPOINT" "$repository_shaped"
+            head_only=()
+            [ "$method" = HEAD ] && head_only=(--head)
+            curl --config "$curlrc" --silent --show-error "${head_only[@]}" \
+              --aws-sigv4 "aws:amz:${REGION}:s3" \
+              --write-out '\n<<HTTP %{http_code}, %{size_download} body bytes read>>\n' \
+              "https://$BUCKET.$ENDPOINT/$repository_shaped" || true
+          done
+          rm -f "$curlrc"
+
+          echo
+          echo "::error title=Object store refused $refused probe(s)::A class the backup depends on is refused. The per-class table above says which one, and the response body above says why."
+          exit 1
+
+      - name: Remove the probe objects if the round trip did not
         if: always()
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
@@ -146,9 +272,12 @@ jobs:
           BUCKET: ${{ vars.PGBACKREST_REPO1_S3_BUCKET }}
           ENDPOINT: ${{ vars.PGBACKREST_REPO1_S3_ENDPOINT }}
           PROBE_KEY: connectivity-check/${{ github.run_id }}-${{ github.run_attempt }}.txt
+          CLASSIFY_KEY: connectivity-check/${{ github.run_id }}-${{ github.run_attempt }}-classify.txt
         run: |
           # A failure between write and delete would otherwise leave litter in a
           # bucket whose whole purpose is to contain exactly one known thing.
-          aws s3api delete-object \
-            --endpoint-url "https://$ENDPOINT" --bucket "$BUCKET" --key "$PROBE_KEY" \
-            >/dev/null 2>&1 || true
+          for key in "$PROBE_KEY" "$CLASSIFY_KEY"; do
+            aws s3api delete-object \
+              --endpoint-url "https://$ENDPOINT" --bucket "$BUCKET" --key "$key" \
+              >/dev/null 2>&1 || true
+          done
