@@ -542,5 +542,106 @@ class TrackedRehearsalFileTests(unittest.TestCase):
                 self.assertIn(f"SET {setting} =", sql)
 
 
+class ObjectStoreReadinessGateTests(unittest.TestCase):
+    """The refusal that stopped this contour was legible only outside pgBackRest.
+
+    stanza-create's first repository call is a HEAD on archive.info, and a HEAD
+    response carries no body, so the object store's explanation is discarded by
+    the protocol and the run reduces to a bare status code. These assertions
+    keep the probe that does read the body in front of the call that cannot,
+    and keep it honest: an object store meters uploads, downloads and listings
+    separately and can refuse exactly one, so a gate that collapsed them into a
+    single yes/no would report the outage without naming it.
+    """
+
+    REHEARSAL = ROOT / ".github" / "workflows" / "postgres-backup-rehearsal.yml"
+    CONNECTIVITY = ROOT / ".github" / "workflows" / "verify-b2-connectivity.yml"
+    GATE = "Prove the rehearsal repository is readable before pgBackRest needs it"
+    STANZA_CREATE = "Start the source cluster and create the stanza"
+    CLASSIFIER = "Classify the refusal by transaction class"
+
+    def steps(self, workflow: Path) -> list[str]:
+        names = []
+        for line in workflow.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("- name: ") and line.startswith(" " * 6):
+                names.append(stripped[len("- name: ") :])
+        self.assertTrue(names, f"no steps were found in {workflow.name}")
+        return names
+
+    def body_of(self, workflow: Path, step: str) -> str:
+        names = self.steps(workflow)
+        # The locator has to fail loudly on a renamed step. A search that
+        # returned "" for a step that is not there would turn every assertion
+        # below into a test of the empty string.
+        self.assertIn(step, names, f"{step!r} is not a step of {workflow.name}")
+        text = workflow.read_text(encoding="utf-8")
+        start = text.index(f"- name: {step}")
+        rest = text[start + 1 :]
+        following = [
+            rest.index(f"- name: {name}")
+            for name in names[names.index(step) + 1 :]
+            if f"- name: {name}" in rest
+        ]
+        return rest[: min(following)] if following else rest
+
+    def test_a_step_that_does_not_exist_is_not_silently_located(self) -> None:
+        with self.assertRaises(AssertionError):
+            self.body_of(self.REHEARSAL, "Ask Backblaze nicely")
+
+    def test_the_readiness_gate_runs_before_stanza_create(self) -> None:
+        names = self.steps(self.REHEARSAL)
+        self.assertIn(self.GATE, names)
+        self.assertIn(self.STANZA_CREATE, names)
+        self.assertLess(names.index(self.GATE), names.index(self.STANZA_CREATE))
+
+    def test_the_gate_runs_after_the_isolation_guard_has_approved_the_prefix(
+        self,
+    ) -> None:
+        # The gate writes an object, so it must not run until the guard has
+        # agreed the prefix it writes to shares no lineage with production.
+        names = self.steps(self.REHEARSAL)
+        guard_step = "Prove the rehearsal cannot reach production"
+        self.assertIn(guard_step, names)
+        self.assertLess(names.index(guard_step), names.index(self.GATE))
+
+    def test_the_gate_probes_every_metered_transaction_class(self) -> None:
+        body = self.body_of(self.REHEARSAL, self.GATE)
+        for operation in (
+            "list-objects-v2",  # listing
+            "put-object",  # upload
+            "get-object",  # download
+            "head-object",  # the call stanza-create makes
+            "delete-object",
+        ):
+            with self.subTest(operation=operation):
+                self.assertIn(operation, body)
+
+    def test_the_gate_carries_a_positive_control_for_downloads(self) -> None:
+        # Without a download of an object the same step has just uploaded,
+        # "downloads are refused" and "there was nothing to download" produce
+        # the same failure.
+        body = self.body_of(self.REHEARSAL, self.GATE)
+        self.assertIn('--key "$readiness"', body)
+        self.assertIn('cmp -s "$sent" "$received"', body)
+
+    def test_the_gate_reads_the_body_a_head_response_cannot_carry(self) -> None:
+        body = self.body_of(self.REHEARSAL, self.GATE)
+        self.assertIn("--aws-sigv4", body)
+        self.assertIn("object-store-refusal.txt", body)
+
+    def test_the_gate_stays_inside_the_run_scoped_prefix(self) -> None:
+        body = self.body_of(self.REHEARSAL, self.GATE)
+        self.assertIn('prefix="${PGBACKREST_REPO1_PATH#/}"', body)
+        self.assertNotIn("PRODUCTION_REPO_PATH", body)
+
+    def test_the_connectivity_probe_classifies_by_transaction_class(self) -> None:
+        body = self.body_of(self.CONNECTIVITY, self.CLASSIFIER)
+        for class_name in ("Class A", "Class B", "Class C"):
+            with self.subTest(transaction_class=class_name):
+                self.assertIn(class_name, body)
+        self.assertIn("--aws-sigv4", body)
+
+
 if __name__ == "__main__":
     unittest.main()

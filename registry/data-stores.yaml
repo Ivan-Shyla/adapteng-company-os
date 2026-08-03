@@ -3,7 +3,7 @@
 # Precedence (ADR-0011 platform layer map):
 #   Postgres = operational truth | Baserow = structured collaboration | Drive = document/media evidence
 version: 1
-updated: 2026-08-02
+updated: 2026-08-03
 
 baserow:
   service: baserow-self-hosted (https://baserow.adapteng.com)
@@ -56,7 +56,8 @@ postgres_adapteng_ops:
     proposed_design: "pinned pgBackRest 2.59.0 physical base backup + continuous WAL, client-side encrypted to private Backblaze B2 EU Central; weekly full, daily differential, 12-full count retention"
     proposed_design_status: object-store-connectivity-verified-backup-not-configured
     object_store_connectivity:
-      status: verified
+      status: uploads-and-listings-allowed-downloads-refused-by-provider-cap
+      status_updated: 2026-08-03
       verified: 2026-08-02
       evidence_run: 30752237109
       evidence_workflow: ".github/workflows/verify-b2-connectivity.yml at 7f5f3585588da8b330e4ae9779f0b6343e1156eb (workflow_dispatch, conclusion success, 2026-08-02T14:30:06Z)"
@@ -64,6 +65,18 @@ postgres_adapteng_ops:
       not_proven: "NO BACKUP EXISTS. Nothing in that run touched PostgreSQL: no pgBackRest install, no stanza, no full or differential backup, no WAL archive, no check, no verify, no restore. The probe object was written under a connectivity-check/ prefix outside the pgBackRest repository path. Reaching the object store is a precondition of the backup design, not evidence of it."
       configuration_home: "GitHub repository variables PGBACKREST_REPO1_* (8) plus 3 repository secrets; the values are deliberately not recorded in Git, so the variables are the single source of truth for bucket, endpoint, region, key type, URI style, repository path and cipher type"
       reverify: "re-dispatch the Verify B2 connectivity workflow; it is dispatch-only, mutates no database, and writes only outside the pgBackRest repository path"
+      download_cap:
+        measured: 2026-08-03
+        evidence_run: 30797986775
+        symptom: "every pgBackRest stanza-create fails with [039] HTTP request failed with 403 on HEAD <repo>/archive/rehearsal/archive.info, response content-length 259, body not shown because a HEAD response carries none"
+        response_body: "<Error><Code>AccessDenied</Code><Message>Cannot download file, download bandwidth or transaction (Class B) cap exceeded. See the Caps and Alerts page to increase your cap.</Message></Error> - 259 bytes, matching the content-length pgBackRest reported"
+        allowed: "Class A uploads and deletes, Class C listings - measured in the same run, with the same credential, seconds apart"
+        refused: "Class B downloads and HEADs, including a download of an object the same step had just uploaded and then successfully deleted"
+        positive_control: "the refused object provably existed: put-object succeeded before the download and delete-object succeeded after it, so this is not a missing key, not a path prefix scope and not a credential fault"
+        daily_reset: "measured twice - refused at 2026-08-02T23:19Z (run 30772015561), fully allowed 71 minutes later at 2026-08-03T00:30Z (run 30774630135); refused again from 2026-08-03T01:39Z (run 30777403139) onward after three complete rehearsals that day"
+        consumption_per_rehearsal: "9436688 bytes across 14 objects written, then read back about three times by verify plus two restores (run 30777047810); the observed ceiling is roughly three rehearsals per UTC day"
+        owner_action: "raise the daily download bandwidth and Class B transaction caps on the Backblaze account, or accept that the contour is limited to about three rehearsals per UTC day; no repository change can make a capped download succeed"
+        not_the_cause: "the application key: aws s3api list-objects-v2, put-object and delete-object all succeed against the same bucket with the same secrets inside every failing run"
     compatibility_gate: "separately reviewed source/derived image manifests; Docker-measured .Image/config ID/sole RepoDigest/platform/PGDATA; exact runtime signature; pinned PostgreSQL/pgBackRest binaries; complete canonical catalog signature; A/B/C must match source before migration"
     integrity_gate: "fresh selected full; post-backup pgBackRest check plus selected-set verify parsed to exactly status: ok; healthy WAL archive; digest-only set reference; tracked procedure/probe digests"
     restore_design: "sole tracked guarded A|B|C entrypoint on three independently created clean Hetzner PostgreSQL-only hosts; wrapper-generated exact pgBackRest config plus fixed descriptor-only secrets; authoritative private target IDs with complete never-started config validation and ID-only start; one-use target-bound provider challenges through the pinned signed owner broker proving exact firewall and empty private_net before target start/SQL and after cleanup; same-ID sealed runner plus complete live Docker inventory; no production snapshot/app clone, public DB, Docker socket or production credentials"
