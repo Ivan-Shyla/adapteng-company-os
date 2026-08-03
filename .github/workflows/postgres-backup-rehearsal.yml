@@ -224,12 +224,23 @@ jobs:
 
           # Recorded, not asserted, and the PR says so: the package revision and
           # the bytes are evidence of what actually ran, not a constraint on it.
+          #
+          # State the boundary here rather than only in a report, because a
+          # reader who finds a version assertion above will reasonably assume
+          # more was pinned than actually was. The version string is asserted
+          # and fails this job closed. The bytes are not: the sha256 below is
+          # observed after the fact and compared against nothing, so PGDG could
+          # rebuild and republish 2.59.0 with different bytes and this job would
+          # still pass. Phase 0's immutability gate asks for the bytes, so this
+          # workflow does NOT satisfy it. Closing it needs a digest to compare
+          # against, supplied by the owner as a Phase 0 artifact.
           binary=$(command -v pgbackrest)
           {
             printf 'asserted version: pgBackRest %s\n' "$PINNED_PGBACKREST_VERSION"
             printf 'package revision: %s\n' "$pinned_package"
             printf 'binary: %s\n' "$binary"
             printf 'binary sha256: %s\n' "$(sha256sum "$binary" | cut -d' ' -f1)"
+            printf 'immutability gate: NOT satisfied - the version above is asserted, the bytes above are only recorded\n'
           } | tee "$EVIDENCE/pgbackrest-provenance.txt"
 
       - name: Create the disposable source cluster
