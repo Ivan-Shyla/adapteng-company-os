@@ -157,9 +157,9 @@ jobs:
             "$received" >/dev/null 2>"$stderr"
           then
             say_why "Backblaze B2 refused to read an object it had just accepted" \
-              "get-object is a Class B transaction, metered separately from the
-               write above, so writes and listings succeeding is not evidence
-               that a backup can be read back."
+              "get-object downloads data and the write above does not, so a
+               write and a listing succeeding is not evidence that a backup can
+               be read back."
             exit 1
           fi
           if ! aws s3api head-object \

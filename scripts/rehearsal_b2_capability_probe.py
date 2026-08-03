@@ -5,28 +5,37 @@ pgBackRest reports a repository refusal as a bare ``HTTP request failed with
 403`` and prints the request headers but never the response body, so the reason
 B2 gave is discarded at exactly the moment it is needed. On 2026-08-03 that cost
 six dispatches and an owner action item pointing at the wrong console page: the
-403 came from an exhausted Backblaze daily cap, not from a defective key, and
-the surrounding ``list-objects-v2`` calls kept passing because they are a
-different transaction class.
+403 came from an account-level meter, not from a defective key, and the
+surrounding ``list-objects-v2`` calls kept passing because listing downloads
+nothing.
 
 So this probe asks the same object store the same questions through the AWS CLI,
-which does print the body, and separates the three S3 transaction classes B2
-meters independently:
+which does print the body, and separates the three S3 transaction classes:
 
-    Class A  put-object, delete-object
-    Class B  get-object, head-object      <- what stanza-create needs first
-    Class C  list-objects-v2
+    Class A  put-object, delete-object       upload and delete
+    Class B  get-object, head-object         download   <- stanza-create first
+    Class C  list-objects-v2                 enumerate
 
-A daily cap is enforced per class, so Class A and Class C can be perfectly
-healthy while every Class B read is refused with ``403 AccessDenied``. A check
-that only lists is therefore not evidence that a backup can be read back, and
-that asymmetry is the whole reason this file exists.
+The refusal lands on exactly the operations that download data and leaves the
+ones that do not alone, which is why a check that only writes and lists is not
+evidence that a backup can be read back. That asymmetry is the whole reason this
+file exists.
+
+What this probe deliberately does NOT do is decide which meter bit. B2's own
+sentence is disjunctive - "download bandwidth **or** transaction (Class B) cap
+exceeded" - and the log cannot resolve it, because both halves would produce
+exactly this pattern. Only the Caps & Alerts page can say which, and on a plan
+where Class A/B/C transactions are free there is no Class B control to look at.
+An instrument that guesses here sends its reader to a setting that may not
+exist, which is the same failure as saying nothing, only more confident. So the
+disjunction is reported as a disjunction.
 
 The Class B probe reads an object this probe has just written and just seen in a
 listing, so a refusal cannot be an absence artifact - the object is known to be
 there. The missing-key probe reproduces the exact request pgBackRest makes
 first, ``HEAD <repo>/archive/<stanza>/archive.info``, whose healthy answer is
-404 and not 403.
+404 and not 403. Every read is issued as both HEAD and GET, because HTTP forbids
+a response body on HEAD: only the GET can recover the reason.
 
 No credential is read, printed or written here; the AWS CLI takes them from the
 environment. Only the bucket, the prefix and B2's own error text are reported.
@@ -45,10 +54,12 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 
-# B2 answers an exhausted daily cap with the same 403 AccessDenied it uses for a
-# permission refusal, and only the message distinguishes them. Ordering matters:
-# matching AccessDenied first is precisely the misreading this probe exists to
-# prevent, so the cap phrases are tested before the generic ones.
+# B2 answers an exhausted account cap with the same 403 AccessDenied it uses for
+# a permission refusal, and only the message distinguishes them. Ordering
+# matters: matching AccessDenied first is precisely the misreading this probe
+# exists to prevent, so the cap phrases are tested before the generic ones.
+# These detect *that* a meter refused, never *which* meter - B2's sentence names
+# two and the caller has to go and look.
 CAP_PHRASES = ("cap exceeded", "caps & alerts", "caps and alerts")
 CREDENTIAL_PHRASES = (
     "signaturedoesnotmatch",
@@ -214,15 +225,16 @@ def fail(report: Report, verdict: str, probe: Probe, title: str, body: str) -> R
 
 
 CAP_EXPLANATION = (
-    "Backblaze meters put and delete (Class A), get and head (Class B) and list"
-    " (Class C) against separate daily caps, and refuses an exhausted one with"
-    " the same 403 AccessDenied it uses for a permission problem. Class A writes"
-    " and Class C listings still succeed here, which is why any check built only"
-    " from listings looks healthy. pgBackRest needs a Class B read for the very"
-    " first repository call it makes, so no stanza-create, backup, verify or"
-    " restore can run until the cap resets at 00:00 GMT or the owner raises it on"
-    " the Backblaze Caps & Alerts page. This is a billing setting, not a bucket"
-    " permission and not a defective key."
+    "B2 refused a read against an account meter rather than a bucket permission,"
+    " so the key and the request shaping are not at fault. Its message is"
+    " disjunctive - download bandwidth OR transaction (Class B) cap - and this"
+    " log cannot tell you which, because both would refuse downloads while"
+    " leaving uploads and listings working, which is exactly the pattern here."
+    " The Caps & Alerts page is the discriminator, not this output; note that on"
+    " a plan where Class A/B/C transactions are free there is no Class B control"
+    " to find, so download bandwidth is the meter to look at first. For scale, a"
+    " whole rehearsal moves roughly 20 MB, about $0.0002 of egress, so a cap this"
+    " reaches is a low ceiling rather than a costly workload."
 )
 
 CREDENTIAL_EXPLANATION = (
@@ -241,9 +253,9 @@ def fail_on_self_describing(report: Report, probe: Probe) -> "Report | None":
     if probe.reason == CAP_EXCEEDED:
         return fail(
             report,
-            "class_b_read_refused_cap_exceeded",
+            "read_refused_by_an_account_cap",
             probe,
-            "Backblaze B2 daily cap is exhausted",
+            "Backblaze B2 refused a read against an account cap",
             CAP_EXPLANATION,
         )
     if probe.reason == BAD_CREDENTIALS:
@@ -286,8 +298,8 @@ def run_probe(
         )
         return report
 
-    # Class C first. It is the cheapest call and the one that keeps passing
-    # while Class B is capped, so establishing that it works is what makes the
+    # Class C first. It is the cheapest call and the one that keeps passing while
+    # downloads are refused, so establishing that it works is what makes the
     # later Class B refusal meaningful rather than ambiguous.
     listing = aws.probe(
         "class_c_list_repository_prefix",

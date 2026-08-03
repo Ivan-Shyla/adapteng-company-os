@@ -293,12 +293,12 @@ jobs:
           # Placed before the first pgBackRest repository call on purpose.
           # pgBackRest prints a refusal as a bare `HTTP request failed with 403`
           # and drops the response body, so the reason B2 gave is lost exactly
-          # where it is needed. The AWS CLI prints it, and B2 meters put/delete
-          # (Class A), get/head (Class B) and list (Class C) against separate
-          # daily caps -- so Class C listings can succeed all day while every
-          # Class B read is refused, which is what makes a list-only check look
-          # like proof that the credentials are fine when it is nothing of the
-          # kind.
+          # where it is needed. The AWS CLI prints it. B2 groups operations as
+          # put/delete (Class A), get/head (Class B) and list (Class C), and an
+          # account meter refuses exactly the ones that download data while
+          # leaving uploads and listings working, which is what makes a
+          # list-only check look like proof that the credentials are fine when
+          # it is nothing of the kind.
 
           # The negative control runs first, and unconditionally. Run after the
           # real probe it would be skipped on exactly the days the real probe

@@ -519,7 +519,7 @@ class CompareCommandTests(unittest.TestCase):
 
 
 class ObjectStoreRefusalTests(unittest.TestCase):
-    """Backblaze reports an exhausted daily cap as 403 AccessDenied.
+    """Backblaze reports an exhausted account cap as 403 AccessDenied.
 
     That single fact is what made the rehearsal's 403 unreadable: the cap
     message and a genuine permission refusal share a status code and an error
@@ -527,6 +527,14 @@ class ObjectStoreRefusalTests(unittest.TestCase):
     problem cost six dispatches and produced an owner action item aimed at the
     wrong console page, so the classification is pinned here rather than left to
     be rediscovered.
+
+    Note what the CAP string below actually says: `download bandwidth OR
+    transaction (Class B) cap exceeded`. It names two meters. This constant sat
+    in this file, verbatim and correct, while the report built on it resolved
+    the disjunction to the second half and told the owner to raise a Class B cap
+    that does not exist on his plan. Having the evidence is not the same as
+    reading it, so the tests below pin that the disjunction is passed through
+    rather than collapsed.
     """
 
     CAP = (
@@ -712,8 +720,44 @@ class CapabilityProbeTests(unittest.TestCase):
             ScriptedObjectStore(missing=(254, self.CAP), present=(254, self.CAP))
         )
         self.assertEqual(status, 1)
-        self.assertEqual(self.verdict(output), "class_b_read_refused_cap_exceeded")
+        self.assertEqual(self.verdict(output), "read_refused_by_an_account_cap")
         self.assertIn("Caps & Alerts", output)
+
+    def test_the_meter_is_not_guessed_when_b2_names_two(self) -> None:
+        # B2 says "download bandwidth OR transaction (Class B) cap exceeded".
+        # Both halves refuse downloads while leaving uploads and listings
+        # working, so this log cannot discriminate and must not pretend to.
+        # Resolving it to the Class B half is what produced an owner action item
+        # pointing at a control that does not exist on a plan where Class A/B/C
+        # transactions are free.
+        _, output = self.probe(
+            ScriptedObjectStore(missing=(254, self.CAP), present=(254, self.CAP))
+        )
+        annotation = next(
+            line for line in output.splitlines() if line.startswith("::error")
+        )
+        # Both candidate meters are named ...
+        self.assertIn("download bandwidth", annotation)
+        self.assertIn("Class B", annotation)
+        # ... the console is named as the thing that decides between them ...
+        self.assertIn("Caps & Alerts page is the discriminator", annotation)
+        # ... and the reader is never told a specific cap has been exhausted.
+        for claim in (
+            "daily cap is exhausted",
+            "Class B cap is exhausted",
+            "resets at 00:00",
+        ):
+            self.assertNotIn(claim, annotation)
+
+    def test_the_owner_is_told_the_rehearsal_is_cheap_not_expensive(self) -> None:
+        # A refusal on a meter invites the reader to assume the workload is
+        # costly and throttle it. One rehearsal moves about 20 MB, so the true
+        # reading is a low ceiling, and the annotation has to say so or the
+        # wrong lesson gets learned.
+        _, output = self.probe(
+            ScriptedObjectStore(missing=(254, self.CAP), present=(254, self.CAP))
+        )
+        self.assertIn("20 MB", output)
 
     def test_a_class_b_refusal_that_is_not_a_cap_is_reported_separately(self) -> None:
         status, output = self.probe(
@@ -736,7 +780,7 @@ class CapabilityProbeTests(unittest.TestCase):
         )
         status, output = self.probe(store)
         self.assertEqual(status, 1)
-        self.assertEqual(self.verdict(output), "class_b_read_refused_cap_exceeded")
+        self.assertEqual(self.verdict(output), "read_refused_by_an_account_cap")
         self.assertIn("Caps & Alerts", output)
         # Named from the missing-key pair alone, before spending a write.
         self.assertNotIn("put-object", [operation for operation, _ in store.calls])
