@@ -206,15 +206,26 @@ services:
       zero-write preflight, reviewed expected writes, the five-phase controlled
       run and zero-duplicate replay. Drive remains artifact authority; Postgres
       remains operational truth; Baserow remains the human projection. Task
-      drive-folder-usage-notes remains a repository contract only; no live
-      START HERE note placement is claimed. Read-only GitHub metadata found the
-      three approved-assets environments absent, no workflow run, all required
-      rollout secrets absent, and GOOGLE_CLOUD_PROJECT / GOOGLE_DRIVE_SCOPE
-      absent; only repository-wide GOOGLE_WORKSPACE_ADMIN exists. The
-      approved-source workflow uses GOOGLE_WORKSPACE_ADMIN as its delegated-user
-      variable. Do not dispatch even zero-write phases until environment-scoped
-      least privilege and the managed-backup/isolated-restore/exact-rehearsal
-      evidence chain are proven.
+      drive-folder-usage-notes gained repository planner/apply capability via
+      PR #91 (427dd7f5ce87a5a72314c8169cca708300b62ea0, 2026-07-30); no live
+      START HERE note placement is claimed. Re-verified read-only 2026-08-03:
+      all three approved-assets GitHub Environments now exist
+      (approved-assets-migrations/preflight/import, created 2026-07-31), and
+      approved-assets-preflight/import are configured with variables
+      GOOGLE_CLOUD_PROJECT, GOOGLE_DRIVE_SCOPE, GOOGLE_WORKSPACE_ADMIN plus
+      secrets APPROVED_ASSETS_BASE_IDEMPOTENCY_KEY,
+      APPROVED_ASSETS_DATABASE_URL, CANONICAL_40_CONTENT_FOLDER_ID,
+      GOOGLE_SERVICE_ACCOUNT_JSON_B64 (names only; approved-assets-migrations
+      has only APPROVED_ASSETS_DATABASE_URL). PR #90 added a machine-checkable
+      rollout-readiness CLI and PR #92 pinned an exact self-hosted runner label
+      set, but PR #92 itself states rollout readiness is not yet claimed
+      pending a GitHub-Enterprise-Required-Reviewers substitute; four
+      exact-subject rollout-authorization PRs (#93-#95, #97) remain open. No
+      Migrate Approved Assets workflow run has ever executed. Do not dispatch
+      even zero-write phases until those PRs merge and the
+      managed-backup/isolated-restore/exact-rehearsal evidence chain is
+      proven (a real rehearsal dispatch on 2026-08-03 failed at
+      pgbackrest stanza-create with HTTP 403).
 
   - id: adapteng-baserow-schema
     repo: adapteng-automation-platform
