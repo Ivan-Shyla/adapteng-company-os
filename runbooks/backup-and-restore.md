@@ -480,22 +480,31 @@ the next reader does not re-open the question:
   ([AWS CLI S3 configuration](https://docs.aws.amazon.com/cli/latest/topic/s3-config.html)).
   Host style is therefore both the pgBackRest default and the style already
   exercised successfully against this bucket.
-- **`repo1-path` is a placeholder, not a literal.** For an S3 repository this is
-  simply the prefix inside the bucket under which pgBackRest keeps its
-  repository; pgBackRest only requires that it start with `/`, contain no `//`
-  and have no trailing `/`. Nothing depends on the specific string: at
-  `7f5f3585588da8b330e4ae9779f0b6343e1156eb`,
-  `scripts/postgres_restore_generation.py` emits `repo1-path` from the guard
-  packet field `repository_path` (which `scripts/postgres_restore_guard.py`
-  takes from `repository["repo_path"]`), the only literal anywhere in `scripts/`
-  is a unit-test fixture, and `.github/workflows/verify-b2-connectivity.yml`
-  asserts only that `PGBACKREST_REPO1_PATH` is absolute. The value is free to
-  choose, so the configured variable wins and this runbook stops asserting a
-  competing one - which also matches this runbook's own evidence policy, where
-  repository paths are on the forbidden list rather than the recorded list. What
-  is **not** free is consistency: the same prefix must be
-  used for backup and for every restore, and it must match the B2 lifecycle-rule
-  scope and the application key prefix restriction from Phase 2.
+- **`repo1-path` is a placeholder, not a literal — but one literal does depend on
+  it.** For an S3 repository this is simply the prefix inside the bucket under
+  which pgBackRest keeps its repository; pgBackRest only requires that it start
+  with `/`, contain no `//` and have no trailing `/`. So B2 does not constrain
+  the choice, and this runbook stops asserting a competing value - which also
+  matches this runbook's own evidence policy, where repository paths are on the
+  forbidden list rather than the recorded list.
+
+  **Correction.** An earlier revision of this section claimed that "the only
+  literal anywhere in `scripts/` is a unit-test fixture". That was wrong.
+  `scripts/postgres_restore_generation.py` does emit `repo1-path` from the guard
+  packet field `repository_path`, and `.github/workflows/verify-b2-connectivity.yml`
+  does assert only that `PGBACKREST_REPO1_PATH` is absolute — but
+  `validate_repository` in `scripts/postgres_restore_guard.py` compares the
+  prefix against a hardcoded literal and fails closed when it differs. That
+  comparison was added on 2026-08-01 in
+  [#15](https://github.com/Ivan-Shyla/adapteng-company-os/pull/15) (`e30da31`);
+  the original trace followed the generator and stopped before reaching the
+  guard. Treat the prefix as free to choose in B2 and **pinned inside this
+  repository** until the mismatch recorded in
+  [`owner/action-items.md`](../owner/action-items.md) is resolved.
+
+  What is **not** free is consistency: the same prefix must be used for backup
+  and for every restore, and it must match the B2 lifecycle-rule scope and the
+  application key prefix restriction from Phase 2.
 
 **Restore-side consumption of these variables.** At
 `7f5f3585588da8b330e4ae9779f0b6343e1156eb` the tracked restore generator

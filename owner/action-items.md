@@ -134,20 +134,28 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
      `30752237109` used the AWS CLI with only `--endpoint-url`, whose
      `addressing_style` default is `auto` and prefers virtual-hosted
      (<https://docs.aws.amazon.com/cli/latest/topic/s3-config.html>).
-  2. **`PGBACKREST_REPO1_PATH` — keep the configured value; verify the B2
-     scopes match it.** The value is only a prefix inside the bucket and is free
-     to choose: at `7f5f3585588da8b330e4ae9779f0b6343e1156eb` nothing reads a
-     literal — `scripts/postgres_restore_generation.py` takes it from the guard
-     packet, and `.github/workflows/verify-b2-connectivity.yml` only asserts it
-     is absolute. The runbook's stale literal has been replaced by a
-     placeholder, and the exact value is deliberately not written into Git
-     because the runbook's own evidence policy lists repository paths as
-     forbidden. **Owner check in the B2 console:** the hidden-version deletion
-     (35 days) and unfinished-large-file cancellation (7 days) lifecycle rules,
-     and the application key's prefix restriction, must be scoped to the value
-     the variable actually holds. A lifecycle rule left on the runbook's old
-     prefix would silently stop expiring hidden versions — a retention and cost
-     defect that no pgBackRest command reports.
+  2. **`PGBACKREST_REPO1_PATH` — the value is a prefix inside the bucket, but it
+     is not unconstrained; see item 5 before changing anything.** **Correction
+     to what this item said when it was first written:** it claimed that at
+     `7f5f3585588da8b330e4ae9779f0b6343e1156eb` "nothing reads a literal". That
+     was wrong, and the error was mine. `scripts/postgres_restore_generation.py`
+     does take the value from the guard packet and
+     `.github/workflows/verify-b2-connectivity.yml` does only assert it is
+     absolute — but `validate_repository` in `scripts/postgres_restore_guard.py`
+     compares it against a hardcoded literal and fails closed on mismatch. That
+     comparison was introduced on 2026-08-01 in
+     [#15](https://github.com/Ivan-Shyla/adapteng-company-os/pull/15) (`e30da31`),
+     a day before the claim was written, so it was present and simply not
+     checked: the trace followed the generator and stopped there. The prefix is
+     therefore free to choose only in B2; inside this repository one literal
+     depends on it. Item 5 has the detail and the recommendation. The exact value
+     remains deliberately unwritten in Git because the runbook's own evidence
+     policy lists repository paths as forbidden. **Owner check in the B2
+     console:** the hidden-version deletion (35 days) and unfinished-large-file
+     cancellation (7 days) lifecycle rules, and the application key's prefix
+     restriction, must be scoped to whichever value item 5 settles on. A
+     lifecycle rule left on a stale prefix would silently stop expiring hidden
+     versions — a retention and cost defect that no pgBackRest command reports.
   3. **The application key is broader than the runbook prescribes.** Phase 2
      step 3 requires a key restricted to the bucket *and the pgBackRest
      repository prefix*, but run `30752237109` wrote and deleted under a
