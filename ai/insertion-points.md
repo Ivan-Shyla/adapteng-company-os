@@ -20,19 +20,77 @@ external/high-impact actions.
   `Content_Items` (848) via the governed adapter. The first approval-gated
   action is `external_draft.create`, limited to pending/draft state — it can
   **never publish or send**.
-- **Gate:** ratified claims/style/sources; `AG-007` quality proof; AG-008
-  envelope/no-external-action/cost hardening; persistent Postgres cost
-  reservation/reconciliation; real EU Vertex and Drive adapters; orchestration,
-  canonical approval and deployment; privacy (ZDR), cache-off, Vertex IAM and FX.
-  Never use the local in-memory test seam as budget authority. See
-  `owner/action-items.md`.
-- **Status:** **REJECT_LIVE.** At control-plane main
-  `affe6ea1e4d522be0df0641e98a08e20a84549ae`, deterministic
-  AG-001/002/003/006/007 are present but no business worker, real provider or
-  Drive runtime exists. The reproduced P0s are optional/unvalidated envelope,
-  completion accepting missing `no_external_action` plus synthetic `approval_id`,
-  and over-cap actual cost driving the in-memory budget negative. AG-008 owns
-  deterministic fixes; automation-platform owns the persistent runtime.
+- **Gate:** ratified claims/style/sources; `AG-007` quality proof; a **durable
+  cost authority that survives process restart** (persistent Postgres cost
+  reservation/reconciliation with cross-process spend accounting and latch
+  persistence); real EU Vertex and Drive adapters; orchestration, canonical
+  approval and deployment; privacy (ZDR), cache-off, Vertex IAM and FX.
+  Never use the local in-memory test seam as budget authority. The AG-008
+  deterministic envelope / no-external-action / cost items are now closed at
+  the control plane — see the status below for what that does and does not
+  buy. See `owner/action-items.md`.
+- **Status:** **REJECT_LIVE.** Re-assessed **2026-08-03** against control-plane
+  main `edadb09125f7fb5d173d5f595181d1384050b6b5`. This **supersedes** the
+  2026-07-25 assessment pinned to
+  `affe6ea1e4d522be0df0641e98a08e20a84549ae`, which is kept visible here
+  because the record is corrected in place, not erased. Evidence:
+  control-plane **PR #40**, which executed each original failure at `affe6ea`
+  and then re-ran the identical probe at `edadb091`, re-sealing mutated
+  artifacts with each tree's own `evidence_digest()` /
+  `artifact_envelope_sha256()` so that a refusal reflects the policy under
+  test rather than a stale hash. No model call and no spend. Verdicts on the
+  three P0s this file previously held open:
+  - **P0 #1 — optional/unvalidated task envelope: CLOSED.** At `affe6ea`,
+    `evaluate_artifact` returned `ready=True` with no envelope at all and
+    `check_task_completion.py` exited `0`; the help text read
+    `--envelope ENVELOPE  Optional business task envelope JSON.` At
+    `edadb091` the same call fails with
+    `business_artifact task requires --envelope for admission`, and
+    "Optional" is gone from the help text.
+  - **P0 #2 — completion accepting missing `no_external_action` plus a
+    synthetic `approval_id`: CLOSED.** The most serious sub-case: at
+    `affe6ea`, `validate_business_artifact_completion` read its inputs off a
+    caller-supplied object via `getattr`, so an object merely declaring the
+    right attributes `True` passed completion **with no artifact existing at
+    all**. At `edadb091` the refusal is explicit —
+    `missing required key 'no_external_action'` and
+    `unexpected key 'approval_id'`.
+  - **P0 #3 — over-cap actual cost driving the budget negative: PARTIAL, i.e.
+    NOT closed.** The immediate defect is fixed: at `affe6ea` a €500 actual
+    against a €10 cap was declared "within runtime_model_cap", drove
+    `runtime_remaining_eur` to **-490.0** and released the output; at
+    `edadb091` it is refused before any spend is applied, `task_state` is
+    `reconciliation_required`, the output is withheld and follow-up calls are
+    denied. **But** re-constructing `ModelBudget` from the same config resets
+    accumulated spend to zero *and* clears the fail-closed latch, so a process
+    restart erases both. The control plane holds no database driver and no
+    durable spend store by design — a codebase-wide search there for
+    `psycopg` / `postgres` / `sqlalchemy` / `DATABASE_URL` returns nothing —
+    and its only ledger is an append-only JSONL run ledger, which is not a
+    monetary authority.
+
+  Two properties of that audit are recorded here because they are what make
+  it re-checkable: P0 #3 was judged on raw `runtime_spent_eur` and **not** on
+  `runtime_remaining_eur`, which is clamped with `max(ZERO_EUR, ...)` and
+  would have shown a false green; and an earlier probe that was refused at
+  *admission* and so never reached the cost path was **discarded as
+  inconclusive** rather than recorded as a pass.
+
+  **What now blocks AI-001** is therefore narrower and fully specified. It is
+  no longer "three deterministic P0s plus runtime": it is **a durable cost
+  authority that survives process restart**. That cannot be built in the
+  control plane, which has no persistent store by design; it lives in
+  `adapteng-automation-platform` (`005_ai_gateway.sql` and the AI-gateway
+  runtime hardening migration), together with the EU Vertex adapter and the
+  Drive adapters. Those migrations were confirmed to *exist*; their behaviour
+  has not been exercised, so durable spend authority is an open ask, not a
+  proven capability. Status stays `REJECT_LIVE`: two of three P0s closing does
+  not authorize a live model call, and P0 #3 is explicitly PARTIAL. AG-008's
+  deterministic fixes have landed; automation-platform still owns the
+  persistent runtime. PR #40 re-tested the three P0s only — the absence of a
+  business worker, real provider and Drive runtime is carried forward from the
+  2026-07-25 assessment and was not re-verified.
+
   `AI-001` is merged (marketing PR #19, deterministic, 106 tests), but **no real
   model call has run**. Exact public package `ART-2026-001`, using source
   set `SRC-2026-001`, is selected for the first live model-backed Company Drive
@@ -40,9 +98,11 @@ external/high-impact actions.
   `CASE-2026-001` is separately the first governed raw-source/case migration and
   evidence-bounded deterministic draft, with media/publication blocked pending
   live Sheet-vs-Git reconciliation. The 2026-07-26 production audit blocks the
-  proof until both deterministic and persistent runtime blockers close. The
-  proof must enter through the canonical gateway and AG-008 and must never use
-  frozen direct-model workflow MM-22.
+  proof until both deterministic and persistent runtime blockers close; the
+  deterministic side is now closed as recorded above, so the persistent
+  runtime blocker is the one that remains. The proof must enter through the
+  canonical gateway and AG-008 and must never use frozen direct-model workflow
+  MM-22.
 
 ## 2. Lead triage / enrichment on WEB-002 — SECOND
 
