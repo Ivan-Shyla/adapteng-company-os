@@ -8,6 +8,12 @@ proof of that, and it runs before the rehearsal is allowed to touch anything:
 * the rehearsal repository prefix must be run-scoped and must share no path
   lineage with the production pgBackRest repository, so a rehearsal expire can
   never reach production repository content;
+* the repository pgBackRest will *actually* use must be the one this gate was
+  told about. pgBackRest reads every ``PGBACKREST_<OPTION>`` environment
+  variable as configuration, so ``PGBACKREST_REPO1_PATH`` in the environment
+  decides where a backup lands regardless of what any caller passes here. A
+  gate that only inspects its own arguments can be satisfied by a caller that
+  declares one repository and exports another;
 * every cluster directory must live inside the runner's ephemeral root, and the
   restore targets must be absent or empty before a restore writes into them;
 * every cluster must be configured with an empty ``listen_addresses``, so the
@@ -61,6 +67,15 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "[::1]", "localhost"})
 # Any pgBackRest option that points the tool at a PostgreSQL server it must
 # reach over the network instead of the local data directory.
 REMOTE_PG_OPTION = re.compile(r"^\s*pg\d*-host(?:-[a-z0-9-]+)?\s*=", re.IGNORECASE)
+
+# The environment variable pgBackRest consults for the repository prefix. It is
+# the value that decides where a backup is written; the command line this gate
+# is given is only a claim about it.
+EFFECTIVE_REPO_PATH_VARIABLE = "PGBACKREST_REPO1_PATH"
+
+# A second configured repository would give pgBackRest another place to write,
+# which this gate has proven nothing about. repo1 is the only one it vouches for.
+ADDITIONAL_REPOSITORY = re.compile(r"^PGBACKREST_REPO(?:[2-9]|\d{2,})_", re.IGNORECASE)
 
 SETTING = re.compile(
     r"^\s*(?P<name>[A-Za-z][A-Za-z0-9_-]*)\s*=\s*(?P<value>.*?)\s*$"
@@ -155,8 +170,96 @@ def check_repository_disjoint(production: str, rehearsal: str) -> list[Check]:
     return checks
 
 
+def check_effective_repository(
+    environment: dict[str, str],
+    declared_rehearsal: str,
+    production: str,
+    *,
+    required: bool = False,
+) -> list[Check]:
+    """Check the repository pgBackRest will really use, not the one it is told.
+
+    ``check_repository_disjoint`` compares the two paths this gate is handed on
+    the command line. That proves the caller's intent, not the outcome:
+    pgBackRest takes ``PGBACKREST_REPO1_PATH`` straight from the environment, so
+    a caller that exports the production prefix while passing a harmless-looking
+    ``--rehearsal-repo-path`` would satisfy every other check here and still back
+    up into production. These checks read the environment itself, which is the
+    only thing pgBackRest will obey.
+
+    Whenever that variable is set it is checked, with or without ``required`` --
+    so the export above is caught even by a caller that never opted in. What
+    ``required`` adds is the demand that it be set at all, which is true inside
+    the rehearsal workflow and not true of a unit test evaluating a fixture.
+    """
+
+    effective = environment.get(EFFECTIVE_REPO_PATH_VARIABLE, "").strip()
+    checks: list[Check] = []
+
+    if required:
+        checks.append(
+            Check(
+                "effective_repo_path_declared",
+                bool(effective),
+                f"{EFFECTIVE_REPO_PATH_VARIABLE}={effective}"
+                if effective
+                else f"{EFFECTIVE_REPO_PATH_VARIABLE} is unset, so the repository "
+                "pgBackRest would use is not knowable here",
+            )
+        )
+
+    if effective:
+        agrees = effective == declared_rehearsal.strip()
+        checks.append(
+            Check(
+                "effective_repo_path_matches_declared_rehearsal",
+                agrees,
+                "the environment and the declared rehearsal path agree"
+                if agrees
+                else f"the environment says {effective}, but this gate was told "
+                f"{declared_rehearsal}",
+            )
+        )
+
+        try:
+            effective_parts = repository_segments(effective)
+            production_parts = repository_segments(production)
+        except GuardError as exc:
+            checks.append(
+                Check("effective_repo_path_disjoint_from_production", False, str(exc))
+            )
+        else:
+            overlapping = (
+                not effective_parts
+                or not production_parts
+                or shares_lineage(effective_parts, production_parts)
+            )
+            checks.append(
+                Check(
+                    "effective_repo_path_disjoint_from_production",
+                    not overlapping,
+                    "no shared path lineage with the production repository"
+                    if not overlapping
+                    else "the repository pgBackRest would use overlaps production",
+                )
+            )
+
+    extra = sorted(name for name in environment if ADDITIONAL_REPOSITORY.match(name))
+    checks.append(
+        Check(
+            "no_additional_pgbackrest_repository_configured",
+            not extra,
+            "repo1 is the only configured repository"
+            if not extra
+            else f"a second repository is configured by: {', '.join(extra)}",
+        )
+    )
+    return checks
+
+
 def check_scope_token(rehearsal: str, scope_token: str) -> Check:
     if not scope_token.strip():
+
         return Check("rehearsal_repo_path_run_scoped", False, "no scope supplied")
     try:
         parts = repository_segments(rehearsal)
@@ -347,6 +450,14 @@ def evaluate(args: argparse.Namespace, environment: dict[str, str]) -> list[Chec
 
     checks: list[Check] = []
     checks.extend(check_repository_disjoint(args.production_repo_path, args.rehearsal_repo_path))
+    checks.extend(
+        check_effective_repository(
+            environment,
+            args.rehearsal_repo_path,
+            args.production_repo_path,
+            required=args.require_effective_repo_path,
+        )
+    )
     checks.append(check_scope_token(args.rehearsal_repo_path, args.scope_token))
     checks.extend(check_ephemeral(args.ephemeral_root, {**clusters, **restore_targets}))
     checks.extend(check_empty(restore_targets))
@@ -363,6 +474,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--production-repo-path", required=True)
     parser.add_argument("--rehearsal-repo-path", required=True)
+    parser.add_argument(
+        "--require-effective-repo-path",
+        action="store_true",
+        help=(
+            f"demand that {EFFECTIVE_REPO_PATH_VARIABLE} is set in the environment. "
+            "Whenever it is set it is checked regardless; this makes its absence a "
+            "failure too, which is what the rehearsal workflow wants and what a "
+            "unit test evaluating a fixture does not."
+        ),
+    )
     parser.add_argument("--scope-token", required=True)
     parser.add_argument("--ephemeral-root", required=True, type=Path)
     parser.add_argument("--cluster", action="append", default=[], metavar="NAME=PATH")
