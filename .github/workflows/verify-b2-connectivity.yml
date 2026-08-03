@@ -103,38 +103,115 @@ jobs:
           endpoint="https://$ENDPOINT"
           sent="$RUNNER_TEMP/probe-sent.txt"
           received="$RUNNER_TEMP/probe-received.txt"
+          stderr="$RUNNER_TEMP/probe-stderr.txt"
           printf 'adapteng b2 connectivity probe run=%s attempt=%s\n' \
             "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >"$sent"
 
+          # B2 answers a refusal with a sentence that names the cause, and the
+          # AWS CLI prints it. Left on stderr it arrives as `exit code 254` in
+          # the annotation and the cause is lost, which is how an exhausted
+          # daily cap was read as a broken application key. Every call is
+          # therefore captured and quoted.
+          say_why() {
+            # Flattened: a newline inside an annotation truncates it, and these
+            # explanations are wrapped for the file rather than for GitHub.
+            printf '::error title=%s::%s B2 said: %s\n' "$1" \
+              "$(printf '%s' "$2" | tr -s '[:space:]' ' ')" \
+              "$(tr -d '\r' <"$stderr" | tr -s '[:space:]' ' ')"
+          }
+
+          # HTTP forbids a response body on HEAD, so head-object can only ever
+          # report `(403) Forbidden` and never why -- which is the same silence
+          # pgBackRest hits, since HEAD is the first repository call it makes.
+          # The same key is therefore asked for again with GET, purely to make
+          # B2 put its reason into words that can be quoted.
+          explain_class_b() {
+            aws s3api get-object \
+              --endpoint-url "$endpoint" --bucket "$BUCKET" --key "$PROBE_KEY" \
+              "$RUNNER_TEMP/probe-why-body.txt" \
+              >/dev/null 2>"$RUNNER_TEMP/probe-why.txt" || true
+            if [ -s "$RUNNER_TEMP/probe-why.txt" ]; then
+              cat "$RUNNER_TEMP/probe-why.txt" >>"$stderr"
+            fi
+          }
+
           echo "--- write ---"
-          aws s3api put-object \
+          if ! aws s3api put-object \
             --endpoint-url "$endpoint" --bucket "$BUCKET" --key "$PROBE_KEY" \
-            --body "$sent" >/dev/null
+            --body "$sent" >/dev/null 2>"$stderr"
+          then
+            say_why "Backblaze B2 refused the write" \
+              "put-object is a Class A transaction and it was refused."
+            exit 1
+          fi
           echo "Wrote $PROBE_KEY"
 
+          # A read of an object that was just written and is known to be there.
+          # This is what makes the post-delete check below mean something: the
+          # same instrument is shown returning success on a present object
+          # before its failure on an absent one is read as absence. GET goes
+          # first because it is the one that can explain a refusal.
           echo "--- read ---"
-          aws s3api get-object \
+          if ! aws s3api get-object \
             --endpoint-url "$endpoint" --bucket "$BUCKET" --key "$PROBE_KEY" \
-            "$received" >/dev/null
+            "$received" >/dev/null 2>"$stderr"
+          then
+            say_why "Backblaze B2 refused to read an object it had just accepted" \
+              "get-object downloads data and the write above does not, so a
+               write and a listing succeeding is not evidence that a backup can
+               be read back."
+            exit 1
+          fi
+          if ! aws s3api head-object \
+            --endpoint-url "$endpoint" --bucket "$BUCKET" --key "$PROBE_KEY" \
+            >/dev/null 2>"$stderr"
+          then
+            explain_class_b
+            say_why "Backblaze B2 refused to head an object it had just served" \
+              "head-object is the call pgBackRest makes first, so a refusal here
+               blocks the rehearsal even though the same object reads back
+               successfully with GET."
+            exit 1
+          fi
           # Comparing bytes rather than trusting a 200: a read that returns the
           # wrong object would still be a successful HTTP call.
           cmp "$sent" "$received"
           echo "Read back $(wc -c <"$received" | tr -d ' ') bytes, identical to what was written."
 
           echo "--- delete ---"
-          aws s3api delete-object \
-            --endpoint-url "$endpoint" --bucket "$BUCKET" --key "$PROBE_KEY" >/dev/null
+          if ! aws s3api delete-object \
+            --endpoint-url "$endpoint" --bucket "$BUCKET" --key "$PROBE_KEY" \
+            >/dev/null 2>"$stderr"
+          then
+            say_why "Backblaze B2 refused the delete" \
+              "delete-object is a Class A transaction and it was refused, so
+               retention cannot be enforced."
+            exit 1
+          fi
 
-          # Asserted, not assumed. If Object Lock were enabled the write and the
-          # delete would both report success while the object survived, and
-          # retention would be quietly unenforceable.
+          # Asserted, not assumed, and asserted specifically. If Object Lock
+          # were enabled the write and the delete would both report success
+          # while the object survived, and retention would be quietly
+          # unenforceable. But `head-object failed` on its own does not mean
+          # `gone`: the same call fails with 403 when a daily cap is exhausted,
+          # and treating that as proof of absence is an absence accepted as
+          # evidence. Only a 404 counts.
           if aws s3api head-object \
-            --endpoint-url "$endpoint" --bucket "$BUCKET" --key "$PROBE_KEY" >/dev/null 2>&1
+            --endpoint-url "$endpoint" --bucket "$BUCKET" --key "$PROBE_KEY" \
+            >/dev/null 2>"$stderr"
           then
             echo "::error title=Probe object survived deletion::Delete reported success but the object is still present, so retention cannot be enforced."
             exit 1
           fi
-          echo "Probe object is gone."
+          if ! grep -Eqi '\(404\)|Not Found|NoSuchKey' "$stderr"; then
+            explain_class_b
+            say_why "Deletion could not be confirmed" \
+              "head-object failed for a reason other than the object being
+               absent, so this run proves nothing about whether the delete
+               worked."
+            exit 1
+          fi
+          echo "Probe object is gone: B2 answered 404 for it."
           echo "Write, read and delete all work against the backup bucket."
 
       - name: Remove the probe object if the round trip did not
