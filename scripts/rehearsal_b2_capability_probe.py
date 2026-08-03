@@ -143,6 +143,35 @@ class Report:
     probes: list[Probe] = field(default_factory=list)
 
 
+def listed_keys(listing_output: str) -> "list[str]":
+    """Return the keys a ``list-objects-v2`` response actually enumerated.
+
+    Parsed rather than substring-matched, because ``list-objects-v2`` echoes the
+    requested ``--prefix`` back in its response body. Asking whether the key
+    appears anywhere in the raw text is therefore true whenever the call
+    succeeds, whether or not a single object exists: a check that cannot pass,
+    which is no more use as a control than one that cannot fail. Only ``Key``
+    entries under ``Contents`` are evidence that something is stored.
+    """
+
+    try:
+        payload = json.loads(listing_output or "{}")
+    except json.JSONDecodeError:
+        # An unreadable listing is not proof of absence, so surface the raw text
+        # as a pseudo-key and let the caller treat the object as still present.
+        return [listing_output.strip()] if listing_output.strip() else []
+    if not isinstance(payload, dict):
+        return []
+    contents = payload.get("Contents") or []
+    if not isinstance(contents, list):
+        return []
+    return [
+        entry["Key"]
+        for entry in contents
+        if isinstance(entry, dict) and isinstance(entry.get("Key"), str)
+    ]
+
+
 def first_message_line(stderr: str) -> str:
     """B2's sentence, without the AWS CLI's traceback or usage noise."""
     for line in stderr.splitlines():
@@ -440,7 +469,7 @@ def run_probe(
         message=first_message_line(stderr),
     )
     report.probes.append(absent)
-    if absent.succeeded and probe_key in listing_output:
+    if absent.succeeded and probe_key in listed_keys(listing_output):
         report.verdict = "probe_object_survived_delete"
         report.reason = UNKNOWN
         annotate(
