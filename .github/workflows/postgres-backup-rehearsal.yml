@@ -356,6 +356,12 @@ jobs:
       - name: Seed deterministic content and capture the pre-backup digest
         run: |
           set -euo pipefail
+          # TEMPORARY, reverted in the commit immediately after this one. A step
+          # that only runs on failure is untested until something fails, so this
+          # makes something fail on purpose, once, to prove the diagnostic below
+          # actually runs against the real object store.
+          echo "::notice title=Deliberate failure::Injected to exercise the object store diagnostic."
+          exit 1
           psql --no-psqlrc --quiet --host="$SOURCE_SOCKET" --port="$SOURCE_PORT" \
             --username=postgres --dbname=postgres \
             --set=ON_ERROR_STOP=1 \
