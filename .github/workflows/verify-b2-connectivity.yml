@@ -389,18 +389,23 @@ jobs:
         run: |
           # Cleanup cannot live at the end of the classification step, because
           # that step is expected to end in failure whenever it has something
-          # to report. Deletion is also the one operation class that stayed
-          # available throughout the incident, so this can be relied on.
+          # to report. It also sweeps the whole probe prefix rather than just
+          # this run's scope: a cleanup that only handles its own run cannot
+          # recover from the very failure mode that leaves litter behind, and
+          # an earlier revision proved that by leaving some. The prefix is
+          # dedicated to this job and disjoint from both the production
+          # repository path and the rehearsal one, so the sweep is safe.
+          # Deletion is also the one operation class that stayed available
+          # throughout the incident that prompted this, so it can be relied on.
           set -uo pipefail
-          scope="operation-class-probe/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          aws s3 rm "s3://$BUCKET/$scope/" --recursive \
+          aws s3 rm "s3://$BUCKET/operation-class-probe/" --recursive \
             --endpoint-url "https://$ENDPOINT" || true
           left=$(aws s3api list-objects-v2 --endpoint-url "https://$ENDPOINT" \
-            --bucket "$BUCKET" --prefix "$scope/" \
+            --bucket "$BUCKET" --prefix "operation-class-probe/" \
             --query 'length(Contents || `[]`)' --output text 2>/dev/null \
             | awk '{ total += $1 } END { print total + 0 }')
-          echo "Objects remaining under $scope/: $left"
+          echo "Objects remaining under operation-class-probe/: $left"
           if [ "$left" != 0 ]; then
-            echo "::error::The probe left $left object(s) behind under $scope/."
+            echo "::error::The probe left $left object(s) behind."
             exit 1
           fi
