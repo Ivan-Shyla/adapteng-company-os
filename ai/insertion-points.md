@@ -41,6 +41,14 @@ external/high-impact actions.
   which is kept visible here because the record is corrected in place, not
   erased.
 
+  **Read the invariant, not the hash.** The claim here is *"P0 #1 and #2 are
+  closed as of AG-008, which is merged on control-plane `main`"*; the SHAs
+  above are evidence anchors showing where and when that was established, not
+  the claim itself. A later control-plane merge therefore leaves this
+  assessment stale-*dated* at worst — it does not falsify it, and it should
+  not be read as a verification that failed. What would falsify it is AG-008
+  being reverted, or the durable-cost gap in P0 #3 below being closed.
+
   **Evidence, and exactly what is merged.** The verdicts below come from
   control-plane **PR #40**, which executed each original failure at `affe6ea`
   and re-ran the identical probe at `edadb091`, re-sealing mutated artifacts
