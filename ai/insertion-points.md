@@ -29,17 +29,33 @@ external/high-impact actions.
   deterministic envelope / no-external-action / cost items are now closed at
   the control plane — see the status below for what that does and does not
   buy. See `owner/action-items.md`.
-- **Status:** **REJECT_LIVE.** Re-assessed **2026-08-03** against control-plane
-  main `edadb09125f7fb5d173d5f595181d1384050b6b5`. This **supersedes** the
-  2026-07-25 assessment pinned to
-  `affe6ea1e4d522be0df0641e98a08e20a84549ae`, which is kept visible here
-  because the record is corrected in place, not erased. Evidence:
+- **Status:** **REJECT_LIVE** — judged per P0 below, not as one global verdict.
+  Re-assessed **2026-08-03** against control-plane main
+  `edadb09125f7fb5d173d5f595181d1384050b6b5`, which is the merge commit of
+  control-plane **PR #39** (*fix(validate_json): fail closed on duplicate keys
+  and non-finite constants*, merged 2026-08-02). The fail-closed hardening
+  actually under judgement here landed one commit earlier, at `c6a5b509` —
+  control-plane **PR #38**, *AG-008: fail-closed business artifact safety
+  hardening*, merged 2026-07-30. This **supersedes** the 2026-07-25 assessment
+  pinned to `affe6ea1e4d522be0df0641e98a08e20a84549ae` (control-plane PR #36),
+  which is kept visible here because the record is corrected in place, not
+  erased.
+
+  **Evidence, and exactly what is merged.** The verdicts below come from
   control-plane **PR #40**, which executed each original failure at `affe6ea`
-  and then re-ran the identical probe at `edadb091`, re-sealing mutated
-  artifacts with each tree's own `evidence_digest()` /
-  `artifact_envelope_sha256()` so that a refusal reflects the policy under
-  test rather than a stale hash. No model call and no spend. Verdicts on the
-  three P0s this file previously held open:
+  and re-ran the identical probe at `edadb091`, re-sealing mutated artifacts
+  with each tree's own `evidence_digest()` / `artifact_envelope_sha256()` so a
+  refusal reflects the policy under test rather than a stale hash. No model
+  call, no spend. **PR #40 is unmerged**, so its merge state must be read
+  precisely: it changes no source file — only `README.md`, agent logs,
+  `context/CURRENT_STATUS.md`, `docs/AG008_P0_AUDIT.md` and tests — therefore
+  the closures below are properties of control-plane **`main` at `edadb091`**,
+  delivered by the already-merged PR #38, and are *not* contingent on PR #40
+  landing. What is not yet on `main` is the regression guard
+  `tests/test_ag008_p0_regression.py`: until PR #40 merges, `main` has the
+  fixed behaviour with **no test pinning it there**, so these closures are
+  currently unprotected against silent re-introduction. Verdicts on the three
+  P0s this file previously held open:
   - **P0 #1 — optional/unvalidated task envelope: CLOSED.** At `affe6ea`,
     `evaluate_artifact` returned `ready=True` with no envelope at all and
     `check_task_completion.py` exited `0`; the help text read
@@ -61,13 +77,21 @@ external/high-impact actions.
     `runtime_remaining_eur` to **-490.0** and released the output; at
     `edadb091` it is refused before any spend is applied, `task_state` is
     `reconciliation_required`, the output is withheld and follow-up calls are
-    denied. **But** re-constructing `ModelBudget` from the same config resets
-    accumulated spend to zero *and* clears the fail-closed latch, so a process
-    restart erases both. The control plane holds no database driver and no
-    durable spend store by design — a codebase-wide search there for
-    `psycopg` / `postgres` / `sqlalchemy` / `DATABASE_URL` returns nothing —
-    and its only ledger is an append-only JSONL run ledger, which is not a
-    monetary authority.
+    denied. **The remaining gap is a mechanism, not an unfinished task.**
+    Re-constructing `ModelBudget` from the same config resets accumulated
+    spend to zero *and* clears the `reconciliation_required` latch — measured
+    as `call 1 allowed: True | spent now: 2.5`, then, from a new
+    process-equivalent budget built from that same config, `spent: 0` and
+    `reconciliation_required carried over?: False`. So any process restart
+    erases both the spend total and the refusal that is supposed to protect
+    it. This cannot be ticked off inside the control plane: the budget is held
+    in process memory, that repository holds no database driver and no durable
+    spend store by design — a codebase-wide search there for `psycopg` /
+    `postgres` / `sqlalchemy` / `DATABASE_URL` returns nothing — and its only
+    ledger is an append-only JSONL run ledger, which is not a monetary
+    authority. The gateway's own refusal string, *"authoritative
+    reconciliation required"*, is the code correctly deferring to a store that
+    does not exist in that repository.
 
   Two properties of that audit are recorded here because they are what make
   it re-checkable: P0 #3 was judged on raw `runtime_spent_eur` and **not** on
@@ -86,10 +110,11 @@ external/high-impact actions.
   has not been exercised, so durable spend authority is an open ask, not a
   proven capability. Status stays `REJECT_LIVE`: two of three P0s closing does
   not authorize a live model call, and P0 #3 is explicitly PARTIAL. AG-008's
-  deterministic fixes have landed; automation-platform still owns the
-  persistent runtime. PR #40 re-tested the three P0s only — the absence of a
-  business worker, real provider and Drive runtime is carried forward from the
-  2026-07-25 assessment and was not re-verified.
+  deterministic fixes have landed on control-plane `main` via PR #38;
+  automation-platform still owns the persistent runtime. Scope note: PR #40
+  re-tested the three P0s only — the absence of a business worker, real
+  provider and Drive runtime is carried forward from the 2026-07-25 assessment
+  and was not re-verified.
 
   `AI-001` is merged (marketing PR #19, deterministic, 106 tests), but **no real
   model call has run**. Exact public package `ART-2026-001`, using source
