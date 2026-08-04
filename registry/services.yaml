@@ -9,7 +9,7 @@
 #   repo-merged-not-live     - code merged to main, no live deploy/wiring yet
 #   planned                  - designed, not built
 version: 1
-updated: 2026-07-31
+updated: 2026-08-04
 
 excluded_personal_projects:
   status: excluded-from-company-os
@@ -219,13 +219,20 @@ services:
       has only APPROVED_ASSETS_DATABASE_URL). PR #90 added a machine-checkable
       rollout-readiness CLI and PR #92 pinned an exact self-hosted runner label
       set, but PR #92 itself states rollout readiness is not yet claimed
-      pending a GitHub-Enterprise-Required-Reviewers substitute; four
-      exact-subject rollout-authorization PRs (#93-#95, #97) remain open. No
-      Migrate Approved Assets workflow run has ever executed. Do not dispatch
-      even zero-write phases until those PRs merge and the
-      managed-backup/isolated-restore/exact-rehearsal evidence chain is
-      proven (a real rehearsal dispatch on 2026-08-03 failed at
-      pgbackrest stanza-create with HTTP 403).
+      pending a GitHub-Enterprise-Required-Reviewers substitute. Of the four
+      exact-subject rollout-authorization PRs, #95 and #97 merged 2026-08-03;
+      #93 and #94 remain open (#93 is in provider-reported CONFLICTING state
+      pending rebase onto post-#95/#97 main; #94 is stacked on #93 and blocked
+      behind it). No Migrate Approved Assets workflow run has ever executed.
+      Do not dispatch even zero-write phases until #93/#94 merge. The earlier
+      2026-08-03 pgbackrest stanza-create HTTP 403 is resolved: root cause was
+      a B2 account download-bandwidth cap (not a backup-path defect, and not
+      the previously-suspected Class B transaction cap, which does not exist
+      on this plan); the scheduled nightly rehearsal has since run green
+      repeatedly (e.g. runs on 2026-08-03 and 2026-08-04), including a full
+      23/23-step stanza-create + backup + dual restore proof. Production
+      adapteng_ops itself still has no stanza, schedule or retention
+      enforcement configured.
 
   - id: adapteng-baserow-schema
     repo: adapteng-automation-platform
