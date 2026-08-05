@@ -1,13 +1,24 @@
 # AdaptEng Company OS — Environment Registry
 # Production hosts, domains, platform and budgets. NO secrets — names/hostnames/ids only.
 version: 1
-updated: 2026-07-28
+updated: 2026-08-06
 
 platform:
   compute: Hetzner (EU region) — single self-hosted host
   orchestrator: Coolify (self-hosted PaaS on Hetzner)
   container_network: coolify (internal; services reach each other by alias, no public exposure)
   policy: upgrade the existing host only after 7 days of measured CPU/RAM/disk pressure (ARCHITECTURE.md §9)
+
+operator_access:
+  production_host: 37.27.213.220
+  ssh_user: adapteng-ai
+  ssh_port: 22
+  private_key_ref: PROD_SSH_PRIVATE_KEY
+  host_verification_ref: PROD_SSH_KNOWN_HOSTS
+  coolify_url_ref: COOLIFY_URL
+  coolify_api_ref: COOLIFY_API_TOKEN
+  verified: 2026-08-06
+  note: "The production host accepted the managed adapteng-ai identity. Local owner-key filenames are not an authority; use the managed GitHub SSH identity or its verified local counterpart."
 
 excluded_personal_projects:
   status: excluded-from-company-os
