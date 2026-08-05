@@ -346,14 +346,17 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   approved-assets before that dependency merges and a reviewed sanitized
   `PASS` validates.
 - [ ] **Migrations not live:** 002 (run ledger), 003 (approval/outbox), 005 (AI
-  gateway), 006 (integrity), 007 (source-identity reservation) and Drive-008
-  (replay reservations) are repo-only and unapplied. The approved-source pair
-  was merged by automation-platform PR #89 at
-  `dbcf806ea7714b8e2a7415ae6cd788491924178d`; apply it to live only after the
-  physical-backup rehearsal above, rollout review and explicit owner go/no-go.
-  Follow [`runbooks/apply-migration.md`](../runbooks/apply-migration.md), require
-  a real consumer, and redeploy the adapter for 007. Unrelated
-  `008_ai_gateway_runtime_hardening.sql` remains forbidden for this rollout.
+  gateway), 006 (integrity), 007 (source-identity reservation), Drive-008
+  (replay reservations) and AI-Gateway-008 (runtime hardening) remain repo-only
+  and unapplied. The approved-source runtime authorization chain is now merged
+  through automation-platform PRs #93, #94 and #98; no
+  `Migrate Approved Assets` dispatch has run as of the 2026-08-05 read-only
+  check. Apply only 007 and Drive-008 through that workflow after its documented
+  production-backup evidence, isolated restore/rehearsal, external review,
+  short-lived exact-subject phase authorization and disposable private-network
+  runner are all present. `008_ai_gateway_runtime_hardening.sql` remains
+  forbidden in the approved-assets workflow; it requires its separate
+  first-model-proof migration path before any live model call.
 - [ ] **Baserow off-host export/restore** completion; **Google Workspace**
   Manager/recovery acceptance.
 - [ ] **Workspace recovery/break-glass acceptance:** verify Ivan is Manager of
