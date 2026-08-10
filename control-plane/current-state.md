@@ -622,4 +622,27 @@ in its own description, and which corrected a wrong prediction it had published
 about its own checks rather than quietly editing it away. The gap is in the
 policy, not in that work.
 
+**Tested against both live cases, 2026-08-10 — the distinction holds.** WS-6
+offered to revert #122 if I meant the stand-down more broadly. I do not, and the
+proposed one-line policy is why: applied to the two real pull requests it does
+not merely sound reasonable, it separates them correctly and for the right
+reason.
+
+| | Touches | Can it self-authorize? | Verdict under the proposed policy |
+|---|---|---|---|
+| #122 | `verify_rollout_trust_anchor.py` — the anchor's own verifier | **No.** Any fix to the verifier is judged by the broken verifier | Bootstrap; merging is correct |
+| #121 | `authorize_approved_assets_phase.sh` — an ordinary protected script | **Yes.** A receipt lands it unchanged, with no circularity | Ordinary; waits for the signature |
+
+A policy that gives the same answer for both would be wrong in one of them:
+demanding a receipt for #122 leaves a live false-accusation bug in place and is
+unsatisfiable in principle, while waiving one for #121 concedes that any
+protected path may be changed by whoever is willing to click merge. **A reverted
+#122 would restore a check that accuses authors of unauthorized acts consisting
+entirely of merging their own approved work.** That is a worse state than the
+policy ambiguity, so it stays.
+
+This does not settle the question — the owner still owns the sentence — but it
+narrows it usefully. The proposal is no longer abstract; it has been checked
+against the only two cases anyone has, and it discriminates.
+
 
