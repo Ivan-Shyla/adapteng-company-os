@@ -25,6 +25,7 @@ runtime-дампов и копий реализации из других реп
 
 | Папка | Что внутри |
 |---|---|
+| [`control-plane/`](control-plane/) | Межрепозиторный слой: проверенное текущее состояние и реестр расхождений, политика автономии (что агент делает сам), аудит защит P0–P3 и программа работ. |
 | [`registry/`](registry/) | Живой индекс: `services.yaml`, `workflows.yaml`, `data-stores.yaml`, `environments.yaml` — что существует, где и в каком статусе (только id/имена, без секретов). |
 | [`runbooks/`](runbooks/) | Повторяемые процедуры: операции с n8n, применение миграций, backup/restore, ротация секретов, реагирование на инциденты. |
 | [`decisions/`](decisions/) | ADR-журнал уровня компании + шаблон; ссылки на платформенные ADR в `adapteng-automation-platform`. |
@@ -41,6 +42,9 @@ runtime-дампов и копий реализации из других реп
 | Как безопасно поменять workflow / применить миграцию? | [`runbooks/`](runbooks/) |
 | Как ротировать токен (и почему старый ещё живой)? | [`runbooks/secret-rotation.md`](runbooks/secret-rotation.md) |
 | Что должен сделать Иван? | [`owner/action-items.md`](owner/action-items.md) |
+| Что агент может делать без approve? | [`control-plane/autonomy-policy.md`](control-plane/autonomy-policy.md) |
+| Что реально блокирует работу прямо сейчас? | [`control-plane/current-state.md`](control-plane/current-state.md) |
+| Какие работы запущены и в каком порядке? | [`control-plane/execution-program.md`](control-plane/execution-program.md) |
 | Куда встраивается AI и по какой цене? | [`ai/insertion-points.md`](ai/insertion-points.md), [`ai/model-choices.md`](ai/model-choices.md) |
 | Текущий статус всего | [`ARCHITECTURE.md` §11](ARCHITECTURE.md#11-current-status) |
 
