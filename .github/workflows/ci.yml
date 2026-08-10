@@ -49,6 +49,10 @@ jobs:
       # have, and its fixtures need os.symlink, which Windows refuses without
       # SeCreateSymbolicLinkPrivilege. It carries no skip marker; this job is
       # where it runs, on the platform the exporter runs on in production.
+      #
+      # test_pre_pr_commands_match_ci asserts that this list and the pre-PR
+      # command in README.md name the same suites. Adding a module here
+      # without adding it there fails that suite by design.
       - name: Run unittest suites
         run: >-
           python -m unittest
@@ -58,3 +62,4 @@ jobs:
           scripts.test_rehearsal_contour
           scripts.test_rehearsal_effective_repository
           scripts.test_coolify_deploy
+          scripts.test_pre_pr_commands_match_ci

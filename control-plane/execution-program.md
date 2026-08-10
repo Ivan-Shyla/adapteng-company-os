@@ -420,7 +420,15 @@ count 0.
 
 **Auto-merge** YES · **Owner decision** NO to fix. YES to remove.
 
-### Prompt
+> **This prompt shipped an incorrect root cause.** It is kept verbatim below,
+> with the correction after it, because the failure mode is worth preserving:
+> the brief named the loudest symptom as the defect and directed an agent to
+> fix something that was not broken. The agent rejected the diagnosis, proved
+> it wrong, and fixed the real bug. That is the behaviour these prompts should
+> invite — the "verify before you implement" instruction in the dispatch rules
+> is what made it possible, and it must stay.
+
+### Prompt (as dispatched — contains an error, see below)
 
 > Two checks — `Verify exact current head from merged base` and `Base-trusted
 > rollout authorization` — fail on every pull request with:
@@ -451,6 +459,32 @@ count 0.
 > If it cannot be made to complete reliably, say so plainly and propose
 > removing it rather than leaving it permanently red. Removal is an owner
 > decision; repair is not.
+
+### Correction (2026-08-10, verified against `main`)
+
+The second paragraph is wrong in both of its claims.
+
+The `fatal:` lines are genuine and reproducible, but they do **not** originate
+from `env -i` — the git calls at `rollout-trust-anchor.yml` lines 82/84 are
+outside the scrubbed block, which closes with its command substitution at line
+77. The credential is missing because the checkout sets
+`persist-credentials: false`. More importantly they did not fail the step:
+`test "$(git status --porcelain=v1)" = ""` throws away git's exit 128 and its
+empty stdout satisfies the comparison, so that assertion **failed open**.
+
+The real defect is in `scripts/validation/verify_rollout_trust_anchor.py`,
+which asks whether approval material is *present* in a tree rather than whether
+the pull request *introduced* it. Once PR #104 merged the receipt onto `main`
+at `2026-08-06T15:42:06Z`, every later branch inherited it. Both directions of
+the gate then jammed — `approval.unexpected` for ordinary PRs,
+`approval.circular_or_stale` for any owner-signed receipt.
+
+**What the prompt should have said:** state the observed failure, state the
+last known-good timestamp, and require the agent to establish the causal chain
+itself. Supplying a mechanism invited implementation against a wrong premise.
+Only the closing instruction — distinguish "not authorized" from "could not
+determine", fail closed on both — survives intact, and it turned out to be the
+most valuable part.
 
 **Success criteria.** The check either passes on a legitimate pull request and
 fails only on genuine authorization problems, or a removal recommendation is

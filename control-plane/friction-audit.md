@@ -108,30 +108,72 @@ in runbook prose. The GitHub environments in the platform repository carry
 **Change:** the ruleset is the single source of truth for what blocks a merge.
 Workflow-level confirmation phrases are kept only where they guard a P0 action.
 
-### F-3 — A trust-anchor gate that cannot complete its own check
+### F-3 — A trust-anchor gate that is deadlocked in both directions
+
+**This entry was rewritten on 2026-08-10. The original diagnosis was wrong.**
+It is preserved as a correction rather than silently replaced, because the
+error is instructive: the loud symptom was not the defect.
 
 `Verify exact current head from merged base` and `Base-trusted rollout
-authorization` fail on PR #109 because the runner does a partial clone and then
-re-runs git with a scrubbed environment containing no credential, so the lazy
-object fetch fails outright:
+authorization` have failed on **every** pull request, on every branch, since
+2026-08-06. Verified: last green run `2026-08-06T15:30:57Z`; **55+** consecutive
+failures after it.
+
+**What I originally wrote, and why it was wrong.** I attributed the failure to
+a partial clone plus `env -i` scrubbing the credential, citing:
 
 ```
 fatal: could not read Username for 'https://github.com'
 fatal: could not fetch <object> from promisor remote
-rollout_trust_anchor.approval.unexpected
 ```
 
-That is an infrastructure failure being reported as an authorization failure.
-The two are indistinguishable from the outside, which is the actual danger: a
-gate that is always red teaches everyone to ignore red.
+Those lines are real and reproducible. They are also **irrelevant to the
+verdict**, on two counts. They do not come from `env -i` — the git calls at
+`rollout-trust-anchor.yml` lines 82/84 sit *outside* the scrubbed block, which
+opens at line 63 and closes with its command substitution at line 77; the
+credential is absent because the checkout sets `persist-credentials: false`.
+And they did not fail the step at all. Line 84 reads:
 
-Neither check is in the ruleset's required list, so they block nothing — they
-only add noise.
+```sh
+test "$(/usr/bin/git -C "$anchor_root" status --porcelain=v1)" = ""
+```
 
-**Change:** fix the fetch so the check can actually run and distinguish "not
-authorized" from "could not determine". If it is repaired, promote it; if it is
-not going to be repaired, remove it. Leaving a permanently-red non-blocking
-gate is the worst of the three options.
+The command substitution discards git's exit 128 and its empty stdout compares
+equal to `""`, so a hard git failure was read as a clean worktree. The check
+**failed open**. Line 82 has the same shape but fails *closed*, since empty
+output cannot equal a 40-character SHA — the pair looks symmetric and is not.
+
+**The actual defect** is a modelling bug in
+`scripts/validation/verify_rollout_trust_anchor.py`. Line 2627 computes
+`approval_paths_present = APPROVAL_PATHS & set(head_leaf)` — membership in the
+head tree — and raises `approval.unexpected` when a PR carries no protected
+change. PR #104 merged `.github/trust/rollout-policy/approval.json` and `.sig`
+onto `main` at `2026-08-06T15:42:06Z`, eleven minutes after that last green run.
+Every branch cut since inherits the receipt, so every PR trips it. The gate
+tests whether approval material is *present*, not whether the PR *introduced*
+it.
+
+The same presence test is applied to the subject tree at lines 2649–2650 and
+2893–2894, raising `approval.circular_or_stale`. So once any receipt had
+merged, no owner-signed receipt could authorize anything either.
+
+**That is the finding that matters, and it is worse than the one it replaces.**
+This is not a noisy gate that misreports its failure class. It is a gate that
+can no longer reach *either* terminal state: it cannot pass an ordinary pull
+request and it cannot accept an authorization. It was non-functional, in both
+directions, for four days, while appearing to be a working control.
+
+Neither check is in the ruleset's required list, so they blocked nothing.
+
+**Change:** judge approval material by what a tree *introduces* relative to the
+merged base, not by presence; deletion is not introduction, since removing
+material can plant nothing. Separate the verdicts — "could not determine" exits
+75, "not authorized" exits 1, both still failing closed. Repair the swallowed
+exit codes so an infrastructure fault can never again be read as success.
+
+**Credit:** diagnosed by the WS-6 session, which rejected this brief's stated
+root cause instead of implementing against it. Verified independently against
+`main` before being recorded here.
 
 ### F-4 — Owner approval for ordinary pull requests and CI reruns
 
@@ -149,12 +191,58 @@ working credential sits unused in this repository.
 **Change:** WS-B. The runbooks become the break-glass path, not the normal one.
 
 ### F-6 — FX treated as a governance programme
-
 FX is already specified as operator-set configuration that is never looked up
 live, with a pinned price version. It needs three values entered at deployment.
 
 **Change:** none, beyond recording it. Do not build an FX workstream. Removing
 work from the plan counts as progress.
+
+### F-7 — The documented local check was weaker than the check that decides
+
+Found 2026-08-10 while validating an unrelated change; fixed in the same pass.
+
+`README.md` names the commands to run before opening a pull request and states
+that CI runs the same ones. That sentence had quietly become false: `ci.yml`
+had gained `test_rehearsal_contour` and `test_rehearsal_effective_repository`
+while the README still listed three suites. Anyone following the documentation
+ran a strictly weaker check than the one that decides mergeability, and learned
+the difference only after pushing.
+
+This is the cheapest kind of friction to fix and among the most expensive to
+leave: it spends a full push-and-wait cycle to deliver information the
+contributor could have had in seconds, and it teaches people that the
+documented commands are approximate.
+
+**Change:** the README now lists every suite CI runs — and, because a promise
+that two files agree is worth exactly what checks it,
+`scripts/test_pre_pr_commands_match_ci.py` parses both and fails on divergence
+in either direction. Registered in `ci.yml` and in the README, including a case
+asserting it lists *itself*, since a check nobody runs cannot fail. Verified
+non-vacuous by deleting a module from the README and confirming the failure
+names the missing suite.
+
+**A related trap, deliberately left alone.**
+`test_postgres_restore_scheduler_surface` fails hard on Windows — 3 failures
+and 15 errors from `os.O_NOFOLLOW`, `os.mkfifo` and `os.symlink`, none of which
+Windows supports. Every agent in this programme runs on Windows, so this looks
+exactly like a broken repository and cost time twice in one day.
+
+It is not a defect and it must not be "fixed". The module's own docstring
+records the reasoning: `skipUnless` was rejected as *an invisible control*, so
+the POSIX-only cases were isolated into a named module that CI runs
+unconditionally on `ubuntu-latest`, the platform the exporter actually runs on.
+Adding a skip marker would trade a loud, honest failure for a silent one. The
+README already flags the line `# только POSIX`; the correct response is to run
+the documented commands rather than `unittest discover`, which the README also
+warns against and which is what produced the confusing result here.
+
+**The general lesson, which cost two sessions today:** a test failing on a
+developer's machine but green in CI is evidence about the machine until proven
+otherwise. The other instance was a report that all seven migration digests
+mismatched — alarming, and entirely a line-ending artifact of a Windows
+checkout, with `.gitattributes` pinning `eol=lf` on only six paths. Check the
+required check's status on `main` **before** reporting a data-integrity
+problem.
 
 ---
 
@@ -178,8 +266,16 @@ misleads the next agent.
 No control was found that protects secrets, money or irreversible state and is
 also unnecessary. The security design is sound. The cost is concentrated in
 **scope and coupling** — checks that are individually correct but wired so that
-an unrelated failure stops everything, and gates that report infrastructure
-faults as authorization faults.
+an unrelated failure stops everything.
+
+One correction to this section's own reasoning, made 2026-08-10. It originally
+ended "…and gates that report infrastructure faults as authorization faults,"
+which restated the trust-anchor diagnosis that F-3 has since disproved. That
+gate was not misreporting a fault class; it could not reach a verdict at all,
+in either direction. The sharper statement is that **a control which cannot
+fail correctly is indistinguishable from one that is working**, and neither
+this audit nor four days of red check-runs surfaced that on their own. It took
+an agent refusing to implement against a brief it could not reproduce.
 
 That is a much better problem to have than missing controls, and it is fixable
 without weakening a single P0.

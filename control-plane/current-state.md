@@ -256,19 +256,29 @@ and no direct table access. Nothing in it warranted the delay it had.
 
 Two red checks on #109 are **not** required by the ruleset and do not block
 merge: `Verify exact current head from merged base` and `Base-trusted rollout
-authorization`. They fail for an infrastructural reason, not a safety one —
-the runner performs a partial clone and then re-invokes git with a scrubbed
-environment holding no credential, so the lazy object fetch fails:
+authorization`.
 
-```
-fatal: could not read Username for 'https://github.com'
-fatal: could not fetch <object> from promisor remote
-rollout_trust_anchor.approval.unexpected
-```
+**The mechanism recorded here on 2026-08-10 was wrong and has been corrected.**
+I attributed these to a partial clone plus a scrubbed environment holding no
+credential. Those `fatal:` lines are real but they are not the cause of the
+verdict: the git calls sit outside the scrubbed block, and the assertion
+`test "$(git status --porcelain=v1)" = ""` discarded git's exit 128 and read
+its empty stdout as a clean worktree, so that step **failed open**.
 
-A gate that cannot complete its own verification is not providing safety; it is
-producing a permanent red mark that trains everyone to ignore red marks. See
-the friction audit, F-3.
+The real defect is that `verify_rollout_trust_anchor.py` tests whether approval
+material is *present* in the head tree rather than whether the pull request
+*introduced* it. PR #104 merged the approval receipt onto `main` at
+`2026-08-06T15:42:06Z` — eleven minutes after the last green anchor run at
+`15:30:57Z`, which was #104's own final run. Every branch cut since inherits
+the receipt and trips `approval.unexpected`; **55+** consecutive failures
+followed. The same presence test on the subject tree
+(`approval.circular_or_stale`) means no owner-signed receipt can authorize
+anything either.
+
+So this was not a noisy gate misreporting its failure class. It was a gate
+unable to reach either terminal state — it could neither pass a pull request
+nor accept an authorization — for four days, while looking like a live control.
+Full analysis and attribution in the friction audit, F-3.
 
 ## 11. The n8n isolation waiver is now a live, scoped blocker
 
@@ -295,10 +305,10 @@ requiring the wrong check is what caused the original outage:
 
 The job carries no workflow-level `paths:` filter and runs on every push and
 pull request, so it always reports a status. That is what makes requiring it
-safe rather than a repeat of the trap in �2.
+safe rather than a repeat of the trap in §2.
 
-**Consequence for the owner.** Renewing the ISO-1 waiver � or resolving the
-company-to-personal crossing so no waiver is needed � is now the blocker for
+**Consequence for the owner.** Renewing the ISO-1 waiver — or resolving the
+company-to-personal crossing so no waiver is needed — is now the blocker for
 n8n work specifically, and only for n8n work. It is still not on the critical
 path to a deployed AI Gateway. It remains owner-only because it is a data
 boundary, and the pinned-tuple design means extending it is a reviewable code
