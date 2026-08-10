@@ -383,6 +383,50 @@ defensible behaviour, not obviously a bug.
 
 Dispatched as WS-9.
 
+**Delivered as platform PR #121, and it did the right thing.** The brief ordered
+observation before inference, and the pull request separates them explicitly:
+an `OBSERVED` section for what was executed or read, an `INFERRED — not
+confirmed` section for the mechanism, and a refusal to do the retry-widening
+step at all. `2>/dev/null` becomes `2>"$temp_dir/run-selection-error"` — a file,
+deliberately not `2>&1`, so the command substitution's stdout stays clean and
+`run_id` is uncontaminated — and the non-retryable path now prints the helper's
+exit status and error code, bounded to 512 bytes through a printable whitelist.
++19/−1 across two files. Exit code, retry behaviour, attempt count and the whole
+success path are unchanged.
+
+It also found a **sufficient** mechanism and quantified it: `fetch_all` performs
+a re-verification pass that re-fetches every page and compares a sha256 digest
+of the projected items, and `_project_run` includes `created_at`, which the test's
+fake `gh` regenerates from the clock on every invocation. Two identical requests
+either side of a whole-second boundary therefore differ, and `fetch_all` raises
+`github_metadata.pagination_race` → exit 1 → the `-ne 2` branch → the observed
+signature. Measured 11/300 (~3.7%) per call with the real clock and simulated
+latency; 0/300 with `created_at` frozen. That matches the archived record
+field-for-field — and it is still labelled unconfirmed, correctly, because the
+code was discarded at the moment of failure and cannot be recovered from the
+archive. The pull request is the instrument, not the conclusion.
+
+**The structural finding, which is the part that matters here.** Both files it
+must touch are in `PROTECTED_EXACT_PATHS` — verified directly against
+`verify_rollout_trust_anchor.py` on `main`:
+`scripts/operations/authorize_approved_assets_phase.sh` and
+`docs/runbooks/migrate-approved-assets.md`. So do the two paths any deeper fix
+would need, including `approved_assets_github_metadata.py` itself. The trust
+anchor therefore refuses the change with
+`rollout_trust_anchor.unauthorized.approval.commit_delta_invalid`, which is
+**correct behaviour, not a defect** — the change really does touch the rollout
+boundary.
+
+**Consequence: F-8 cannot be closed by any agent.** A reliability defect in a
+*required* check sits entirely behind an authorization gate that only an
+owner-signed receipt can open. Nothing is wrong with either control on its own;
+the coupling is what bites. All five required checks are green on #121, so
+GitHub will permit the merge — the anchor checks are advisory — but merging past
+a correctly-functioning authorization refusal would hollow out the control this
+program spent a day repairing, and would destroy the argument for ever promoting
+it to required. **Left open for the owner.** This is now an owner-action item,
+not agent work.
+
 ---
 
 ## P3 — obsolete, delete

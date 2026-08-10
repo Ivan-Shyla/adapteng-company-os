@@ -631,7 +631,7 @@ it randomly blocks merges today. **Not on the WS-5 → WS-8 critical path.**
 | WS-5 | **Unblocked, needs the owner** | WS-2 and WS-4 both complete, so nothing technical remains. Requires three operator values at run time: the FX rate, its timestamp and its source label. |
 | WS-7 | Deferred | Deliberately. Nothing depends on it. |
 | WS-8 | Blocked | Needs WS-5 **and** the owner checkpoint. Model inference count is still **0**. |
-| WS-9 | **Open, agent-executable** | Raised by WS-4 and verified independently. A required check with two verdicts for one commit. See F-8. |
+| WS-9 | **Instrument delivered; needs the owner** | Platform PR **#121**, open. Purely additive: stops discarding the helper's stderr so the next occurrence names its own cause. Observation and inference kept separate, and the retry contract deliberately left alone. **Cannot be merged by an agent** — both files are in `PROTECTED_EXACT_PATHS`, so the trust anchor correctly refuses with `unauthorized.approval.commit_delta_invalid`. All five required checks green. See F-8. |
 
 Unplanned work that landed in the same window and is not attributable to any
 workstream: platform **#117** (records the required checks and how to read
@@ -641,8 +641,12 @@ write and thereby deleted the ISO-1 waiver decision rather than deferring it
 
 The critical path is now **WS-5 → WS-8**, and both need the owner. There is no
 remaining agent-executable work **on the path to a deployed AI Gateway** —
-WS-9 is agent-executable but sits off that path, and fixing it does not bring
-a deployment any closer.
+WS-9 sits off that path, and fixing it does not bring a deployment any closer.
+
+**As of PR #121 there is no remaining agent-executable work anywhere in this
+program.** WS-9 was the last of it, and it has run out of agent authority rather
+than out of engineering: its fix touches the protected rollout boundary, so it
+needs an owner-signed receipt. Every open item below is now an owner decision.
 
 ## Next owner checkpoint
 
@@ -654,9 +658,17 @@ deployed gateway:
 1. **Renewing the n8n isolation waiver, or resolving the crossing.** WS-1 has
    landed, so this no longer blocks unrelated engineering and can be decided
    calmly. It remains owner-only because it is a data boundary. A scheduled job
-   now warns 14 days before the next expiry.
+   now warns 14 days before the next expiry. **Superseded in practice:** #118
+   removed the crossing outright, so the waiver list is empty and there is
+   currently nothing to renew.
 2. **The FX rate, timestamp and source label**, needed during WS-5. Three
    values, entered once. Not a workstream, and not a governance programme.
+3. **An owner-signed receipt for platform PR #121**, or an explicit decision to
+   leave the flaky required check as it is. The pull request is the diagnostic
+   instrument for F-8; without it, the next occurrence is as unreadable as the
+   last. The trust anchor refuses it correctly, because it touches the protected
+   rollout boundary, and no agent should merge past that refusal. Procedure is in
+   the platform's `docs/runbooks/authorize-rollout-policy-change.md`.
 
 Everything else on the path to a deployed, healthy AI Gateway is either AUTO or
 AUTO + FAIL CLOSED under the [autonomy policy](autonomy-policy.md).
