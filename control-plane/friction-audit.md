@@ -314,6 +314,18 @@ fault. Here the documentation was already right, the design was already right,
 and the operator was wrong. Read the docstring before you improve the test, and
 run the procedure as written before you conclude it is broken.
 
+**Sixth sighting — the fourth one recurring, which is the point.** Reading §13 of
+`current-state.md` back through `Get-Content` on 2026-08-10 showed `Â§12` and
+`â€”` throughout. This is the *same* PowerShell 5.1 ANSI-decoding artifact as the
+fourth sighting, in a different cmdlet, against a file whose bytes I had already
+verified clean. It is recorded not because it is new but because it recurred
+within hours of being written down, against an author who knew about it — which
+is the strongest available argument that the mitigation belongs in tooling rather
+than in memory. **Always confirm with a byte-level `EF BF BD` count via
+`[System.IO.File]::ReadAllBytes`; never trust a PowerShell 5.1 text read for a
+mojibake verdict.** A file that displays wrongly and a file that *is* wrong are
+indistinguishable on this machine without that check.
+
 ---
 
 ### F-8 — A required check that is nondeterministic — P1
@@ -459,6 +471,99 @@ This is the sharpest instance yet of the pattern in `current-state.md` §15: the
 protections are individually correct and collectively immovable. It should be
 weighed when that policy question is settled, because it is no longer academic —
 it is blocking two distinct repairs to a check that randomly blocks merges.
+
+### The message names the wrong subsystem — 33 causes, one label
+
+WS-1, doing evidence-only work under observe-first orders, noticed that
+`lifecycle.run_selection_failed` points investigators at selection logic. I
+verified that against the helper source on `main` and it is worse than reported.
+
+`approved_assets_github_metadata.py` raises `MetadataError` at **34 sites**. The
+handler at line 510 catches the class, not a code family, and maps it:
+
+```
+except MetadataError as exc:
+    print(exc.code, file=sys.stderr)
+    return 1 if exc.code != "run_selection.zero" else 2
+```
+
+So exactly **one** site exits 2 (retryable, `run_selection.zero`) and the other
+**33 exit 1** — which bash reports, uniformly, as `lifecycle.run_selection_failed`.
+Of those 33, only two are actually about run selection (`run_selection.multiple`,
+`run_selection.created_after_invalid`). The remaining 31 are **23**
+`github_metadata.*`, **7** `runner_selection.*` and **1** `secret_selection.*`.
+
+**The label is correct for at most 2 of the 33 failures it is printed for.** It
+is not merely uninformative; it actively misdirects, and it has already cost
+investigation time in this programme — both the sessions that looked at this
+went to run-selection logic first, because the message told them to.
+
+This belongs to the §13 family but is a distinct member: not a control that
+cannot go red, and not a control that goes red without saying why, but **a
+control that goes red and says something false about why.** Of the three, this is
+the most expensive, because a silent failure invites investigation while a
+confidently mislabelled one redirects it.
+
+### Correction: WS-9's hypothesis is *not* ruled out, and no crash is required
+
+WS-1 concluded from the same trace that the observed exit 1 "was not a
+run-selection outcome at all — it was an uncaught exception or a crash in the
+helper or the stub." The first half is right; **the second half is wrong**, and
+recording it unqualified would have retired a live hypothesis.
+
+`github_metadata.pagination_race` — WS-9's proposed mechanism — is raised as a
+`MetadataError` at three sites inside `fetch_all` (lines 257, 290, 318). Being a
+`MetadataError`, it is *caught* at line 510, and being not-`run_selection.zero`
+it returns 1, which bash reports as `lifecycle.run_selection_failed`. No crash,
+no uncaught exception, no stub defect is needed anywhere in that chain. The
+observed signature — exit 1, empty stdout, that exact message — is exactly what a
+**handled** `pagination_race` produces.
+
+WS-1's ruling-out addressed a *different* race: `dispatch_after` is captured
+before dispatch truncated to whole seconds and compared non-strictly
+(`created_at >= created_after`), so same-second is handled correctly. That is
+sound, and it is not WS-9's mechanism. WS-9's race is in `fetch_all`'s
+re-verification pass, which re-fetches every page and compares a sha256 of the
+projected items — including `created_at`, which the fake `gh` regenerates from
+the clock on each call.
+
+So the two sessions ruled on two different races and only one of them was ever
+on the table. Net effect on the record: WS-9's hypothesis moves from "a
+sufficient mechanism" to "a sufficient mechanism with a verified end-to-end route
+to the observed message". **It remains INFERRED, not confirmed** — the stderr
+that would name the code was discarded, so this still cannot be settled
+retroactively. But it is now the leading candidate rather than one of several.
+
+### The archived attempt is recoverable — a general method for F-8
+
+WS-1 recovered the discarded run: for run `31410536810`, `attempts/1/jobs` and
+then `actions/jobs/<id>/logs` still serve the *original* failing attempt even
+after a re-run overwrote the surface conclusion. That matters beyond this
+instance, because retry-to-green is precisely how this flake has been handled all
+along, and everyone involved assumed the evidence was gone with it.
+
+The limit is worth stating so nobody over-trusts it: the archived log recovers
+what the job *printed*. It cannot recover what was routed to `/dev/null` before
+it ever reached the log. So the attempt survives; the specific error code still
+does not.
+
+### #121 fixes one discard site of two
+
+Verified in the diff: #121 changes line 254 (`--created-after … 2>/dev/null`) and
+leaves **line 379 (`--expected-name "$expected_runner_name" 2>/dev/null`)
+untouched.** The runner check discards its stderr by the same pattern, and the
+seven `runner_selection.*` codes are among the 33 that exit 1.
+
+WS-1 derived the same remedy independently and declined to act on a script under
+another session's investigation — which was the right call procedurally, and
+which also means two sessions reached the same fix without conferring. That
+strengthens the case for the receipt rather than weakening it.
+
+**Practical consequence for the owner:** #121 is already waiting on a signature.
+Extending it to line 379 costs nothing extra at signing time and avoids needing a
+second receipt later for an identical one-line change. Recorded here rather than
+acted on, because amending #121 means touching a protected path — the same lock
+described above.
 
 ---
 

@@ -511,15 +511,28 @@ otherwise meet it a fourth time without recognising it.
    the gap by mutation: narrowing `FAILING_STATES` and forcing `return 0` were
    both green before the change and both caught after.
 
-A fourth sits open as **F-8**: `2>/dev/null` on the `select-queued-run` call
-discards the very error code needed to diagnose the nondeterministic required
-check, so the control fails without saying why.
+A fourth sits open as **F-8**, and it is a distinct member of the family. The
+`2>/dev/null` on the `select-queued-run` call discards the error code needed to
+diagnose the nondeterministic required check — but the control does not merely
+fail silently. It prints `lifecycle.run_selection_failed`, which is correct for
+at most 2 of the 33 failure codes it is emitted for; 23 of them are
+`github_metadata.*` and 7 are `runner_selection.*`. So this is **a control that
+goes red and says something false about why**, which is worse than one that says
+nothing: silence invites investigation, a confident wrong label redirects it.
+Both sessions that looked at F-8 went to run-selection logic first, because the
+message told them to. (See F-8 for the verified breakdown.)
 
 **The rule.** A green check is evidence only if you know it can go red. When a
 control changes — or when the condition it guarded is removed, which is what
 happened in case 3 — verify by mutation that it still fails when it should.
 Deleting the last failing test is indistinguishable from deleting the control,
 and both leave the suite green.
+
+**The corollary, from F-8.** A red check is actionable only if what it says about
+the failure is true. When a handler collapses many error classes onto one
+message, the message stops being a diagnosis and becomes a guess with the
+authority of a log line. Check the width of the `except` before trusting the
+label attached to it.
 
 **The corollary for this record:** never infer that a mechanism works from the
 absence of failures. Two of the three above looked healthy for days.

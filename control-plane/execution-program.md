@@ -668,7 +668,12 @@ deployed gateway:
    instrument for F-8; without it, the next occurrence is as unreadable as the
    last. The trust anchor refuses it correctly, because it touches the protected
    rollout boundary, and no agent should merge past that refusal. Procedure is in
-   the platform's `docs/runbooks/authorize-rollout-policy-change.md`.
+   the platform's `docs/runbooks/authorize-rollout-policy-change.md`. **Worth
+   extending before signing:** #121 repairs one of the two stderr-discard sites.
+   Line 379, the runner check, still routes its error to `/dev/null`, and seven
+   of the helper's failure codes report through it. Covering both in one receipt
+   avoids needing a second signature later for an identical one-line change. See
+   F-8.
 4. **One sentence settling whether an advisory authorization refusal may be
    merged past.** Two sessions answered this oppositely within four minutes —
    platform #122 merged, #121 was left open — from materially identical
