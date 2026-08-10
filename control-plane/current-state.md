@@ -515,12 +515,15 @@ A fourth sits open as **F-8**, and it is a distinct member of the family. The
 `2>/dev/null` on the `select-queued-run` call discards the error code needed to
 diagnose the nondeterministic required check — but the control does not merely
 fail silently. It prints `lifecycle.run_selection_failed`, which is correct for
-at most 2 of the 33 failure codes it is emitted for; 23 of them are
-`github_metadata.*` and 7 are `runner_selection.*`. So this is **a control that
-goes red and says something false about why**, which is worse than one that says
-nothing: silence invites investigation, a confident wrong label redirects it.
-Both sessions that looked at F-8 went to run-selection logic first, because the
-message told them to. (See F-8 for the verified breakdown.)
+at most 2 of the **11 distinct codes** that can produce it; the other **9** are
+`github_metadata.*` transport and pagination failures. So this is **a control
+that goes red and says something false about why**, which is worse than one that
+says nothing: silence invites investigation, a confident wrong label redirects
+it. Both sessions that looked at F-8 went to run-selection logic first, because
+the message told them to. The same shape sits at the runner call site, where
+`lifecycle.runner_registration_invalid` is wrong for 9 of the 13 codes that
+reach it. (See F-8 for the reachability arithmetic — and for the correction of
+the larger, wrong figure this paragraph carried for five commits.)
 
 **The rule.** A green check is evidence only if you know it can go red. When a
 control changes — or when the condition it guarded is removed, which is what

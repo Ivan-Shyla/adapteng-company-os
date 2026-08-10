@@ -518,14 +518,17 @@ the fixture requires deciding that the verifier may be re-pinned against itself,
 which is a change to the trust boundary's own machinery. They can be taken at the
 same sitting; they are not the same decision, and item 5 is the larger one.
 
-### The message names the wrong subsystem — 33 causes, one label
+### The message names the wrong subsystem — 9 of 11, one label
 
 WS-1, doing evidence-only work under observe-first orders, noticed that
-`lifecycle.run_selection_failed` points investigators at selection logic. I
-verified that against the helper source on `main` and it is worse than reported.
+`lifecycle.run_selection_failed` points investigators at selection logic. That
+observation is correct and it is the origin of everything below. **The figure I
+first attached to it was not** — it was corrected by WS-9 and then corrected
+again by checking WS-9, and the arithmetic is set out here in full because this
+register is worth exactly as much as its numbers survive being checked.
 
-`approved_assets_github_metadata.py` raises `MetadataError` at **34 sites**. The
-handler at line 510 catches the class, not a code family, and maps it:
+`approved_assets_github_metadata.py` raises `MetadataError` at **34 sites**, and
+the handler at line 510 catches the class, not a code family:
 
 ```
 except MetadataError as exc:
@@ -533,16 +536,81 @@ except MetadataError as exc:
     return 1 if exc.code != "run_selection.zero" else 2
 ```
 
-So exactly **one** site exits 2 (retryable, `run_selection.zero`) and the other
-**33 exit 1** — which bash reports, uniformly, as `lifecycle.run_selection_failed`.
-Of those 33, only two are actually about run selection (`run_selection.multiple`,
-`run_selection.created_after_invalid`). The remaining 31 are **23**
-`github_metadata.*`, **7** `runner_selection.*` and **1** `secret_selection.*`.
+Two things have to be got right to turn that into a number, and my first pass got
+both wrong.
 
-**The label is correct for at most 2 of the 33 failures it is printed for.** It
-is not merely uninformative; it actively misdirects, and it has already cost
-investigation time in this programme — both the sessions that looked at this
-went to run-selection logic first, because the message told them to.
+**Sites are not codes.** The 34 raise sites carry only **20 distinct codes**
+(`github_metadata` 11, `runner_selection` 5, `run_selection` 3,
+`secret_selection` 1). Reporting "33 codes" counted duplicated raise sites as
+separate causes — `github_metadata.page_invalid` alone is raised at seven sites.
+
+**Exit code is not reachability.** All 33 non-`run_selection.zero` sites do exit
+1, but exiting 1 is not the same as printing *this* message. The subcommands are
+mutually exclusive branches of one `if`/`elif`/`else`, and each is invoked from a
+different line of `authorize_approved_assets_phase.sh`. Only
+`select-queued-run` (`.sh:248`) reports through
+`lifecycle.run_selection_failed` (`.sh:262`). The `runner_selection.*` family
+belongs to `verify-staged-runner` and `assert-runners-absent`, which report
+through their own messages — so including those 7 sites inflated the figure with
+a family that **cannot reach the label at all**.
+
+Reachable from `select-queued-run`, by call tree — `_repository_endpoint`,
+`fetch_all(…, "workflow_runs")` with the default `identity_key="id"`, and
+`select_run`:
+
+| | distinct codes |
+| --- | --- |
+| Reachable | 12 |
+| less `run_selection.zero` (exits 2 → retries → `lifecycle.run_not_found`) | **11 print the message** |
+| of which genuinely about run selection (`multiple`, `created_after_invalid`) | 2 |
+| **`github_metadata.*` transport codes wearing a run-selection label** | **9** |
+
+The nine: `api_failed`, `page_invalid`, `bytes_exceeded`, `pagination_race`,
+`item_id_invalid`, `duplicate_item`, `results_exceeded`, `truncated`,
+`repository_invalid`.
+
+**Two `github_metadata.*` codes are *not* reachable here**, which is where WS-9's
+otherwise-correct recount ran two too generous. `item_identity_invalid` (269) is
+in the `elif` branch taken only when `identity_key != "id"`, which is the secrets
+path; `collection_invalid` (203) fires only on an unrecognised collection string,
+and all three call sites pass a known literal.
+
+**The conclusion never depended on the inflated denominator.** "Correct for at
+most 2" was right when the figure was 33 and is still right at 11. The label is
+wrong for **9 of the 11** codes it is printed for — 82%, not 94%. It is not
+merely uninformative; it actively misdirects, and it has already cost
+investigation time here: both sessions that looked at this went to run-selection
+logic first, because the message told them to.
+
+### The same defect sits at the runner call site, and it is not smaller
+
+Quantifying the second discard site (the one #121 leaves alone) shows it is the
+same shape. `.sh:383` prints `lifecycle.runner_registration_invalid` for **any**
+non-zero exit of `verify-staged-runner`. Reachable there: 9 `github_metadata.*`
+transport codes plus 4 genuine `runner_selection.*`
+(`run_id_invalid`, `labels_invalid`, `release_count_invalid`,
+`binding_mismatch`) — **13 distinct codes, 9 of them mislabelled.** The same
+nine transport failures, asserting something false about runner registration
+instead of about run selection.
+
+So the two sites are near-identical in both defects — discarded stderr *and* an
+over-claiming label — and folding line 379 into the #121 receipt now has a
+number behind it rather than a symmetry argument.
+
+### That this register carried a false number is the finding, not an aside
+
+The §13 entry warning that a control can "go red and say something false about
+why" was itself, for five commits, stating a false number about how often that
+happens — inflated by counting raise sites as codes and by including a family
+that cannot produce the message. It was checkable the whole time; nobody had
+checked it, including me, because it was mine.
+
+It is corrected in place rather than quietly overwritten because F-3 sits in this
+same document as the worked example of a confident wrong brief, and a register
+that silently repairs its own errors provides no evidence about how often it
+makes them. WS-9's reason for pushing the correction is the one to keep: a
+smaller figure that survives the owner checking it is worth more than a larger
+one that does not.
 
 This belongs to the §13 family but is a distinct member: not a control that
 cannot go red, and not a control that goes red without saying why, but **a
@@ -605,8 +673,10 @@ above exists; do not make it necessary.
 
 Verified in the diff: #121 changes line 254 (`--created-after … 2>/dev/null`) and
 leaves **line 379 (`--expected-name "$expected_runner_name" 2>/dev/null`)
-untouched.** The runner check discards its stderr by the same pattern, and the
-seven `runner_selection.*` codes are among the 33 that exit 1.
+untouched.** The runner check discards its stderr by the same pattern, and
+reports through its own over-claiming label — `lifecycle.runner_registration_invalid`,
+wrong for 9 of the 13 codes that reach it, as quantified above. Both defects, at
+both sites.
 
 WS-1 derived the same remedy independently and declined to act on a script under
 another session's investigation — which was the right call procedurally, and
