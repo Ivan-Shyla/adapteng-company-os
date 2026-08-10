@@ -260,6 +260,8 @@ that inference is what produced D-1 in the first place.
 | #48 | `adapteng-company-os` | **MERGED** 2026-08-10 18:29:36Z (`cd751a642d80`) | Recorded the trust-anchor repair (§12) and the eliminated waiver (§11a). |
 | #49 | `adapteng-company-os` | **MERGED** 2026-08-10 18:45:24Z (`124e04642d42`) | Corrected #111's disposition and recorded the `-fresh` rebuild pattern (§11b). |
 | #50 | `adapteng-company-os` | **MERGED** 2026-08-10 | Completed this table, which had stopped at #47. |
+| #51 | `adapteng-company-os` | **MERGED** 2026-08-10 19:26:32Z (`7ede8c6d439e`) | Recorded F-8, the nondeterministic required check, and dispatched WS-9. |
+| #52 | `adapteng-company-os` | **MERGED** 2026-08-10 | Added the #51 row. The tail lags by construction; see below. |
 
 This table is self-referential, and that is the structural reason it drifts: the
 row recording any given change can only be written by a later change. #48 and
@@ -267,6 +269,13 @@ row recording any given change can only be written by a later change. #48 and
 not neglect, but a record that cannot close itself. Verify the tail of this
 table against `gh pr list --state merged` rather than trusting it; the merge
 SHAs above are what make that check cheap.
+
+**Demonstrated immediately.** #50 closed the gap and #51 reopened it within the
+hour, which #52 then closed again. Chasing the tail with another pull request
+is a treadmill and will always leave exactly one row outstanding — the one
+being written. Do not read a missing final row as evidence of unrecorded work,
+and do not open a pull request solely to add one. The `gh pr list --state
+merged` check is the remedy; this table is a convenience.
 
 PR #109 adds credential-file validation that checks existence, readability and
 non-emptiness without ever reading contents, its tests, and a least-privilege
