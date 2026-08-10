@@ -6,6 +6,7 @@
 #   infra-live-not-cutover   - infrastructure runs, but not yet the authority
 #   live-partial-authority   - production workload runs here, but other domains remain on a legacy authority
 #   live-legacy-binding      - production service is up but still uses a credential/data binding scheduled for cutover
+#   implemented-tested-not-deployed - code merged AND its suite is green in CI, but nothing runs in production yet
 #   repo-merged-not-live     - code merged to main, no live deploy/wiring yet
 #   planned                  - designed, not built
 version: 1
@@ -93,17 +94,32 @@ services:
     status: live
     owner: Ivan
     notes: >-
-      Migrations 001 and 004 are applied and used; 002/003/005/006 remain
-      repo-only and unapplied. Migrations 007_source_identity_reservation.sql
-      and 008_drive_bridge_replay_reservations.sql are repository-merged via
-      automation PR #89 / dbcf806ea7714b8e2a7415ae6cd788491924178d, but
-      live:false and unapplied. Unrelated 008_ai_gateway_runtime_hardening.sql
-      is forbidden for approved-source import. Read-only production evidence
-      recorded by automation PR #108 found the
-      allocator table under schema adapteng_ops rather than canonical public.
-      PR #108 schema-qualifies repository bootstrap/runtime access but performed
-      no production remediation; an owner-approved preservation-first repair
-      and read-only sequence/caller verification remain open. Proposed
+      MIGRATIONS ARE APPLIED — DO NOT REPLAY. Corrected 2026-08-10: this entry
+      previously said 002/003/005/006 remained repo-only and unapplied and that
+      007 and 008_drive_bridge_replay_reservations.sql were live:false. The
+      owner's post-rollout manual production check found all nine logical
+      migration units exact in production (001, 002, 003, 004, 005, 006, 007,
+      008_drive_bridge_replay_reservations.sql and
+      008_ai_gateway_runtime_hardening.sql). Re-applying any of them against
+      live operational truth is forbidden; start from a read-only status check,
+      never from a repository live: flag. The owner's check is owner-attested and
+      not reproducible from GitHub — the Migrate Approved Assets workflow has
+      zero runs (verified read-only 2026-08-10), so the rollout did not go
+      through GitHub Actions and the absence of a run is NOT evidence of an
+      unapplied database. UNVERIFIED: per-unit applied state and rollout
+      timestamp; a read-only db_status or catalog capture attached to a status PR
+      would settle it. Fail-closed status/apply runners for all nine units are
+      merged and CI-green via automation PRs #105
+      (a19c9fdb30122c3e94cc40adc95a78cc94d64978), #106
+      (8441ad5b39102ef68b1a66f98380a8cfb262e27a) and #107
+      (d6ab6322983af42e355dedea4de6d0d21752de59); a merged runner is a
+      capability, not an instruction to run it. Migration 001's allocator
+      schema mismatch is closed in code by automation PR #108
+      (23a23f0fd5cacd630badf3bd20503789366f7220, merged 2026-08-08, all five
+      checks green): bootstrap and runtime access now schema-qualify
+      public.id_allocator_sequences. That PR states it made no production
+      change, so the live disposition of the misplaced adapteng_ops copy is
+      UNVERIFIED. Proposed
       operator-managed pinned
       pgBackRest 2.59.0 physical/WAL backup using provider-managed B2 EU object
       storage plus clean PostgreSQL-only restore is documented, and the object
@@ -129,12 +145,24 @@ services:
       12-full expiry and provider-cost proofs; guarded independent-host A
       baseline, B exact apply plus streamed digest-verified DML transaction
       rollback, C final exact
-      migrated state; cleanup; reviewed digest-only PASS; and a separately merged
-      automation evidence-lifecycle schema/validator/consumer contract that
-      validates exactly the five sanitized fields. No final schema version or
-      compatibility is claimed; that separate PR is an explicit blocker.
-      Rollout authorization is
-      NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR.
+      migrated state; cleanup; and reviewed digest-only PASS. The automation
+      evidence-lifecycle dependency is CLOSED: that chain merged as automation
+      PRs #93 (1f420dc0f1cc7cfc88fa8037e00b982c0514cc08), #94
+      (0fa357d0baebc362b5bea0afba78e6233d91b7c8) and #98
+      (d06bdd41964e57d9fc7f1b2490d6dcde64b0143d) on 2026-08-05, verified
+      read-only 2026-08-10. PR #94 is the evidence-lifecycle unit: it raises
+      rollout evidence/policy/receipts to v4 covering exactly completed_at,
+      selected_set_info_sha256, scheduler_inventory_sha256,
+      scheduler_inventory_observed_at and retention_valid_until, and cites
+      company-os PR #15 (e30da31607708153ce11c6e6f513145523a8f335) as the
+      producer contract. Stop citing that dependency as a reason to wait.
+      UNVERIFIED: whether a reviewed sanitized PASS has been produced against a
+      real evidence packet; PR #94's body still reads "Rollout remains NOT
+      READY" and no Migrate Approved Assets run exists. The remaining hold is the
+      unconfigured production backup itself, not the cross-repository dependency.
+      Rollout authorization is BLOCKED_ON_UNCONFIGURED_PRODUCTION_BACKUP; the
+      superseded literal NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR no
+      longer describes reality.
 
   - id: adapteng-baserow-adapter
     repo: adapteng-automation-platform
@@ -161,19 +189,42 @@ services:
     repo: adapteng-automation-platform
     path: services/ai-gateway
     role: Provider-pluggable model adapter (EU Vertex canonical). First op is a schema-valid, side-effect-free draft.
-    runtime: Coolify (target); not deployed
+    runtime: Coolify (target); NOT deployed — no container, no endpoint
     source_of_truth_for: none
     depends_on: [postgres-adapteng-ops (migration 005 ai_gateway), approval-outbox]
-    status: repo-merged-not-live
-    readiness_verdict: REJECT_LIVE
+    status: implemented-tested-not-deployed
+    implemented: true
+    tested: true
+    deployed: false
+    schema_applied_in_production: true   # migrations 005 + 008_ai_gateway_runtime_hardening.sql; owner's post-rollout production check; DO NOT REPLAY
+    test_evidence:
+      run: 31214858400
+      workflow: "AI Gateway Tests"
+      branch: main
+      head: d6ab6322983af42e355dedea4de6d0d21752de59
+      completed: "2026-08-07T20:12:40Z"
+      conclusion: success
+      jobs_green: [ai-gateway unit tests (ubuntu-latest), ai-gateway unit tests (windows-latest), ai-gateway postgres semantics, ai-gateway supply-chain gates, repo validation]
+      verified: 2026-08-10
+    not_blocked_by: [cost, model pricing, FX configuration]
+    blocked_by: ["deployment: no ai-gateway container runs in Coolify, so the tested durable cost authority is not the live authority; the real EU Vertex client, Drive adapters, orchestration and canonical approval composition are unproven against a running service"]
+    deployment_evidence: UNVERIFIED — GitHub shows no deploy; a recorded deploy plus a no-business-data smoke result against the running service would settle it
     owner: Ivan
     notes: >-
-      PR #71 merged, but this is repository code only. Migration 005 is NOT
-      live-applied. The GCP project/SA exists, but a real EU Vertex adapter,
-      authoritative persistent Postgres cost reservation/reconciliation, Drive
-      adapters, orchestration, canonical approval composition, FX configuration
-      and deployment remain unproven. Never use the in-memory ModelGateway as
-      production budget authority. See ai/model-choices.md and ADR-0010.
+      PR #71 merged. Corrected 2026-08-10: this entry previously read
+      repo-merged-not-live with readiness_verdict REJECT_LIVE and said
+      "Migration 005 is NOT live-applied" plus "FX configuration and deployment
+      remain unproven". Both readings were stale. The service is implemented and
+      its suite is green on automation-platform main (run 31214858400 above,
+      including Linux and Windows unit tests, PostgreSQL semantics and
+      supply-chain gates), and migrations 005 and
+      008_ai_gateway_runtime_hardening.sql are among the nine logical units the
+      owner's post-rollout manual production check found exact in production —
+      so they must NOT be re-applied. The single open item is deployment. FX is a
+      deploy-time configuration value, not a blocker; the code fails closed
+      without it. No live model call has occurred. Never use the in-memory
+      ModelGateway as production budget authority. See ai/model-choices.md,
+      ai/insertion-points.md, owner/action-items.md and ADR-0010.
 
   - id: integrity-reconciler
     repo: adapteng-automation-platform
@@ -375,3 +426,8 @@ services:
       negative. AG-008 owns deterministic fixes. Automation-platform must still
       deploy persistent Postgres cost reservation/reconciliation, the EU Vertex
       and Drive adapters, orchestration, canonical approval and runtime.
+      Scope note 2026-08-10: this verdict is about the control plane's in-memory
+      budget seam and remains true of it. It is not a statement about the
+      ai-gateway service, which is implemented, tested green (run 31214858400)
+      and has its schema applied in production — that service's only open item is
+      deployment. See the ai-gateway entry above.

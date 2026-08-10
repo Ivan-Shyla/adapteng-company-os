@@ -32,36 +32,58 @@ postgres_adapteng_ops:
   service: adapteng-ops-db (Coolify resource `pgdgbwzsuuxhw55g8v5opjgn`; internal Coolify network; SSL disabled on internal network)
   authority: operational truth — id allocation, lead reservation, run/approval ledger
   schemas: [public, integrity]
+  # ALL NINE LOGICAL MIGRATION UNITS ARE APPLIED IN PRODUCTION — DO NOT REPLAY.
+  # Corrected 2026-08-10. These entries previously carried live:false for
+  # 002/003/005/006/007/Drive-008, which invited a re-apply against live
+  # operational truth. The owner's post-rollout manual production check found all
+  # nine units exact in production. Never start migration work from a live: flag
+  # in this file; start from a read-only status check.
   migrations:
-    - { file: 001_id_allocator.sql,               provides: "AE-* id allocator (canonical target: public)",    live: true,  applied: "adapter first boot (RUN_MIGRATIONS_ON_START)", actual_schema: adapteng_ops, remediation: "planned; PR #108 is repository fix only" }
-    - { file: 002_run_ledger.sql,                 provides: "task/run/outcome ledger",                         live: false }
-    - { file: 003_approval_outbox.sql,            provides: "approval ledger + outbox (hash-only tokens)",     live: false }
-    - { file: 004_lead_identity.sql,              provides: "public.lead_identity_reservation + reserve_lead_identity()", live: true, applied: "2026-07-25 (WEB-002); function pins search_path=pg_catalog,public" }
-    - { file: 005_ai_gateway.sql,                 provides: "AI gateway cost/run ledger",                      live: false }
-    - { file: 006_integrity_projection_manifest.sql, provides: "integrity schema: projection_manifest + coverage_marker", live: false, note: "kept unapplied until backup/restore planning per ARCHITECTURE.md §11 + ADR-0011" }
-    - { file: 007_source_identity_reservation.sql, provides: "canonical source identity to allocator-returned AE-CGR reservation", live: false, note: "repository-merged via automation PR #89; unapplied" }
-    - { file: 008_drive_bridge_replay_reservations.sql, provides: "atomic governed Drive replay reservations", live: false, note: "repository-merged via automation PR #89; unapplied" }
+    - { file: 001_id_allocator.sql,               provides: "AE-* id allocator (canonical target: public)",    live: true,  applied: "adapter first boot (RUN_MIGRATIONS_ON_START)", replay: forbidden, allocator_shadow_copy: "adapteng_ops copy disposition UNVERIFIED; code root cause closed by PR #108" }
+    - { file: 002_run_ledger.sql,                 provides: "task/run/outcome ledger",                         live: true,  applied: "owner's post-rollout manual production check", replay: forbidden }
+    - { file: 003_approval_outbox.sql,            provides: "approval ledger + outbox (hash-only references)", live: true,  applied: "owner's post-rollout manual production check", replay: forbidden }
+    - { file: 004_lead_identity.sql,              provides: "public.lead_identity_reservation + reserve_lead_identity()", live: true, applied: "2026-07-25 (WEB-002); function pins search_path=pg_catalog,public", replay: forbidden }
+    - { file: 005_ai_gateway.sql,                 provides: "AI gateway cost/run ledger",                      live: true,  applied: "owner's post-rollout manual production check", replay: forbidden, note: "schema is live; the ai-gateway service itself is implemented and tested, not deployed" }
+    - { file: 006_integrity_projection_manifest.sql, provides: "integrity schema: projection_manifest + coverage_marker", live: true, applied: "owner's post-rollout manual production check", replay: forbidden, note: "schema present; the integrity-reconciler still has no live schedule by design (ADR-0011)" }
+    - { file: 007_source_identity_reservation.sql, provides: "canonical source identity to allocator-returned AE-CGR reservation", live: true, applied: "owner's post-rollout manual production check", replay: forbidden, note: "repository-merged via automation PR #89" }
+    - { file: 008_drive_bridge_replay_reservations.sql, provides: "atomic governed Drive replay reservations", live: true, applied: "owner's post-rollout manual production check", replay: forbidden, note: "repository-merged via automation PR #89" }
+    - { file: 008_ai_gateway_runtime_hardening.sql, provides: "AI gateway runtime hardening", live: true, applied: "owner's post-rollout manual production check", replay: forbidden, note: "previously recorded only as forbidden for approved-source import; it must also never be replayed, because it is already applied" }
+  migration_state_evidence:
+    source: "owner's post-rollout manual production check"
+    attested_by: owner
+    reproducible_from_github: false
+    recorded: 2026-08-10
+    migrate_approved_assets_runs: 0   # workflow id 323029213; verified read-only 2026-08-10
+    inference_warning: "Zero workflow runs does NOT mean the migrations are unapplied. The rollout was manual and left no GitHub dispatch record. Reading run-count zero as 'still repo-only' is the exact error corrected here."
+    merged_runners: "fail-closed status/apply runners for all nine units are merged and CI-green via automation PRs #105 (a19c9fdb30122c3e94cc40adc95a78cc94d64978), #106 (8441ad5b39102ef68b1a66f98380a8cfb262e27a) and #107 (d6ab6322983af42e355dedea4de6d0d21752de59); a merged runner is a capability, not an instruction to run it"
+    unverified: "per-unit applied state, rollout timestamp and operator"
+    would_settle_it: "a read-only db_status output from the merged runners, or a catalog capture from the live adapteng_ops database, attached to a status PR"
   live_read_only_verification:
     verified: 2026-08-08
     engine: PostgreSQL 16
     health: healthy
     public_5432_binding: absent
     network: coolify
-    current_schema: "Read-only evidence found public.lead_identity_reservation present and the structurally correct allocator table under adapteng_ops rather than canonical public. Run ledger, approval/outbox, AI Gateway, source-identity and Drive-replay migrations remain absent."
+    current_schema: "Superseded 2026-08-10. This read-only snapshot recorded that only public.lead_identity_reservation was present and that the run ledger, approval/outbox, AI Gateway, source-identity and Drive-replay migrations were absent. The owner's later post-rollout manual production check found all nine logical migration units exact in production, and it outranks this snapshot. Kept visible because the record is corrected in place, not erased; do not use it to justify re-applying anything."
     allocator_schema_mismatch:
-      status: live-defect-remediation-planned
-      evidence: "adapteng-automation-platform PR #108 / 23a23f0fd5cacd630badf3bd20503789366f7220"
-      repository_fix: "bootstrap and runtime access now schema-qualify public.id_allocator_sequences"
-      live_change: false
-      next_action: "owner-approved preservation-first move/repair with rollback and read-only sequence/caller verification"
+      status: root-cause-closed-in-code
+      evidence: "adapteng-automation-platform PR #108 / 23a23f0fd5cacd630badf3bd20503789366f7220, merged 2026-08-08T22:19:10Z; all five checks on that merge commit concluded success (verified read-only 2026-08-10)"
+      root_cause: "both the RUN_MIGRATIONS_ON_START bootstrap and every runtime allocation used an unqualified table name, so placement followed the connecting role's search_path and resolved to the identically-named adapteng_ops schema before public"
+      repository_fix: "bootstrap and runtime access now schema-qualify public.id_allocator_sequences; a regression test against a real disposable PostgreSQL reproduces the original condition and was confirmed to fail against the pre-fix code"
+      canonical_migration_unchanged: true   # 001_id_allocator.sql and its digest pin were not touched
+      live_change: false                    # PR #108 states: "No production changes in this PR"
+      live_disposition_of_misplaced_copy: UNVERIFIED
+      would_settle_it: "a read-only capture showing the allocator table in public with its current sequence values, and the adapteng_ops copy either absent or explicitly retained as inert, attached to a status PR"
+      next_action: "owner-approved preservation-first repair with rollback; allocated AE-* business IDs must never be re-issued"
   approved_source_import:
     repository_status: repo-merged-not-live
     repository_status_updated: 2026-07-29
     merge: "adapteng-automation-platform PR #89 / dbcf806ea7714b8e2a7415ae6cd788491924178d"
     reviewed_tree: 8fc649a97963f38ce0a7592001a7fea4834eceea
-    permitted_migrations: [007_source_identity_reservation.sql, 008_drive_bridge_replay_reservations.sql]
-    forbidden_migration: 008_ai_gateway_runtime_hardening.sql
-    note: "No workflow dispatch or live database mutation occurred; repository readiness is not live readiness."
+    migration_phase: NOT_APPLICABLE — all nine logical units are already applied in production; DO NOT REPLAY
+    previously_permitted_migrations: [007_source_identity_reservation.sql, 008_drive_bridge_replay_reservations.sql]   # historical; this list must no longer be executed
+    forbidden_migration: 008_ai_gateway_runtime_hardening.sql   # forbidden for approved-source import AND already applied, so forbidden to replay
+    note: "No workflow dispatch or live Drive/Baserow mutation has occurred; repository readiness is not live readiness. The database side, however, is no longer pending: do not dispatch this workflow to apply 007 or Drive-008."
   backup:
     last_verified: "2026-07-25 13:31 (35.21 KB, Coolify local + owner download)"
     last_verified_contract_status: insufficient-logical-backup
@@ -94,8 +116,9 @@ postgres_adapteng_ops:
     restore_design: "sole tracked guarded A|B|C entrypoint on three independently created clean Hetzner PostgreSQL-only hosts; wrapper-generated exact pgBackRest config plus fixed descriptor-only secrets; authoritative private target IDs with complete never-started config validation and ID-only start; one-use target-bound provider challenges through the pinned signed owner broker proving exact firewall and empty private_net before target start/SQL and after cleanup; same-ID sealed runner plus complete live Docker inventory; no production snapshot/app clone, public DB, Docker socket or production credentials"
     acceptance: "A pre-migration exact restore; B exact 007/Drive-008 apply plus digest-verified fail-closed DML transaction rollback with zero durable synthetic state; C independent re-restore ending in exact migrated state equal to B; all statuses through nonzero-preserving expected-state gate; cleanup and reviewed digest-only PASS"
     retention_gate: "canonical fixed O_EXCL accepted packet binds verified selected-set bytes/completion, pinned exporter identity, declared dedicated-host scope with no user managers/linger, exclusive repository-write capability, directly resolved full/differential jobs, every installed/loaded/transient systemd and per-user source, cron/anacron/at spool, container and all-UID root/admin/writer-capable process, plus exact 12-slot weekly repository bytes; current shared Coolify scope is not accepted without a separately reviewed exclusive broker; authorization co-binds accepted plus fresh current inventories"
-    rollout_evidence_schema_dependency: "BLOCKED: a separately reviewed automation evidence-lifecycle schema, validator, fixtures and consumer PR must merge and validate exactly the five sanitized fields; no final schema version or compatibility is claimed"
-    rollout_authorization_status: NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR
+    rollout_evidence_schema_dependency: "CLOSED — merged as automation PRs #93 (1f420dc0f1cc7cfc88fa8037e00b982c0514cc08), #94 (0fa357d0baebc362b5bea0afba78e6233d91b7c8) and #98 (d06bdd41964e57d9fc7f1b2490d6dcde64b0143d) on 2026-08-05, verified read-only 2026-08-10. PR #94 raises rollout evidence/policy/receipts to v4 covering exactly completed_at, selected_set_info_sha256, scheduler_inventory_sha256, scheduler_inventory_observed_at and retention_valid_until, and cites company-os PR #15 (e30da31607708153ce11c6e6f513145523a8f335) as the producer contract."
+    rollout_authorization_status: BLOCKED_ON_UNCONFIGURED_PRODUCTION_BACKUP   # supersedes NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR; no longer blocked on the cross-repository evidence-lifecycle PR
+    rollout_authorization_unverified: "whether a reviewed sanitized PASS has been produced against a real evidence packet; PR #94's own body still reads 'Rollout remains NOT READY' and the Migrate Approved Assets workflow has zero runs"
     cost_gate: "owner-approved current quote for Hetzner compute/IPv4/Volume/VAT and B2 active+hidden storage, verify plus three-restore egress and other nonzero charges"
     forbidden_substitutes: [Coolify pg_dump, manual logical dump, Baserow all-in-one backup, running-server Hetzner snapshot, Object Lock as retention substitute]
     policy: no migration until the separately reviewed image/collector/harness implementation exists, the proposed design is configured, every acceptance gate passes, and the cross-repository rollout evidence schema dependency merges; see runbooks/backup-and-restore.md
@@ -151,7 +174,7 @@ google_drive:
       repository_variables_present: [GOOGLE_WORKSPACE_ADMIN]
       dispatch_safe: false
       note: "Read-only GitHub metadata only; no secret values or live provider access."
-    backup_readiness: "Operator-managed pgBackRest 2.59.0 physical/WAL using provider-managed B2 EU storage is documented and its object store is now reachable, but the backup itself is not configured: run 30752237109 (2026-08-02) proved write/read-back/delete/verify-absent against the private B2 bucket and nothing more, and the 2026-07-25 Coolify logical backup remains insufficient. Tracked guarded restore/probe/retention artifacts now exist, but approved measured-image manifests/build, signed provider broker, dedicated-host or separately reviewed exclusive-broker scheduler scope, runtime/catalog collectors, backup acceptance, authentic authorization-time retention, provider quote, independent A/B/C results and reviewed digest-only PASS are absent. The separate automation evidence-lifecycle consumer PR remains an explicit blocker; no final schema version or compatibility is claimed."
+    backup_readiness: "Operator-managed pgBackRest 2.59.0 physical/WAL using provider-managed B2 EU storage is documented and its object store is now reachable, but the backup itself is not configured: run 30752237109 (2026-08-02) proved write/read-back/delete/verify-absent against the private B2 bucket and nothing more, and the 2026-07-25 Coolify logical backup remains insufficient. Tracked guarded restore/probe/retention artifacts now exist, but approved measured-image manifests/build, signed provider broker, dedicated-host or separately reviewed exclusive-broker scheduler scope, runtime/catalog collectors, backup acceptance, authentic authorization-time retention, provider quote, independent A/B/C results and reviewed digest-only PASS are absent. Corrected 2026-08-10: the automation evidence-lifecycle consumer PR is no longer a blocker — it merged as automation PRs #93/#94/#98 on 2026-08-05 (see rollout_evidence_schema_dependency). The unconfigured production backup is what remains."
     next_gates: "configure and accept the documented physical backup path; create environment-scoped least-privilege rollout configuration; zero-write preflight; reviewed expected writes; five-phase controlled run; zero-duplicate replay"
   cutover: base structure complete; approved-source foundation merged but not live; no controlled import has begun; workflow rewiring and owner recovery/break-glass acceptance remain pending
   operating_guide: runbooks/company-drive.md

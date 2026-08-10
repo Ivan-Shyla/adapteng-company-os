@@ -1,7 +1,7 @@
 # AdaptEng Company OS — Environment Registry
 # Production hosts, domains, platform and budgets. NO secrets — names/hostnames/ids only.
 version: 1
-updated: 2026-08-06
+updated: 2026-08-10
 
 platform:
   compute: Hetzner (EU region) — single self-hosted host
@@ -43,6 +43,36 @@ domains:
   - host: adapteng-baserow-adapter:8080
     service: adapteng-baserow-adapter
     exposure: INTERNAL ONLY (coolify network alias; no public URL — verified 503 externally)
+
+declared_not_yet_created:
+  # Production resources that are designed and named here but DO NOT EXIST yet.
+  # Presence in this block is a declaration, never evidence of a running resource.
+  - resource: ai-gateway
+    service: ai-gateway            # registry/services.yaml
+    repo: adapteng-automation-platform
+    path: services/ai-gateway
+    target_runtime: Coolify (Hetzner), internal-only on the coolify network
+    intended_exposure: INTERNAL ONLY — no public URL, reached by container alias like the Baserow adapter
+    exists_in_production: false
+    coolify_app_uuid: none — application not created
+    endpoint: none — not deployed
+    state: implemented and tested, not deployed
+    test_evidence:
+      run: 31214858400
+      workflow: "AI Gateway Tests"
+      branch: main
+      head: d6ab6322983af42e355dedea4de6d0d21752de59
+      completed: "2026-08-07T20:12:40Z"
+      conclusion: success
+      jobs_green: [ai-gateway unit tests (ubuntu-latest), ai-gateway unit tests (windows-latest), ai-gateway postgres semantics, ai-gateway supply-chain gates, repo validation]
+      verified: 2026-08-10
+    database_dependency: postgres-adapteng-ops — migrations 005 and 008_ai_gateway_runtime_hardening.sql are ALREADY APPLIED in production per the owner's post-rollout manual production check; DO NOT REPLAY them at deploy time
+    not_blocked_by: [cost, model pricing, FX configuration]
+    blocking: "creation and deployment of the Coolify application, then proving the EU Vertex client, Drive adapters, orchestration and canonical approval composition against the running service"
+    budget_binding: budgets.ai_runtime_cap_eur_month (fail-closed cap, not evidenced spend)
+    model_binding: external_saas "Google Cloud (Vertex AI + Drive API)" — gemini-3.1-flash-lite, location eu
+    deployment_evidence: UNVERIFIED — GitHub shows no deploy; a recorded deploy plus a no-business-data smoke result against the running service would settle it
+    declared: 2026-08-10
 
 external_saas:
   - name: n8n Cloud

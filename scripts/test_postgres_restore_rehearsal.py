@@ -2913,7 +2913,17 @@ class GitObjectSealTests(unittest.TestCase):
 
 class ReadinessAndManifestTests(unittest.TestCase):
     def test_literal_not_ready_enum_is_on_all_status_surfaces(self) -> None:
-        enum = "NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR"
+        # The rollout-authorization status literal must stay synchronized across
+        # every status surface, so that no surface can quietly disagree about
+        # what is blocking the rollout. The automation evidence-lifecycle
+        # dependency merged on 2026-08-05 (adapteng-automation-platform PRs #93,
+        # #94 and #98), so the current literal is
+        # BLOCKED_ON_UNCONFIGURED_PRODUCTION_BACKUP. The superseded literal is
+        # kept only where the record is corrected in place, and every surface
+        # that still names it must also carry the closure evidence, so it can
+        # never be read as the current status.
+        enum = "BLOCKED_ON_UNCONFIGURED_PRODUCTION_BACKUP"
+        superseded = "NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR"
         paths = (
             ROOT / "ARCHITECTURE.md",
             ROOT / "owner/action-items.md",
@@ -2922,7 +2932,10 @@ class ReadinessAndManifestTests(unittest.TestCase):
             ROOT / "registry/services.yaml",
         )
         for path in paths:
-            self.assertIn(enum, path.read_text(encoding="utf-8"), str(path))
+            text = path.read_text(encoding="utf-8")
+            self.assertIn(enum, text, str(path))
+            if superseded in text:
+                self.assertIn("#94", text, str(path))
 
     def test_new_isolation_members_are_in_procedure_manifest(self) -> None:
         manifest = json.loads(
