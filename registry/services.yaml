@@ -9,7 +9,7 @@
 #   repo-merged-not-live     - code merged to main, no live deploy/wiring yet
 #   planned                  - designed, not built
 version: 1
-updated: 2026-08-04
+updated: 2026-08-10
 
 excluded_personal_projects:
   status: excluded-from-company-os
@@ -34,9 +34,18 @@ services:
     producer_pr: adapteng-website#78
     producer_historical_last_reviewed_head: b0e3a656cf6659b893810e11a15b9f515527ab79
     producer_historical_seven_issue_blocked_head: 1baedaf732088edcc3fa4e40892d23d42b140d7b
-    producer_current_head: a23b194fb72aed51941d9cb1c288cbc7eb2f66a0
-    producer_status: draft-unmerged-undeployed-awaiting-fresh-independent-review
-    producer_review_status: current exact head pending; no review-clean or cutover-ready claim
+    producer_current_head: 6770e749fbf1345bfe15f260e574da93fa4df329
+    producer_status: repo-merged-not-live
+    producer_review_status: merged producer remains undeployed and not cutover-ready
+    repository_main: 4c9255066ea0ae6607537f64207300d22f979b2c
+    theme_live_evidence:
+      verified: 2026-08-09
+      deployed_head: 206e24644e7b40f43ae68da0db41f4290c9a35a8
+      deployment_run: 31329017343
+      acceptance: "recorded post-deploy checks: 96 sitemap URLs with zero unreachable/non-200/fragment/hreflang failures; 18/18 checked commercial pages with exactly one localized description"
+    plugin_live_head: 50e7ecc4101c9e0f7d7e2d706cadc97829d92d38
+    plugin_live_run: 30720691975
+    plugin_newer_repository_features_live: false
     legacy_snapshot:
       repository: PalinaRuban/adapteng
       classification: personal-account June-2026 WordPress/Azure snapshot; no active or authoritative production role
@@ -69,9 +78,8 @@ services:
       b0e3a656cf6659b893810e11a15b9f515527ab79 is historical last-reviewed
       evidence only. Head 1baedaf732088edcc3fa4e40892d23d42b140d7b is
       historical seven-issue-blocked evidence for delivery/data-race defects.
-      Current GitHub head a23b194fb72aed51941d9cb1c288cbc7eb2f66a0 remains
-      draft, unmerged and undeployed and awaits fresh independent review; no
-      review-clean or cutover-ready claim is made. Require an exact-head
+      WEB-001 merged as 6770e749fbf1345bfe15f260e574da93fa4df329 but remains
+      undeployed and not cutover-ready. Require an exact-head
       independent review-clean result plus actual WordPress/Fluent Forms
       producer T1-T4, atomic no-dual-write cutover, seven-day reconciliation and
       rollback proof. Model-provider legal placeholders stay unpublished.
@@ -90,7 +98,13 @@ services:
       and 008_drive_bridge_replay_reservations.sql are repository-merged via
       automation PR #89 / dbcf806ea7714b8e2a7415ae6cd788491924178d, but
       live:false and unapplied. Unrelated 008_ai_gateway_runtime_hardening.sql
-      is forbidden for approved-source import. Proposed operator-managed pinned
+      is forbidden for approved-source import. Read-only production evidence
+      recorded by automation PR #108 found the
+      allocator table under schema adapteng_ops rather than canonical public.
+      PR #108 schema-qualifies repository bootstrap/runtime access but performed
+      no production remediation; an owner-approved preservation-first repair
+      and read-only sequence/caller verification remain open. Proposed
+      operator-managed pinned
       pgBackRest 2.59.0 physical/WAL backup using provider-managed B2 EU object
       storage plus clean PostgreSQL-only restore is documented, and the object
       store is now proven reachable (run 30752237109, 2026-08-02: write,
@@ -219,20 +233,13 @@ services:
       has only APPROVED_ASSETS_DATABASE_URL). PR #90 added a machine-checkable
       rollout-readiness CLI and PR #92 pinned an exact self-hosted runner label
       set, but PR #92 itself states rollout readiness is not yet claimed
-      pending a GitHub-Enterprise-Required-Reviewers substitute. Of the four
-      exact-subject rollout-authorization PRs, #95 and #97 merged 2026-08-03;
-      #93 and #94 remain open (#93 is in provider-reported CONFLICTING state
-      pending rebase onto post-#95/#97 main; #94 is stacked on #93 and blocked
-      behind it). No Migrate Approved Assets workflow run has ever executed.
-      Do not dispatch even zero-write phases until #93/#94 merge. The earlier
-      2026-08-03 pgbackrest stanza-create HTTP 403 is resolved: root cause was
-      a B2 account download-bandwidth cap (not a backup-path defect, and not
-      the previously-suspected Class B transaction cap, which does not exist
-      on this plan); the scheduled nightly rehearsal has since run green
-      repeatedly (e.g. runs on 2026-08-03 and 2026-08-04), including a full
-      23/23-step stanza-create + backup + dual restore proof. Production
-      adapteng_ops itself still has no stanza, schedule or retention
-      enforcement configured.
+      pending a GitHub-Enterprise-Required-Reviewers substitute; four
+      exact-subject rollout-authorization PRs (#93-#95, #97) remain open. No
+      Migrate Approved Assets workflow run has ever executed. Do not dispatch
+      even zero-write phases until those PRs merge and the
+      managed-backup/isolated-restore/exact-rehearsal evidence chain is
+      proven (a real rehearsal dispatch on 2026-08-03 failed at
+      pgbackrest stanza-create with HTTP 403).
 
   - id: adapteng-baserow-schema
     repo: adapteng-automation-platform

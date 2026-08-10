@@ -3,7 +3,7 @@
 # Precedence (ADR-0011 platform layer map):
 #   Postgres = operational truth | Baserow = structured collaboration | Drive = document/media evidence
 version: 1
-updated: 2026-08-03
+updated: 2026-08-10
 
 baserow:
   service: baserow-self-hosted (https://baserow.adapteng.com)
@@ -29,11 +29,11 @@ baserow:
   id_binding: adapteng-automation-platform config/company-operations.binding.env (non-secret numeric ids, captured on main via PR #77)
 
 postgres_adapteng_ops:
-  service: postgres-adapteng-ops (internal Coolify; SSL disabled on internal network)
+  service: adapteng-ops-db (Coolify resource `pgdgbwzsuuxhw55g8v5opjgn`; internal Coolify network; SSL disabled on internal network)
   authority: operational truth — id allocation, lead reservation, run/approval ledger
   schemas: [public, integrity]
   migrations:
-    - { file: 001_id_allocator.sql,               provides: "AE-* id allocator (public)",                      live: true,  applied: "adapter first boot (RUN_MIGRATIONS_ON_START)" }
+    - { file: 001_id_allocator.sql,               provides: "AE-* id allocator (canonical target: public)",    live: true,  applied: "adapter first boot (RUN_MIGRATIONS_ON_START)", actual_schema: adapteng_ops, remediation: "planned; PR #108 is repository fix only" }
     - { file: 002_run_ledger.sql,                 provides: "task/run/outcome ledger",                         live: false }
     - { file: 003_approval_outbox.sql,            provides: "approval ledger + outbox (hash-only tokens)",     live: false }
     - { file: 004_lead_identity.sql,              provides: "public.lead_identity_reservation + reserve_lead_identity()", live: true, applied: "2026-07-25 (WEB-002); function pins search_path=pg_catalog,public" }
@@ -41,6 +41,19 @@ postgres_adapteng_ops:
     - { file: 006_integrity_projection_manifest.sql, provides: "integrity schema: projection_manifest + coverage_marker", live: false, note: "kept unapplied until backup/restore planning per ARCHITECTURE.md §11 + ADR-0011" }
     - { file: 007_source_identity_reservation.sql, provides: "canonical source identity to allocator-returned AE-CGR reservation", live: false, note: "repository-merged via automation PR #89; unapplied" }
     - { file: 008_drive_bridge_replay_reservations.sql, provides: "atomic governed Drive replay reservations", live: false, note: "repository-merged via automation PR #89; unapplied" }
+  live_read_only_verification:
+    verified: 2026-08-08
+    engine: PostgreSQL 16
+    health: healthy
+    public_5432_binding: absent
+    network: coolify
+    current_schema: "Read-only evidence found public.lead_identity_reservation present and the structurally correct allocator table under adapteng_ops rather than canonical public. Run ledger, approval/outbox, AI Gateway, source-identity and Drive-replay migrations remain absent."
+    allocator_schema_mismatch:
+      status: live-defect-remediation-planned
+      evidence: "adapteng-automation-platform PR #108 / 23a23f0fd5cacd630badf3bd20503789366f7220"
+      repository_fix: "bootstrap and runtime access now schema-qualify public.id_allocator_sequences"
+      live_change: false
+      next_action: "owner-approved preservation-first move/repair with rollback and read-only sequence/caller verification"
   approved_source_import:
     repository_status: repo-merged-not-live
     repository_status_updated: 2026-07-29
