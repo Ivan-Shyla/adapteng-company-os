@@ -55,17 +55,26 @@ The checks are not wrong; their scope, coupling or ceremony is. This is where
 the cost is being paid.
 
 > **Status 2026-08-10.** F-1 and F-5 are **remediated** (platform PR #110,
-> company-os PR #41). F-3 is in progress. F-4 needed no code change — it was a
-> false belief, not a control. F-6 needed no work at all. The findings are kept
-> in full: an audit that deletes its own reasoning once acted on cannot be
-> checked later, and the F-1 failure mode is one worth recognising on sight.
+> company-os PRs #41 and #45). F-3 is in progress. F-4 needed no code change —
+> it was a false belief, not a control. F-6 needed no work at all. The findings
+> are kept in full: an audit that deletes its own reasoning once acted on cannot
+> be checked later, and the F-1 failure mode is one worth recognising on sight.
+>
+> **One correction to this audit's own reasoning.** F-1 framed the isolation
+> check as too broad. It was, but it was also *too weak*: scoping it in #110
+> left it advisory, so an n8n change under an expired waiver would have merged.
+> Company-os PR #45 made it a required check. Narrowing a control's scope and
+> strengthening its enforcement are not opposites, and treating "reduce
+> friction" as always meaning "relax" would have opened a real hole here.
 
 ### F-1 — A lapsed n8n waiver merge-locks the entire repository
 
 **Remediated by platform PR #110**, which scoped the check without weakening it
-and added a scheduled job that warns 14 days before the next expiry. The
-underlying isolation finding is still open and still reported; renewing the
-waiver remains an owner decision. The analysis below is why.
+and added a scheduled job that warns 14 days before the next expiry, and by
+company-os PR #45, which promoted the scoped job to a required check so the
+boundary is enforced for n8n changes rather than merely reported. The underlying
+isolation finding is still open and still reported; renewing the waiver remains
+an owner decision. The analysis below is why.
 
 **The single most expensive control in the system.** An expired waiver on one
 n8n resource crossing makes `Validate repository structure and content` fail,
