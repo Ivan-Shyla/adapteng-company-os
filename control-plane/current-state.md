@@ -735,12 +735,33 @@ the same day: §15 asserted that a path is protected by "both" mechanisms, havin
 counted the two frozensets the worked examples cite. Reading `is_protected_path`
 itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
-described the artefact. This is the same shape as counting `raise` sites without
-walking each guard, and as matching a defect's silhouette without checking its
-mechanism — three instances now, all of them *reasoning about the inputs to a
-decision instead of the decision*. The check is one step and always available:
-find the function that consumes the constant before describing what the constant
-does.
+described the artefact.
+
+**The general rule, with three sub-shapes and five instances.** WS-1 proposed the
+right corollary after its own second miss: state not only the boundary you
+searched, but whether the search you chose *could have returned the answer*. That
+generalises everything in this family, and the instances now sort cleanly by how
+the instrument's range fails to match the question:
+
+- **Too narrow — silence read as absence.** WS-1 searched a shell helper list for
+  a module. A helper list enumerates *invoked scripts* and structurally cannot
+  contain an *imported* one, so the empty result was a true negative about the
+  wrong category, read as a finding. Its earlier instance was a function boundary
+  searched against an `except`.
+- **Too wide — hits read as presence.** WS-1's repository-wide enumeration of
+  "importers" returned sixteen sites of which **three** are imports; the other
+  thirteen are string literals. WS-9's count of `raise` sites had the same defect:
+  every site is real, but the set is wider than "reachable".
+- **Wrong axis — the artefact described instead of the decision.** My "both
+  mechanisms" above; the sets are real, and they are not what decides.
+
+Unifying form, and the reason the three belong together: **the instrument's range
+does not match the question, and its output was read as though it did.** Stated
+that way it yields a check that costs one sentence — before believing a result,
+say what the instrument enumerates and compare it to what was asked. Note that
+two of the three sub-shapes produce *confident* wrong answers, and the too-narrow
+one produces a confident wrong answer that looks like diligence, which is why it
+is the dangerous member of the family.
 
 ## 14. Where the required-check list is allowed to be duplicated
 
