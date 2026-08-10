@@ -1,24 +1,29 @@
 # Company OS — verified current state
 
-**Reconciled:** 2026-08-10. **Method:** GitHub API reads against every
-repository owned by the account, plus the failing CI logs behind each red
-check. Production runtime was not reachable from the reconciling workstation;
-every claim that would require it is marked `UNVERIFIED` and names what would
-settle it.
+**Reconciled:** 2026-08-10. **Last updated:** 2026-08-10, after the first
+execution round landed. **Method:** GitHub API reads against every repository
+owned by the account, plus the failing CI logs behind each red check. Production
+runtime was not reachable from the reconciling workstation; every claim that
+would require it is marked `UNVERIFIED` and names what would settle it.
+
+> **Execution round 1 landed.** Platform PR #110 cleared the repository-wide
+> merge lock; company-os PRs #35, #39, #40 and #41 merged. Coolify deployment
+> automation now exists and its read-only `inspect` has been run once. Sections
+> 2, 6, 9 and 10 are updated below; the rest still holds as reconciled.
 
 ## 1. Repositories
 
 Discovered by enumeration, not from the handoff list. Six exist; five are in
 Company OS scope.
 
-| Repository | Role | `main` state | Open PRs |
-|---|---|---|---|
-| `adapteng-company-os` | Control plane, registry, governance | active | 1 (#35) |
-| `adapteng-automation-platform` | Implementation: AI Gateway, adapters, migrations | `23a23f0` | 1 (#109) |
-| `ai-dev-loop-control-plane` | Agent execution patterns, skills, admission | active | 0 |
-| `adapteng-website` | Public website | active | 0 |
-| `adapteng-marketing` | Marketing assets | active | 0 |
-| `Kraken` | **Out of scope.** Personal trading project. | active | 0 |
+| Repository | Role | Open PRs |
+|---|---|---|
+| `adapteng-company-os` | Control plane, registry, governance | 0 |
+| `adapteng-automation-platform` | Implementation: AI Gateway, adapters, migrations | 1 (#109, now mergeable) |
+| `ai-dev-loop-control-plane` | Agent execution patterns, skills, admission | 0 |
+| `adapteng-website` | Public website | 0 |
+| `adapteng-marketing` | Marketing assets | 0 |
+| `Kraken` | **Out of scope.** Personal trading project. | 0 |
 
 `Kraken` is not Company OS. Its exclusion follows the boundary already recorded
 in [`decisions/0002-…`](../decisions/0002-personal-projects-remain-outside-company-os.md).
@@ -28,26 +33,33 @@ with it being outside the governed set. No action.
 Two repositories the handoff did not mention were found by enumeration
 (`Kraken`, `adapteng-marketing`). Neither changes the plan.
 
-## 2. The single blocking fact
+## 2. The single blocking fact — CLEARED 2026-08-10
 
-**`adapteng-automation-platform` cannot merge anything.** Not one pull request,
-regardless of content.
+> **Resolved by platform PR #110**, which scoped the isolation check out of the
+> required job without weakening it. `adapteng-automation-platform` merges
+> normally again, and PR #109 moved from `BLOCKED` to `MERGEABLE` as a direct
+> result. The isolation finding below is **still open and still reported**; only
+> its blast radius was removed. Renewing the waiver remains an owner decision.
+>
+> The diagnosis is kept in full because the failure mode is worth recognising
+> again: a governance control with a date in it became a repository-wide outage,
+> silently, with no warning before the fact.
 
-The `main-protected` ruleset requires four status checks. Three pass. The
-fourth, `Validate repository structure and content`, fails on a condition that
-has nothing to do with any code under review:
+**What was wrong.** The `main-protected` ruleset requires four status checks.
+Three passed. The fourth, `Validate repository structure and content`, failed on
+a condition that had nothing to do with any code under review:
 
 ```
 n8n/isolation-waivers.json:waiver[0]: waiver expired isolation_ref=ISO-1
 ```
 
 The repository holds one time-boxed waiver permitting a company-to-personal
-resource crossing. Its `expires_on` is **2026-08-08**. Today is 2026-08-10.
-The waiver lapsed two days ago and the check that reads it runs on every push
-and every pull request to every branch.
+resource crossing. Its `expires_on` is **2026-08-08**. The waiver lapsed on
+2026-08-08 and the check that reads it runs on every push and every pull request
+to every branch, so from 2026-08-09 the repository was sealed.
 
-Evidence that this is a date lapse and not a regression: the same workflow
-succeeded on `main` at `23a23f0` on 2026-08-08, and fails at 2026-08-10 against
+Evidence that this was a date lapse and not a regression: the same workflow
+succeeded on `main` at `23a23f0` on 2026-08-08, and failed at 2026-08-10 against
 a pull request that touches only `services/ai-gateway/` and `docs/`.
 
 The waiver is deliberately double-locked. The validator pins the approved
@@ -57,9 +69,11 @@ one without the other fails with `does not match the approved ISO-1 tuple`.
 That design is sound: it makes extending a data-boundary waiver a reviewable
 code change rather than a quiet JSON edit. It is kept.
 
-What is wrong is the blast radius, not the check. A lapsed waiver on an n8n
-resource crossing currently halts unrelated engineering across the whole
-repository, and it did so silently, on a date nobody was warned about.
+What was wrong is the blast radius, not the check. A lapsed waiver on an n8n
+resource crossing halted unrelated engineering across the whole repository, and
+it did so silently, on a date nobody was warned about. PR #110 separated the
+two concerns and added a scheduled job that now warns 14 days before the next
+expiry, so the recurrence is visible before it is blocking.
 
 ## 3. What is actually complete
 
@@ -82,16 +96,20 @@ Verified from `main` and CI, not from narrative.
 
 ## 4. What is not built
 
-- **No Coolify deployment automation exists anywhere.** Searched both
-  repositories. The platform repository contains Coolify *specifications*
-  (`deploy/coolify/`, compose files for Postgres and n8n), a spec validator
-  (`scripts/validation/validate_deploy.py`) and five runbooks — all describing
-  manual console work. No workflow or script calls the Coolify API. There is no
-  AI Gateway resource definition.
-- **The AI Gateway is not deployed.** Its own README says repository-ready, not
-  deployed. `UNVERIFIED` that no Coolify application exists, because the API was
-  not reachable from this workstation; the credential to check it is held as a
-  repository secret in *this* repository (see §6).
+- ~~**No Coolify deployment automation exists anywhere.**~~ **Built** by
+  company-os PR #41: `deploy/ai-gateway.json` (committed declarative spec),
+  `scripts/coolify_deploy.py` (stdlib-only driver with `inspect`, `reconcile`,
+  `deploy`, `status`) and a SHA-pinned dispatch workflow. `reconcile` re-reads
+  after writing and fails on residual difference; deletion is unreachable by
+  construction. The platform repository still holds only Coolify *specifications*
+  and manual runbooks, which is now correct — the API driver belongs here,
+  with the credential.
+- **The AI Gateway is not deployed.** Confirmed, no longer inferred: a read-only
+  `inspect` run on 2026-08-10 found project `adapteng-ops` and environment
+  `production` present, containing `adapteng-baserow-adapter` (running, healthy)
+  and `n8n-selfhosted` (running). **`ai-gateway` is absent**, so the first
+  `reconcile` will create rather than update. This resolves the `UNVERIFIED`
+  mark previously carried here.
 - **The approval writer is unbound.** `external_draft_dispatcher` is `None` at
   construction. This is a deliberate open seam, not an omission — see §7.
 
@@ -198,7 +216,7 @@ column now records the outcome rather than an outstanding instruction.
 | D-1 | Migrations 002, 003, 005, 006, 007 and both 008 units "remain repo-only and unapplied" | [`owner/action-items.md`](../owner/action-items.md) | Owner's post-rollout manual production check: all nine logical units exact | **Corrected in PR #40.** The item now records the verified state and forbids replay; [`registry/data-stores.yaml`](../registry/data-stores.yaml) carries all nine units as `live: true` with `replay: forbidden`. |
 | D-2 | Rollout authorization blocked pending an automation-evidence lifecycle PR | [`owner/action-items.md`](../owner/action-items.md) | The referenced chain merged through platform PRs #93, #94, #98 | **Closed in PR #40**, each PR re-verified merged with its SHA. Status literal is now `BLOCKED_ON_UNCONFIGURED_PRODUCTION_BACKUP` on all five status surfaces. |
 | D-3 | AI Gateway readiness reads as cost-and-runtime blocked | `ai/` notes | Gateway tests and supply-chain gates green on `main`; only deployment is missing | **Narrowed in PR #40** to "implemented and tested, not deployed", citing AI Gateway Tests run `31214858400` (5/5 jobs green). |
-| D-4 | Coolify deployment assumed to be manual console work | platform runbooks | Credential for API automation exists in this repository | **Obsolete once WS-B lands.** Out of scope for PR #40, which touched only this repository. |
+| D-4 | Coolify deployment assumed to be manual console work | platform runbooks | Credential for API automation exists in this repository | **Obsolete.** Out of scope for PR #40, which touched only this repository; closed instead by PR #41, which added the API driver and committed spec. The platform runbooks still describe console work and are now the fallback path, not the standard one. |
 | D-5 | Migration 001 allocator schema incident open | prior narrative | Fixed and merged in platform PR #108 | **Root cause closed in code**, recorded in PR #40. Narrower than this row's original "Closed": #108's body states "No production changes in this PR", so the live disposition of the misplaced copy is `UNVERIFIED`. |
 
 D-1 was the most damaging: it invited an agent to re-apply migrations that are
@@ -221,13 +239,16 @@ that inference is what produced D-1 in the first place.
 | PR | Repository | State | Verdict |
 |---|---|---|---|
 | #35 | `adapteng-company-os` | **MERGED** 2026-08-10 (`c75127d60e4cc61f0bb4ed44c53b3d73dfe39b93`) | Was ready and waiting on nobody. Merged, then PR #40 branched from the updated `main`. |
+| #39 | `adapteng-company-os` | **MERGED** 2026-08-10 | Established this control plane. |
 | #40 | `adapteng-company-os` | **MERGED** 2026-08-10 (`f36be5e64e410b050d6b45dfc0a578b52b054030`) | Reconciled D-1, D-2, D-3 and D-5 in place, plus the two registry surfaces. Both checks green. |
-| #109 | `adapteng-automation-platform` | `MERGEABLE` but `BLOCKED` | Content is sound and its own tests are green. Blocked solely by §2. |
+| #41 | `adapteng-company-os` | **MERGED** 2026-08-10 | Coolify deployment automation, closing D-4. |
+| #110 | `adapteng-automation-platform` | **MERGED** 2026-08-10 | Cleared the §2 repository-wide merge lock. |
+| #109 | `adapteng-automation-platform` | **Open, now `MERGEABLE`** (`UNSTABLE`) | Content is sound and its own tests are green. Was blocked solely by §2; unblocked by #110. Its two remaining red checks are the non-required trust-anchor pair (F-3). |
 
 PR #109 adds credential-file validation that checks existence, readability and
 non-emptiness without ever reading contents, its tests, and a least-privilege
 runtime-role runbook. The role grants execute on the required definer functions
-and no direct table access. Nothing in it warrants the delay it has had.
+and no direct table access. Nothing in it warranted the delay it had.
 
 Two red checks on #109 are **not** required by the ruleset and do not block
 merge: `Verify exact current head from merged base` and `Base-trusted rollout
