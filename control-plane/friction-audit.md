@@ -690,6 +690,30 @@ second receipt later for an identical one-line change. Recorded here rather than
 acted on, because amending #121 means touching a protected path — the same lock
 described above.
 
+**The two defects are separable, and only two sites carry both** (WS-9's
+refinement, verified against `main` at `824b4238`). The helper is invoked from
+**eight** sites, in three groups:
+
+| Sites | Redirection | Consequence |
+| --- | --- | --- |
+| 56, 61, 71 | `>/dev/null 2>&1`, inside the cleanup trap | both streams discarded; defensible for cleanup |
+| 156, 161, 168 | `>/dev/null` only | label over-claims, but the real `MetadataError` code is in the log directly above it — **mislabelled yet diagnosable** |
+| 248/254, 376/379 | `2>/dev/null` while capturing stdout | **blind**: the code is destroyed, not merely mislabelled |
+
+So the over-claiming *label* is a repo-wide naming problem across five lifecycle
+labels, while the *blindness* is exactly two sites — #121 closes one and 379 is
+the other. That is a tighter scope than "both discard sites carry both defects",
+and it is checkable.
+
+**Why `2>&1` is the wrong fix at both, structurally.** Each is a command
+substitution assigning to a variable the script then depends on — `run_id="$("`
+at 247–255 and `runner_id="$("` at 375–380 — with the identical
+`set +e` / status / `set -e` / label / exit frame around it. Merging stderr into
+stdout would contaminate the captured value. So #121's construct — redirect to a
+file under `$temp_dir`, `head -c 512 | tr -c`, print alongside the existing label
+— ports **verbatim**. Whoever extends the receipt is doing a transcription, not a
+design.
+
 ### The mechanism narrows to one raise site, and the instrument cannot say so
 
 Every line WS-1 cited was checked against `main` at `824b4238` and is exact:
@@ -806,6 +830,34 @@ indistinguishable from a current one until someone re-derives it — the same
 property that makes a wrong timestamp more dangerous than a wrong SHA (§10). The
 cheap habit: state the ref you read at, so the reader can check the delta instead
 of re-reading the file.
+
+**The second variant is worse, and it appeared within the hour.** WS-9 cited the
+runner discard site as "`.sh:388` → `.sh:393`". On `main` at `824b4238` those
+lines are **379 → 384**; 388 and 393 are exact at **`f0a2d17`, the head of its own
+open pull request**, where #121's added construct has pushed the file from 409
+lines to 418. Both citations were produced carefully and neither stated a ref.
+
+The two failures are not the same shape:
+
+- WS-1's was **temporal** — a tree two commits behind. It self-heals on sync, and
+  the delta is checkable with `git diff --name-only`.
+- WS-9's is **spatial** — a concurrent branch `main` has never contained. Syncing
+  does not fix it, because there is nothing to sync to.
+
+And the spatial variant has a property that makes it genuinely treacherous here:
+because #121 *inserts* nine lines above that point, **if #121 merges, `main`'s
+numbers become 388 and 393.** The citation is wrong today and correct later,
+conditional on a merge that has not happened. A reader checking now finds it
+wrong; a reader checking after the receipt is signed finds it right; neither can
+tell which regime they are in from the number alone.
+
+This is not pedantry about line numbers — it is the same failure as the F-8 label.
+A citation, like a lifecycle label, is a pointer that carries no evidence of its
+own provenance, and a confident wrong pointer costs more than no pointer, because
+it is acted on. The operative consequence: whoever extends the receipt to the
+runner site edits **379 on `main`** or **388 on `f0a2d17`**, depending on
+sequencing, and writing either number without its ref creates a real chance of
+editing the wrong line or failing to find it at all.
 
 ---
 
