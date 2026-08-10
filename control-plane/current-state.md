@@ -527,16 +527,81 @@ wording, each of which would otherwise miscount:
 3. **The count needs a version anchor, and that is why it stands at one.** All
    four failing runs on the board — `f0a2d175` ×2 (#121) and `fd96060f` ×2
    (#122) — were created between 20:21:21Z and 20:43:43Z, before #122 merged at
-   20:44:07Z. `pull_request_target` takes its workflow and code from the base
+   **20:44:08Z** (`merged_at`; corrected from the committer date 20:44:07Z by
+   point 5 below). `pull_request_target` takes its workflow and code from the base
    branch, so every one of them ran the *pre-repair* verifier. They are excluded
    on **code version, not verdict class**, which is a different reason from the
-   one WS-6 gave. Without "runs of the verifier at or after `3e9b9ef4`" written
-   into the criterion, a later sweep will scoop up old runs and over-count.
+   one WS-6 gave. Without a version anchor written into the criterion, a later
+   sweep will scoop up old runs and over-count — but see point 4: the anchor
+   cannot be read off the run, and point 6: it must not be a constant.
 
 **Current count: 1** — run `31430619706`, head `d799b5bb`, 20:45:58Z, the only
 anchor run to date executing post-#122 code. WS-6's forward-looking consequence
 stands: if #121 is rebased or re-triggered, its refusal *will* count, because
 declining correctly is the mechanism working.
+
+**Update, 01:05Z — three further corrections, all verified.** WS-6 conceded the
+first two above and then supplied a finding that changes the third.
+
+4. **The version anchor is not observable on the run at all.** Correction 3 above
+   said the criterion needs "runs of the verifier at or after `3e9b9ef4`". WS-6
+   checked whether that is *checkable* and it is not. Run `31430619706` records
+   `event=pull_request_target`, `head_sha=d799b5bb…`, `head_branch=palinaruban-undetermined-not-always-broken`
+   — the **pull request head**. `pull_request_target` executes base-branch code
+   while recording the PR's head, so no field on the run says which verifier ran.
+   All 81 anchor runs to date use that event, so this is universal for this
+   workflow, not incidental. The only available proxy is the run's `created_at`
+   against the merge time, and the record must say so rather than implying the
+   version is readable.
+5. **Name the timestamp field, not just the value.** I wrote 20:44:07Z and WS-6
+   wrote 20:44:08Z. Both exist: 20:44:07Z is the merge commit's committer date,
+   20:44:08Z is the pull request's `merged_at`. Since `pull_request_target` takes
+   code from the base branch, the boundary that matters is **when the ref moved**,
+   which is `merged_at` — the committer date precedes it. So WS-6's field is the
+   correct one and the criterion should name it. **The comparison also has an
+   error window:** a run created shortly before the merge may check out shortly
+   after it, so a run whose lifetime straddles the boundary cannot be classified
+   from metadata. Here nothing straddles — the nearest failure is 25 seconds
+   before and the survivor 110 seconds after — so the exclusion holds, but the
+   window is a property of the criterion and not of this data.
+6. **The anchor must move, or the criterion decays into the #120 mistake.**
+   Written as the constant `3e9b9ef4`, it would still be the anchor after the
+   *next* verifier change, and the count would absorb runs of a verifier nobody
+   had validated — which is exactly what counting #120's run would have been. So:
+   **the anchor is the `merged_at` of the most recent change to
+   `verify_rollout_trust_anchor.py`, and any such change resets the count.** That
+   converts my one-off #120 reset into a rule. **One addition WS-6 did not make:**
+   a change to `.github/workflows/rollout-trust-anchor.yml` must reset it too,
+   because that file decides both what triggers a run and what code gets checked
+   out — the "always starts" half of the precondition lives there, not in the
+   verifier.
+7. **Count distinct head SHAs, not runs.** Two runs of one tree are one
+   observation repeated, and under a raw-run bar, re-triggering a single pull
+   request N times would satisfy promotion without ever exercising a second input.
+   The data supports this strongly: the board carries `f0a2d175` ×2,
+   `fd96060f` ×2, `36902fc7` ×2, `4d6e70ba` ×2, `83cfa563` ×2, `835c92c6` ×2,
+   `d9766d6f` ×2 and `05255308` ×3. It is "one clean run is not a run of them"
+   applied one level down. Verified: after 20:44:08Z there is exactly **one**
+   distinct head SHA, so the count is 1 under either rule.
+
+**A weakness in the count that neither of us had named.** The single counted run
+is `not_applicable` — the verdict produced when the verifier finds no protected
+change at all, which exercises less machinery than any other outcome. So "1" is
+not merely a small number, it is one observation of the cheapest path. A count
+composed entirely of `not_applicable` runs would be weak evidence for exactly the
+proposition being tested, which is that the gate *can* refuse. Whatever N is
+chosen, it is worth requiring that at least one counted run reached a real
+authorization decision.
+
+**A consequence of the timestamp comparison, which is an independent argument for
+the neutral ruling.** Because classification is now a timestamp comparison, a run
+straddling the anchor is unclassifiable from metadata — and the window in which
+that happens is precisely a merge landing underneath a running job, the same race
+that produces `no_longer_open`. Those runs are therefore unclassifiable for two
+unrelated reasons at once, and neutral is right on both. Operational note, WS-6's:
+because neutral runs neither advance nor break the count, a spell of them makes
+"not promoting yet" indistinguishable from "no traffic". The stall should be
+surfaced, or the count goes quiet in a way that reads as a decision.
 
 **And the second consequence generalises past this check.** WS-6's argument for
 why a green streak cannot be the criterion is that a long red stretch is
@@ -646,9 +711,24 @@ two genuine run-selection outcomes, and only the discarded error code separates
 them. §12 reached it from above: a stretch of red anchor runs is ambiguous
 between a broken gate and a run of protected-path pull requests being correctly
 refused, and only the verdict string separates *those*. Different subsystems,
-different layers, same result — **count verdicts, not colours.** Any health
-metric defined over conclusions is measuring a projection and will eventually
-mistake a working control for a broken one, or the reverse.
+different layers, same result — **count verdicts, not colours.**
+
+**Stated more narrowly than I first wrote it, on WS-6's correction.** The claim
+was "any health metric defined over conclusions will eventually mistake a working
+control for a broken one". That over-reaches: for a plain test suite, red really
+does mean broken and the conclusion loses nothing. The property actually doing the
+work is that **the control has more terminal states than the conclusion field has
+values** — three verdict classes squeezed into two conclusions in §12, eleven
+error codes squeezed into one `failure` in F-8. Where that inequality holds the
+collapse is guaranteed and the conclusion cannot be trusted as a health signal;
+where it does not, the conclusion is faithful.
+
+That version is more useful because it says *when to look* rather than asserting
+the problem always exists — count the control's terminal states, compare against
+the field you are reading, and you know immediately whether you are reading a
+projection or the thing itself. The refusing controls in this programme all fail
+the test, which is why they all needed verdict strings; an ordinary test suite
+passes it, which is why nobody has ever needed one there.
 
 ## 14. Where the required-check list is allowed to be duplicated
 
