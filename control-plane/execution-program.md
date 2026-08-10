@@ -692,7 +692,17 @@ deployed gateway:
    which is what most of the friction register is about. **The test for the
    sentence:** could an incautious agent apply it correctly without judgement? If
    not, it needs sharpening whichever reading it adopts — the failure here was
-   not a wrong answer but a rule nobody could point at.
+   not a wrong answer but a rule nobody could point at. **If the encoded form is
+   chosen, it is a security design and not a labelling exercise.** Bootstrap must
+   be its own class with its own exit code, not a sub-code under `unauthorized`,
+   because the three cases need three different human responses — refuse, repair,
+   escalate. And it must be classified strictest-applicable: a naive file-list
+   detection makes the softer class **self-selecting**, since anyone could add a
+   trivial edit to the verifier and inherit it. §15 carries the full argument, the
+   check against both live cases, and two gaps the proposal does not yet close —
+   that "the anchor's own machinery" is not a set that exists anywhere in the
+   code, and that constraining only protected paths leaves the unprotected payload
+   unexamined. Do not hand this to an implementer without that section.
 5. **Whether to re-pin the verifier so the F-8 fixture can be repaired.** The
    defective fake `gh` lives in a file that is both protected and digest-pinned,
    and the pin lives in a verifier that pins itself. The fix is known, was
