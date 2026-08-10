@@ -452,6 +452,44 @@ checks passed on it — `Verify exact current head from merged base` SUCCESS and
 checks. That is stronger evidence than the earlier successes, which all sat
 close to merges. The re-evaluation above now has its first clean data point.
 
+**Update, 20:44Z — the merge-boundary race above was a real defect, and this
+section was wrong to file it under "not a defect".** The paragraph beginning
+"Still not required" told the next reader to treat a single merge-boundary
+failure as a race rather than a fault. Platform **#122** investigated instead of
+accepting that, and found a **third** conflation site that #116 had not reached:
+`fetch_live_pull_request` required `state == "open"` and `merged is False`, and
+raised `TrustError("pull_request.state_invalid")` — *authorization* class, exit
+1 — otherwise. The observed timeline on #119 is unambiguous:
+
+```
+18:26:54Z  ready_for_review    triggers the run
+18:26:57Z  merged              3s later, job still starting
+18:27:05Z  verifier reads the API -> state="closed"
+```
+
+So the check accused an author of an unauthorized act consisting entirely of
+merging their own approved pull request, and the same head SHA produced SUCCESS
+at 18:23:46Z and FAILURE at 18:26:57Z. A well-formed but no-longer-open pull
+request is now `UndeterminedError` / `pull_request.no_longer_open` at exit 75,
+narrowly: a malformed `state` or non-boolean `merged` still raises `TrustError`
+at exit 1, so this cannot be used to downgrade a suspect API response, and a
+number mismatch stays an integrity failure regardless of state. Undetermined
+still exits non-zero, so closing a pull request mid-run cannot turn the check
+green.
+
+**The lesson is mine, and it is the §13 rule pointed at my own writing.** I saw
+one commit produce two verdicts, reached for "race, not a defect", and wrote it
+into the record as guidance. It was a race *and* a defect — the race was the
+trigger, the misclassification was the fault. It is the same
+authorization-versus-infrastructure conflation I had already documented twice in
+F-3, and I failed to recognise its third instance because I had a comfortable
+explanation. **Two verdicts from one commit is a defect until proven otherwise,
+whatever the timing looks like.**
+
+Consequence for promotion: the precondition is unchanged and still unmet. The
+count of clean ordinary-pull-request runs resets against the repaired verifier,
+because the version observed on #120 still contained this third site.
+
 ## 13. A control that cannot fail is not a control
 
 Three instances landed on 2026-08-10, in three different mechanisms. They are
@@ -517,5 +555,58 @@ time — more machinery, and a new credential path, than a documentation mirror
 is worth. A comment that travels with the line being edited is the proportionate
 control here. If the pair is ever observed to have drifted, revisit that
 judgement.
+
+## 15. An unsettled policy: may an advisory refusal be merged past?
+
+**This is the one open governance question in the programme, and it needs one
+sentence from the owner.** It is recorded here because two sessions reached
+opposite conclusions about it within four minutes, and both are defensible from
+the documentation as written.
+
+The situation is identical in both cases. A pull request changes a path in
+`PROTECTED_EXACT_PATHS`; all five *required* checks pass; the trust anchor
+correctly returns `rollout_trust_anchor.unauthorized.approval.commit_delta_invalid`,
+because a protected change arrived without an owner-signed receipt commit; and
+the two anchor checks are advisory, so GitHub permits the merge.
+
+| | Platform #122 | Platform #121 |
+|---|---|---|
+| Protected paths touched | `verify_rollout_trust_anchor.py`, `authorize-rollout-policy-change.md` | `authorize_approved_assets_phase.sh`, `migrate-approved-assets.md` |
+| Anchor verdict | `unauthorized.approval.commit_delta_invalid` | `unauthorized.approval.commit_delta_invalid` |
+| Required checks | all green | all green |
+| Outcome | **merged** 20:44:08Z | **left open** |
+
+All four paths verified present in `PROTECTED_EXACT_PATHS`, read from
+`verify_rollout_trust_anchor.py` on `main` rather than from either report.
+
+**The reading under which #122 is right.** The anchor checks are advisory
+*precisely because* the required signature cannot be produced inside a pull
+request — the platform's own governance checklist says so, and says an
+`unauthorized.<code>` verdict is actioned by "an approver, or the author". If a
+protected change could never merge without a receipt, "advisory" would be
+indistinguishable from "required". This reading has real force, because **the
+anchor protects its own source file**: every repair to it is a protected change.
+Under the opposing reading, the four-day anchor outage could not have been fixed
+by any agent, and #116 — which ended it — would also have been improper.
+
+**The reading under which leaving #121 open is right.** A refusal that is
+routinely merged past is decorative. Each such merge also forecloses promoting
+these checks to required, which this audit has been arguing toward. #121 is not
+a repair to the anchor's own machinery; it is an ordinary reliability fix that
+happens to touch a protected path, so the bootstrap argument does not apply to
+it.
+
+**The distinction that probably resolves it, though the owner should decide.**
+Separate *bootstrap* changes — to the anchor's own verifier and runbook, which
+cannot self-authorize — from *ordinary* protected changes, which can wait for a
+receipt. That is a one-line policy, and it makes #116 and #122 correct while
+keeping the boundary meaningful for everything else.
+
+**Interim stance: #121 stays open.** When the meaning of a control is unsettled,
+the conservative default is not to spend it. This is deliberately *not* a
+criticism of #122, whose engineering is sound, whose reasoning was stated openly
+in its own description, and which corrected a wrong prediction it had published
+about its own checks rather than quietly editing it away. The gap is in the
+policy, not in that work.
 
 

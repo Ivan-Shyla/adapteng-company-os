@@ -669,6 +669,14 @@ deployed gateway:
    last. The trust anchor refuses it correctly, because it touches the protected
    rollout boundary, and no agent should merge past that refusal. Procedure is in
    the platform's `docs/runbooks/authorize-rollout-policy-change.md`.
+4. **One sentence settling whether an advisory authorization refusal may be
+   merged past.** Two sessions answered this oppositely within four minutes —
+   platform #122 merged, #121 was left open — from materially identical
+   positions, and both readings are supportable from the documentation. See
+   `current-state.md` §15, which sets out the likely resolution: treat changes to
+   the anchor's own machinery, which cannot self-authorize, differently from
+   ordinary protected changes. Until it is settled, agents should leave such pull
+   requests open.
 
 Everything else on the path to a deployed, healthy AI Gateway is either AUTO or
 AUTO + FAIL CLOSED under the [autonomy policy](autonomy-policy.md).
