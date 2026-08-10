@@ -254,7 +254,19 @@ that inference is what produced D-1 in the first place.
 | #118 | `adapteng-automation-platform` | **MERGED** 2026-08-10 18:08Z | Removed the MM-25 cross-scope write. Supersedes #115, which was **closed unmerged** and rebuilt on a fresh branch. Empties the waiver list — see §11. |
 | #111 | `adapteng-automation-platform` | **CLOSED unmerged** — content shipped as **#119** | Was 8 behind / 6 ahead; its red marks were a stale tree, not a defect. Abandoned and rebuilt on `…-evidence-lane-fresh`, merged 18:26:57Z. See the note below on `-fresh` rebuilds. |
 | #119 | `adapteng-automation-platform` | **MERGED** 2026-08-10 18:26:57Z | WEB-002 self-hosted evidence lane — the content of #111. |
-| #45, #46, #47 | `adapteng-company-os` | **MERGED** 2026-08-10 | Required the n8n gate; recorded it as enforcing; corrected the trust-anchor diagnosis (§12) and enforced README↔CI equivalence (F-7). |
+| #45 | `adapteng-company-os` | **MERGED** 2026-08-10 17:28:54Z (`cb87521039bf`) | Promoted `n8n isolation` to a required check in `bootstrap_rulesets.py`, completing WS-1. See §11. |
+| #46 | `adapteng-company-os` | **MERGED** 2026-08-10 17:39:06Z (`48fa67cad42e`) | Recorded the gate as enforcing rather than advisory. |
+| #47 | `adapteng-company-os` | **MERGED** 2026-08-10 18:20:41Z (`7b148f5e4b47`) | Corrected the trust-anchor root cause in F-3 and §10, repaired three mojibake characters, and closed the README↔CI drift (F-7) with an enforcing test. |
+| #48 | `adapteng-company-os` | **MERGED** 2026-08-10 18:29:36Z (`cd751a642d80`) | Recorded the trust-anchor repair (§12) and the eliminated waiver (§11a). |
+| #49 | `adapteng-company-os` | **MERGED** 2026-08-10 18:45:24Z (`124e04642d42`) | Corrected #111's disposition and recorded the `-fresh` rebuild pattern (§11b). |
+| #50 | `adapteng-company-os` | **MERGED** 2026-08-10 | Completed this table, which had stopped at #47. |
+
+This table is self-referential, and that is the structural reason it drifts: the
+row recording any given change can only be written by a later change. #48 and
+#49 were absent from it for the same reason D-1 and D-2 went stale elsewhere —
+not neglect, but a record that cannot close itself. Verify the tail of this
+table against `gh pr list --state merged` rather than trusting it; the merge
+SHAs above are what make that check cheap.
 
 PR #109 adds credential-file validation that checks existence, readability and
 non-emptiness without ever reading contents, its tests, and a least-privilege
