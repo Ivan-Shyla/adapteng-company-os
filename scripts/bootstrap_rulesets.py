@@ -47,6 +47,14 @@ TARGETS: tuple[Target, ...] = (
         (
             "Fail on unencrypted secret-like content",
             "independent-rollout-policy",
+            # Safe to require only because the job always starts. It runs the
+            # isolation validator on every push and pull request and fails
+            # solely when the change under test touches ``n8n/``; it carries no
+            # workflow-level ``paths:`` filter. Requiring it is what makes the
+            # data boundary actually blocking for n8n changes rather than
+            # merely reported, and it is scoped so an expired waiver can no
+            # longer seal the whole repository.
+            "n8n isolation",
             "root-rollout-tests",
             "Validate repository structure and content",
         ),
