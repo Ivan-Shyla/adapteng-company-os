@@ -943,6 +943,74 @@ in *permission* rather than only in *label* — but the cheap guard is to say it
 now: the escalation reviews the whole diff, not the protected subset, or
 bootstrap requires the pull request to touch nothing but anchor machinery at all.
 
+**Resolved in favour of the strict form, on evidence.** Of those two options, the
+strict one — *the pull request touches nothing but anchor machinery* — costs
+nothing against either real case: #116 changed four files and #122 three, and
+**neither touched anything outside anchor machinery**. So the strict form is free
+on all observed evidence, it is checkable inside the verifier, and it closes this
+gap as a side effect rather than delegating it to a human process. Whole-diff
+review is prose, and a distinction living in prose drifts from the thing it
+describes — which is F-7, and the argument the encoding rests on in the first
+place.
+
+### Three things the implementer must not get wrong
+
+**The obvious implementation fails on the outage repair itself.** #116 — the
+commit that ended the four-day outage — changed four files:
+`.github/workflows/rollout-trust-anchor.yml`,
+`docs/runbooks/authorize-rollout-policy-change.md`,
+`scripts/validation/verify_rollout_trust_anchor.py` and
+`tests/test_rollout_trust_anchor.py`. All four are anchor machinery, but the first
+is protected by **prefix**, not exact path: `PROTECTED_PREFIXES` takes
+`.github/workflows/` wholesale at line 65, and `PROTECTED_EXACT_PATHS` contains no
+`.github/workflows` entry at all — verified by reading the whole set. So the
+implementation anyone will reach for, "anchor machinery ⊆ `PROTECTED_EXACT_PATHS`"
+— reached for because that is the set both worked examples cite — classifies
+**#116 as ordinary**, demands a receipt for it, and makes the outage permanent
+under the rule written to permit its repair. It fails closed, which is the right
+direction and the wrong outcome. The anchor-machinery set must span both
+protection mechanisms, and that is exactly the sort of detail that dies between a
+ruling and an implementation.
+
+A second-order consequence: because the prefix protects every workflow, the
+anchor-machinery set has to name `rollout-trust-anchor.yml` **explicitly** even
+though it is already protected. That path will therefore appear in two mechanisms
+for two different reasons, and the two can drift apart — an F-7 shape built in at
+construction time, worth a comment at the definition rather than a discovery
+later.
+
+**The set that defines bootstrap is itself anchor machinery, so widening it is
+classified bootstrap — the lighter class.** An attacker's optimal move is a
+one-line addition to that set, arriving under the class whose label says
+"escalate, this cannot self-authorize". WS-6's fix is the right shape and matches
+the asymmetry already accepted elsewhere: **adding to the anchor-machinery set is
+not itself a bootstrap change; removing from it can be.** The verifier already
+computes tree deltas, so it can see the difference.
+
+Two corrections that fix are not safe without.
+
+*Polarity is not uniform across the sets in that file.* For the anchor-machinery
+set the dangerous direction is **addition**, because adding widens the lighter
+class. For `PROTECTED_EXACT_PATHS` and `PROTECTED_PREFIXES` the dangerous
+direction is **removal**, because removing strips protection outright. A blanket
+"additions are ordinary, removals may be bootstrap" would therefore let a
+protection-stripping deletion arrive under the lighter class — the same hole in
+the opposite direction. State it polarity-free: **a delta that weakens any
+boundary is never bootstrap, whichever set it edits.**
+
+*Modification is an addition and a removal at once.* A rename, or an edit that
+replaces one entry with another, satisfies both halves, and a rule phrased over
+the diff's shape can be argued into the wrong branch. Phrase it over the
+**effect on membership**, not over the operation.
+
+**One dead end, checked so nobody re-walks it.** `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256`
+looks like an existing grouping that could serve, and cannot: it maps
+`scripts/migrations/_fixed_migration.py` and the three approved-assets collectors
+to source digests, and contains **none** of the anchor's own files. It exists for
+working-tree closure integrity, a different concept that merely overlaps. Reusing
+it would read as avoiding duplication while silently binding two unrelated
+security sets together, so that the next edit to either corrupts the other.
+
 Recorded, not built. It is a protected-path change encoding an undecided policy,
 and it waits for both the ruling and the authority to ask for it.
 
