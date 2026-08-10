@@ -345,6 +345,38 @@ Identical trees, opposite verdicts. Both were re-run to green, which is why
 the current check-run conclusions all read `success` and the failures are
 invisible unless you look at run attempts.
 
+**Re-verified 2026-08-10 against the API, and one alternative explanation is now
+ruled out.** WS-6 asked — correctly, and without asserting it — whether the
+`2c9824ba` split might be its newly-found `pull_request.state_invalid`
+conflation rather than nondeterminism, since a `pull_request` run reading a PR
+that merged underneath it is deterministic and merely timing-dependent. It is
+not. The three runs on that commit separate cleanly:
+
+| Run | Workflow | Event | Result |
+|---|---|---|---|
+| `31412597674` | Rollout Policy | `push` | success |
+| `31412621141` | Rollout Policy | `pull_request` | **failure** |
+| `31412620854` | Base-Trusted Rollout Authorization | `pull_request_target` | failure |
+
+F-8's evidence is the first two: **the same workflow, on the same tree, at the
+same attempt number, disagreeing.** The anchor conflation lives in
+`verify_rollout_trust_anchor.py`, which runs only in the third — a different
+workflow, on a different event, emitting a `rollout_trust_anchor.*` verdict
+rather than a pytest assertion. The F-8 failure is `assert 1 == 90` inside
+`test_production_lifecycle_cleanup_status_is_fail_closed`, driving the bash
+script against a **stub** `gh`; it never reads live pull-request state, so
+`fetch_live_pull_request` cannot be reached from it.
+
+The third run failing *as well* is not a coincidence and not a complication: on
+that date the anchor was permanently red for the presence-vs-introduced reason
+(§12). Both defects were live simultaneously on the same commit, which is
+precisely why they were worth separating rather than merging into one story.
+
+**Recorded because a ruled-out hypothesis is worth as much as a confirmed one
+here.** F-3 exists in this register because a confident, coherent, wrong
+mechanism was published and believed. WS-6 had a coherent mechanism and asked
+instead of asserting; the answer is no, and F-8 keeps its evidence.
+
 The failure is always the same case of
 `test_production_lifecycle_cleanup_status_is_fail_closed`: the `ok-fail-0-90`
 case exits 1 with `lifecycle.run_selection_failed` instead of reaching the
