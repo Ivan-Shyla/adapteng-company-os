@@ -254,6 +254,7 @@ that inference is what produced D-1 in the first place.
 | #118 | `adapteng-automation-platform` | **MERGED** 2026-08-10 18:08Z | Removed the MM-25 cross-scope write. Supersedes #115, which was **closed unmerged** and rebuilt on a fresh branch. Empties the waiver list — see §11. |
 | #111 | `adapteng-automation-platform` | **CLOSED unmerged** — content shipped as **#119** | Was 8 behind / 6 ahead; its red marks were a stale tree, not a defect. Abandoned and rebuilt on `…-evidence-lane-fresh`, merged 18:26:57Z. See the note below on `-fresh` rebuilds. |
 | #119 | `adapteng-automation-platform` | **MERGED** 2026-08-10 18:26:57Z | WEB-002 self-hosted evidence lane — the content of #111. |
+| #120 | `adapteng-automation-platform` | **MERGED** 2026-08-10 19:03:23Z | Restored the waiver-horizon CLI's only failing test, lost when #118 retired the waiver. Tests only, mutation-verified. See §13. |
 | #45 | `adapteng-company-os` | **MERGED** 2026-08-10 17:28:54Z (`cb87521039bf`) | Promoted `n8n isolation` to a required check in `bootstrap_rulesets.py`, completing WS-1. See §11. |
 | #46 | `adapteng-company-os` | **MERGED** 2026-08-10 17:39:06Z (`48fa67cad42e`) | Recorded the gate as enforcing rather than advisory. |
 | #47 | `adapteng-company-os` | **MERGED** 2026-08-10 18:20:41Z (`7b148f5e4b47`) | Corrected the trust-anchor root cause in F-3 and §10, repaired three mojibake characters, and closed the README↔CI drift (F-7) with an enforcing test. |
@@ -433,3 +434,45 @@ always start and always report. That has now been observed green twice and
 red once under a known race — enough to trust the mechanism, not yet enough to
 promote a check whose failure mode includes a merge-boundary race. Re-evaluate
 after a run of clean pull requests, and only then.
+
+**Update, 19:03Z.** Platform **#120** is the first ordinary pull request to
+complete after the repair, away from any merge boundary, and **both** anchor
+checks passed on it — `Verify exact current head from merged base` SUCCESS and
+`Base-trusted rollout authorization` SUCCESS, alongside all five required
+checks. That is stronger evidence than the earlier successes, which all sat
+close to merges. The re-evaluation above now has its first clean data point.
+
+## 13. A control that cannot fail is not a control
+
+Three instances landed on 2026-08-10, in three different mechanisms. They are
+recorded together because the pattern generalises and the next agent will
+otherwise meet it a fourth time without recognising it.
+
+1. **The trust anchor's worktree assertion.** `test "$(git status
+   --porcelain=v1)" = ""` discarded git's exit 128 and read empty stdout as a
+   clean worktree. It printed alarming `fatal:` noise while asserting nothing.
+   Failed **open**. (§12, F-3.)
+2. **The trust anchor's verdict logic.** Testing whether approval material was
+   *present* rather than *introduced* meant no ordinary pull request could pass
+   and no owner-signed receipt could authorize. Jammed in both directions for
+   four days while appearing live. (§12.)
+3. **The n8n waiver-horizon test suite.** When #118 retired the ISO-1 waiver,
+   the test asserting the CLI exits non-zero was removed with it and replaced
+   only by a passing case. The daily early-warning job would have kept passing
+   even if `return 1` were deleted. Closed by platform **#120**, which proved
+   the gap by mutation: narrowing `FAILING_STATES` and forcing `return 0` were
+   both green before the change and both caught after.
+
+A fourth sits open as **F-8**: `2>/dev/null` on the `select-queued-run` call
+discards the very error code needed to diagnose the nondeterministic required
+check, so the control fails without saying why.
+
+**The rule.** A green check is evidence only if you know it can go red. When a
+control changes — or when the condition it guarded is removed, which is what
+happened in case 3 — verify by mutation that it still fails when it should.
+Deleting the last failing test is indistinguishable from deleting the control,
+and both leave the suite green.
+
+**The corollary for this record:** never infer that a mechanism works from the
+absence of failures. Two of the three above looked healthy for days.
+
