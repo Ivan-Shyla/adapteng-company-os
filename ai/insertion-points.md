@@ -20,18 +20,17 @@ external/high-impact actions.
   `Content_Items` (848) via the governed adapter. The first approval-gated
   action is `external_draft.create`, limited to pending/draft state — it can
   **never publish or send**.
-- **Gate:** ratified claims/style/sources; `AG-007` quality proof; a **durable
-  cost authority that survives process restart** (persistent Postgres cost
-  reservation/reconciliation with cross-process spend accounting and latch
-  persistence); real EU Vertex and Drive adapters; orchestration, canonical
-  approval and deployment; privacy (ZDR), cache-off, Vertex IAM and FX.
+- **Gate:** ratified claims/style/sources; `AG-007` quality proof; a **deployed**
+  durable cost authority (the persistent Postgres cost
+  reservation/reconciliation, running as the authority rather than merely
+  implemented); real EU Vertex and Drive adapters; orchestration, canonical
+  approval and deployment; privacy (ZDR), cache-off and Vertex IAM.
   Never use the local in-memory test seam as budget authority — that warning
-  **stands unchanged**, and P0 #3 below is precisely why it is not obsolete.
-  AG-008 has closed the envelope and no-external-action items at the control
-  plane. The **cost** item is closed only *within a process* and is therefore
-  **not** a durable authority, so this gate remains unsatisfied. See the status
-  below and `owner/action-items.md`.
-- **Status:** **REJECT_LIVE** — judged per P0 below, not as one global verdict.
+  **stands unchanged**. AG-008 closed the envelope and no-external-action items
+  at the control plane, and the durable cost store is now implemented and tested
+  in `adapteng-automation-platform` with its schema applied in production; what
+  is left is running it. See the status below and `owner/action-items.md`.
+- **Status:** **NOT DEPLOYED** — judged per P0 below, not as one global verdict.
   Re-assessed **2026-08-03** against control-plane main
   `edadb09125f7fb5d173d5f595181d1384050b6b5`, which is the merge commit of
   control-plane **PR #39** (*fix(validate_json): fail closed on duplicate keys
@@ -105,7 +104,12 @@ external/high-impact actions.
     ledger is an append-only JSONL run ledger, which is not a monetary
     authority. The gateway's own refusal string, *"authoritative
     reconciliation required"*, is the code correctly deferring to a store that
-    does not exist in that repository.
+    does not exist in that repository. **Scope note (2026-08-10):** this finding
+    is about the *control-plane* in-memory `ModelGateway` and remains true of it.
+    It is **not** a finding about the `ai-gateway` service, whose durable
+    PostgreSQL cost authority is implemented, tested green and applied in
+    production — see below. Read this bullet as "the control plane must keep
+    deferring", not as "no durable authority exists".
 
   Two properties of that audit are recorded here because they are what make
   it re-checkable: P0 #3 was judged on raw `runtime_spent_eur` and **not** on
@@ -114,23 +118,33 @@ external/high-impact actions.
   *admission* and so never reached the cost path was **discarded as
   inconclusive** rather than recorded as a pass.
 
-  **What now blocks AI-001** is therefore narrower and fully specified. It is
-  no longer "three deterministic P0s plus runtime": it is **a durable cost
-  authority that survives process restart**. That cannot be built in the
-  control plane, which has no persistent store by design; it lives in
-  `adapteng-automation-platform` (`005_ai_gateway.sql` and
-  `008_ai_gateway_runtime_hardening.sql`), together with the EU Vertex adapter
-  and the Drive adapters. Those two migrations were confirmed to *exist* and
-  were **not** exercised, so this is an **open ask against that repository, not
-  a defect finding about it** — a different claim with a different owner and a
-  different evidence bar. Durable spend authority is therefore not a proven
-  capability here. Status stays `REJECT_LIVE`: two of three P0s closing does
-  not authorize a live model call, and P0 #3 is explicitly PARTIAL. AG-008's
-  deterministic fixes have landed on control-plane `main` via PR #38;
-  automation-platform still owns the persistent runtime. Scope note: PR #40
-  re-tested the three P0s only — the absence of a business worker, real
-  provider and Drive runtime is carried forward from the 2026-07-25 assessment
-  and was not re-verified.
+  **What now blocks AI-001** is therefore narrower again, and it is
+  **deployment**. The earlier reading — that the missing piece was an
+  unbuilt durable cost authority — is corrected here in place. That authority
+  is not missing: it lives in `adapteng-automation-platform`
+  (`005_ai_gateway.sql` and `008_ai_gateway_runtime_hardening.sql`), it is
+  **implemented and tested**, and both migrations are among the nine logical
+  units the owner's post-rollout manual production check found exact in
+  production, so its schema is live. **Do not re-apply them** — see
+  `owner/action-items.md`.
+  Its test evidence is workflow run
+  [`31214858400`](https://github.com/Ivan-Shyla/adapteng-automation-platform/actions/runs/31214858400)
+  (*AI Gateway Tests*) on automation-platform `main` head
+  `d6ab6322983af42e355dedea4de6d0d21752de59`, 2026-08-07T20:12:40Z, conclusion
+  `success`, with **ai-gateway unit tests green on both `ubuntu-latest` and
+  `windows-latest`**, plus green **ai-gateway postgres semantics**, **ai-gateway
+  supply-chain gates** and repo validation. The PostgreSQL semantics job is the
+  relevant one here: cross-process spend accounting is exercised against real
+  PostgreSQL, not asserted.
+  So the honest statement is: **the gateway is implemented and tested, and it is
+  not deployed.** No `ai-gateway` container runs in Coolify, so the tested
+  durable authority is not yet *the* authority at runtime, and the real EU Vertex
+  client, Drive adapters, orchestration and approval composition are unproven
+  against a running service. AI-001 stays closed for that reason and no other —
+  **not** because of cost, **not** because of FX configuration, and no longer
+  because of an open deterministic defect. `UNVERIFIED`: nothing in GitHub
+  evidences a deployment; what would settle it is a recorded deploy plus a
+  no-business-data smoke result against the running service.
 
   `AI-001` is merged (marketing PR #19, deterministic, 106 tests), but **no real
   model call has run**. Exact public package `ART-2026-001`, using source
@@ -140,10 +154,11 @@ external/high-impact actions.
   evidence-bounded deterministic draft, with media/publication blocked pending
   live Sheet-vs-Git reconciliation. The 2026-07-26 production audit blocks the
   proof until both deterministic and persistent runtime blockers close; the
-  deterministic side is now closed as recorded above, so the persistent
-  runtime blocker is the one that remains. The proof must enter through the
-  canonical gateway and AG-008 and must never use frozen direct-model workflow
-  MM-22.
+  deterministic side is closed as recorded above, and the persistent side is now
+  implemented and tested rather than absent — so what remains is deploying it and
+  proving the runtime paths against the running service. The proof must enter
+  through the canonical gateway and AG-008 and must never use frozen
+  direct-model workflow MM-22.
 
 ## 2. Lead triage / enrichment on WEB-002 — SECOND
 

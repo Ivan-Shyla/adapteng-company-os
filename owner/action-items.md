@@ -333,34 +333,95 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   with zero durable synthetic state; and independent C ending in B's exact
   migrated catalog state. Record digest-only evidence, capture C final exact
   status before cleanup, then delete the host/volumes and revoke the read-only
-  key. A separately reviewed automation evidence-lifecycle schema, validator,
-  fixtures and consumer PR is an explicit blocker; no final schema version or
-  compatibility is claimed. Current
-  status is `NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR`; rollout
-  authorization remains blocked until that PR merges and validates these
-  exact local fields: `completed_at`, `selected_set_info_sha256`,
-  `scheduler_inventory_sha256`, `scheduler_inventory_observed_at`, and
-  `retention_valid_until`. Do not dispatch
-  approved-assets before that dependency merges and a reviewed sanitized
-  `PASS` validates.
-- [ ] **Migrations not live:** 002 (run ledger), 003 (approval/outbox), 005 (AI
-  gateway), 006 (integrity), 007 (source-identity reservation), Drive-008
-  (replay reservations) and AI-Gateway-008 (runtime hardening) remain repo-only
-  and unapplied. The approved-source runtime authorization chain is now merged
-  through automation-platform PRs #93, #94 and #98; no
-  `Migrate Approved Assets` dispatch has run as of the 2026-08-05 read-only
-  check. Apply only 007 and Drive-008 through that workflow after its documented
-  production-backup evidence, isolated restore/rehearsal, external review,
-  short-lived exact-subject phase authorization and disposable private-network
-  runner are all present. `008_ai_gateway_runtime_hardening.sql` remains
-  forbidden in the approved-assets workflow; it requires its separate
-  first-model-proof migration path before any live model call.
-- [ ] **Remediate the production allocator schema mismatch.** Read-only
-  evidence in automation PR #108 found the live allocator table in schema
-  `adapteng_ops`, not canonical `public`. The merged code now schema-qualifies
-  `public.id_allocator_sequences`, but no live table move or data rewrite
-  occurred. Owner: approve a preservation-first remediation and rollback plan,
-  then verify sequence values and every caller read-only after the change.
+  key. **The automation evidence-lifecycle dependency is CLOSED.** It was recorded
+  here as an explicit outstanding blocker with status
+  `NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR`; that chain has since
+  merged on `adapteng-automation-platform` `main` (verified read-only
+  2026-08-10):
+  PR #93 *add exact-subject rollout authorization*, merged 2026-08-05T15:59:29Z as
+  `1f420dc0f1cc7cfc88fa8037e00b982c0514cc08`;
+  PR #94 *bind backup retention evidence*, merged 2026-08-05T16:58:09Z as
+  `0fa357d0baebc362b5bea0afba78e6233d91b7c8`; and
+  PR #98 *add first governed Company OS model proof*, merged 2026-08-05T17:07:57Z
+  as `d06bdd41964e57d9fc7f1b2490d6dcde64b0143d`.
+  PR #94 is the evidence-lifecycle unit: it upgrades rollout evidence, policy and
+  receipts to v4 and its stated contract covers exactly the five local fields
+  this item required — `completed_at`, `selected_set_info_sha256`,
+  `scheduler_inventory_sha256`, `scheduler_inventory_observed_at` and
+  `retention_valid_until` — and it names company-os PR #15
+  (`e30da31607708153ce11c6e6f513145523a8f335`) as the compatible producer
+  contract. Stop citing this dependency as a reason to wait.
+  `UNVERIFIED`: that a reviewed sanitized `PASS` has actually been produced and
+  validated against a real evidence packet — PR #94's own body still reads
+  "Rollout remains NOT READY", and no `Migrate Approved Assets` run exists. What
+  would settle it: a reviewed sanitized `PASS` packet recorded against a named
+  run. The remaining hold on this item is therefore the **production backup
+  itself**, which is still not configured, and no longer this cross-repository
+  dependency. Current rollout-authorization status:
+  `BLOCKED_ON_UNCONFIGURED_PRODUCTION_BACKUP`.
+- [x] **Migrations ARE live in production — DO NOT REPLAY THEM.**
+  ✅ **CORRECTED 2026-08-10.** This item previously read *"002, 003, 005, 006,
+  007, Drive-008 and AI-Gateway-008 remain repo-only and unapplied"* and told the
+  reader to apply 007 and Drive-008 through `Migrate Approved Assets`. **That was
+  wrong, and acting on it would have damaged production.** The owner's
+  post-rollout manual production check found **all nine logical migration units
+  exact in production**: 001 (id allocator), 002 (run ledger), 003
+  (approval/outbox), 004 (lead identity), 005 (AI gateway), 006 (integrity), 007
+  (source-identity reservation), `008_drive_bridge_replay_reservations.sql` and
+  `008_ai_gateway_runtime_hardening.sql`. Production outranks a repository note.
+  - **Do not re-apply any of the nine units.** Do not dispatch
+    `Migrate Approved Assets` "to apply 007 and Drive-008", and do not route
+    `008_ai_gateway_runtime_hardening.sql` through any approved-assets path.
+    Those instructions described a database state that no longer exists.
+    Replaying an applied migration against live operational truth — the id
+    allocator and the lead identity reservation that AUT-001 and WEB-002 depend
+    on — is the most destructive action currently available in this repository.
+    Any future migration work starts from a read-only status check, never from a
+    repository `live:` flag.
+  - **Evidence:** the owner's post-rollout manual production check. It is
+    owner-attested and deliberately **not** reproducible from GitHub. Read-only
+    confirmation 2026-08-10: the `Migrate Approved Assets` workflow
+    (`adapteng-automation-platform`, id `323029213`) has **zero runs**, so the
+    rollout did not go through GitHub Actions and GitHub holds no dispatch record
+    of it. The absence of a run is therefore **not** evidence that the migrations
+    are unapplied — that inference is exactly the error corrected here.
+  - **`UNVERIFIED` from GitHub:** the per-unit applied state, the rollout
+    timestamp and the operator. What would settle it: a read-only `db_status`
+    output from the merged fail-closed runners, or a `\dt`-equivalent catalog
+    capture from the live `adapteng_ops` database, attached to a status PR.
+    Until such a capture exists the owner's check stands as the authority, and
+    the do-not-replay rule above applies regardless.
+  - Repository-side runners for all nine units are merged and CI-green —
+    automation-platform PRs #105 (`a19c9fdb30122c3e94cc40adc95a78cc94d64978`),
+    #106 (`8441ad5b39102ef68b1a66f98380a8cfb262e27a`) and #107
+    (`d6ab6322983af42e355dedea4de6d0d21752de59`). A merged runner is a capability,
+    not an instruction to run it.
+- [x] **Migration 001 allocator schema mismatch — root cause closed.**
+  ✅ **CLOSED IN CODE 2026-08-08** by automation-platform PR #108
+  *fix(baserow-adapter): schema-qualify the allocator table as public*, merged
+  2026-08-08T22:19:10Z as `23a23f0fd5cacd630badf3bd20503789366f7220` (verified
+  read-only 2026-08-10; all five checks on that merge commit — Validate Repo,
+  Adapter Tests, Baserow Adapter Service, Rollout Policy and the hard-fail scan —
+  concluded `success`). The incident was that both code paths touching the
+  allocator used an unqualified table name, so placement followed the connecting
+  role's `search_path` and resolved to the identically-named `adapteng_ops`
+  schema before `public`. PR #108 pins both the `RUN_MIGRATIONS_ON_START`
+  bootstrap and every runtime allocation to `public.id_allocator_sequences`, and
+  adds a regression test against a real disposable PostgreSQL that reproduces the
+  original condition and was confirmed to fail against the pre-fix code.
+  `001_id_allocator.sql` and its digest pin are unchanged.
+  - **`UNVERIFIED`: the live disposition of the misplaced copy.** PR #108's own
+    description states "No production changes in this PR. Production remediation
+    plan to follow separately once this merges." Nothing in GitHub shows whether
+    the structurally-correct copy under `adapteng_ops` was moved, merged or
+    dropped, or which of the two the allocator now reads. The owner's
+    post-rollout production check attests the nine canonical units are exact,
+    which covers `public`; it does not speak to the leftover shadow object.
+    What would settle it: a read-only capture showing the allocator table present
+    in `public` with its current sequence values, and the `adapteng_ops` copy
+    either absent or explicitly retained as inert, attached to a status PR.
+  - Owner: before any repair, confirm sequence values and every caller read-only.
+    Preservation first — allocated AE-* business IDs must never be re-issued.
 - [ ] **Baserow off-host export/restore** completion; **Google Workspace**
   Manager/recovery acceptance.
 - [ ] **Workspace recovery/break-glass acceptance:** verify Ivan is Manager of

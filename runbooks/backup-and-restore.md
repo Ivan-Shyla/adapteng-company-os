@@ -15,10 +15,23 @@ Docker storage, internal network only, and no public database port.
 > Docker or a provider. The
 > 2026-07-25 Coolify logical backup does not satisfy this contract. Do not run
 > approved-assets migrations until every gate below has a reviewed sanitized
-> `PASS`. Current rollout-authorization status:
-> `NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR`. The separate automation
-> consumer dependency has not merged; no schema version, compatibility,
-> configuration, execution, or readiness is claimed.
+> `PASS` — and note that as of 2026-08-10 there is nothing left to migrate: the
+> owner's post-rollout manual production check found all nine logical migration
+> units exact in production, so approved-assets migrations must **never be
+> replayed** (see [`owner/action-items.md`](../owner/action-items.md)). Current
+> rollout-authorization status:
+> `BLOCKED_ON_UNCONFIGURED_PRODUCTION_BACKUP`. The superseded literal
+> `NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR` no longer describes
+> reality: that separate automation consumer dependency **merged** on 2026-08-05
+> as `adapteng-automation-platform` PRs #93
+> (`1f420dc0f1cc7cfc88fa8037e00b982c0514cc08`), #94
+> (`0fa357d0baebc362b5bea0afba78e6233d91b7c8`) and #98
+> (`d06bdd41964e57d9fc7f1b2490d6dcde64b0143d`), PR #94 being the
+> evidence-lifecycle unit covering exactly `completed_at`,
+> `selected_set_info_sha256`, `scheduler_inventory_sha256`,
+> `scheduler_inventory_observed_at` and `retention_valid_until`. What blocks this
+> runbook is the unconfigured production backup itself. `UNVERIFIED`: whether a
+> reviewed sanitized `PASS` has been produced against a real evidence packet.
 
 > **Verified 2026-08-02 - the object store, and only the object store.** The
 > private Backblaze B2 EU Central bucket this design targets is reachable and
@@ -1778,8 +1791,8 @@ isolation:
   repository_credentials_present_during_sql: false
   raw_business_rows_in_evidence: 0
 rollout_evidence_contract:
-  authorization_status: "NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR"
-  automation_schema_sha256: "<absent until separate reviewed PR merges>"
+  authorization_status: "BLOCKED_ON_UNCONFIGURED_PRODUCTION_BACKUP"
+  automation_schema_sha256: "<UNVERIFIED: the consumer contract merged as automation PR #94 / 0fa357d0baebc362b5bea0afba78e6233d91b7c8; the accepted schema digest is not recorded here>"
   required_fields_accepted: false
 repository_controls:
   bucket_visibility: "private"
