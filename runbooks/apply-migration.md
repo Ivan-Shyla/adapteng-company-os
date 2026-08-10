@@ -1,5 +1,21 @@
 # Runbook — apply a Postgres migration to live `adapteng_ops`
 
+> **STOP — read before using this runbook. Verified 2026-08-10.** All nine
+> logical migration units (001, 002, 003, 004, 005, 006, 007,
+> `008_drive_bridge_replay_reservations.sql`,
+> `008_ai_gateway_runtime_hardening.sql`) are **already applied in production**.
+> The owner's post-rollout manual production check found every one of them
+> exact. **None of them may be replayed.** This runbook is the procedure for a
+> *genuinely new* migration only. If you are here because a note said a
+> migration "remains repo-only and unapplied", that note was stale and has been
+> corrected — see [`owner/action-items.md`](../owner/action-items.md) and
+> [`registry/data-stores.yaml`](../registry/data-stores.yaml).
+> `UNVERIFIED`: per-unit production state is owner-attested and cannot be
+> re-derived from GitHub, because the rollout was manual and `Migrate Approved
+> Assets` has zero runs. A read-only schema verification would settle it. Note
+> that zero runs is **not** evidence of an unapplied database — that inference
+> is what produced the stale note in the first place.
+
 Governed procedure for applying a migration from
 `adapteng-automation-platform/database/migrations/` to the live operational
 database. Proven applying `001_id_allocator` (adapter first boot) and
@@ -10,10 +26,16 @@ database. Proven applying `001_id_allocator` (adapter first boot) and
 1. The migration is **merged to `main`** in `adapteng-automation-platform`.
 2. A fresh backup of `adapteng_ops` exists and is verified — see
    [`backup-and-restore.md`](backup-and-restore.md). **Do not skip this.**
-3. There is a real consumer for the migration, or an explicit owner decision to
-   pre-apply. Applying schema with no consumer adds surface for no value — some
-   migrations (e.g. `006`) are intentionally kept **unapplied** until their
-   feature is wired (see `registry/data-stores.yaml` and ADR-0011).
+3. The migration is **not already applied**. Confirm read-only against the live
+   database first; do not infer from a document. All nine existing units are
+   applied (see the banner above), so this precondition currently excludes every
+   migration in the repository.
+4. There is a real consumer for the migration, or an explicit owner decision to
+   pre-apply. Applying schema with no consumer adds surface for no value. This
+   was previously the reason `006` was recorded as intentionally kept
+   **unapplied**; that is no longer the state — `006` was applied during the
+   rollout and must not be replayed. What ADR-0011 still defers is `006`'s
+   *wiring*, not its schema (see `registry/data-stores.yaml` and ADR-0011).
 
 ## The `search_path` trap (important)
 

@@ -233,7 +233,14 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
 - [ ] **INT-001 (integrity) — approve the deferred wiring, one PR at a time.**
   ADR-0011 defers each of these to a *future approved PR*: live schedule, the
   Finding→Action adapter, the n8n workflow, live manifest wiring, and deployed
-  credentials. Keep **migration 006 unapplied** until backup/restore planning.
+  credentials. **Correction, verified 2026-08-10: migration 006 is already
+  applied in production** — the owner's post-rollout manual production check
+  found all nine logical migration units exact. The former instruction here to
+  "keep migration 006 unapplied until backup/restore planning" described a state
+  that no longer exists, and reading it as current invites an agent to apply an
+  already-applied unit. **Do not replay migration 006.** What remains deferred
+  is the *wiring* listed above, not the schema. See the migration item below for
+  the full record and its `UNVERIFIED` caveat.
   Nothing here should be forced by an agent.
 - [ ] **AI runtime readiness — REJECT_LIVE, but AG-008 is repository-merged.**
   Control-plane main advanced to `edadb09125f7fb5d173d5f595181d1384050b6b5` via
@@ -247,9 +254,19 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   gap in the general JSON validator. `agent/NEXT_TASK.md` self-declares
   `status: done` and CI is green, but no independent third-party review of this
   exact head is recorded — get one before relying on it. Separately,
-  automation-platform must still deploy and wire persistent Postgres cost
-  reservation/reconciliation, the EU Vertex adapter, Drive adapters,
-  orchestration, canonical approval and runtime. Repository components are not
+  automation-platform must still **deploy** the AI Gateway that carries
+  persistent Postgres cost reservation/reconciliation, the EU Vertex adapter,
+  Drive adapters, orchestration, canonical approval and runtime. Note the
+  narrowing, verified 2026-08-10: those components are **implemented and
+  tested**, not missing — `AI Gateway Tests` run
+  [`31214858400`](https://github.com/Ivan-Shyla/adapteng-automation-platform/actions/runs/31214858400)
+  on platform `main` (head `d6ab6322983af42e355dedea4de6d0d21752de59`,
+  conclusion `success`) is green across unit tests on `ubuntu-latest` and
+  `windows-latest`, PostgreSQL-backed semantics, supply-chain gates and repo
+  validation. What is missing is a deployed, running service, so this reads as
+  "build the deployment", never as "build the components". The `REJECT_LIVE`
+  in this item's heading is the **control-plane in-memory** model gateway
+  above, not the `ai-gateway` service. Repository components are not
   deployed/working business AI.
 - [ ] **AI-001 exact first live model proof.** Use only the already-approved and
   published July public article-radar package `ART-2026-001` with source set
