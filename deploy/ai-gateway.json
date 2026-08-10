@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "service": "ai-gateway",
+  "summary": "Provider-pluggable model adapter (EU Vertex canonical), private network only.",
+  "source_of_declared_values": {
+    "repository": "Ivan-Shyla/adapteng-automation-platform",
+    "files": [
+      "services/ai-gateway/Dockerfile",
+      "services/ai-gateway/.env.example",
+      "services/ai-gateway/app/pricing.py",
+      "services/ai-gateway/app/provider.py"
+    ],
+    "verified_on": "2026-08-10"
+  },
+  "target": {
+    "project": "adapteng-ops",
+    "environment": "production",
+    "resource_name": "ai-gateway",
+    "server": null,
+    "destination": null,
+    "note": "server and destination are null on purpose: the reconciler resolves them from the instance and aborts when the match is not unique, rather than guessing."
+  },
+  "source": {
+    "kind": "private_github_app",
+    "git_repository": "Ivan-Shyla/adapteng-automation-platform",
+    "git_branch": "main",
+    "github_app": null,
+    "note": "The platform repository is private, so Coolify must read it through an installed GitHub App. github_app is null: the reconciler resolves the single installed app and aborts when several exist."
+  },
+  "build": {
+    "build_pack": "dockerfile",
+    "base_directory": "/services/ai-gateway",
+    "dockerfile_location": "/Dockerfile"
+  },
+  "network": {
+    "internal_port": 8081,
+    "public_fqdn": null,
+    "connect_to_docker_network": true,
+    "note": "public_fqdn is null and must stay null: this service is reachable only from the private Docker network, exactly like adapteng-baserow-adapter. connect_to_docker_network attaches the container to the shared network so other resources can reach it by name without any public route."
+  },
+  "health_check": {
+    "enabled": true,
+    "path": "/health",
+    "method": "GET",
+    "scheme": "http",
+    "return_code": 200,
+    "interval_seconds": 15,
+    "timeout_seconds": 10,
+    "retries": 5,
+    "start_period_seconds": 30
+  },
+  "delivery": {
+    "auto_deploy_on_push": false,
+    "preview_deployments": false,
+    "force_https": false,
+    "note": "Deployment is driven only by the deploy operation of this repository's workflow, so a push to the platform repository never releases by itself. force_https is off because there is no public route to redirect."
+  },
+  "configuration": [
+    {
+      "key": "AI_GATEWAY_HTTP_HOST",
+      "value": "0.0.0.0",
+      "note": "The service image ends with ENV AI_GATEWAY_HTTP_HOST=127.0.0.1, and app/config.py falls back to the same loopback address. A process bound to loopback answers only callers inside its own container, so the container-network health probe and every internal caller would be refused and the deployment could never become healthy. Binding all interfaces is what makes the container reachable on the private network; nothing is published to the internet, because there is no public FQDN and no port mapping."
+    },
+    {
+      "key": "AI_GATEWAY_HTTP_PORT",
+      "value": "8081",
+      "note": "Declared so the listening port, the exposed port and the health-check port have exactly one source of truth in this file."
+    },
+    {
+      "key": "AI_GATEWAY_PROVIDER_HOST",
+      "value": "https://aiplatform.eu.rep.googleapis.com"
+    },
+    {
+      "key": "AI_GATEWAY_REGION",
+      "value": "eu"
+    },
+    {
+      "key": "AI_GATEWAY_MODEL",
+      "value": "gemini-3.1-flash-lite"
+    },
+    {
+      "key": "AI_GATEWAY_MODEL_ALLOWLIST",
+      "value": "gemini-3.1-flash-lite"
+    },
+    {
+      "key": "AI_GATEWAY_PRICE_VERSION",
+      "value": "2026-07-27",
+      "note": "Must equal PRICE_VERSION in app/pricing.py. The service refuses to start on any other snapshot, so a stale value here is a startup failure, not a silent mispricing."
+    },
+    {
+      "key": "AI_GATEWAY_PROVIDER_TIMEOUT_SECONDS",
+      "value": "30"
+    },
+    {
+      "key": "AI_GATEWAY_PROVIDER_MAX_ATTEMPTS",
+      "value": "2"
+    },
+    {
+      "key": "AI_GATEWAY_PROVIDER_RETRY_BACKOFF_SECONDS",
+      "value": "0.5"
+    },
+    {
+      "key": "AI_GATEWAY_RESERVATION_LEASE_SECONDS",
+      "value": "90"
+    }
+  ],
+  "externally_provided_configuration": [
+    {
+      "key": "AI_GATEWAY_BEARER_TOKENS",
+      "reason": "Caller authentication material. Held only in the Coolify environment store, set by the owner, referenced here by name and never written by this automation."
+    },
+    {
+      "key": "AI_GATEWAY_DATABASE_URL",
+      "reason": "Connection string for the adapteng_ops budget ledger. Carries authentication material, so it is owner-set and name-referenced only."
+    },
+    {
+      "key": "AI_GATEWAY_PROVIDER_PROJECT",
+      "reason": "Google Cloud project identifier. An external resource identifier, kept out of this repository by the same rule that keeps resource ids uncommitted."
+    },
+    {
+      "key": "AI_GATEWAY_FX_USD_EUR",
+      "reason": "Operator-set exchange rate. Pinning a dated rate in git would make the reconciler push a stale rate back over a fresher one."
+    },
+    {
+      "key": "AI_GATEWAY_FX_AS_OF",
+      "reason": "Timestamp for the operator-set rate above, for the same reason."
+    },
+    {
+      "key": "AI_GATEWAY_FX_SOURCE",
+      "reason": "Provenance label for the operator-set rate above, for the same reason."
+    }
+  ]
+}
