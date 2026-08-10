@@ -68,6 +68,12 @@ declared_not_yet_created:
       verified: 2026-08-10
     database_dependency: postgres-adapteng-ops — migrations 005 and 008_ai_gateway_runtime_hardening.sql are ALREADY APPLIED in production per the owner's post-rollout manual production check; DO NOT REPLAY them at deploy time
     not_blocked_by: [cost, model pricing, FX configuration]
+    known_deployment_requirements:
+      # Both found by reading platform main; recorded in control-plane/current-state.md section 5.
+      # Neither is a defect: the defaults are safe, they simply must be overridden or
+      # supplemented at deploy time, and that was previously written down nowhere.
+      - must set AI_GATEWAY_HTTP_HOST=0.0.0.0 — the Dockerfile defaults to 127.0.0.1, which is unreachable from the container network, so the health check cannot pass
+      - /health is liveness only — it returns ok without touching PostgreSQL, so a green health check does not prove database or budget accounting readiness; a separate readiness check is required
     blocking: "creation and deployment of the Coolify application, then proving the EU Vertex client, Drive adapters, orchestration and canonical approval composition against the running service"
     budget_binding: budgets.ai_runtime_cap_eur_month (fail-closed cap, not evidenced spend)
     model_binding: external_saas "Google Cloud (Vertex AI + Drive API)" — gemini-3.1-flash-lite, location eu

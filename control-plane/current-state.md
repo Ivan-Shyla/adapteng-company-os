@@ -188,28 +188,40 @@ workstream is needed.** It is a field on the deployment configuration.
 
 Documentation that contradicts a stronger source. Recorded, not silently fixed.
 
+Reconciled in place by company-os PR #40
+(`f36be5e64e410b050d6b45dfc0a578b52b054030`, merged 2026-08-10). The register is
+kept as the audit trail of what was wrong and what settled it; the "Verdict"
+column now records the outcome rather than an outstanding instruction.
+
 | # | Claim | Where | Contradicted by | Verdict |
 |---|---|---|---|---|
-| D-1 | Migrations 002, 003, 005, 006, 007 and both 008 units "remain repo-only and unapplied" | [`owner/action-items.md`](../owner/action-items.md) | Owner's post-rollout manual production check: all nine logical units exact | **Stale.** Production outranks the note. Correct it. |
-| D-2 | Rollout authorization blocked pending an automation-evidence lifecycle PR | [`owner/action-items.md`](../owner/action-items.md) | The referenced chain merged through platform PRs #93, #94, #98 | **Stale.** Re-verify and close. |
-| D-3 | AI Gateway readiness reads as cost-and-runtime blocked | `ai/` notes | Gateway tests and supply-chain gates green on `main`; only deployment is missing | **Partly stale.** Narrow to "not deployed". |
-| D-4 | Coolify deployment assumed to be manual console work | platform runbooks | Credential for API automation exists in this repository | **Obsolete once WS-B lands.** |
-| D-5 | Migration 001 allocator schema incident open | prior narrative | Fixed and merged in platform PR #108 | **Closed.** |
+| D-1 | Migrations 002, 003, 005, 006, 007 and both 008 units "remain repo-only and unapplied" | [`owner/action-items.md`](../owner/action-items.md) | Owner's post-rollout manual production check: all nine logical units exact | **Corrected in PR #40.** The item now records the verified state and forbids replay; [`registry/data-stores.yaml`](../registry/data-stores.yaml) carries all nine units as `live: true` with `replay: forbidden`. |
+| D-2 | Rollout authorization blocked pending an automation-evidence lifecycle PR | [`owner/action-items.md`](../owner/action-items.md) | The referenced chain merged through platform PRs #93, #94, #98 | **Closed in PR #40**, each PR re-verified merged with its SHA. Status literal is now `BLOCKED_ON_UNCONFIGURED_PRODUCTION_BACKUP` on all five status surfaces. |
+| D-3 | AI Gateway readiness reads as cost-and-runtime blocked | `ai/` notes | Gateway tests and supply-chain gates green on `main`; only deployment is missing | **Narrowed in PR #40** to "implemented and tested, not deployed", citing AI Gateway Tests run `31214858400` (5/5 jobs green). |
+| D-4 | Coolify deployment assumed to be manual console work | platform runbooks | Credential for API automation exists in this repository | **Obsolete once WS-B lands.** Out of scope for PR #40, which touched only this repository. |
+| D-5 | Migration 001 allocator schema incident open | prior narrative | Fixed and merged in platform PR #108 | **Root cause closed in code**, recorded in PR #40. Narrower than this row's original "Closed": #108's body states "No production changes in this PR", so the live disposition of the misplaced copy is `UNVERIFIED`. |
 
-D-1 is the most damaging: it invites an agent to re-apply migrations that are
+D-1 was the most damaging: it invited an agent to re-apply migrations that are
 already exact, which is the one class of mistake this system is built to
-prevent.
+prevent. That invitation is now removed at every surface that carried it,
+including a step in [`ai/ai-001-pilot-intake.md`](../ai/ai-001-pilot-intake.md)
+that had instructed an agent to apply migration 005.
 
-`UNVERIFIED` — D-1 and D-2 rest on the owner's production check, which this
-reconciliation could not repeat. A read-only schema verification run through
-the existing migration runner would settle both permanently, and is exactly the
-kind of check that should be automated rather than remembered.
+`UNVERIFIED` — D-1 and D-2 rest on the owner's production check, which neither
+this reconciliation nor PR #40 could repeat; PR #40 records them as
+owner-attested and not reproducible from GitHub rather than as GitHub-verified.
+A read-only schema verification run through the existing migration runner would
+settle both permanently, and is exactly the kind of check that should be
+automated rather than remembered. Note also that `Migrate Approved Assets` has
+zero runs, and that zero runs is **not** evidence of an unapplied database —
+that inference is what produced D-1 in the first place.
 
 ## 10. Pull requests
 
 | PR | Repository | State | Verdict |
 |---|---|---|---|
-| #35 | `adapteng-company-os` | **CLEAN**, all checks green | Ready. Documentation refresh; nothing is waiting on it but it is waiting on nobody. Merge. |
+| #35 | `adapteng-company-os` | **MERGED** 2026-08-10 (`c75127d60e4cc61f0bb4ed44c53b3d73dfe39b93`) | Was ready and waiting on nobody. Merged, then PR #40 branched from the updated `main`. |
+| #40 | `adapteng-company-os` | **MERGED** 2026-08-10 (`f36be5e64e410b050d6b45dfc0a578b52b054030`) | Reconciled D-1, D-2, D-3 and D-5 in place, plus the two registry surfaces. Both checks green. |
 | #109 | `adapteng-automation-platform` | `MERGEABLE` but `BLOCKED` | Content is sound and its own tests are green. Blocked solely by §2. |
 
 PR #109 adds credential-file validation that checks existence, readability and
