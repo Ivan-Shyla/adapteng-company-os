@@ -1289,6 +1289,13 @@ post-apply state. Migration 007 may use the runner's single transaction.
 Drive-008 uses its embedded transaction and must not be wrapped or rewritten.
 Do not apply migration 006, AI Gateway 008, or any other migration.
 
+> **This invocation is historical. Verified 2026-08-10 — do not run it.** 007
+> and Drive-008 are already applied in production, as are all nine logical
+> units, per the owner's post-rollout manual production check. This block
+> records the procedure that was used, not an operation still to perform.
+> Replaying it is forbidden. See the status banner at the top of this runbook
+> and [`owner/action-items.md`](../owner/action-items.md).
+
 `bootstrap-role` creates, measures and executes the same sealed runner container
 against the current locked target using the disposable-admin capability; it does
 not use `docker exec`. The runner opens the fixed root-owned mode-0600,
