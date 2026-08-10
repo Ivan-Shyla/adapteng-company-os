@@ -252,7 +252,8 @@ that inference is what produced D-1 in the first place.
 | #116 | `adapteng-automation-platform` | **MERGED** 2026-08-10 17:49Z | Repaired the trust anchor. See §12 — this is the one that ended a four-day outage nobody had noticed. |
 | #117 | `adapteng-automation-platform` | **MERGED** 2026-08-10 17:54Z | Records the required checks and how their verdicts are to be read. |
 | #118 | `adapteng-automation-platform` | **MERGED** 2026-08-10 18:08Z | Removed the MM-25 cross-scope write. Supersedes #115, which was **closed unmerged** and rebuilt on a fresh branch. Empties the waiver list — see §11. |
-| #111 | `adapteng-automation-platform` | **Open, `BLOCKED`, stale** | 8 behind / 6 ahead. Every red mark on it predates #116 and #118 and is expected to clear on a rebase. Do not diagnose it from its current check-runs. |
+| #111 | `adapteng-automation-platform` | **CLOSED unmerged** — content shipped as **#119** | Was 8 behind / 6 ahead; its red marks were a stale tree, not a defect. Abandoned and rebuilt on `…-evidence-lane-fresh`, merged 18:26:57Z. See the note below on `-fresh` rebuilds. |
+| #119 | `adapteng-automation-platform` | **MERGED** 2026-08-10 18:26:57Z | WEB-002 self-hosted evidence lane — the content of #111. |
 | #45, #46, #47 | `adapteng-company-os` | **MERGED** 2026-08-10 | Required the n8n gate; recorded it as enforcing; corrected the trust-anchor diagnosis (§12) and enforced README↔CI equivalence (F-7). |
 
 PR #109 adds credential-file validation that checks existence, readability and
@@ -336,6 +337,33 @@ governed was deleted.
 Note for the record: this landed as #118, on a fresh branch. **#115 was closed
 unmerged**, so anyone tracing this through #115 will conclude the change was
 abandoned. It was not.
+
+### 11b. Two pull requests were rebuilt on `-fresh` branches, not rebased
+
+This happened twice within twenty minutes and is now a pattern rather than an
+accident:
+
+| Original | Fate | Replacement | Merged |
+|---|---|---|---|
+| #115 `…fix-mm25-isolation` | **closed unmerged** | #118 `…fix-mm25-isolation-fresh` | 18:08:29Z |
+| #111 `…web002-evidence-lane` | **closed unmerged** | #119 `…web002-evidence-lane-fresh` | 18:26:57Z |
+
+Both originals had fallen far behind `main` — #111 by 8 commits — while the
+repository was being unblocked by #110, #116 and #118 in quick succession. A
+branch that stale has its required checks evaluated against a tree that no
+longer resembles the target, so the red marks describe the old world and cannot
+be reasoned about directly. Rebuilding was the correct call.
+
+**The trap this leaves behind.** An audit that walks pull request numbers sees
+two `CLOSED`, unmerged pull requests and concludes the work was dropped. Both
+shipped in full. Any future reconciliation of this repository against `main`
+must resolve outcomes by *content on `main`*, not by pull request state — the
+same discipline already recorded in §9 for the drift register.
+
+**Related:** this is also why a stale branch must never be diagnosed from its
+current check-runs. Check `compare/<branch>...main` for `behind_by` first. An
+earlier entry in this very document made that mistake about #111 and had to be
+corrected here.
 
 This is the outcome to prefer whenever it is available. A waiver is a standing
 promise that someone will revisit a boundary violation later; removing the
