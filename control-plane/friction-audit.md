@@ -796,6 +796,26 @@ and it passes **by construction**. The current-run fetch is shell 274–278 and 
 clock capture that becomes `decided_at` is shell 314, so `created_at` is always
 the earlier of the two and the 86400-second window is nowhere near binding.
 
+**And it is reached twice per authorization, not once.** WS-1 offered `create:197`
+as "the second call site passing the same `decided_at`", which undersells what is
+there. 197 is not a second call of `validate_current_run_metadata`; it is an
+argument to `validate_phase_authorization` (opened at `create:180`), and *that*
+function calls `validate_current_run_metadata` at
+`validate_approved_assets_phase_authorization.py:354`, forwarding
+`evaluation_time=evaluation_time` at 361. So the comparison at 241–243 runs on
+both paths:
+
+| Path | Entry | Reaches 241–243 via |
+|---|---|---|
+| Direct | `create:119`, `evaluation_time=decided_at` (126) | immediately |
+| Indirect | `create:180`, `evaluation_time=decided_at` (197) | `valpha:354` → 361 |
+
+Both carry the same `decided_at`, so the by-construction conclusion is unchanged
+and neither can fail while the shell ordering holds. What doubles is the
+consequence of breaking that ordering, and the second site is the more confusing
+one: it surfaces from inside receipt validation, so a clock-ordering regression
+would present as an authorization-receipt failure rather than a metadata failure.
+
 That distinction is worth the paragraph because "not executed" and "executed but
 unfailable" have different futures. The property doing the work is an *ordering in
 the shell*, not an invariant of the validator. Capture `now` before the fetch, or
@@ -810,6 +830,54 @@ the shape *I checked the named list and the mechanism was not in it* — and a
 helper list names scripts, so imported modules can never appear in it. The general
 form belongs with §13: **the boundary you stop at is an assumption, and it is
 invisible precisely because stopping feels like completing.**
+
+### The enumeration that followed is mislabelled, and correcting the label reverses its conclusion
+
+WS-1 then did the repository-wide search it had declined the turn before, and
+offered a list of "importers" of `validate_approved_assets_phase_authorization`
+as data, drawing one conclusion — that the module is "broadly depended on", which
+it advanced as a reason to treat the item-5 edit as conservative. Every cited
+line checked at `824b4238`. **Three of the sixteen are imports. Thirteen are
+string literals.**
+
+| Site | Reality |
+|---|---|
+| `create_approved_assets_phase_authorization.py:20` | import |
+| `tests/test_migrate_approved_assets.py:28` | import |
+| `tests/test_approved_assets_rollout_readiness.py:24` | import |
+| `verify_rollout_trust_anchor.py:91` | `PROTECTED_EXACT_PATHS` entry |
+| `verify_rollout_trust_anchor.py:387` | module-name allowlist entry |
+| `run_rollout_module.py:46,50` | loader registry key and path |
+| `run_rollout_module.py:158,161,250,253` | module-name strings |
+| `validate_repo.py:46` | path string |
+| `validate_rollout_ci_policy.py:151` | path string |
+| `test_migrate_approved_assets.py:448,2053` | strings |
+| `test_rollout_trust_anchor.py:2023` | path string |
+
+So in production code **exactly one module imports it** — `create`, the one
+already known, which is the site that started this thread. The anchor does not
+depend on the validator at all; it *protects* it and *allowlists* it, which is a
+governance relationship, not a dependency.
+
+**Correctly labelled, the data says close to the opposite of the conclusion drawn
+from it.** `run_rollout_module.py` describes itself as "Run one fixed rollout
+module without adding repository roots to `sys.path`", and imports
+`importlib.machinery`, `importlib.util` and `runpy`: it is a fixed-registry
+dynamic loader. These modules are deliberately *not* ambient imports. They are
+named as strings, launched through a controlled channel, and their sources are
+digest-pinned in `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256` with
+`closure.dynamic_import` raised on mismatch. The breadth is **pinning breadth,
+not dependency breadth**.
+
+That inverts the practical caution, which is why the mislabel matters rather than
+being pedantry. Broad dependency would mean *many callers may change behaviour* —
+an argument for a minimal edit. Broad pinning means *nothing changes behaviour,
+and several registries and digests must move in lockstep or the loader refuses
+the file*. The second is not a reason to make the edit smaller; it is a reason to
+enumerate the pins before starting. The same structure governs the verifier
+re-pin in item 5, which is the actual subject of that item.
+
+
 
 **Limits, stated.** The consumers traced are those reachable from
 `authorize_approved_assets_phase.sh`; no exhaustive repository-wide enumeration

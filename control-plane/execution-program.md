@@ -720,7 +720,16 @@ deployed gateway:
    on the live path — the second regenerating stub at 783 feeds a single
    `api_call` with no re-fetch, so it cannot produce the failure. Fix 773–775 to
    close the path; include 783 in the same edit because it is free once the file
-   is open and the signature is one attempt.
+   is open and the signature is one attempt. **Enumerate the pins before
+   starting.** These validation modules are launched by a fixed-registry dynamic
+   loader (`run_rollout_module.py`, which exists to run them "without adding
+   repository roots to `sys.path`"), so a single file is typically named in
+   several places at once — a loader registry, `PROTECTED_EXACT_PATHS`, a
+   module-name allowlist, `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256`, and test
+   tables. Those references are *pins, not callers*: nothing changes behaviour
+   when the file changes, but any pin left stale makes the loader refuse it with
+   `closure.dynamic_import`. With one signature available, the failure mode to
+   plan against is a missed pin, not a broken dependant. See F-8.
 
 Everything else on the path to a deployed, healthy AI Gateway is either AUTO or
 AUTO + FAIL CLOSED under the [autonomy policy](autonomy-policy.md).
