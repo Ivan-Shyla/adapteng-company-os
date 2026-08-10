@@ -175,6 +175,14 @@ exit codes so an infrastructure fault can never again be read as success.
 root cause instead of implementing against it. Verified independently against
 `main` before being recorded here.
 
+**Resolved.** Platform PR #116 merged `2026-08-10T17:49:36Z`. The gate returned
+its first green runs in four days at 17:52Z and 18:03Z, and now separates
+"could not determine" (exit 75) from "not authorized" (exit 1), both failing
+closed. Detail and the one post-repair merge-race failure are in
+[`current-state.md`](current-state.md) §12. Not promoted to required: the
+precondition is a check that always starts and always reports, and that
+deserves a run of clean pull requests first.
+
 ### F-4 — Owner approval for ordinary pull requests and CI reruns
 
 All governed rulesets already require **zero** approving reviews. The habit of

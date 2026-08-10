@@ -247,7 +247,13 @@ that inference is what produced D-1 in the first place.
 | #40 | `adapteng-company-os` | **MERGED** 2026-08-10 (`f36be5e64e410b050d6b45dfc0a578b52b054030`) | Reconciled D-1, D-2, D-3 and D-5 in place, plus the two registry surfaces. Both checks green. |
 | #41 | `adapteng-company-os` | **MERGED** 2026-08-10 | Coolify deployment automation, closing D-4. |
 | #110 | `adapteng-automation-platform` | **MERGED** 2026-08-10 | Cleared the §2 repository-wide merge lock. |
-| #109 | `adapteng-automation-platform` | **Open, now `MERGEABLE`** (`UNSTABLE`) | Content is sound and its own tests are green. Was blocked solely by §2; unblocked by #110. Its two remaining red checks are the non-required trust-anchor pair (F-3). |
+| #109 | `adapteng-automation-platform` | **MERGED** 2026-08-10 | Was blocked solely by §2; unblocked by #110. |
+| #112, #113, #114 | `adapteng-automation-platform` | **MERGED** 2026-08-10 | AI Gateway deployment contract: bound host/port logging, readiness split from liveness, contract documented. |
+| #116 | `adapteng-automation-platform` | **MERGED** 2026-08-10 17:49Z | Repaired the trust anchor. See §12 — this is the one that ended a four-day outage nobody had noticed. |
+| #117 | `adapteng-automation-platform` | **MERGED** 2026-08-10 17:54Z | Records the required checks and how their verdicts are to be read. |
+| #118 | `adapteng-automation-platform` | **MERGED** 2026-08-10 18:08Z | Removed the MM-25 cross-scope write. Supersedes #115, which was **closed unmerged** and rebuilt on a fresh branch. Empties the waiver list — see §11. |
+| #111 | `adapteng-automation-platform` | **Open, `BLOCKED`, stale** | 8 behind / 6 ahead. Every red mark on it predates #116 and #118 and is expected to clear on a rebase. Do not diagnose it from its current check-runs. |
+| #45, #46, #47 | `adapteng-company-os` | **MERGED** 2026-08-10 | Required the n8n gate; recorded it as enforcing; corrected the trust-anchor diagnosis (§12) and enforced README↔CI equivalence (F-7). |
 
 PR #109 adds credential-file validation that checks existence, readability and
 non-emptiness without ever reading contents, its tests, and a least-privilege
@@ -307,9 +313,74 @@ The job carries no workflow-level `paths:` filter and runs on every push and
 pull request, so it always reports a status. That is what makes requiring it
 safe rather than a repeat of the trap in §2.
 
-**Consequence for the owner.** Renewing the ISO-1 waiver — or resolving the
-company-to-personal crossing so no waiver is needed — is now the blocker for
-n8n work specifically, and only for n8n work. It is still not on the critical
-path to a deployed AI Gateway. It remains owner-only because it is a data
-boundary, and the pinned-tuple design means extending it is a reviewable code
-change rather than a quiet JSON edit.
+**Consequence for the owner — superseded the same day, see below.** Renewing
+the ISO-1 waiver was briefly the blocker for n8n work specifically.
+
+### 11a. The waiver decision was eliminated, not deferred
+
+Platform PR **#118** merged at `2026-08-10T18:08:29Z` and removed the MM-25
+cross-scope write outright. `n8n/isolation-waivers.json` on `main` is now:
+
+```json
+{
+  "schema_version": "1.0",
+  "waivers": []
+}
+```
+
+There is no expired waiver, because there is no waiver. `n8n isolation` passes
+on `main` with the gate fully required. **The owner decision recorded above no
+longer exists** — it was not deferred, postponed or delegated; the crossing it
+governed was deleted.
+
+Note for the record: this landed as #118, on a fresh branch. **#115 was closed
+unmerged**, so anyone tracing this through #115 will conclude the change was
+abandoned. It was not.
+
+This is the outcome to prefer whenever it is available. A waiver is a standing
+promise that someone will revisit a boundary violation later; removing the
+violation retires both the promise and the mechanism that tracked it. The
+double-lock pinned-tuple design in `validate_n8n_isolation.py` remains in place
+for any future crossing, unused and harmless.
+
+## 12. The trust-anchor gate is repaired and green
+
+Platform PR **#116** merged at `2026-08-10T17:49:36Z`.
+
+The gate had failed on every pull request since `2026-08-06T15:30:57Z` — 55+
+consecutive runs — and, as F-3 now records, was jammed in *both* directions:
+it could neither pass an ordinary pull request (`approval.unexpected`) nor
+accept an owner-signed receipt (`approval.circular_or_stale`). For four days it
+looked like a working control while being incapable of reaching a verdict.
+
+**Verified green after the repair**, which is the only evidence that counts:
+
+| Run | Branch | Result |
+|---|---|---|
+| `2026-08-10T17:52:05Z` | `palinaruban-document-check-verdicts` | **success** |
+| `2026-08-10T18:03:19Z` | `palinaruban-fix-mm25-isolation-fresh` | **success** |
+
+Those are the first successes in four days.
+
+The repair also splits the verdicts, which was the part of the original brief
+worth keeping: **exit 75** and `rollout_trust_anchor.undetermined.<code>` for
+"could not determine", **exit 1** and `rollout_trust_anchor.unauthorized.<code>`
+for "not authorized", with distinct check-run titles. Both still fail closed.
+An infrastructure fault can no longer be read as an authorization refusal — or,
+as the pre-repair code did on one line, as success.
+
+**One failure after the repair, and it is not a regression.** Run
+`31417567517` at `2026-08-10T18:08:29Z` exited 1 at the exact second #118 was
+merging. `pull_request_target` evaluates `main`'s verifier against a head and
+base that both moved underneath it. The two runs before it passed and #118
+merged cleanly. Non-required, so it blocked nothing. If this recurs *away* from
+a merge boundary, treat it as real; a single instance timestamped to the second
+of a merge is a race, not a defect.
+
+**Still not required, deliberately.** Promotion is a company-os decision made
+in [`scripts/bootstrap_rulesets.py`](../scripts/bootstrap_rulesets.py), and the
+precondition is the one that made requiring `n8n isolation` safe: the job must
+always start and always report. That has now been observed green twice and
+red once under a known race — enough to trust the mechanism, not yet enough to
+promote a check whose failure mode includes a merge-boundary race. Re-evaluate
+after a run of clean pull requests, and only then.
