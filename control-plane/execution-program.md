@@ -673,15 +673,23 @@ deployed gateway:
    Line 379, the runner check, still routes its error to `/dev/null`, and seven
    of the helper's failure codes report through it. Covering both in one receipt
    avoids needing a second signature later for an identical one-line change. See
-   F-8.
+   F-8. **Context is already on the pull request:** WS-6 posted the verdict's
+   meaning and then corrected its own comment to disclose the §15 hold and the
+   fact that it merged #122 past the same verdict four minutes earlier. Opening
+   #121 gives the whole picture without needing these documents.
 4. **One sentence settling whether an advisory authorization refusal may be
    merged past.** Two sessions answered this oppositely within four minutes —
    platform #122 merged, #121 was left open — from materially identical
    positions, and both readings are supportable from the documentation. See
    `current-state.md` §15, which sets out the likely resolution: treat changes to
    the anchor's own machinery, which cannot self-authorize, differently from
-   ordinary protected changes. Until it is settled, agents should leave such pull
-   requests open.
+   ordinary protected changes. That distinction has since been tested against
+   both live cases and separates them correctly. Until it is settled, agents
+   should leave such pull requests open. **Worth deciding at the same time:**
+   whether the verifier should *emit* the distinction as distinct codes rather
+   than leaving it in prose for readers to re-derive. It can already see the
+   difference, and a policy encoded in the check cannot drift from the check —
+   which is what most of the friction register is about.
 5. **Whether to re-pin the verifier so the F-8 fixture can be repaired.** The
    defective fake `gh` lives in a file that is both protected and digest-pinned,
    and the pin lives in a verifier that pins itself. The fix is known, was

@@ -645,4 +645,23 @@ This does not settle the question — the owner still owns the sentence — but 
 narrows it usefully. The proposal is no longer abstract; it has been checked
 against the only two cases anyone has, and it discriminates.
 
+**If it is adopted, it does not have to live only in prose.** WS-6 offered the
+implementation and correctly declined to build it without the decision: the
+verifier can already see the difference between a change confined to the anchor's
+own machinery and one touching other protected paths, so it could **emit distinct
+codes** rather than making a reader open the file list and re-derive which case
+they are in.
+
+That is the same principle as the rest of this programme. §13 says a control that
+cannot fail is not a control; F-8 adds that a control which reports the wrong
+cause is worse than one that reports none; F-7 is a whole register of things that
+drifted because a distinction lived in prose that something else had to remember.
+A policy encoded in the check cannot drift from the check. **So the owner's
+sentence has a durable form available, and the choice is worth making
+deliberately rather than defaulting to prose** — which is the option that decays.
+
+Not built, and correctly so: it is both a protected-path change and an encoding
+of a policy that has not been decided. It waits for the decision and for someone
+with the authority to ask for it.
+
 
