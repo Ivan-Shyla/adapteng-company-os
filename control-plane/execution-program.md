@@ -677,6 +677,12 @@ deployed gateway:
    the anchor's own machinery, which cannot self-authorize, differently from
    ordinary protected changes. Until it is settled, agents should leave such pull
    requests open.
+5. **Whether to re-pin the verifier so the F-8 fixture can be repaired.** The
+   defective fake `gh` lives in a file that is both protected and digest-pinned,
+   and the pin lives in a verifier that pins itself. The fix is known, was
+   implemented and verified, and was then deliberately reverted rather than
+   shipped. See F-8. This is one decision, not a workstream, and it can be taken
+   at the same time as the receipt for #121.
 
 Everything else on the path to a deployed, healthy AI Gateway is either AUTO or
 AUTO + FAIL CLOSED under the [autonomy policy](autonomy-policy.md).
