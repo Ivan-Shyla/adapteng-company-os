@@ -76,17 +76,23 @@ runtime-дампов и копий реализации из других реп
 
 ```bash
 python scripts/validate_sensitive_references.py
-python -m unittest scripts.test_validate_sensitive_references scripts.test_postgres_restore_rehearsal scripts.test_coolify_deploy
+python -m unittest scripts.test_validate_sensitive_references scripts.test_postgres_restore_rehearsal scripts.test_rehearsal_contour scripts.test_rehearsal_effective_repository scripts.test_coolify_deploy scripts.test_pre_pr_commands_match_ci
 python -m unittest scripts.test_postgres_restore_scheduler_surface  # только POSIX
 ```
 
 Первая команда — это то, что делает проверяемым обещание из начала файла: она
 читает отслеживаемые файлы через `git ls-files` и возвращает код 1, если находит
 ссылку или id ресурса Google Drive либо присвоение чувствительного значения.
-Вторая — регрессионные наборы к ней, к процедуре восстановления PostgreSQL и к
-драйверу деплоя в Coolify. `unittest discover` не используется: в `scripts/` нет
-`__init__.py`, поэтому модули перечисляются явно, а запуск обязателен из корня
-репозитория.
+Вторая — регрессионные наборы к ней, к процедуре восстановления PostgreSQL, к
+её контуру и выбору репозитория, и к драйверу деплоя в Coolify.
+`unittest discover` не используется: в `scripts/` нет `__init__.py`, поэтому
+модули перечисляются явно, а запуск обязателен из корня репозитория.
+
+Список модулей во второй команде должен совпадать с
+[`ci.yml`](.github/workflows/ci.yml) — иначе локальная проверка слабее CI и
+пропускает то, что CI обязательно поймает. Это не просьба: набор
+`test_pre_pr_commands_match_ci` разбирает оба файла и падает при расхождении в
+любую сторону. Добавляя модуль в CI, добавьте его и сюда.
 
 Третья команда работает только на POSIX и на Windows не запустится: её предмет —
 `scheduler_file_record`, который открывает файлы с `os.O_NOFOLLOW` (на Windows
