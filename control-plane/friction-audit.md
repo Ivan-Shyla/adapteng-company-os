@@ -427,6 +427,39 @@ program spent a day repairing, and would destroy the argument for ever promoting
 it to required. **Left open for the owner.** This is now an owner-action item,
 not agent work.
 
+**And the underlying defect is locked three deep, which is the more interesting
+finding.** WS-9 identified the harness fault — the fake `gh` regenerates
+`created_at` from the clock on every invocation — implemented the fix (record it
+once at dispatch and reuse it), verified it against the committed fixture, and
+then **reverted it rather than ship it**. That was the right call, and the reason
+is structural. Verified directly against `verify_rollout_trust_anchor.py` on
+`main`:
+
+1. `tests/test_migrate_approved_assets.py`, which holds the defective fixture, is
+   in `PROTECTED_EXACT_PATHS`.
+2. It is *also* digest-pinned in `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256`
+   (`1f18157989b9…`), so editing it trips `closure.dynamic_import` until the pin
+   is updated.
+3. The pin lives in `verify_rollout_trust_anchor.py`, which is itself a protected
+   path **and pins its own source** (`0cf23bf17d39…`) — so re-pinning the test
+   changes the verifier, which then requires re-pinning itself.
+
+`scripts/validation/approved_assets_github_metadata.py` is pinned too, so the
+alternative repair site is closed by the same mechanism.
+
+**A digest pin intended to protect a test file also freezes any defect inside
+it.** The control is not wrong — pinning reviewed sources is exactly how you stop
+a test being quietly weakened — but the consequence nobody designed is that a
+known-defective fixture in a *required* check cannot be repaired by anyone
+without an owner-signed receipt and a deliberate re-pinning of the verifier
+against itself. Both the diagnostic instrument (#121) and the actual fix are now
+waiting on the same signature.
+
+This is the sharpest instance yet of the pattern in `current-state.md` §15: the
+protections are individually correct and collectively immovable. It should be
+weighed when that policy question is settled, because it is no longer academic —
+it is blocking two distinct repairs to a check that randomly blocks merges.
+
 ---
 
 ## P3 — obsolete, delete
