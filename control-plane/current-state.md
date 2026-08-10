@@ -616,6 +616,28 @@ searched is what makes the miss visible to the next reader, including yourself.
 **The corollary for this record:** never infer that a mechanism works from the
 absence of failures. Two of the three above looked healthy for days.
 
+**The same error recurred one level up, which is what promotes it to a rule.**
+Tracing the second F-8 fixture site, WS-1 excluded a file from the executed path
+because the shell's helper list does not name it — while the shell *does* run a
+script that imports the deciding function from it. The first error stopped at a
+function boundary that an `except` crossed; the second stopped at an invocation
+boundary that an `import` crossed. Both have the form *I checked the named list
+and the mechanism was not in it*, and in both cases the list was real, correctly
+read, and the wrong list.
+
+So the rule is not about exception scope. **The boundary you stop searching at is
+an assumption, and it is invisible precisely because stopping feels like
+finishing.** A conclusion reached inside too small a boundary looks identical to a
+correct one — same line numbers, same ruled-out alternatives. The only cheap
+defence is the one WS-1 named itself: state the boundary you searched, so the
+unstated assumptions become visible as the unstated ones.
+
+Worth recording that in this instance the *conclusion* was right and only the
+reason was wrong. That is the harder case to catch, and the reason it still
+matters is that reasons carry forward while conclusions do not: "not executed"
+and "executed but unfailable by construction" imply different future behaviour
+the moment anyone reorders the code.
+
 **The generalisation, arrived at twice independently.** A pass/fail conclusion is
 a lossy projection of the verdict that produced it, and the loss is exactly the
 part you need when deciding whether a control is healthy. F-8 reached this from
