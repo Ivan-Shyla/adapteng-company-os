@@ -1,0 +1,65 @@
+name: Coolify deploy
+
+# Drives the Coolify API for the services declared under deploy/, so releasing a
+# service is a workflow run with a reviewable diff rather than a console session.
+#
+# The declared state lives in deploy/<service>.json and nowhere else. The inputs
+# below choose only which service and which operation, never what to apply, so a
+# dispatch cannot smuggle in configuration that was never reviewed.
+#
+# inspect and status only read. reconcile writes configuration and then re-reads
+# it to confirm what was stored. deploy releases the already-reconciled resource
+# and follows the deployment to a terminal state. Nothing here removes anything:
+# the script refuses the DELETE method outright.
+#
+# The access value is passed through the environment and is never printed. The
+# base address comes from a repository variable, so neither is written into a
+# file in this repository.
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "inspect and status read only; reconcile writes config; deploy releases"
+        required: true
+        default: inspect
+        type: choice
+        options:
+          - inspect
+          - reconcile
+          - deploy
+          - status
+      service:
+        description: "Spec file under deploy/, named without its extension"
+        required: true
+        default: ai-gateway
+        type: string
+
+permissions:
+  contents: read
+
+# One run at a time per service. Two overlapping reconciles could each read a
+# state the other is about to change.
+concurrency:
+  group: coolify-deploy-${{ github.event.inputs.service }}
+  cancel-in-progress: false
+
+jobs:
+  drive:
+    name: Coolify ${{ inputs.operation }} ${{ inputs.service }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      # coolify_deploy.py imports only the standard library, matching every other
+      # script in this repository, so there is no dependency install step.
+      - name: Drive the Coolify API
+        env:
+          COOLIFY_API_CREDENTIAL: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_BASE_URL: ${{ vars.COOLIFY_URL }}
+          OPERATION: ${{ inputs.operation }}
+          SERVICE: ${{ inputs.service }}
+        run: python scripts/coolify_deploy.py

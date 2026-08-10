@@ -30,6 +30,7 @@ runtime-дампов и копий реализации из других реп
 | [`decisions/`](decisions/) | ADR-журнал уровня компании + шаблон; ссылки на платформенные ADR в `adapteng-automation-platform`. |
 | [`ai/`](ai/) | Программа AI: точки встраивания, guardrails, выбор модели с проверенными ценами, контроль затрат. |
 | [`owner/`](owner/) | «Пины» — действия только для владельца (`action-items.md`) и карта доступов по именам (`access-map.md`). |
+| [`deploy/`](deploy/) | Декларативное целевое состояние деплоя: один файл на сервис для Coolify. Значения применяет [`scripts/coolify_deploy.py`](scripts/coolify_deploy.py) через workflow `Coolify deploy`; секретные значения — только по имени. |
 
 ## Быстрые ответы (где смотреть)
 
@@ -71,16 +72,17 @@ runtime-дампов и копий реализации из других реп
 
 ```bash
 python scripts/validate_sensitive_references.py
-python -m unittest scripts.test_validate_sensitive_references scripts.test_postgres_restore_rehearsal
+python -m unittest scripts.test_validate_sensitive_references scripts.test_postgres_restore_rehearsal scripts.test_coolify_deploy
 python -m unittest scripts.test_postgres_restore_scheduler_surface  # только POSIX
 ```
 
 Первая команда — это то, что делает проверяемым обещание из начала файла: она
 читает отслеживаемые файлы через `git ls-files` и возвращает код 1, если находит
 ссылку или id ресурса Google Drive либо присвоение чувствительного значения.
-Вторая — регрессионные наборы к ней и к процедуре восстановления PostgreSQL.
-`unittest discover` не используется: в `scripts/` нет `__init__.py`, поэтому
-модули перечисляются явно, а запуск обязателен из корня репозитория.
+Вторая — регрессионные наборы к ней, к процедуре восстановления PostgreSQL и к
+драйверу деплоя в Coolify. `unittest discover` не используется: в `scripts/` нет
+`__init__.py`, поэтому модули перечисляются явно, а запуск обязателен из корня
+репозитория.
 
 Третья команда работает только на POSIX и на Windows не запустится: её предмет —
 `scheduler_file_record`, который открывает файлы с `os.O_NOFOLLOW` (на Windows
