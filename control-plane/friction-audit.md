@@ -619,6 +619,75 @@ second receipt later for an identical one-line change. Recorded here rather than
 acted on, because amending #121 means touching a protected path — the same lock
 described above.
 
+### The mechanism narrows to one raise site, and the instrument cannot say so
+
+Every line WS-1 cited was checked against `main` at `824b4238` and is exact:
+`_project_run` returns `created_at` at 149, `_parse_page` projects through it at
+198, the digest is taken at 277–284, the re-verification loop runs 291–318, the
+`try` opens at 461 and the `except` closes at 510, and the fake `gh` regenerates
+`created_at` from `datetime.now()` at 773–775. Three refinements follow that
+neither session stated.
+
+**One of the three `pagination_race` sites is reachable here, not three.** Line
+257 fires when a later page's `total_count` differs from the first; line 290 when
+`expected_total != len(items)`. The stub pins `"total_count": 1` and returns
+exactly one item on every invocation, so both comparisons hold unconditionally.
+Only **line 318**, the digest comparison, can trip — and the only projected field
+that varies between two identical GETs is `created_at`. The mechanism is
+therefore not "a pagination race" but one specific comparison failing on one
+specific field.
+
+**The re-verification pass is the only success path out of `fetch_all`, not an
+extra step for small responses.** `return items` at 319 sits *inside* the
+`if len(page.items) < PER_PAGE:` at 288; the only other exit is
+`raise MetadataError("github_metadata.truncated")` at 320. So the gate is what
+makes the page loop *terminate*, not what makes verification run — there is no
+successful return that skips it, at any response size. Every successful metadata
+fetch in this system doubles its GETs and re-compares digests. WS-1's phrasing
+("the verification pass always runs here") is true but reads as a property of the
+one-run fixture; it is a property of the function.
+
+**Production is not exposed to this, and the reason is worth stating rather than
+assuming.** Production digests `created_at` too — it is in the projection for
+every caller. But a real run's `created_at` is a fixed server-side attribute that
+does not change between two fetches, so the digests agree. Catching a genuine
+race is what the control is *for*. The defect is entirely that the fixture
+regenerates a value production holds constant. That confirms WS-9's "the harness
+is the defect" conclusion by mechanism rather than by inference.
+
+**A limit on #121's instrument, worth knowing before the datum arrives.** One
+code covers three raise sites, so `lifecycle.run_selection_stderr=` will report
+`github_metadata.pagination_race` without saying which comparison failed. Under
+the stub, elimination gives 318; on any path where `total_count` can legitimately
+vary, it would not. #121 upgrades the label from *wrong subsystem* to *right
+code* — a large gain — but a code still is not a site, and 23 `github_metadata.*`
+codes spread across more than 23 raise sites means this is general, not peculiar
+to `pagination_race`.
+
+**The fixture defect has a second instance.** The `actions/runs/701` stub
+regenerates `created_at` from `now()` at line 783 by the same pattern as 773–775.
+It is not consumed by `authorize_approved_assets_phase.sh` — checked: that script
+contains no `actions/runs/` reference — and its consumer has not been traced here.
+Recorded because the validated fix ("record `created_at` once at dispatch and
+reuse it") would leave 783 untouched if written against 773–775 alone, and
+whoever eventually obtains the re-pin authority gets one attempt at a protected
+edit.
+
+### A stale worktree produced citations that were right by luck
+
+WS-1 reported platform `main` at `3bddeee` while it was at `824b4238` — two
+commits behind, with #122 (`3e9b9ef4`) and #123 (`824b4238`) landed in between.
+Its line numbers nonetheless verified exactly, because neither commit touched
+`approved_assets_github_metadata.py` or `test_migrate_approved_assets.py`. That
+was checked against the changed-file lists rather than assumed.
+
+The citations were correct; the method that produced them was not. Line numbers
+carry no evidence of the tree they came from, so a stale citation is
+indistinguishable from a current one until someone re-derives it — the same
+property that makes a wrong timestamp more dangerous than a wrong SHA (§10). The
+cheap habit: state the ref you read at, so the reader can check the delta instead
+of re-reading the file.
+
 ---
 
 ## P3 — obsolete, delete

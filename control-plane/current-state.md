@@ -534,6 +534,25 @@ message, the message stops being a diagnosis and becomes a guess with the
 authority of a log line. Check the width of the `except` before trusting the
 label attached to it.
 
+**The worked example, supplied by WS-1 against itself.** Having been corrected,
+WS-1 traced exactly how the label misled it: it examined `select_run`'s own raise
+sites, established that `run_selection.multiple` is unreachable under a stub that
+always returns exactly one run, and concluded the failure was therefore "not a
+`MetadataError` at all" — an uncaught exception or a crash. The reasoning inside
+that boundary was sound. The boundary was wrong: the `except` at 510 spans the
+whole operation, and three `fetch_all` call sites sit inside it. Its own
+diagnosis of the miss is the part worth keeping — *"I stopped at the function
+boundary while the `except` spans the whole operation. I never stated that
+assumption, which is exactly why I didn't test it."*
+
+That is the mechanism by which a wrong label does damage. It did not merely fail
+to inform; it selected the subsystem, and careful reasoning within the wrong
+subsystem produces a wrong answer carrying all the visible marks of a good one —
+specific line numbers, a ruled-out alternative, a stated conclusion. Silence
+would have been safer, because silence does not come with a suggestion. An
+unstated assumption is untestable by construction; naming the boundary you
+searched is what makes the miss visible to the next reader, including yourself.
+
 **The corollary for this record:** never infer that a mechanism works from the
 absence of failures. Two of the three above looked healthy for days.
 
