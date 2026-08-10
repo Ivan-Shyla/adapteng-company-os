@@ -664,4 +664,22 @@ Not built, and correctly so: it is both a protected-path change and an encoding
 of a policy that has not been decided. It waits for the decision and for someone
 with the authority to ask for it.
 
+**A test for whether the sentence is good enough, from WS-9.** Whichever way the
+owner rules, *the rule must be unambiguous enough that an agent does not have to
+be cautious by temperament to apply it correctly.*
+
+That is not a stylistic preference; it is the thing that actually failed here.
+Both sessions reasoned honestly from the same governance text and took opposite
+actions on an identical verdict, and WS-9's own assessment of its stop is the
+decisive evidence: **"a judgement call, not a rule I could point at."** It
+happened to be the conservative call, and conservatism happened to be right — but
+a policy that only works when the agent reading it is temperamentally careful is
+not a policy, it is a filter on personnel.
+
+So the acceptance criterion for the owner's sentence is not "is it correct" but
+"could an incautious agent apply it correctly without judgement". If the answer
+is no, the sentence needs to be sharper regardless of which reading it adopts.
+This is also the strongest argument for the encoded form above: a code emitted by
+the verifier requires no temperament at all to read.
+
 
