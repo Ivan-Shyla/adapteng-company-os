@@ -557,21 +557,27 @@ activation of a materially new paid provider is reserved to the owner under the
 
 ## Dispatch status
 
-**Round 1 landed 2026-08-10.** Round 2 is running.
+**Rounds 1 and 2 landed 2026-08-10.** Every dispatched workstream is complete.
 
 | WS | Status | Evidence |
 |---|---|---|
 | **WS-1** | **Done** | Platform PR #110, completed by company-os PR #45 which made `n8n isolation` a required check. Merge lock cleared; #109 merged. |
 | **WS-2** | **Done** | company-os PR #41. `inspect` confirmed `ai-gateway` absent in Coolify. |
 | **WS-3** | **Done** | company-os PRs #35 and #40. Drift register closed. |
-| **WS-4** | Partly done | #109 and #112 merged (credential check, bind-address contract and logging). Readiness endpoint and the configuration runbook remain. |
-| **WS-6** | Running | Repairs the two permanently-red trust-anchor checks. |
-| WS-5 | Blocked | Needs the rest of WS-4. Also needs the owner's FX values at run time. |
+| **WS-4** | **Done** | Platform #109, #112, #113, #114: credential check, bind-address contract and logging, readiness split from liveness, deployment contract documented. |
+| **WS-6** | **Done** | Platform PR #116, merged 17:49Z. Trust anchor green at 17:52Z and 18:03Z — first successes in four days. Diagnosis corrected; see F-3 and `current-state.md` §12. |
+| WS-5 | **Unblocked, needs the owner** | WS-2 and WS-4 both complete, so nothing technical remains. Requires three operator values at run time: the FX rate, its timestamp and its source label. |
 | WS-7 | Deferred | Deliberately. Nothing depends on it. |
-| WS-8 | Blocked | Needs WS-5 **and** the owner checkpoint. |
+| WS-8 | Blocked | Needs WS-5 **and** the owner checkpoint. Model inference count is still **0**. |
 
-The critical path is now the remainder of WS-4 → WS-5 → WS-8, and only the last
-of those needs the owner.
+Unplanned work that landed in the same window and is not attributable to any
+workstream: platform **#117** (records the required checks and how to read
+their verdicts) and platform **#118**, which removed the MM-25 cross-scope
+write and thereby deleted the ISO-1 waiver decision rather than deferring it
+(`current-state.md` §11a). #118 replaced **#115**, which was closed unmerged.
+
+The critical path is now **WS-5 → WS-8**, and both need the owner. There is no
+remaining agent-executable work on the path to a deployed AI Gateway.
 
 ## Next owner checkpoint
 
