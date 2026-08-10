@@ -252,6 +252,84 @@ checkout, with `.gitattributes` pinning `eol=lf` on only six paths. Check the
 required check's status on `main` **before** reporting a data-integrity
 problem.
 
+**Third sighting, 2026-08-10:** the AI-gateway session reported that
+`validate_ai_gateway.py` cannot pass on a Windows checkout, because migration
+008's SQL is checked out CRLF and its sha256 never matches the LF digest
+pinned in `apply_ai_gateway_008.py`. Same root cause, third session. The
+digests are correct and CI is green; the local check is what is unusable. The
+pins must not be "fixed" — they are the control. Widening `.gitattributes` to
+pin `eol=lf` on the migration set is the only safe remedy, and it is cosmetic
+relative to the confusion it keeps causing.
+
+---
+
+### F-8 — A required check that is nondeterministic — P1
+
+**`root-rollout-tests` produced two different verdicts for the same commit,
+twice.** It is one of the five checks required by the platform ruleset, so
+every occurrence randomly blocks a merge that has nothing wrong with it.
+
+Evidence, from the API rather than from a report:
+
+| Commit | `push` run | `pull_request` run |
+|---|---|---|
+| `2c9824ba` (PR #112) | attempt 1 **success** | attempt 1 **failure** |
+| `084c4d17` (PR #114) | attempt 1 **success** | needed **attempt 2** |
+
+Identical trees, opposite verdicts. Both were re-run to green, which is why
+the current check-run conclusions all read `success` and the failures are
+invisible unless you look at run attempts.
+
+The failure is always the same case of
+`test_production_lifecycle_cleanup_status_is_fail_closed`: the `ok-fail-0-90`
+case exits 1 with `lifecycle.run_selection_failed` instead of reaching the
+cleanup path and exiting 90.
+
+**Why a transient becomes a hard failure.** In
+`scripts/operations/authorize_approved_assets_phase.sh` the `select-queued-run`
+retry loop treats **only** exit code 2 as retryable:
+
+```sh
+if [ "$selection_status" -eq 0 ]; then break; fi
+if [ "$selection_status" -ne 2 ]; then
+  printf '%s\n' "lifecycle.run_selection_failed" >&2
+  exit 1
+fi
+```
+
+and `approved_assets_github_metadata.py` returns 2 for exactly one condition,
+`run_selection.zero`. Every other error — including anything raised by the API
+and JSON layers — collapses to exit 1 and kills a required check with no
+retry, thirty attempts notwithstanding.
+
+**The trigger is UNCONFIRMED, and deliberately recorded as such.** The helper's
+stderr is discarded by `2>/dev/null` in the same command substitution, so the
+one datum that would name the cause — the `MetadataError` code — never reaches
+the log. What can be ruled out by reading the fixtures:
+
+- **not `run_selection.multiple`** — the fake `gh` returns exactly one run
+  (`total_count: 1`, single element)
+- **not `run_selection.zero`** — that maps to exit 2 and would retry, and in
+  any case the filter is `created_at >= created_after` where both sides
+  truncate to whole seconds and `created_at` is always the later real time, so
+  truncation cannot invert the comparison
+
+Which leaves an error raised outside the selection filter — most plausibly the
+fake `gh` reading `$state/dispatch.json` and the helper then parsing empty or
+partial output. **Plausible is not confirmed.** This audit has already been
+burned once by a mechanism that was coherent and wrong (F-3); the next owner
+should make the failure observable *before* changing behaviour.
+
+**Order of work, and the reason for the order:** stop discarding the helper's
+stderr and print the code on the failure path. That is purely additive, changes
+no control semantics, and converts an unreproducible flake into a named error
+on its next occurrence. Only then decide whether the retry contract should
+widen. Widening it first would be changing fail-closed retry semantics in a
+lifecycle script on a guess — and a hard failure on an unrecognised status is
+defensible behaviour, not obviously a bug.
+
+Dispatched as WS-9.
+
 ---
 
 ## P3 — obsolete, delete
