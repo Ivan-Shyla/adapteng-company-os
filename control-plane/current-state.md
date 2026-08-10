@@ -445,6 +445,12 @@ red once under a known race — enough to trust the mechanism, not yet enough to
 promote a check whose failure mode includes a merge-boundary race. Re-evaluate
 after a run of clean pull requests, and only then.
 
+> **Superseded twice — do not act on this paragraph.** Its "known race" reading
+> was wrong (see the 20:44Z update: it was a real defect), and "a run of clean
+> pull requests" was ambiguous (see the 22:29Z update, which replaces it with the
+> adopted criterion). Both corrections are below. Kept because the record of how
+> the criterion was got wrong is part of the evidence for the criterion.
+
 **Update, 19:03Z.** Platform **#120** is the first ordinary pull request to
 complete after the repair, away from any merge boundary, and **both** anchor
 checks passed on it — `Verify exact current head from merged base` SUCCESS and
@@ -489,6 +495,57 @@ whatever the timing looks like.**
 Consequence for promotion: the precondition is unchanged and still unmet. The
 count of clean ordinary-pull-request runs resets against the repaired verifier,
 because the version observed on #120 still contained this third site.
+
+**Update, 22:29Z — the precondition was ambiguous, and the sharper version is
+adopted.** WS-6 swept every anchor run and found nothing live, but flagged that
+"always starts and always reports" and "runs green" are different criteria that
+have not yet diverged only because no anchor run has fired since 20:45:58Z. Once
+protected-path traffic resumes they point in opposite directions.
+
+**The words are right and "green" is wrong.** A gate that has never been observed
+refusing is a gate with no evidence it *can* refuse — which is §13 exactly, and
+the failure mode this entire repair existed to remove. A correct refusal is the
+check working, and counting only greens would rebuild the thing that broke.
+
+Adopted criterion: **N consecutive runs that each reach a terminal verdict, of
+any class, with no infrastructure fault.** Three corrections to the proposed
+wording, each of which would otherwise miscount:
+
+1. **`not_applicable` counts.** WS-6 proposed "of either class", meaning
+   authorized or unauthorized. There are three terminal outcomes, and
+   `not_applicable` is the most common — it is what any pull request touching no
+   protected path produces. Read strictly, "either class" would exclude
+   `d799b5bb`, the single run the count currently rests on, whose verdict is
+   `{"outcome":"not_applicable"}` (verified in the job log).
+2. **`undetermined.pull_request.no_longer_open` is not a fault.** WS-6's message
+   closes by calling any `undetermined.*` code a real defect — which restates the
+   #117 claim that its own #123 retired. #122 *created* that code for the benign
+   merge-underneath-the-job race documented above. It is neither evidence for the
+   mechanism nor against it: the job legitimately could not reach a decision.
+   Treat it as **neutral** — it does not advance the count and does not break it.
+   Any other `undetermined.*` is an infrastructure fault and breaks it.
+3. **The count needs a version anchor, and that is why it stands at one.** All
+   four failing runs on the board — `f0a2d175` ×2 (#121) and `fd96060f` ×2
+   (#122) — were created between 20:21:21Z and 20:43:43Z, before #122 merged at
+   20:44:07Z. `pull_request_target` takes its workflow and code from the base
+   branch, so every one of them ran the *pre-repair* verifier. They are excluded
+   on **code version, not verdict class**, which is a different reason from the
+   one WS-6 gave. Without "runs of the verifier at or after `3e9b9ef4`" written
+   into the criterion, a later sweep will scoop up old runs and over-count.
+
+**Current count: 1** — run `31430619706`, head `d799b5bb`, 20:45:58Z, the only
+anchor run to date executing post-#122 code. WS-6's forward-looking consequence
+stands: if #121 is rebased or re-triggered, its refusal *will* count, because
+declining correctly is the mechanism working.
+
+**And the second consequence generalises past this check.** WS-6's argument for
+why a green streak cannot be the criterion is that a long red stretch is
+ambiguous between "the anchor is broken" and "several protected-path pull
+requests landed in a row" — and only the verdict string distinguishes them, not
+the conclusion. That is the F-8 finding one layer up: there, a CI conclusion of
+`failure` was ambiguous across nine transport codes and two genuine ones, and
+only the discarded error code distinguished them. Two workstreams, different
+subsystems, the same structural result. Recorded as a rule in §13.
 
 ## 13. A control that cannot fail is not a control
 
@@ -558,6 +615,18 @@ searched is what makes the miss visible to the next reader, including yourself.
 
 **The corollary for this record:** never infer that a mechanism works from the
 absence of failures. Two of the three above looked healthy for days.
+
+**The generalisation, arrived at twice independently.** A pass/fail conclusion is
+a lossy projection of the verdict that produced it, and the loss is exactly the
+part you need when deciding whether a control is healthy. F-8 reached this from
+below: a CI conclusion of `failure` is ambiguous across nine transport codes and
+two genuine run-selection outcomes, and only the discarded error code separates
+them. §12 reached it from above: a stretch of red anchor runs is ambiguous
+between a broken gate and a run of protected-path pull requests being correctly
+refused, and only the verdict string separates *those*. Different subsystems,
+different layers, same result — **count verdicts, not colours.** Any health
+metric defined over conclusions is measuring a projection and will eventually
+mistake a working control for a broken one, or the reverse.
 
 ## 14. Where the required-check list is allowed to be duplicated
 
