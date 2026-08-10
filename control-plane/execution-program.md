@@ -555,6 +555,68 @@ activation of a materially new paid provider is reserved to the owner under the
 
 ---
 
+## WS-9 — Make the flaky required check observable, then decide
+
+**Repository:** `Ivan-Shyla/adapteng-automation-platform`. **Priority:** P1 —
+it randomly blocks merges today. **Not on the WS-5 → WS-8 critical path.**
+
+> You are working in `Ivan-Shyla/adapteng-automation-platform`. Branch from
+> `main`.
+>
+> `root-rollout-tests` is one of five checks required by the repository
+> ruleset, and it is nondeterministic. Verified evidence, not a report:
+> commit `2c9824ba` (PR #112) passed under `push` and failed under
+> `pull_request` on attempt 1; commit `084c4d17` (PR #114) passed under `push`
+> and needed attempt 2 under `pull_request`. Identical trees, opposite
+> verdicts. Both were re-run to green, so the current check-run conclusions
+> read `success` and you will only find the failures by inspecting
+> `run_attempt` and the archived run logs.
+>
+> The failing case is always `ok-fail-0-90` in
+> `test_production_lifecycle_cleanup_status_is_fail_closed`
+> (`tests/test_migrate_approved_assets.py`). It exits 1 with
+> `lifecycle.run_selection_failed` instead of reaching the cleanup path and
+> exiting 90. The test is POSIX-only and raises `SkipTest` on Windows, so it
+> runs on Linux CI only.
+>
+> **Step 1, and do only this first.** In
+> `scripts/operations/authorize_approved_assets_phase.sh`, the
+> `select-queued-run` call discards the helper's stderr with `2>/dev/null`
+> inside the command substitution. That stderr carries the `MetadataError`
+> code, which is the single datum that identifies the cause. Capture it and
+> print it on the failure path alongside `lifecycle.run_selection_failed`.
+> This is purely additive: it changes no control semantics, no exit code and
+> no retry behaviour. Check whether any test asserts on that stderr being
+> exactly `lifecycle.run_selection_failed` and update it deliberately if so.
+>
+> **Step 2. Do not skip to this.** Only once a failure has been observed with
+> its real code should you decide whether the retry contract is wrong. Today
+> the loop treats **only** exit 2 (`run_selection.zero`) as retryable and
+> hard-fails on everything else. That may well be correct — a hard failure on
+> an unrecognised status is defensible fail-closed behaviour. Widening it on a
+> guess would be changing the semantics of a lifecycle control without
+> evidence.
+>
+> **What is already ruled out, so you do not repeat it.** Not
+> `run_selection.multiple`: the fake `gh` returns exactly one run
+> (`total_count: 1`). Not `run_selection.zero`: that maps to exit 2 and would
+> retry, and the filter `created_at >= created_after` truncates both sides to
+> whole seconds while `created_at` is always the later real time, so
+> truncation cannot invert it. The remaining suspicion — the fake `gh` reading
+> `$state/dispatch.json` and the helper then parsing empty or partial output —
+> is **a hypothesis, not a finding.** Confirm it before acting on it.
+>
+> **Do not** disable, skip, quarantine or `xfail` the test, and do not remove
+> `root-rollout-tests` from the required set. A flaky required check is a
+> problem; an absent one is worse.
+>
+> **Read [`friction-audit.md`](friction-audit.md) F-3 before you start.** That
+> entry records a coherent, confidently-stated and entirely wrong mechanism
+> which cost a full session. Distinguish what you have observed from what you
+> have inferred, in your report as well as in your commits.
+
+---
+
 ## Dispatch status
 
 **Rounds 1 and 2 landed 2026-08-10.** Every dispatched workstream is complete.
@@ -569,6 +631,7 @@ activation of a materially new paid provider is reserved to the owner under the
 | WS-5 | **Unblocked, needs the owner** | WS-2 and WS-4 both complete, so nothing technical remains. Requires three operator values at run time: the FX rate, its timestamp and its source label. |
 | WS-7 | Deferred | Deliberately. Nothing depends on it. |
 | WS-8 | Blocked | Needs WS-5 **and** the owner checkpoint. Model inference count is still **0**. |
+| WS-9 | **Open, agent-executable** | Raised by WS-4 and verified independently. A required check with two verdicts for one commit. See F-8. |
 
 Unplanned work that landed in the same window and is not attributable to any
 workstream: platform **#117** (records the required checks and how to read
@@ -577,7 +640,9 @@ write and thereby deleted the ISO-1 waiver decision rather than deferring it
 (`current-state.md` §11a). #118 replaced **#115**, which was closed unmerged.
 
 The critical path is now **WS-5 → WS-8**, and both need the owner. There is no
-remaining agent-executable work on the path to a deployed AI Gateway.
+remaining agent-executable work **on the path to a deployed AI Gateway** —
+WS-9 is agent-executable but sits off that path, and fixing it does not bring
+a deployment any closer.
 
 ## Next owner checkpoint
 
