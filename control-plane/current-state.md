@@ -730,6 +730,18 @@ projection or the thing itself. The refusing controls in this programme all fail
 the test, which is why they all needed verdict strings; an ordinary test suite
 passes it, which is why nobody has ever needed one there.
 
+**Read the predicate, not the sets it consumes.** Recording this against myself
+the same day: §15 asserted that a path is protected by "both" mechanisms, having
+counted the two frozensets the worked examples cite. Reading `is_protected_path`
+itself showed **three** mechanisms and an exemption that fires before all of
+them. The sets were the visible artefact; the function was the decision, and I
+described the artefact. This is the same shape as counting `raise` sites without
+walking each guard, and as matching a defect's silhouette without checking its
+mechanism — three instances now, all of them *reasoning about the inputs to a
+decision instead of the decision*. The check is one step and always available:
+find the function that consumes the constant before describing what the constant
+does.
+
 ## 14. Where the required-check list is allowed to be duplicated
 
 Platform **#117** rewrote §3 of that repository's
@@ -968,24 +980,62 @@ implementation anyone will reach for, "anchor machinery ⊆ `PROTECTED_EXACT_PAT
 — reached for because that is the set both worked examples cite — classifies
 **#116 as ordinary**, demands a receipt for it, and makes the outage permanent
 under the rule written to permit its repair. It fails closed, which is the right
-direction and the wrong outcome. The anchor-machinery set must span both
-protection mechanisms, and that is exactly the sort of detail that dies between a
+direction and the wrong outcome. The anchor-machinery set must span every
+protection mechanism, and that is exactly the sort of detail that dies between a
 ruling and an implementation.
+
+**Correction to the sentence above, made the same day it was written.** It first
+said "**both** protection mechanisms", which is an undercount reached by looking
+at the two sets the worked examples cite instead of at the predicate. Reading
+`is_protected_path` at line 1107, a path is protected by **three** mechanisms,
+and there is also an exemption that fires first:
+
+1. `PROTECTED_EXACT_PATHS`, case-folded (1111–1112);
+2. `PROTECTED_PREFIXES`, case-folded prefix match (1113–1114);
+3. `_is_protected_python_shadow_path` (1115) — the anti-shadowing mechanism,
+   which protects `.py`, `.pyc`, `.pyd` and `.so` forms that would shadow a
+   protected module, against `PROTECTED_PYTHON_NAMESPACE_PATHS` (`scripts`,
+   `scripts.migrations`, `scripts.validation`, `tests`) and
+   `PROTECTED_PYTHON_EXACT_MODULE_PATHS`;
+4. and `APPROVAL_PATHS` returns **False** first (1108–1109) — the receipt and
+   signature are deliberately *not* protected, because otherwise no receipt could
+   ever be added.
+
+The third does not add anchor files, because it is **derived from the first**:
+`_protected_exact_python_module_paths` walks `PROTECTED_EXACT_PATHS` at line 134
+and projects it into module space, adding every ancestor. It changes the shape of
+the question rather than the file list — an implementer who tests "which of the
+two sets protects this path" gets a wrong answer for shadow forms. That direction
+is safe here (an unlisted shadow form classifies ordinary, which is stricter), so
+this is a correctness point about the encoding, not a live hole.
 
 A second-order consequence: because the prefix protects every workflow, the
 anchor-machinery set has to name `rollout-trust-anchor.yml` **explicitly** even
 though it is already protected. That path will therefore appear in two mechanisms
 for two different reasons, and the two can drift apart — an F-7 shape built in at
 construction time, worth a comment at the definition rather than a discovery
-later.
+later. The general form is stronger than the instance: **anchor machinery cannot
+be derived from any protection set, because none of the three is about this
+question.** It has to be its own enumeration, cross-checked against the union.
 
 **The set that defines bootstrap is itself anchor machinery, so widening it is
 classified bootstrap — the lighter class.** An attacker's optimal move is a
 one-line addition to that set, arriving under the class whose label says
 "escalate, this cannot self-authorize". WS-6's fix is the right shape and matches
 the asymmetry already accepted elsewhere: **adding to the anchor-machinery set is
-not itself a bootstrap change; removing from it can be.** The verifier already
-computes tree deltas, so it can see the difference.
+not itself a bootstrap change; removing from it can be.**
+
+*The capability that fix assumes is not the one that exists.* WS-6 justified it
+with "the verifier already computes tree deltas, so it can see the difference".
+Tree deltas answer *which files changed*, which cannot distinguish an addition
+from a removal **inside** a frozenset. What the verifier actually has is a closer
+precedent and still not the thing: at 1290–1310 it AST-parses a named constant's
+literal keys out of source, for `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256`. That
+operates on **one** revision. A membership delta needs the base revision's copy
+of the verifier fetched and parsed as well — a new fetch and a second parse, not
+an existing capability. And it works only for constants written as literals:
+`PROTECTED_PYTHON_EXACT_MODULE_PATHS` is a **function call** at line 154, so its
+membership is not readable this way at all.
 
 Two corrections that fix are not safe without.
 
