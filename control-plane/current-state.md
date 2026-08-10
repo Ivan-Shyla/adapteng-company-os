@@ -36,18 +36,22 @@ Two repositories the handoff did not mention were found by enumeration
 ## 2. The single blocking fact â€” CLEARED 2026-08-10
 
 > **Resolved by platform PR #110**, which scoped the isolation check out of the
-> required job without weakening it. `adapteng-automation-platform` merges
-> normally again, and PR #109 moved from `BLOCKED` to `MERGEABLE` as a direct
-> result. The isolation finding below is **still open and still reported**; only
-> its blast radius was removed. Renewing the waiver remains an owner decision.
+> required job without weakening it, and completed by company-os PR #45, which
+> promoted the new `n8n isolation` job to a required check so the data boundary
+> actually blocks n8n changes instead of merely reporting on them.
+> `adapteng-automation-platform` merges normally again: PR #109 moved from
+> `BLOCKED` to `MERGEABLE` and has merged, as has #112. The isolation finding is
+> **still open and still reported**; only its blast radius was removed.
+> Renewing the waiver remains an owner decision, and is now the live blocker for
+> n8n work specifically â€” see Â§11.
 >
 > The diagnosis is kept in full because the failure mode is worth recognising
 > again: a governance control with a date in it became a repository-wide outage,
 > silently, with no warning before the fact.
 
-**What was wrong.** The `main-protected` ruleset requires four status checks.
-Three passed. The fourth, `Validate repository structure and content`, failed on
-a condition that had nothing to do with any code under review:
+**What was wrong.** The `main-protected` ruleset then required four status
+checks. Three passed. The fourth, `Validate repository structure and content`,
+failed on a condition that had nothing to do with any code under review:
 
 ```
 n8n/isolation-waivers.json:waiver[0]: waiver expired isolation_ref=ISO-1
@@ -265,3 +269,37 @@ rollout_trust_anchor.approval.unexpected
 A gate that cannot complete its own verification is not providing safety; it is
 producing a permanent red mark that trains everyone to ignore red marks. See
 the friction audit, F-3.
+
+## 11. The n8n isolation waiver is now a live, scoped blocker
+
+Recorded 2026-08-10, after the gate was made enforcing.
+
+Company-os PR #45 promoted `n8n isolation` to a required check on
+`adapteng-automation-platform`. Platform PR #110 had scoped the job correctly
+but left it advisory at the ruleset level, and said so in its own comment: the
+job always starts, so it is safe to promote later. Only this repository could
+finish that, because the ruleset is managed here in
+[`scripts/bootstrap_rulesets.py`](../scripts/bootstrap_rulesets.py).
+
+Until that landed the boundary was **reported but not enforced**: a change
+touching `n8n/` while the waiver is expired failed the job and could still
+merge. That is the precise outcome the gate exists to prevent.
+
+**Verified behaviour after applying it**, which is the part that matters, since
+requiring the wrong check is what caused the original outage:
+
+| Pull request | Touches `n8n/` | `n8n isolation` | Outcome |
+|---|---|---|---|
+| platform #112 | no | `SUCCESS` | Merged normally. Unrelated work is unaffected. |
+| platform #111 | yes | `FAILURE` | `BLOCKED`. Correct: it crosses a boundary under an expired waiver. |
+
+The job carries no workflow-level `paths:` filter and runs on every push and
+pull request, so it always reports a status. That is what makes requiring it
+safe rather than a repeat of the trap in §2.
+
+**Consequence for the owner.** Renewing the ISO-1 waiver — or resolving the
+company-to-personal crossing so no waiver is needed — is now the blocker for
+n8n work specifically, and only for n8n work. It is still not on the critical
+path to a deployed AI Gateway. It remains owner-only because it is a data
+boundary, and the pinned-tuple design means extending it is a reviewable code
+change rather than a quiet JSON edit.

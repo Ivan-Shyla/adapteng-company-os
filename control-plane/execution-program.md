@@ -527,17 +527,17 @@ activation of a materially new paid provider is reserved to the owner under the
 
 | WS | Status | Evidence |
 |---|---|---|
-| **WS-1** | **Done** | Platform PR #110. Merge lock cleared; #109 became `MERGEABLE`. |
+| **WS-1** | **Done** | Platform PR #110, completed by company-os PR #45 which made `n8n isolation` a required check. Merge lock cleared; #109 merged. |
 | **WS-2** | **Done** | company-os PR #41. `inspect` confirmed `ai-gateway` absent in Coolify. |
 | **WS-3** | **Done** | company-os PRs #35 and #40. Drift register closed. |
-| **WS-4** | Running | Depended on WS-1. Merges #109, then fixes the bind address and readiness. |
-| **WS-6** | Running | Depended on WS-1. Repairs the two permanently-red trust-anchor checks. |
-| WS-5 | Blocked | Needs WS-4. Also needs the owner's FX values at run time. |
+| **WS-4** | Partly done | #109 and #112 merged (credential check, bind-address contract and logging). Readiness endpoint and the configuration runbook remain. |
+| **WS-6** | Running | Repairs the two permanently-red trust-anchor checks. |
+| WS-5 | Blocked | Needs the rest of WS-4. Also needs the owner's FX values at run time. |
 | WS-7 | Deferred | Deliberately. Nothing depends on it. |
 | WS-8 | Blocked | Needs WS-5 **and** the owner checkpoint. |
 
-The critical path is now WS-4 → WS-5 → WS-8, and only the last of those needs
-the owner.
+The critical path is now the remainder of WS-4 → WS-5 → WS-8, and only the last
+of those needs the owner.
 
 ## Next owner checkpoint
 
