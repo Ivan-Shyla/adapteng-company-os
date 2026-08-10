@@ -711,7 +711,11 @@ deployed gateway:
    same act as item 3:** path protection needs a signature, a digest pin needs a
    signature *and* a change to the verifier that authorizes edits. Item 3 is
    ordinary; this one touches the trust boundary's own machinery. They can be
-   taken at the same sitting.
+   taken at the same sitting. **Scope, now traced:** only the stub at 773–775 is
+   on the live path — the second regenerating stub at 783 feeds a single
+   `api_call` with no re-fetch, so it cannot produce the failure. Fix 773–775 to
+   close the path; include 783 in the same edit because it is free once the file
+   is open and the signature is one attempt.
 
 Everything else on the path to a deployed, healthy AI Gateway is either AUTO or
 AUTO + FAIL CLOSED under the [autonomy policy](autonomy-policy.md).

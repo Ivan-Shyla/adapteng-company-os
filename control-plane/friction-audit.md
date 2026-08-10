@@ -735,14 +735,62 @@ code* — a large gain — but a code still is not a site, and 23 `github_metada
 codes spread across more than 23 raise sites means this is general, not peculiar
 to `pagination_race`.
 
-**The fixture defect has a second instance.** The `actions/runs/701` stub
-regenerates `created_at` from `now()` at line 783 by the same pattern as 773–775.
-It is not consumed by `authorize_approved_assets_phase.sh` — checked: that script
-contains no `actions/runs/` reference — and its consumer has not been traced here.
-Recorded because the validated fix ("record `created_at` once at dispatch and
-reuse it") would leave 783 untouched if written against 773–775 alone, and
-whoever eventually obtains the re-pin authority gets one attempt at a protected
-edit.
+**The fixture defect has a second instance, and it is not a second live path.**
+The `actions/runs/701` stub regenerates `created_at` from `now()` at line 783 by
+the same pattern as 773–775. WS-1 traced its consumer; the trace verifies, and the
+conclusion is that 783 is fixture realism rather than a live race:
+
+- the consumer is `collect_approved_assets_current_run.py:72`, a **single**
+  `api_call`. `fetch_all` is not imported into that module at all, so there is no
+  fingerprint, no re-fetch and no digest comparison that a regenerated clock value
+  could make disagree. **783 cannot produce the F-8 signature.** This is the
+  load-bearing half and it is correct.
+- `created_at` is projected at `collect:103`, read by the shell at 308–313 and
+  embedded verbatim into the request at 340.
+- the one comparison that consumes it is
+  `created_at <= evaluation_time and evaluation_time - created_at <= 86400s`
+  (`validate_approved_assets_phase_authorization.py:241–243`,
+  `CURRENT_RUN_MAX_AGE_SECONDS = 86400`), reached from
+  `create_approved_assets_phase_authorization.py:126`.
+
+So the re-pin only has to fix 773–775 to close the live path. Including 783 while
+the file is open is still worth doing — it is free once the edit is authorized,
+and the one-attempt constraint is what makes free things worth taking.
+
+**But the reason 783 is safe is not the one WS-1 gave, and the difference has a
+future.** WS-1 excluded `validate_approved_assets_phase_authorization.py` on the
+grounds that it "is not invoked by `authorize_approved_assets_phase.sh` … so it is
+outside the failing test's path", listing shell line 347 among the lines checked.
+Line 347 *is* the invocation of `create_approved_assets_phase_authorization.py`,
+which imports `validate_current_run_metadata` from that very file (`create:20–28`).
+The file is on the executed path — as a library, not as a subcommand — and the
+comparison at 241–243 that WS-1 correctly identified as reached lives inside it.
+The two statements contradict each other.
+
+The correct reason is stronger: the check **is** executed, on every authorization,
+and it passes **by construction**. The current-run fetch is shell 274–278 and the
+clock capture that becomes `decided_at` is shell 314, so `created_at` is always
+the earlier of the two and the 86400-second window is nowhere near binding.
+
+That distinction is worth the paragraph because "not executed" and "executed but
+unfailable" have different futures. The property doing the work is an *ordering in
+the shell*, not an invariant of the validator. Capture `now` before the fetch, or
+add a retry that re-fetches after it, and `created_at <= evaluation_time` starts
+failing with `github_current_run.time_invalid` — against a fixture whose clock
+moves. Nobody guards a path they believe is not executed.
+
+**It is also the same error as WS-1's previous one, one level up.** That one
+stopped at a function boundary while the `except` spanned the whole operation;
+this one stops at the invocation boundary while an `import` crosses it. Both have
+the shape *I checked the named list and the mechanism was not in it* — and a
+helper list names scripts, so imported modules can never appear in it. The general
+form belongs with §13: **the boundary you stop at is an assumption, and it is
+invisible precisely because stopping feels like completing.**
+
+**Limits, stated.** The consumers traced are those reachable from
+`authorize_approved_assets_phase.sh`; no exhaustive repository-wide enumeration
+was done, by WS-1 or here. `create:197` is a second call passing the same
+`decided_at`, so it does not change the result.
 
 ### A stale worktree produced citations that were right by luck
 
