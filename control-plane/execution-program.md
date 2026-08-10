@@ -686,8 +686,11 @@ deployed gateway:
    defective fake `gh` lives in a file that is both protected and digest-pinned,
    and the pin lives in a verifier that pins itself. The fix is known, was
    implemented and verified, and was then deliberately reverted rather than
-   shipped. See F-8. This is one decision, not a workstream, and it can be taken
-   at the same time as the receipt for #121.
+   shipped. See F-8. **This is the larger of the two F-8 decisions and is not the
+   same act as item 3:** path protection needs a signature, a digest pin needs a
+   signature *and* a change to the verifier that authorizes edits. Item 3 is
+   ordinary; this one touches the trust boundary's own machinery. They can be
+   taken at the same sitting.
 
 Everything else on the path to a deployed, healthy AI Gateway is either AUTO or
 AUTO + FAIL CLOSED under the [autonomy policy](autonomy-policy.md).

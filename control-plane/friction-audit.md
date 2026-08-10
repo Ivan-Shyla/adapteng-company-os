@@ -472,6 +472,20 @@ protections are individually correct and collectively immovable. It should be
 weighed when that policy question is settled, because it is no longer academic —
 it is blocking two distinct repairs to a check that randomly blocks merges.
 
+**The two locks are not equivalent, and the difference is decision-relevant.**
+WS-9 put it better than my paragraph above did, so its formulation stands:
+**path-protected means "needs a signature"; digest-pinned means "needs a
+signature *and* a verifier change in the same breath."** That is why #121 could
+be built at all — its `.sh` and runbook are path-protected only, so a signed
+approval lands them unchanged — while the fixture fix cannot be, because the
+file carrying the defect is pinned inside the very file that authorizes edits.
+
+An owner reading the decision list should therefore not treat items 3 and 5 as
+one act. Signing #121 is ordinary: construct the receipt, merge, done. Unlocking
+the fixture requires deciding that the verifier may be re-pinned against itself,
+which is a change to the trust boundary's own machinery. They can be taken at the
+same sitting; they are not the same decision, and item 5 is the larger one.
+
 ### The message names the wrong subsystem — 33 causes, one label
 
 WS-1, doing evidence-only work under observe-first orders, noticed that
@@ -546,6 +560,14 @@ The limit is worth stating so nobody over-trusts it: the archived log recovers
 what the job *printed*. It cannot recover what was routed to `/dev/null` before
 it ever reached the log. So the attempt survives; the specific error code still
 does not.
+
+**Operational instruction for the next occurrence, from WS-9.** Once #121 lands,
+the confirming datum is the `lifecycle.run_selection_stderr=` line. **Capture it
+before re-running to green.** A re-run erases it from the surface conclusion and
+from `--log-failed`, leaving it only in `run_attempt` and the archived log — and
+the reflex on a flaky required check is to hit re-run immediately, which is
+precisely how this went undiagnosed for as long as it did. The recovery path
+above exists; do not make it necessary.
 
 ### #121 fixes one discard site of two
 
