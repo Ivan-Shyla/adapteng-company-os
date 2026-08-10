@@ -284,14 +284,12 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   actual WordPress/Fluent Forms producer T1–T4, atomic mode switch with no
   dual-write, seven-day reconciliation and rollback proof; MM-18 retirement
   last. Keep model-provider legal placeholders unpublished.
-  Separately, a **theme-only** deployment track (unrelated to WEB-001) was
-  authorized by the owner and merged as PRs #121–#130; `main` now carries an
-  active `main-protected` ruleset (all five active repos, 2026-08-02T15:30
-  CEST), and the `Deploy theme to Cloudways` workflow's run `30766896787`
-  (head `18767bd1...`, 2026-08-02T21:00:26Z) completed with its snapshot,
-  deploy and production-smoke-test steps all `success` per GitHub Actions
-  metadata — independently re-verify the live site before treating that as
-  accepted.
+  The separate **theme-only** track now has accepted post-deploy evidence:
+  PRs #139/#140 produced a recorded 96-URL crawl with no unreachable,
+  non-200, fragment or hreflang failures, and PR #143 plus deployment run
+  `31329017343` produced exactly one localized description on all 18 checked
+  commercial pages. This does not deploy `adapteng-core`: its last successful
+  plugin deployment remains run `30720691975` at the pre-WEB-001 head.
 - [ ] **self-hosted n8n cutover:** repoint the Coolify source from branch
   `palinaruban-repo-status-review` to `main`, verify auto-deploy, then complete
   the inactive company-workflow shadow. n8n Cloud remains the authority for
@@ -357,6 +355,12 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   runner are all present. `008_ai_gateway_runtime_hardening.sql` remains
   forbidden in the approved-assets workflow; it requires its separate
   first-model-proof migration path before any live model call.
+- [ ] **Remediate the production allocator schema mismatch.** Read-only
+  evidence in automation PR #108 found the live allocator table in schema
+  `adapteng_ops`, not canonical `public`. The merged code now schema-qualifies
+  `public.id_allocator_sequences`, but no live table move or data rewrite
+  occurred. Owner: approve a preservation-first remediation and rollback plan,
+  then verify sequence values and every caller read-only after the change.
 - [ ] **Baserow off-host export/restore** completion; **Google Workspace**
   Manager/recovery acceptance.
 - [ ] **Workspace recovery/break-glass acceptance:** verify Ivan is Manager of
