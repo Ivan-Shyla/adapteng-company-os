@@ -773,4 +773,75 @@ is no, the sentence needs to be sharper regardless of which reading it adopts.
 This is also the strongest argument for the encoded form above: a code emitted by
 the verifier requires no temperament at all to read.
 
+### The encoding is a security design, not a labelling exercise
+
+WS-6's closing handover is the part most easily lost between a ruling and whoever
+implements it, so it is recorded in full here.
+
+**Bootstrap must not be a sub-code under `unauthorized`.** The obvious encoding,
+`unauthorized.approval.bootstrap_self_change`, is wrong for the same reason the
+original defect was wrong: `unauthorized` is an accusation and this is not one.
+Three cases demand three different human responses — which is the test that has
+held all day:
+
+| Class | What it means | What a human does |
+| --- | --- | --- |
+| `unauthorized` | someone attempted something they should not | refuse |
+| `undetermined` | the check could not decide | retry or repair infrastructure |
+| bootstrap | the check is **not competent** to decide, because the change alters the machinery that would judge it | escalate |
+
+It should fail closed with its own exit code. The slot is natural: the verifier
+already carries `UNAUTHORIZED_EXIT_CODE` and `UNDETERMINED_EXIT_CODE` as named
+constants, so a third is an extension rather than a new concept.
+
+**The hazard, which is the reason this note exists.** If the bootstrap class is
+auto-detected from the file list *and* treated as mergeable-with-reasons, it
+becomes **self-selecting**: anyone wanting the softer class adds a trivial edit to
+`verify_rollout_trust_anchor.py` and inherits it. That converts the repair into a
+bypass, and it would look entirely reasonable in review. WS-6's own words are
+worth keeping: under a naive encoding, **#122 would have been the template for
+the exploit** — a real verifier fix, honestly argued, that also happens to be the
+shape an attacker wants. That is not an argument against encoding; it is an
+argument that whoever builds it needs this paragraph.
+
+**The defence: strictest-applicable, not most-lenient.** A pull request touching
+the verifier *and* another protected path is ordinary, not bootstrap. Bootstrap
+requires that the protected paths touched are a subset of the anchor's own
+machinery and nothing else.
+
+**Checked against both live cases, and it discriminates correctly.** #122 touched
+`scripts/validation/verify_rollout_trust_anchor.py`, `tests/test_rollout_trust_anchor.py`
+and `docs/runbooks/authorize-rollout-policy-change.md` — all three in
+`PROTECTED_EXACT_PATHS` (lines 99, 114, 73) and all three anchor machinery →
+bootstrap. #121 touched `scripts/operations/authorize_approved_assets_phase.sh`
+and `docs/runbooks/migrate-approved-assets.md` (lines 84, 74) — protected,
+neither anchor machinery → ordinary. So the rule does not make its own repair
+unsatisfiable, which was the failure WS-6 warned about in another context: *a
+rule that makes its own repair unsatisfiable is not strict, it is inert.*
+
+Two things the implementer needs that the proposal does not yet state.
+
+**"The anchor's own machinery" does not exist as a set.** Verified against the
+verifier at `824b4238`: `PROTECTED_EXACT_PATHS` is one flat frozenset of forty-odd
+paths with no sub-classification, and `PROTECTED_PREFIXES` covers `.github/workflows/`
+wholesale — every workflow in the repository. So the encoding requires **defining
+a new set that does not exist**, and that set is itself security-critical: whoever
+widens it widens the bootstrap class. It must therefore live inside the verifier,
+which makes it protected, which makes editing it itself a bootstrap change. That
+is the same self-reference as the digest pin, and the third instance of this shape
+today. An implementer who puts the set in a separate config file for tidiness has
+created an unprotected lever on a security boundary.
+
+**The defence constrains only protected paths, and the payload need not be in
+one.** "Touched protected paths ⊆ anchor machinery" says nothing about the
+unprotected files in the same pull request. A change weakening the verifier and
+shipping arbitrary unprotected code alongside it still classifies as bootstrap.
+This only bites under exactly the condition WS-6 named — bootstrap being lighter
+in *permission* rather than only in *label* — but the cheap guard is to say it
+now: the escalation reviews the whole diff, not the protected subset, or
+bootstrap requires the pull request to touch nothing but anchor machinery at all.
+
+Recorded, not built. It is a protected-path change encoding an undecided policy,
+and it waits for both the ruling and the authority to ask for it.
+
 
