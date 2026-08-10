@@ -689,7 +689,10 @@ deployed gateway:
    whether the verifier should *emit* the distinction as distinct codes rather
    than leaving it in prose for readers to re-derive. It can already see the
    difference, and a policy encoded in the check cannot drift from the check —
-   which is what most of the friction register is about.
+   which is what most of the friction register is about. **The test for the
+   sentence:** could an incautious agent apply it correctly without judgement? If
+   not, it needs sharpening whichever reading it adopts — the failure here was
+   not a wrong answer but a rule nobody could point at.
 5. **Whether to re-pin the verifier so the F-8 fixture can be repaired.** The
    defective fake `gh` lives in a file that is both protected and digest-pinned,
    and the pin lives in a verifier that pins itself. The fix is known, was
