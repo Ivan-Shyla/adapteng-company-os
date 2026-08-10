@@ -54,7 +54,18 @@ should run on their own and fail closed.
 The checks are not wrong; their scope, coupling or ceremony is. This is where
 the cost is being paid.
 
+> **Status 2026-08-10.** F-1 and F-5 are **remediated** (platform PR #110,
+> company-os PR #41). F-3 is in progress. F-4 needed no code change — it was a
+> false belief, not a control. F-6 needed no work at all. The findings are kept
+> in full: an audit that deletes its own reasoning once acted on cannot be
+> checked later, and the F-1 failure mode is one worth recognising on sight.
+
 ### F-1 — A lapsed n8n waiver merge-locks the entire repository
+
+**Remediated by platform PR #110**, which scoped the check without weakening it
+and added a scheduled job that warns 14 days before the next expiry. The
+underlying isolation finding is still open and still reported; renewing the
+waiver remains an owner decision. The analysis below is why.
 
 **The single most expensive control in the system.** An expired waiver on one
 n8n resource crossing makes `Validate repository structure and content` fail,

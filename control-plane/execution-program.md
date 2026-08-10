@@ -521,18 +521,23 @@ activation of a materially new paid provider is reserved to the owner under the
 
 ---
 
-## Immediate dispatch
+## Dispatch status
 
-| Start now | Blocked until |
-|---|---|
-| **WS-1** — unblocks the entire platform repository | — |
-| **WS-2** — the largest autonomy gain available | — |
-| **WS-3** — removes the most dangerous stale instruction | — |
-| WS-4 | WS-1 merged |
-| WS-6 | WS-1 merged. Low priority. |
-| WS-7 | Nothing, but deliberately deferred |
-| WS-5 | WS-2 and WS-4 |
-| WS-8 | WS-5, and the owner checkpoint |
+**Round 1 landed 2026-08-10.** Round 2 is running.
+
+| WS | Status | Evidence |
+|---|---|---|
+| **WS-1** | **Done** | Platform PR #110. Merge lock cleared; #109 became `MERGEABLE`. |
+| **WS-2** | **Done** | company-os PR #41. `inspect` confirmed `ai-gateway` absent in Coolify. |
+| **WS-3** | **Done** | company-os PRs #35 and #40. Drift register closed. |
+| **WS-4** | Running | Depended on WS-1. Merges #109, then fixes the bind address and readiness. |
+| **WS-6** | Running | Depended on WS-1. Repairs the two permanently-red trust-anchor checks. |
+| WS-5 | Blocked | Needs WS-4. Also needs the owner's FX values at run time. |
+| WS-7 | Deferred | Deliberately. Nothing depends on it. |
+| WS-8 | Blocked | Needs WS-5 **and** the owner checkpoint. |
+
+The critical path is now WS-4 → WS-5 → WS-8, and only the last of those needs
+the owner.
 
 ## Next owner checkpoint
 
@@ -541,9 +546,10 @@ There should be one, and it is **WS-8**.
 Two smaller owner decisions exist and neither is on the critical path to a
 deployed gateway:
 
-1. **Renewing the n8n isolation waiver, or resolving the crossing.** After WS-1
-   this stops blocking unrelated engineering, so it can be decided calmly. It
-   remains owner-only because it is a data boundary.
+1. **Renewing the n8n isolation waiver, or resolving the crossing.** WS-1 has
+   landed, so this no longer blocks unrelated engineering and can be decided
+   calmly. It remains owner-only because it is a data boundary. A scheduled job
+   now warns 14 days before the next expiry.
 2. **The FX rate, timestamp and source label**, needed during WS-5. Three
    values, entered once. Not a workstream, and not a governance programme.
 
