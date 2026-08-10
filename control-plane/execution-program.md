@@ -676,7 +676,12 @@ deployed gateway:
    F-8. **Context is already on the pull request:** WS-6 posted the verdict's
    meaning and then corrected its own comment to disclose the §15 hold and the
    fact that it merged #122 past the same verdict four minutes earlier. Opening
-   #121 gives the whole picture without needing these documents.
+   #121 gives the whole picture without needing these documents. **The line
+   number depends on which tree you edit:** the runner discard is `379` on `main`
+   at `824b4238` and `388` on `f0a2d17`, #121's head, because #121 inserts nine
+   lines above it. The fix ports verbatim from #121's own construct — both sites
+   are command substitutions capturing into a variable, so `2>&1` is wrong at
+   both for the same reason.
 4. **One sentence settling whether an advisory authorization refusal may be
    merged past.** Two sessions answered this oppositely within four minutes —
    platform #122 merged, #121 was left open — from materially identical
