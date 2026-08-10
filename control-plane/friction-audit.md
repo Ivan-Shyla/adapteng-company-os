@@ -261,6 +261,59 @@ pins must not be "fixed" — they are the control. Widening `.gitattributes` to
 pin `eol=lf` on the migration set is the only safe remedy, and it is cosmetic
 relative to the confusion it keeps causing.
 
+**Fourth sighting, and this one was my own tooling, 2026-08-10.** The
+pre-commit scan I have been running before every control-plane pull request —
+`Select-String -Path "*.md" -Pattern ([char]0xFFFD)` — reported mojibake on
+nearly every line of `autonomy-policy.md`. It was a false positive on all of
+them. Windows PowerShell 5.1's `Select-String` decodes files using the ANSI
+code page, not UTF-8, so every `—` and `§` in a correctly-encoded file becomes a
+replacement character *in the scan's own reading of it*. The file on disk is
+clean. Verified by counting the actual `EF BF BD` byte sequences:
+
+```powershell
+$bytes = [System.IO.File]::ReadAllBytes($path)   # 0 hits across all five documents
+```
+
+**Use the byte check, not the text check.** A grep for a character cannot be
+trusted when the tool doing the grepping is guessing the encoding. This is the
+same failure class as the CRLF sightings above — a local tool misreading bytes
+and reporting a content problem — and it is the reason the rule in §13 of the
+state document is stated as *a control that cannot fail is not a control*: its
+mirror image is equally dangerous. A check that fires regardless of the truth
+trains you to ignore it, and I would have ignored it, and the one time it was
+real I would have shipped the corruption.
+
+**Fifth sighting, and this one exonerates the documentation — 2026-08-10.**
+Running the pre-PR suite on Windows produced 18 failures in
+`scripts/test_postgres_restore_scheduler_surface.py` (symlink chains, symlink
+loops, group- and world-writable bits, absolute host unit roots). I confirmed
+they are pre-existing by stashing my changes and re-running against the
+pristine tree: byte-identical 3 failures and 15 errors, so nothing I had
+touched was implicated.
+
+They are also entirely expected, and **the repository already says so.** That
+module's docstring states it is POSIX-only *by subject, not by choice* —
+`scheduler_file_record` opens with `os.O_NOFOLLOW`, which does not exist on
+Windows, and the fixtures need `os.symlink`, which Windows refuses without
+`SeCreateSymbolicLinkPrivilege`. The author deliberately declined a
+`skipUnless` marker, calling it "an invisible control", and isolated the cases
+in their own named module instead. The README correspondingly splits that
+module onto its own line, annotated `# только POSIX`.
+
+**The defect was mine: I ran CI's single-command form instead of the documented
+local one.** CI can run everything in one invocation because it runs on
+`ubuntu-latest`; the README deliberately does not. I nearly "fixed" this by
+adding platform skips — which would have overridden a correct, documented
+decision with precisely the invisible control its author had rejected, and
+would have silently deleted the only coverage `scheduler_file_record` has ever
+had.
+
+**Recorded deliberately as a negative result.** Every other entry in this audit
+is drift, and a register that only ever finds fault trains its author to expect
+fault. Here the documentation was already right, the design was already right,
+and the operator was wrong. Read the docstring before you improve the test, and
+run the procedure as written before you conclude it is broken.
+
 ---
 
 ### F-8 — A required check that is nondeterministic — P1
