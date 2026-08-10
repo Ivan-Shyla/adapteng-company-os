@@ -254,7 +254,7 @@ that inference is what produced D-1 in the first place.
 | #118 | `adapteng-automation-platform` | **MERGED** 2026-08-10 18:08Z | Removed the MM-25 cross-scope write. Supersedes #115, which was **closed unmerged** and rebuilt on a fresh branch. Empties the waiver list — see §11. |
 | #111 | `adapteng-automation-platform` | **CLOSED unmerged** — content shipped as **#119** | Was 8 behind / 6 ahead; its red marks were a stale tree, not a defect. Abandoned and rebuilt on `…-evidence-lane-fresh`, merged 18:26:57Z. See the note below on `-fresh` rebuilds. |
 | #119 | `adapteng-automation-platform` | **MERGED** 2026-08-10 18:26:57Z | WEB-002 self-hosted evidence lane — the content of #111. |
-| #120 | `adapteng-automation-platform` | **MERGED** 2026-08-10 19:03:23Z | Restored the waiver-horizon CLI's only failing test, lost when #118 retired the waiver. Tests only, mutation-verified. See §13. |
+| #120 | `adapteng-automation-platform` | **MERGED** 2026-08-10 19:03:23Z (`3bddeeeab05b`) | Restored the waiver-horizon CLI's only failing test, lost when #118 retired the waiver. Tests only, mutation-verified. See §13. |
 | #45 | `adapteng-company-os` | **MERGED** 2026-08-10 17:28:54Z (`cb87521039bf`) | Promoted `n8n isolation` to a required check in `bootstrap_rulesets.py`, completing WS-1. See §11. |
 | #46 | `adapteng-company-os` | **MERGED** 2026-08-10 17:39:06Z (`48fa67cad42e`) | Recorded the gate as enforcing rather than advisory. |
 | #47 | `adapteng-company-os` | **MERGED** 2026-08-10 18:20:41Z (`7b148f5e4b47`) | Corrected the trust-anchor root cause in F-3 and §10, repaired three mojibake characters, and closed the README↔CI drift (F-7) with an enforcing test. |
@@ -270,6 +270,16 @@ row recording any given change can only be written by a later change. #48 and
 not neglect, but a record that cannot close itself. Verify the tail of this
 table against `gh pr list --state merged` rather than trusting it; the merge
 SHAs above are what make that check cheap.
+
+**The SHAs are also self-checking, which caught a live error.** While recording
+#120 I carried its short SHA as `3bddeea`; the true value is `3bddeee`. A single
+transposed character. `gh api repos/<owner>/<repo>/commits/3bddeea` answers
+**HTTP 422, "No commit found for SHA"** — a wrong short SHA cannot silently
+resolve to a plausible commit. The error was caught before it was published, but
+the general point is the reason to record SHAs at all: a timestamp can be wrong
+and still look reasonable forever, whereas a wrong SHA is mechanically
+detectable by anyone, at any time, with one call. Prefer identifiers that fail
+loudly over prose that degrades quietly.
 
 **Demonstrated immediately.** #50 closed the gap and #51 reopened it within the
 hour, which #52 then closed again. Chasing the tail with another pull request
@@ -475,4 +485,37 @@ and both leave the suite green.
 
 **The corollary for this record:** never infer that a mechanism works from the
 absence of failures. Two of the three above looked healthy for days.
+
+## 14. Where the required-check list is allowed to be duplicated
+
+Platform **#117** rewrote §3 of that repository's
+`docs/github-governance-checklist.md`, which had claimed `Validate repository
+structure and content` was the only required check with the rest "pending". It
+now enumerates all five, with the workflow each comes from, and documents the
+`unauthorized` versus `undetermined` split.
+
+The session that wrote it offered to cut the table back to a bare pointer,
+since a second copy of a list is a drift source. **Decision: keep the table.**
+Verified against the live ruleset on 2026-08-10 — all five names match exactly
+and `required_approving_review_count` is `0`, as the document states. It is
+accurate, it is useful to someone working in that repository who should not
+have to open another repository to learn what will block them, and it already
+names [`scripts/bootstrap_rulesets.py`](../scripts/bootstrap_rulesets.py) as
+the authority and tells the reader to propose changes there.
+
+**What was missing was the other direction.** The mirror knew about the
+authority; the authority did not know about the mirror. That is exactly the
+shape of F-7, where the README and the CI module list each failed to mention
+the other and drifted apart. `bootstrap_rulesets.py` now carries a comment at
+the platform target naming the mirrored table, so anyone editing the tuple is
+told where the copy lives.
+
+**This is a weaker guarantee than F-7 got, and deliberately so.** F-7 is
+enforced by a test because both surfaces live in one repository. This pair
+spans two repositories, so a test would need cross-repository read access at CI
+time — more machinery, and a new credential path, than a documentation mirror
+is worth. A comment that travels with the line being edited is the proportionate
+control here. If the pair is ever observed to have drifted, revisit that
+judgement.
+
 
