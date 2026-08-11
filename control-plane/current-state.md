@@ -584,6 +584,26 @@ first two above and then supplied a finding that changes the third.
    applied one level down. Verified: after 20:44:08Z there is exactly **one**
    distinct head SHA, so the count is 1 under either rule.
 
+**The reset pair is complete, and that is now a checked claim rather than an
+assumed one.** Read at `824b4238`: the workflow uses exactly one action —
+`actions/checkout` pinned to `11bd7190…` at line 24 — and no local composite
+actions; its sparse-checkout is four paths (`.gitattributes`, `.gitignore`, the
+`allowed_signers` trust root, and the verifier). Verifier plus workflow is
+therefore the whole of what determines run behaviour. Worth recording as checked,
+because the failure mode is a third input added later while the criterion
+silently stops covering it.
+
+**One correction to WS-6's reason for leaving the trust root out of the pair.**
+It argued that `allowed_signers` "determines *what* verdict, not *whether* a
+verdict". It does both: workflow lines 69–70 attach two undetermined codes to it,
+`anchor_trust_root_absent` and `anchor_trust_root_not_regular`, so deleting it or
+replacing it with a symlink stops any verdict being reached at all. The
+conclusion survives for a different reason — those failure modes are *loud*. They
+break the count through the existing `undetermined.*` rule instead of silently
+invalidating runs, and the reset exists to catch silent invalidation. The wrong
+reason would have had a future: someone triaging `anchor_trust_root_absent` while
+believing the trust root cannot break the check.
+
 **A weakness in the count that neither of us had named.** The single counted run
 is `not_applicable` — the verdict produced when the verifier finds no protected
 change at all, which exercises less machinery than any other outcome. So "1" is
@@ -592,6 +612,91 @@ composed entirely of `not_applicable` runs would be weak evidence for exactly th
 proposition being tested, which is that the gate *can* refuse. Whatever N is
 chosen, it is worth requiring that at least one counted run reached a real
 authorization decision.
+
+### 12a. The authorization path has never run since the repair
+
+WS-6 returned with the evidence that settles the weakness above, and the true
+position is worse than either of us had written. Verified independently, with one
+correction that makes the finding stronger rather than weaker.
+
+**The verdict census.** The check writes its outcome as the check-run title, and
+the map is explicit in the verifier — `_check_run_payload` admits five outcomes
+and gives each a distinct title. Reading that title off every successful run in
+the check's entire history:
+
+| Window | Distinct runs | Verdict |
+|---|---|---|
+| 2026-08-05T14:56:30Z → 2026-08-06T15:30:57Z | 7 | `authorized` — "Exact signed subject authorized" |
+| 2026-08-10T17:52:05Z → 20:45:58Z | 5 | `not_applicable` — "No protected rollout boundary change" |
+
+Twelve successes in total, as WS-6 said. **WS-6 listed two `authorized` runs;
+there are seven.** Both of its two are real and one of them is genuinely the
+last, but the set was offered as the whole and it is under a third of it. The
+conclusion is untouched: all seven precede the outage, all five post-repair
+successes are `not_applicable`, and **no `authorized` verdict exists after the
+repair.**
+
+**The escalation — WS-6's own rule, turned on WS-6's aside.** WS-6 consoled the
+criterion by observing that an `unauthorized` refusal would satisfy "reached a
+real authorization decision", and that refusals exist in quantity. They do:
+fifteen distinct heads were refused on 2026-08-10 alone. **But every one of them
+predates the reset anchor.** Point 6 above — which WS-6 proposed and I extended —
+resets the count at the `merged_at` of the most recent verifier change, and that
+is #122 at 20:44:08Z. After that instant exactly one run exists, `d799b5bb` at
+20:45:58Z, and it is `not_applicable`. So under the verifier now on `main`:
+
+> **zero `authorized`, zero `unauthorized`, one `not_applicable`.**
+
+Neither real decision has been observed even once. WS-6 imported its consolation
+across the boundary it had itself just drawn — the same move as counting #120's
+run, which is precisely what its own refinement was written to prevent. The gap
+is twice as wide as the note claimed.
+
+**Why that is not merely a thin count.** The four-day outage was
+`approval.circular_or_stale` on the subject tree — the failure that made it
+impossible for *any* owner-signed receipt to authorize anything. So
+`_approval_material_introduced` on its authorizing branch is code that was broken
+for four days, is the reason the gate could reach no terminal state at all, and
+has since been validated **only by unit tests**. That is a gap in the repair's
+validation, not only in the promotion criterion.
+
+**And it cannot close by waiting.** An `authorized` verdict requires a pull
+request that touches a protected path *and* carries an owner-signed receipt.
+Ordinary traffic yields `not_applicable` — which is what all five post-repair
+successes are. So any N will be reached with the let-work-through path still
+unexercised unless someone deliberately produces the input.
+
+**The input already exists, and both missing observations can be taken from it.**
+Platform #121 changes `scripts/operations/authorize_approved_assets_phase.sh` and
+`docs/runbooks/migrate-approved-assets.md` — both verified in
+`PROTECTED_EXACT_PATHS`, at lines 84 and 74 — and carries no receipt, so its
+verdict is a genuine refusal. But its only two anchor runs are at 20:21:21Z and
+20:27:27Z, **both before 20:44:08Z**, so the red mark displayed on #121 today was
+produced by a verifier that no longer exists. Therefore:
+
+1. **Fire an `edited` event on #121** — a title or body edit, no push. This
+   re-runs the anchor against the current verifier and yields the first
+   post-anchor `unauthorized` observation. Verified safe:
+   `rollout-trust-anchor.yml` is the **only** workflow in the repository that
+   lists `edited`, and `edited` is not in the default trigger set, so nothing else
+   re-runs, no green check is invalidated and no review is dismissed. #121 is
+   already red and stays red; the observation merely becomes current.
+2. **Then sign the receipt.** That turns the same pull request `authorized` and
+   discharges owner-decision item 2 at the same time.
+
+So the promotion-evidence gap and the outstanding receipt are one action, and its
+cheaper half is free and can be taken first.
+
+**A corroboration that fell out of the same query.** The last `authorized`
+verdict in the repository's history was written at 2026-08-06T15:41:39Z — the
+check-run `completed_at` on head `a74b6c67`, which is #104's own head. #104 merged
+at 15:42:06Z, **27 seconds later**. The receipt authorized itself, and that same
+merge is what made every subsequent run fail the presence test; the diagnosis and
+the timeline now close on each other from independent directions. WS-6's
+arithmetic is exact. One field note, which is point 5's discipline applied to
+WS-6's own citation: 15:41:39Z is the check's `completed_at`, not the run's
+`created_at`, which is 15:30:57Z on attempt 2. Eleven minutes separate the two
+candidate readings, so the field has to be named.
 
 **A consequence of the timestamp comparison, which is an independent argument for
 the neutral ruling.** Because classification is now a timestamp comparison, a run
@@ -737,17 +842,24 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with three sub-shapes and five instances.** WS-1 proposed the
+**The general rule, with four sub-shapes and six instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
 the instrument's range fails to match the question:
 
-- **Too narrow — silence read as absence.** WS-1 searched a shell helper list for
-  a module. A helper list enumerates *invoked scripts* and structurally cannot
-  contain an *imported* one, so the empty result was a true negative about the
-  wrong category, read as a finding. Its earlier instance was a function boundary
-  searched against an `except`.
+- **Too narrow, empty — silence read as absence.** WS-1 searched a shell helper
+  list for a module. A helper list enumerates *invoked scripts* and structurally
+  cannot contain an *imported* one, so the empty result was a true negative about
+  the wrong category, read as a finding. Its earlier instance was a function
+  boundary searched against an `except`.
+- **Too narrow, non-empty — a sample read as a census.** WS-6 reported the two
+  `authorized` verdicts in the anchor's history; there are seven (§12a). Every
+  element it named was true and one was genuinely the last — the quantifier was
+  false, not the data. This is the more durable of the two narrow shapes, because
+  an empty result at least invites the question "is that right?", while a
+  plausible non-empty list looks like a finished enumeration and so is *less*
+  likely to be challenged than the silence is.
 - **Too wide — hits read as presence.** WS-1's repository-wide enumeration of
   "importers" returned sixteen sites of which **three** are imports; the other
   thirteen are string literals. WS-9's count of `raise` sites had the same defect:
@@ -755,13 +867,23 @@ the instrument's range fails to match the question:
 - **Wrong axis — the artefact described instead of the decision.** My "both
   mechanisms" above; the sets are real, and they are not what decides.
 
-Unifying form, and the reason the three belong together: **the instrument's range
+Unifying form, and the reason the four belong together: **the instrument's range
 does not match the question, and its output was read as though it did.** Stated
 that way it yields a check that costs one sentence — before believing a result,
-say what the instrument enumerates and compare it to what was asked. Note that
-two of the three sub-shapes produce *confident* wrong answers, and the too-narrow
-one produces a confident wrong answer that looks like diligence, which is why it
-is the dangerous member of the family.
+say what the instrument enumerates and compare it to what was asked. Three of the
+four sub-shapes produce *confident* wrong answers, and both narrow shapes produce
+a confident wrong answer that looks like diligence, which is why they are the
+dangerous members of the family.
+
+**One aggravating factor, from the §12a instance.** Correcting WS-6's census from
+two to seven made WS-6's own argument *stronger* — a well-attested pre-outage
+`authorized` path makes the post-repair silence more striking, not less. So this
+was an error its author had no incentive to find. That is worth stating as its
+own caution, because the intuitive guard against motivated error is to check
+hardest where a finding flatters you: **an error whose repair helps the arguer
+will not be caught by that guard.** Self-interest is not an error detector in
+either direction, and undercounts in your own favour are as invisible as
+overcounts are tempting.
 
 ## 14. Where the required-check list is allowed to be duplicated
 
