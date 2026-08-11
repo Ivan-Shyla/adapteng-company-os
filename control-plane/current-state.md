@@ -1029,6 +1029,15 @@ same way. So of the five pre-flight guards, two do not merely duplicate verifier
 checks — they systematically re-label a class of verifier errors before the verifier
 can name them.
 
+**That sentence is true, correctly qualified, and the qualification is where the
+defect was.** "Unreachable on *this* workflow's path" scopes the claim exactly
+right and never asks what the other paths do. They do the wrong thing: the same
+`trust_root_file_missing` is live and reported as `unauthorized` on two required
+checks that have no guard (§ the live misclassification, below, reproduced by
+execution). The boundary was stated and then not crossed — which is this document's
+own rule about search boundaries, met halfway. Stating a scope makes the claim
+honest; it does not discharge the question the scope raises.
+
 **A third meaning for the same token, inside the verifier.**
 `_validate_trust_root_command` (**3206**) special-cases `trust_root_not_configured`
 at **3210**: it prints `{"trust_root":"unconfigured"}` and **returns 0**. So the
@@ -1061,13 +1070,40 @@ completed with exit code 1.", and 7 cancellations.
 That last figure decides more than it was asked to. `UNAUTHORIZED_EXIT_CODE = 1` and
 `UNDETERMINED_EXIT_CODE = 75` (**158–159**), and the runbook table at 147–148
 documents exactly that mapping. **All 64 failures exited 1; none exited 75.**
-Therefore, across the entire recorded history of this check:
 
-- the workflow emitter has never fired — all twelve of its call sites `exit 75`;
+**Correction, from WS-6, and it removes 58 of the 64 from the inference.** Exit 75
+did not exist for most of this history. Measured at `1a5d84e^` = `8a4d87e7`, the
+verifier is 3168 lines and contains **zero** occurrences of `UNDETERMINED_EXIT_CODE`,
+`UndeterminedError` and `_report_failure` — and, extending WS-6's check, zero of
+`UNAUTHORIZED_EXIT_CODE` as well. At `1a5d84e` all four appear. The same boundary
+holds for the workflow: `rollout-trust-anchor.yml` at `8a4d87e7` has no
+`undetermined()` helper, no `exit 75` and no `::error` annotation. So before #116
+there was no category system at all — 1 was the only failing value the binary could
+produce, and a run exiting 1 carried no information about a path that did not exist.
+
+Therefore the four conclusions below hold, but on **6** runs rather than 64:
+
+- the workflow emitter has never fired. True — but for the 58 it is true because
+  the emitter was not in the file, not because its twelve `exit 75` sites went
+  untaken. The conclusion is unchanged and the reason is different, which matters
+  here for the reason this document keeps giving: reasons carry forward and
+  conclusions do not;
 - the verifier has never returned an `undetermined` verdict either;
 - `internal_failure` (3266, returns 75) has never fired;
 - every one of the 64 failures was `unauthorized`, and — since `exec` leaves only
-  the verify path reachable — was emitted at site **3132** specifically.
+  the verify path reachable — was emitted at site **3132** specifically. **This one
+  is false for the 58**, and doubly so: 3132 did not exist when they were emitted,
+  and neither did the word `unauthorized`. Calling them `unauthorized` projects a
+  taxonomy backwards onto observations that predate it.
+
+**The refutation was already on this page, four lines below the claim.** The census
+table splits 58 bare / 6 prefixed — 21 + 12 + 11 + 7 + 5 + 2 = 58 against 4 + 2 = 6 —
+and the sentence immediately after it says *bare codes predate #116, when the
+category prefix did not exist*. Both halves were recorded correctly and neither was
+carried up to the four bullets that needed them. WS-6 found it from outside by
+checking the parent commit; the arithmetic needed to find it from inside was already
+written down. The control is free and should have been standing: **filter to heads
+after `1a5d84e` before drawing any conclusion about the undetermined path.**
 
 So the eleven-code vocabulary, the annotation surface, and the runbook's entire
 exit-75 row are latent: correct, unexercised, and owned by "An operator" who has
@@ -1130,6 +1166,49 @@ the two instruments WS-6 had to use to investigate a defect in the same file, so
 finding's own subject suppressed its evidence — but only on that surface. The
 logs held the codes the whole time under a greppable prefix, which is what makes
 WS-6's own re-diagnosis the right one and is recorded in §13.
+
+**A live misclassification on two required checks, found by WS-6 and reproduced
+here by execution.** §12's premise — that a broken trust root is announced as
+`undetermined` — holds only on the anchor path. `validate_allowed_signers` is
+invoked at four sites (2586, 2660, 3026, 3208; a grep that counts the `def` at 2451
+returns five), and the `validate-trust-root` subcommand at 3208 is hosted by two
+workflows: `validate.yml:88` and `secret-scan.yml:43`. Both are **required and
+merge-blocking** — confirmed independently against the active `main-protected`
+ruleset, whose five required contexts include *Validate repository structure and
+content* and *Fail on unencrypted secret-like content*. Neither has a pre-flight
+guard. Run against the real script at `824b4238`:
+
+```
+missing trust root  →  rollout_trust_anchor.unauthorized.trust_root_file_missing   exit 1
+empty trust root    →  {"trust_root":"unconfigured"}                               exit 0
+```
+
+An infrastructure fault announced as an authorization refusal, on checks that block
+merge — the exact conflation #116 was written to remove, surviving where #116 did
+not reach. All **15** raises in `validate_allowed_signers` (2451–2523) and all **6**
+in `_validate_executable` (2524–2541) are bare `TrustError`; neither function reads
+the pull request, and on the anchor path the trust root is read from `$anchor_root`,
+the base-trusted checkout of `main`, which a pull request cannot influence. So
+`unauthorized` there is not merely the wrong word, it is a verdict about a subject
+the code never consults.
+
+**And the reason nobody saw it is the mitigation.** Line 69 of the anchor workflow
+reports the identical condition as `anchor_trust_root_absent` — undetermined, and
+correct. The workflow and the verifier disagreed about the same file, and the guard
+renamed the condition before the verifier could misclassify it. The annotation sweep
+recorded above returned zero trust-anchor codes; **that zero was produced by the
+mask, not by absence of the defect** (§13, twentieth sub-shape).
+
+**One qualification against WS-6's own framing, and it is the correction WS-6 had
+just made to me.** WS-6 cites the census's 11 × `trust_root_not_configured` — third
+most common failure in repository history — as the same function "misclassified the
+whole time". Those 11 are **bare** codes, so they predate the category system
+entirely; there was no classification for them to be wrong. What the 11 establish is
+*frequency* — the condition recurs and is not hypothetical — while the
+misclassification is a property of the **current** code, which would render the same
+condition as `unauthorized`. Frequency and misclassification are both real and they
+are established by different things. This is the measurement-window correction WS-6
+opened the message with, applied one section later to the message itself.
 
 **A third instance of the collapse, found while enumerating F-8's discard sites,
 and it is the cleanest of the three because nothing else is wrong with it.**
@@ -1303,7 +1382,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with nineteen sub-shapes and forty-five instances.** WS-1 proposed the
+**The general rule, with twenty sub-shapes and forty-eight instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -1380,6 +1459,23 @@ prose cases and it is this document's own overdetermination rule: **nothing
 downstream needed the property to be stated, so nothing tested whether it was.** A
 property no one wrote down is not thereby absent; it is merely unowned, and it
 breaks when someone improves the line that incidentally holds it.
+
+**Twenty and forty-eight, and this round's arithmetic is worth showing because the
+new shape is not mine.** Bullets re-counted in the edited file: **twenty**. New
+sub-shape, WS-6's — *a mitigation that converts its own success into evidence that
+nothing is wrong*. Three new instances: (i) my four exit-75 conclusions drawn from
+64 runs when 58 predate the mechanism, under *unstated validity interval*; (ii)
+WS-6's 11 pre-category codes cited as evidence of misclassification, the same shape
+one section after correcting me on it; (iii) the line-69 guard masking a live
+misclassification on two required checks, the new shape's own instance. Nineteen
+plus one is twenty; forty-five plus three is forty-eight.
+
+**The register's own result this round is that both directions now work.** The last
+entry recorded that every new instance was mine and none was found by me. Here one
+of the three is WS-6's, found by me, in a message whose opening correction named the
+exact shape it went on to commit. The list is no longer only a record of what other
+readers catch in me; it is now symmetric, which is the first evidence that the
+shapes are properties of the work rather than of one writer.
 
 **The current round adds one sub-shape and two instances, again by enumeration.**
 The bullets were counted directly and stood at seventeen before this edit. New
@@ -1697,6 +1793,21 @@ plus two is **forty-one**. Bullets re-enumerated, not incremented.
   the claim feel checked, which is the trap: **the easy half of a conditional is
   usually the half that is not load-bearing.** WS-9 found it by asking what pins the
   working directory — a question the sentence presupposed had an answer.
+  **Third instance, mine, and WS-6 named the variant better than "domain":
+  the measurement window spanned the introduction of the thing being measured.**
+  From "all 64 failures exited 1; none exited 75" this document concluded that the
+  undetermined path had never been taken across the check's whole history. Exit 75
+  did not exist for 58 of those runs — `UNDETERMINED_EXIT_CODE`, `UndeterminedError`,
+  `_report_failure` and `UNAUTHORIZED_EXIT_CODE` are all absent at `1a5d84e^`, as are
+  the workflow's `undetermined()`, `exit 75` and `::error` — so 1 was the only
+  failing value available and those runs cannot bear on the question. A negative
+  result changed meaning partway through the population. **What makes this the
+  sharpest instance in the list is that the disproof was already written on the same
+  page:** the census table splits 58 bare / 6 prefixed, and the next sentence gives
+  the reason. Neither was carried up to the four bullets that depended on it. WS-6
+  then committed the same shape one section later, citing 11 pre-category
+  occurrences as evidence of misclassification, so the round contains the error, its
+  correction, and its recurrence.
 - **Success mistaken for effect — an action that reports success while changing
   something other than what its name promises.** The six above are all *read*
   instruments, misread. This one is a write, and the remedy is different in kind.
@@ -1925,7 +2036,26 @@ plus two is **forty-one**. Bullets re-enumerated, not incremented.
   epistemic — **the instances of a generalisation must be gathered before it is
   written, because afterwards the writer is no longer sampling.**
 
-Unifying form, and the reason the nineteen belong together: **every one of these
+- **A mitigation that converts its own success into evidence that nothing is
+  wrong.** WS-6's, and it is the only shape here where the instrument was adequate
+  and the *world* had been altered to be quiet. The anchor workflow's line 69 guard
+  reports a missing trust root as `anchor_trust_root_absent` — undetermined, and
+  correct — before the verifier can reach it. The verifier's own answer for the same
+  condition is `unauthorized.trust_root_file_missing`, still live on two required
+  checks that have no such guard. Because the guard suppressed the symptom on the
+  surface anyone would look at, an annotation sweep across the whole run history
+  returned zero occurrences, and that zero read as absence of the defect when it was
+  a product of the fix. **Distinct from *too narrow, empty*, where the query was the
+  wrong shape:** here the query was right, the population was right, and the silence
+  was real — manufactured by a partial repair. The tell is cheap and available: a
+  mitigation that renames a condition creates *two* names for it, so the question is
+  not "does this still occur" but **"how many code paths reach this condition, and
+  does the mitigation cover all of them"** — a question about the call graph, which
+  no quantity of production evidence answers. The general form is uncomfortable:
+  **the better a partial fix is at hiding the symptom, the stronger the evidence it
+  manufactures that the remainder needs no fixing.**
+
+Unifying form, and the reason the twenty belong together: **every one of these
 instruments returned a true statement, and in no case was the true statement about
 the question being asked.** The helper list truly contained no such script. The
 two `authorized` verdicts were truly `authorized`. The sixteen hits truly
