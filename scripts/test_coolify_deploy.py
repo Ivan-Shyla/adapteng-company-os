@@ -851,8 +851,10 @@ class InspectTests(unittest.TestCase):
 
         The fixture's database carries a credential in two fields, one of them a
         URL. Both must be absent from the report while the identity that makes
-        the report worth running - the name a container would resolve - is
-        present.
+        the report worth running - the address a container would resolve - is
+        present. The URL is the interesting one: its address half is exactly what
+        is needed and its userinfo half is exactly what must not appear, so
+        printing it whole and printing nothing are both wrong.
         """
 
         instance = FakeInstance(with_application=True)
@@ -860,9 +862,22 @@ class InspectTests(unittest.TestCase):
         self.assertEqual(code, driver.EXIT_OK)
         self.assertIn("adapteng-postgres", report)
         self.assertIn("standalone-postgresql", report)
+        self.assertIn("internal address: adapteng-postgres:5432/postgres", report)
         self.assertIn("internal_db_url", report)
         self.assertNotIn("s3cr3t-not-for-a-log", report)
         self.assertEqual(instance.writes(), [])
+
+    def test_the_address_of_a_url_drops_its_credential(self) -> None:
+        self.assertEqual(
+            driver.address_of("postgresql://someone:a-credential@db.internal:5432/ops"),
+            "db.internal:5432/ops",
+        )
+        self.assertEqual(driver.address_of(None), "not reported")
+        self.assertEqual(driver.address_of(""), "not reported")
+        self.assertNotIn(
+            "a-credential",
+            driver.address_of("postgresql://someone:a-credential@db.internal:5432/ops"),
+        )
 
     def test_an_instance_reporting_no_databases_is_not_an_error(self) -> None:
         instance = FakeInstance(with_application=True)
