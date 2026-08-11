@@ -936,6 +936,34 @@ def resolve_github_app(client: Client, declared: str | None) -> dict:
 # --------------------------------------------------------------------------- #
 
 
+def report_settings_sources(client: Client, application_uuid: str) -> None:
+    """Probe, read-only, for any route that reports the delivery flags.
+
+    The application resource on this instance carries none of them. Before
+    treating that as unverifiable, the other places they could plausibly live are
+    checked, so the conclusion rests on an enumeration rather than on one read.
+
+    Status codes and key names only. Every request is a GET.
+    """
+
+    owned = set(SETTING_KEYS)
+    candidates = (
+        f"/applications/{application_uuid}/settings",
+        f"/applications/{application_uuid}?include=settings",
+        f"/applications/{application_uuid}/advanced",
+    )
+    emit("      settings source probe (read-only):")
+    for path in candidates:
+        status, parsed = client.request("GET", path)
+        found: list[str] = []
+        if isinstance(parsed, dict):
+            found = sorted(key for key in parsed if key in owned)
+            nested = parsed.get("settings")
+            if isinstance(nested, dict):
+                found = sorted(set(found) | (owned & set(nested)))
+        emit(f"        GET {path} -> HTTP {status}, owned keys reported: {found}")
+
+
 def report_object_shape(client: Client, application: dict) -> dict:
     """Print the key names the API reports for this application, and nothing else.
 
@@ -963,6 +991,7 @@ def report_object_shape(client: Client, application: dict) -> dict:
         emit("      detail read: not available")
         return application
     describe("detail read", detail)
+    report_settings_sources(client, application["uuid"])
     return detail
 
 
