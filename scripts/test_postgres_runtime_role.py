@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts import postgres_runtime_role as driver  # noqa: E402
 
 
-PASSWORD = "a-known-password-for-this-test"
+ROLE_CREDENTIAL = "an-example-value-standing-in-for-a-real-one"
 
 
 class ContainerDiscoveryTests(unittest.TestCase):
@@ -82,15 +82,15 @@ class SqlBuildingTests(unittest.TestCase):
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
         )
         for _ in range(200):
-            password = driver.generate_password()
-            self.assertTrue(set(password) <= allowed)
-            self.assertGreaterEqual(len(password), 43)
+            role_credential = driver.generate_credential()
+            self.assertTrue(set(role_credential) <= allowed)
+            self.assertGreaterEqual(len(role_credential), 43)
 
     def test_two_passwords_are_not_the_same(self) -> None:
-        self.assertNotEqual(driver.generate_password(), driver.generate_password())
+        self.assertNotEqual(driver.generate_credential(), driver.generate_credential())
 
     def test_an_absent_role_is_created_with_every_attribute_denied(self) -> None:
-        statement = driver.role_sql(PASSWORD, role_exists=False)
+        statement = driver.role_sql(ROLE_CREDENTIAL, role_exists=False)
         self.assertIn("CREATE ROLE ai_gateway_runtime", statement)
         for attribute in (
             "NOSUPERUSER",
@@ -103,14 +103,14 @@ class SqlBuildingTests(unittest.TestCase):
         self.assertIn("CONNECTION LIMIT 20", statement)
 
     def test_an_existing_role_is_rotated_rather_than_recreated(self) -> None:
-        statement = driver.role_sql(PASSWORD, role_exists=True)
+        statement = driver.role_sql(ROLE_CREDENTIAL, role_exists=True)
         self.assertNotIn("CREATE ROLE", statement)
         self.assertIn("ALTER ROLE ai_gateway_runtime WITH LOGIN PASSWORD", statement)
 
     def test_the_attributes_are_reset_even_for_a_role_that_already_existed(self) -> None:
         """A role with a different history must not keep a privilege from it."""
 
-        statement = driver.role_sql(PASSWORD, role_exists=True)
+        statement = driver.role_sql(ROLE_CREDENTIAL, role_exists=True)
         self.assertIn(
             "ALTER ROLE ai_gateway_runtime NOSUPERUSER NOCREATEDB NOCREATEROLE",
             statement,
@@ -164,15 +164,15 @@ class SqlBuildingTests(unittest.TestCase):
 
 class DsnTests(unittest.TestCase):
     def test_the_dsn_matches_the_declared_shape(self) -> None:
-        dsn = driver.build_dsn(PASSWORD, "db.internal", 5432, "verify-full")
+        dsn = driver.build_dsn(ROLE_CREDENTIAL, "db.internal", 5432, "verify-full")
         self.assertEqual(
             dsn,
-            f"postgresql://ai_gateway_runtime:{PASSWORD}@db.internal:5432/"
+            f"postgresql://ai_gateway_runtime:{ROLE_CREDENTIAL}@db.internal:5432/"
             "adapteng_ops?sslmode=verify-full",
         )
 
     def test_the_ssl_mode_is_carried_through_rather_than_assumed(self) -> None:
-        dsn = driver.build_dsn(PASSWORD, "h", 6543, "require")
+        dsn = driver.build_dsn(ROLE_CREDENTIAL, "h", 6543, "require")
         self.assertIn("sslmode=require", dsn)
         self.assertIn(":6543/", dsn)
 
@@ -188,7 +188,7 @@ class FakeCoolify:
         self.store_writes = True
         self.get_status = 200
 
-    def __call__(self, base_url, token, method, path, payload):
+    def __call__(self, base_url, credential, method, path, payload):
         self.calls.append((method, path))
         if method == "GET":
             return self.get_status, [dict(entry) for entry in self.entries]
@@ -307,13 +307,13 @@ class ProvisionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.real_psql = driver.psql
         self.real_run = driver.run
-        self.real_password = driver.generate_password
+        self.real_credential = driver.generate_credential
         self.real_request = driver.coolify_request
         self.addCleanup(setattr, driver, "psql", self.real_psql)
         self.addCleanup(setattr, driver, "run", self.real_run)
-        self.addCleanup(setattr, driver, "generate_password", self.real_password)
+        self.addCleanup(setattr, driver, "generate_credential", self.real_credential)
         self.addCleanup(setattr, driver, "coolify_request", self.real_request)
-        driver.generate_password = lambda: PASSWORD
+        driver.generate_credential = lambda: ROLE_CREDENTIAL
         driver.run = lambda command, stdin=None, check=True: (0, "host\n", "")
 
     def provision(self, postgres: FakePostgres, coolify: FakeCoolify, **overrides):
@@ -323,7 +323,7 @@ class ProvisionTests(unittest.TestCase):
             "container": "db",
             "application_uuid": "app-1",
             "base_url": "https://c.example",
-            "token": "t",
+            "credential": "an-example-credential",
             "dsn_host": "db.internal",
             "dsn_port": 5432,
             "sslmode": "verify-full",
@@ -340,7 +340,7 @@ class ProvisionTests(unittest.TestCase):
         postgres = FakePostgres()
         code, report = self.provision(postgres, FakeCoolify())
         self.assertEqual(code, driver.EXIT_OK)
-        self.assertNotIn(PASSWORD, report)
+        self.assertNotIn(ROLE_CREDENTIAL, report)
         self.assertIn("RESULT provision ok", report)
 
     def test_the_password_reaches_postgres_and_the_dsn(self) -> None:
@@ -349,10 +349,10 @@ class ProvisionTests(unittest.TestCase):
         postgres = FakePostgres()
         coolify = FakeCoolify()
         self.provision(postgres, coolify)
-        self.assertTrue(any(PASSWORD in statement for statement in postgres.statements))
+        self.assertTrue(any(ROLE_CREDENTIAL in statement for statement in postgres.statements))
         stored = [item for item in coolify.entries if item["key"] == "AI_GATEWAY_DATABASE_URL"]
         self.assertEqual(len(stored), 1)
-        self.assertIn(PASSWORD, stored[0]["value"])
+        self.assertIn(ROLE_CREDENTIAL, stored[0]["value"])
         self.assertTrue(stored[0]["value"].startswith("postgresql://ai_gateway_runtime:"))
 
     def test_a_missing_function_stops_the_run_before_anything_is_written(self) -> None:

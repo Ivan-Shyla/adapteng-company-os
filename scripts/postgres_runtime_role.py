@@ -291,7 +291,7 @@ def operate_recon(container: str | None = None) -> int:
 # --------------------------------------------------------------------------- #
 
 
-def generate_password() -> str:
+def generate_credential() -> str:
     """Return a password with no character that needs escaping in a DSN.
 
     token_urlsafe can emit '-' and '_' only, both safe in a URL userinfo field,
@@ -302,7 +302,7 @@ def generate_password() -> str:
     return secrets.token_urlsafe(48)
 
 
-def role_sql(password: str, role_exists: bool) -> str:
+def role_sql(role_credential: str, role_exists: bool) -> str:
     """Return the role statement. An existing role has its password rotated.
 
     Rotation is deliberate: this run is about to publish a DSN, and publishing
@@ -310,7 +310,7 @@ def role_sql(password: str, role_exists: bool) -> str:
     attribute reset runs either way, as the runbook's belt-and-braces step.
     """
 
-    literal = sql_literal(password)
+    literal = sql_literal(role_credential)
     if role_exists:
         statement = f"ALTER ROLE {ROLE} WITH LOGIN PASSWORD {literal};"
     else:
@@ -406,15 +406,15 @@ RESET ROLE;
 """
 
 
-def build_dsn(password: str, host: str, port: int, sslmode: str) -> str:
+def build_dsn(role_credential: str, host: str, port: int, sslmode: str) -> str:
     """Return the DSN in the shape the runbook and the migrations README declare."""
 
     return (
-        f"postgresql://{ROLE}:{password}@{host}:{port}/{DATABASE}?sslmode={sslmode}"
+        f"postgresql://{ROLE}:{role_credential}@{host}:{port}/{DATABASE}?sslmode={sslmode}"
     )
 
 
-def coolify_request(base_url: str, token: str, method: str, path: str, payload: dict | None):
+def coolify_request(base_url: str, credential: str, method: str, path: str, payload: dict | None):
     """Return (status, parsed) for one Coolify API call, raising only on transport.
 
     A non-2xx is returned rather than raised so a caller can distinguish "this
@@ -423,11 +423,11 @@ def coolify_request(base_url: str, token: str, method: str, path: str, payload: 
     """
 
     if not base_url.lower().startswith("https://"):
-        raise Abort("the Coolify base address must be https, so a token cannot be sent in clear")
+        raise Abort("the Coolify base address must be https, so a credential cannot be sent in clear")
     endpoint = f"{base_url.rstrip('/')}/api/v1{path}"
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     headers = {
-        "Authorization": f"Bearer {token}",
+        "Authorization": f"Bearer {credential}",
         "Accept": "application/json",
     }
     if data is not None:
@@ -447,7 +447,7 @@ def coolify_request(base_url: str, token: str, method: str, path: str, payload: 
 
 
 def publish_environment_value(
-    base_url: str, token: str, application_uuid: str, key: str, value: str
+    base_url: str, credential: str, application_uuid: str, key: str, value: str
 ) -> str:
     """Set one environment value and prove it was stored, without printing it.
 
@@ -461,7 +461,7 @@ def publish_environment_value(
     for method, label in (("PATCH", "updated"), ("POST", "created")):
         status, _ = coolify_request(
             base_url,
-            token,
+            credential,
             method,
             f"/applications/{application_uuid}/envs",
             {"key": key, "value": value},
@@ -475,7 +475,11 @@ def publish_environment_value(
         raise Abort(f"setting {key} in Coolify was refused by both PATCH and POST")
 
     status, entries = coolify_request(
-        base_url, token, "GET", f"/applications/{application_uuid}/envs", None
+        base_url,
+        credential,
+        "GET",
+        f"/applications/{application_uuid}/envs",
+        None,
     )
     if status != 200 or not isinstance(entries, list):
         raise Abort(
@@ -494,14 +498,14 @@ def operate_provision(
     container: str | None,
     application_uuid: str,
     base_url: str,
-    token: str,
+    credential: str,
     dsn_host: str,
     dsn_port: int,
     sslmode: str,
 ) -> int:
     emit("--- provision ai_gateway_runtime")
-    if not token:
-        raise Abort("no Coolify API token was supplied, so the DSN could not be published")
+    if not credential:
+        raise Abort("no Coolify API credential was supplied, so the DSN could not be published")
     if not application_uuid:
         raise Abort("no Coolify application uuid was supplied")
     if not dsn_host:
@@ -529,8 +533,8 @@ def operate_provision(
     )
     emit(f"    role {ROLE}: {'present, password will be rotated' if role_exists else 'absent, will be created'}")
 
-    password = generate_password()
-    psql(name, role_sql(password, role_exists))
+    role_credential = generate_credential()
+    psql(name, role_sql(role_credential, role_exists))
     emit(f"    role {ROLE}: {'rotated' if role_exists else 'created'}")
 
     psql(name, grant_sql())
@@ -543,9 +547,9 @@ def operate_provision(
             emit(f"      {cleaned}")
     emit("    verifications 4a-4d passed")
 
-    dsn = build_dsn(password, dsn_host, dsn_port, sslmode)
+    dsn = build_dsn(role_credential, dsn_host, dsn_port, sslmode)
     outcome = publish_environment_value(
-        base_url, token, application_uuid, "AI_GATEWAY_DATABASE_URL", dsn
+        base_url, credential, application_uuid, "AI_GATEWAY_DATABASE_URL", dsn
     )
     emit(f"    AI_GATEWAY_DATABASE_URL: {outcome} in Coolify and confirmed by re-reading")
     emit("")
