@@ -764,9 +764,10 @@ def report_placement_sources(client: Client, applications: list) -> None:
         detail = call(client, "GET", f"/applications/{uuid}")
         if not isinstance(detail, dict):
             continue
+        server = detail.get("server_uuid")
         emit(
             f"      placement of {detail.get('name')}: "
-            f"server={detail.get('server_uuid') or detail.get('server_status') or 'unreported'} "
+            f"server={server if isinstance(server, str) else 'unreported'} "
             f"destination={destination_uuid_of(detail) or 'unreported'}"
         )
 
