@@ -705,6 +705,41 @@ labels, while the *blindness* is exactly two sites — #121 closes one and 379 i
 the other. That is a tighter scope than "both discard sites carry both defects",
 and it is checkable.
 
+**The definitive coordinates, stated so no convention is implicit.** Two numbers
+have been used for the "first" number of each site — the `python -I` invocation
+and the `2>/dev/null` line — and citing one against the other's convention makes
+two correct records look contradictory. All three lines, both trees, verified by
+reading each file:
+
+| Site | Tree | `python -I` call | stderr redirect | label `printf` |
+| --- | --- | --- | --- | --- |
+| `select-queued-run` | `main` | 248 | 254 | 262 |
+| `select-queued-run` | `f0a2d17` | 249 | 255 (`2>"$selection_error_file"`) | 269 |
+| `verify-staged-runner` | `main` | 376 | 379 | 384 |
+| `verify-staged-runner` | `f0a2d17` | 385 | 388 | 393 |
+
+**A single-number delta is itself a citation error when the insertion is
+interior.** WS-9 established the offset mechanically — `main` 409 lines,
+`f0a2d17` 418, `--numstat` 10/1, net +9 — and derived 388 = 379 + 9 and
+393 = 384 + 9. Both are right, and they are right by luck: the runner site lies
+below *every* line #121 adds, so the file-level net happens to be its local
+offset. The select site does not. #121 inserts `selection_error_file=` at 245 and
+replaces a two-line failure block with a ten-line one at 263–272, so the local
+offset is **+1** at the call and redirect (248→249, 254→255) and **+7** at the
+label (262→269). Applying the headline +9 to the select site would have been
+wrong by eight.
+
+The general form is the §13 one again: a file-level `--numstat` enumerates *net
+lines changed*, which cannot answer *where line N moved to*. It was a safe
+instrument for the question asked and an unsafe one for the adjacent question,
+and nothing in the number says which case you are in.
+
+One consequence for anyone grepping: `f0a2d17` still contains **two**
+`2>/dev/null` occurrences, at 264 and 388. The one at 264 is new and benign — it
+is on the `head -c 512` that reads the captured error file back — so a raw count
+does not show #121 halving the blind sites. It removed one and added a harmless
+one.
+
 **Why `2>&1` is the wrong fix at both, structurally.** Each is a command
 substitution assigning to a variable the script then depends on — `run_id="$("`
 at 247–255 and `runner_id="$("` at 375–380 — with the identical
@@ -926,6 +961,26 @@ it is acted on. The operative consequence: whoever extends the receipt to the
 runner site edits **379 on `main`** or **388 on `f0a2d17`**, depending on
 sequencing, and writing either number without its ref creates a real chance of
 editing the wrong line or failing to find it at all.
+
+**The fix WS-9 proposed is better than stating the ref, and it is adopted.**
+Anchor the citation to text — *the `2>/dev/null` on the `verify-staged-runner`
+call whose stdout is captured into `runner_id`, and the
+`lifecycle.runner_registration_invalid` printf below it* — and attach the
+coordinates as a convenience with their provenance. The prose survives both
+regimes, so the citation is no longer sequencing-dependent at all, and it
+degrades gracefully: a reader who cannot find line 379 can still find the
+construct. That is the same reason the port is a transcription rather than a
+design — the shape is the stable thing, and the coordinates are a projection of
+it into a frame that keeps moving. Owner-decision item 3 is now written this way.
+
+**Why it went unnoticed for an evening, which is the part worth keeping.** WS-9
+had read that file at 388 all session. From inside a branch the ref is invisible;
+the line number simply *is* the line number, and no amount of care surfaces a
+frame you cannot see you are in. So the remedy is not diligence but form: a line
+citation without a ref is **malformed**, in the same way "the current head" is
+malformed without a SHA. That framing is what makes the habit enforceable rather
+than aspirational, because malformedness is checkable by the writer and
+carelessness is not.
 
 ---
 
