@@ -316,6 +316,20 @@ class ReconcileTests(unittest.TestCase):
         self.assertIs(created[0]["instant_deploy"], False)
         self.assertEqual(created[0]["build_pack"], "dockerfile")
 
+    def test_the_creation_body_carries_only_fields_the_instance_accepts(self) -> None:
+        """A field the published schema documents is not a field this instance takes.
+
+        max_restart_count is in the published create and update schemas and is
+        refused outright by the live instance. That cost one round trip, so the
+        set is pinned here and widening it is a deliberate act.
+        """
+
+        coolify = FakeCoolify()
+        run_operation(runner.operate_reconcile, coolify, FakeGitHub(), repository=REPOSITORY)
+        created = [body for _, path, body in coolify.writes if path.endswith("/dockerfile")][0]
+        self.assertEqual(set(created), set(runner.ACCEPTED_CREATION_FIELDS))
+        self.assertNotIn("max_restart_count", created)
+
     def test_the_declared_environment_is_written_and_then_verified(self) -> None:
         coolify = FakeCoolify()
         code, report = run_operation(
