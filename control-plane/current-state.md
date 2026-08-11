@@ -1021,7 +1021,7 @@ world.
 because the remedy differs.** In every case above the instrument was consulted and
 its answer misread. In these the answer came *first* and the citation was
 recruited afterwards to support it — so the citation is **true, and its truth is
-independent of the conclusion it is offered for**. Three instances, all from this
+independent of the conclusion it is offered for**. Four instances, all from this
 programme:
 
 - WS-6 argued `allowed_signers` belongs outside the reset pair because it
@@ -1036,14 +1036,33 @@ programme:
 - Mine: §15's second caveat was illustrated with a hand-picked hypothetical while
   `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256` sat in the same document, real and
   stronger, already labelled a dead end.
+- Mine, and the worst of the four because it was load-bearing. Correcting WS-9's
+  audit predicate for F-8, I proposed *is the failure of this command observable
+  anywhere downstream?* and supported it with "at `main` 254/379 and `f0a2d17` 388
+  there is no downstream name". That sentence is false — all three sites print a
+  label and exit non-zero (262, 384, 392). The predicate does not merely admit one
+  false positive; **it clears every real site**, so an auditor applying it would
+  have concluded #121 fixes nothing. What separates the sites is the *cause*, not
+  the failure. Two features make this the sharpest instance in the register: the
+  fabricated support sat in the same paragraph as the claim it supported, and the
+  paragraph's whole purpose was correcting somebody else's predicate — the act of
+  correcting is not itself a check, and it supplies exactly the confidence that
+  suppresses one.
 
-**The tell is checkable and cheap.** Ask whether the citation would still be true
-if the conclusion were false. For all three it would. A supporting citation should
-*fail* when the claim fails; one that cannot is decoration, and it costs the
-implementer who reads "the anchor already blocks this" and skips writing the
-guard. The remedy is not a better search — the search worked — it is stating the
-conclusion and the evidence in that order, and checking the arrow between them
-points the way it is drawn.
+**The tell is checkable and cheap, and it has a hole my own instance falls
+through.** Ask whether the citation would still be true if the conclusion were
+false. For the first three it would; a supporting citation should *fail* when the
+claim fails, and one that cannot is decoration. It costs the implementer who reads
+"the anchor already blocks this" and skips writing the guard. The remedy for those
+is stating the conclusion and the evidence in that order, and checking the arrow
+between them points the way it is drawn. **The fourth is not that.** "There is no
+downstream name" is not a true statement recruited for the wrong conclusion — it
+is simply false, and no question about the arrow between claim and evidence
+detects it, because the evidence was never checked at all. So the family splits:
+three cases of a real citation aimed wrongly, one of a citation that was asserted
+because the conclusion required it to exist. The second kind is cheaper to catch —
+read the lines — and easier to commit, because writing a sentence about what the
+code does feels indistinguishable from having looked.
 
 **And a limit on this section, established by the section itself.** The
 `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256` error above was committed *after* the
