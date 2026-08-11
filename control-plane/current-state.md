@@ -125,10 +125,15 @@ Verified from `main` and CI, not from narrative.
   access log.
 
   `/ready` opens a database connection where `/health` does not (§5b), so this
-  is also the database proof: the runtime DSN is in place and usable. It proves
-  nothing about the two remaining owner-held values and nothing about model
-  access — both endpoints answer before the `Authorization` header is read, and
-  no model is called. **Vertex inference calls remain 0.**
+  is also the database proof: the runtime DSN is in place and usable. It says
+  nothing about the other two credentials and nothing about model access —
+  both endpoints answer before the `Authorization` header is read, and no model
+  is called. Those two are confirmed bound separately: `ai_gateway_credentials.py
+  status` (run `31543126097`) reports `credentials=bound`, with the storage
+  `/secrets/vertex-service-account.json` present and both environment keys set.
+  Bound is not the same as correct — a secret cannot be read back from either
+  store, by design — so the first live model call is what would prove the Vertex
+  key, and it is held for the owner's GO. **Vertex inference calls remain 0.**
 
   The entry stayed wrong for one turn after it had become false, and the reason
   is worth keeping: `verify` ranked executions by an `id` that this Coolify
