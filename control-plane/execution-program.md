@@ -1112,6 +1112,30 @@ deployed gateway:
    assertion is three `assertIn`s, and it converts an advisory-only guard into a
    pre-merge one for the specific bytes the signature is taken over.
 
+   **Corrected 2026-08-11, and the correction is to this recommendation rather
+   than to anything downstream of it.** WS-9 implemented the sentence above
+   exactly, in `498aad7` on the held platform PR #125, and the result asserts
+   five of the six pins. The recommendation counted six entries four lines
+   earlier, named four of them as unasserted, and then prescribed three — so the
+   secrets baseline is uncovered by the instruction, not by the implementation.
+   **Revised recommendation: assert all four unasserted pins**, the three
+   trust-root files and the secrets baseline. The baseline is not decorative:
+   `validate.yml` 79 runs the scanner against it, its command string is pinned at
+   `tests/test_ci_n8n_isolation_scope.py` 56, and the anchor suite parses it as
+   JSON at 1900. One further `assertIn`-equivalent, on the same required check,
+   in the same loop.
+
+   Two refinements from that implementation, both of which improve on what this
+   item specified. It uses `git check-attr` rather than a substring search, which
+   resolves the **effective** attribute and therefore also catches a later line, a
+   glob, or a nested file overriding an exact pin — none of which the three
+   `assertIn`s recommended above could see. And it sharpens the `-text` row: the
+   measurement here is right that the bytes do not change, but unsetting `text`
+   also disables **check-in** normalisation, so a later commit can put CRLF into
+   the blob and checkout will then reproduce it. `-text` does not unpin the bytes;
+   it unpins the *invariant*. The table below is correct as a statement about
+   today's blob and should not be read as one about the guarantee.
+
    **Why the original table could not have found this, which is the part worth
    carrying.** The experiment mutated a worktree that already existed, so every
    row it could produce was a *transition*. The population where the remedy works
