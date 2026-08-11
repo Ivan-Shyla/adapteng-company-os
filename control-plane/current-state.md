@@ -885,6 +885,21 @@ will not be caught by that guard.** Self-interest is not an error detector in
 either direction, and undercounts in your own favour are as invisible as
 overcounts are tempting.
 
+**And a second, from WS-6's own diagnosis of its tree-delta claim.** It observed
+that of the four claims in that note it verified three by reading source and
+pulling file lists, and asserted only the one about *feasibility* — "the verifier
+can already see the difference". Its reading of why is worth keeping verbatim in
+substance: **feasibility is the kind of claim whose cost lands on the implementer
+rather than on the claimant.** Being wrong about a fact is discovered by the next
+person to read the file; being wrong about whether something can be built is
+discovered by whoever tries, after committing to the design. So the check should
+be weighted the other way from instinct — the claims to verify hardest are not
+the ones you would be embarrassed to get wrong, they are the ones whose cost you
+will not personally pay. Note that this and the paragraph above are the same rule
+seen twice: **look hardest where the cost of being wrong lands somewhere other
+than on you** — either because the error flatters you, or because someone else
+does the work of discovering it.
+
 ## 14. Where the required-check list is allowed to be duplicated
 
 Platform **#117** rewrote §3 of that repository's
@@ -1108,7 +1123,7 @@ review is prose, and a distinction living in prose drifts from the thing it
 describes — which is F-7, and the argument the encoding rests on in the first
 place.
 
-### Three things the implementer must not get wrong
+### Four things the implementer must not get wrong
 
 **The obvious implementation fails on the outage repair itself.** #116 — the
 commit that ended the four-day outage — changed four files:
@@ -1203,6 +1218,70 @@ to source digests, and contains **none** of the anchor's own files. It exists fo
 working-tree closure integrity, a different concept that merely overlaps. Reusing
 it would read as avoiding duplication while silently binding two unrelated
 security sets together, so that the next edit to either corrupts the other.
+
+**Fourth: the receipt is invisible to `is_protected_path`, deliberately.** This is
+the strongest of the three arguments for the strict form, because of what it
+admits. `APPROVAL_PATHS` — `.github/trust/rollout-policy/approval.json` and
+`.sig`, defined at 53–60 — sit *underneath* the protected prefix
+`.github/trust/rollout-policy/` at line 64, and the exemption at 1108 returns
+`False` for exactly those two before any mechanism is consulted. So any
+classifier that consumes `is_protected_path` is structurally unable to see a
+receipt.
+
+Under the naive rule — *touched protected paths ⊆ anchor machinery* — a pull
+request that edits the verifier **and adds approval material** has a
+touched-protected set of `{verifier}`. The subset test passes and the change is
+classified bootstrap, the class whose label reads "cannot self-authorize,
+escalate". The payload riding along invisibly is not arbitrary: it is the receipt,
+the one artefact the entire gate exists to govern. The strict form —
+*the pull request touches nothing but anchor machinery* — is immune, precisely
+because it reads the raw changed-file list instead of filtering it through
+`is_protected_path` first.
+
+*Correction to the scoping, which matters more than it looks.* WS-6 called this
+inert today because "`commit_delta_invalid` requires a receipt commit whose delta
+from its parent is only `APPROVAL_PATHS`, so a combined verifier+receipt commit
+fails now". The first half is true — line 2703 raises
+`approval.commit_delta_invalid` unless `_changed_leaf_paths(subject_tree,
+head_tree)` equals `APPROVAL_PATHS` exactly. But the conclusion does not follow,
+because **the anchor does not block the hazardous shape; it mandates it.** Read
+2701 and 2703 together: the subject tree must introduce no approval material, and
+the head commit's delta from that subject must be exactly the two approval paths.
+That *is* the canonical authorized pull request — one commit carrying the change,
+one receipt commit on top — and it passes today by design. A single combined
+commit does fail, but nobody builds that shape. What actually makes the hazard
+inert is only that the classifier does not exist yet. The difference has a future:
+"the anchor already blocks this" is false comfort that would survive into the
+implementation and stop someone writing the guard.
+
+*The proposed invariant is worth taking, and its scope is narrower than claimed.*
+WS-6 offers `all(is_protected_path(p) for p in ANCHOR_MACHINERY)` — cheap,
+in-repository, no cross-repository access, runs in the existing
+`root-rollout-tests`. Verified that it holds on the real set today: the verifier
+(99), the test file (114) and the runbook (73) are exact entries, and the workflow
+is covered by the prefix at 65. Two caveats it needs to carry.
+
+1. **The English and the code disagree on exactly the pair that motivated the
+   finding.** "Protected by at least one of the three mechanisms" is not what
+   `is_protected_path` computes; that function returns `False` for `APPROVAL_PATHS`
+   *before* reaching any mechanism. The two readings diverge only on the approval
+   paths — which is where this whole item started. Write the assertion in terms of
+   the predicate and say why, or the first confusing failure gets "fixed" by
+   someone removing the exemption.
+2. **It is a necessary condition, and it is blind to the more dangerous
+   widening.** Adding an *unprotected* file to the set fails the assertion and is
+   caught. Adding a *protected but non-machinery* file passes it — and that is the
+   direction that hurts, because a pull request touching only that file then
+   classifies as bootstrap and merges with no receipt. WS-6 splits the cases as
+   deliberate versus accidental and claims the test "stops the accidental kind".
+   The operative split is which direction, not which intent, and the most likely
+   *accidental* widening lands in the uncaught one, because the confusable names
+   live there. Concretely: `scripts/operations/authorize_approved_assets_phase.sh`
+   is protected (line 84), is **not** anchor machinery, has "authorize" in its
+   name, and is the file in #121. Anyone writing the set from memory could sweep
+   it in, and this test would pass. What stops that is the rule already recorded
+   above — adding to the set is never bootstrap — so the invariant is a supplement
+   to it, never a substitute.
 
 Recorded, not built. It is a protected-path change encoding an undecided policy,
 and it waits for both the ruling and the authority to ask for it.
