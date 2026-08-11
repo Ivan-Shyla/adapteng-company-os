@@ -147,6 +147,9 @@ class FakeInstance:
             "persistent_storages": [],
         }
         self.deployment_states = list(deployment_states or ["queued", "in_progress", "finished"])
+        # What this instance puts in a deployment's ``logs`` field. None means the
+        # field is absent, which is one of the shapes the reader must survive.
+        self.deployment_logs = None
         self.deployments: dict[str, dict] = {}
         self.calls: list[tuple[str, str]] = []
         self.reject_writes_silently = False
@@ -249,6 +252,8 @@ class FakeInstance:
                 return 404, {"message": "not found"}
             if self.deployment_states:
                 record["status"] = self.deployment_states.pop(0)
+            if self.deployment_logs is not None:
+                record["logs"] = self.deployment_logs
             return 200, copy.deepcopy(record)
         return 404, {"message": f"no route for {path}"}
 
@@ -1548,6 +1553,103 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(code, driver.EXIT_FAILED)
         self.assertIn("RESULT deploy failed", report)
         self.assertIn("dep-1", report)
+
+    def test_a_failure_reports_the_reason_and_not_only_the_verdict(self) -> None:
+        """state=failed alone is a verdict with the cause removed.
+
+        The build log is the only place the cause exists, so a run that reports
+        the state and stops has told the reader that something is wrong and
+        withheld the one fact they need.
+        """
+
+        instance = FakeInstance(
+            with_application=True, deployment_states=["queued", "failed"]
+        )
+        instance.deployment_logs = json.dumps(
+            [
+                {"output": "Step 4/9 : COPY requirements.lock ."},
+                {"output": "ERROR: failed to solve: lstat requirements.lock: no such file"},
+            ]
+        )
+        code, report = self.deploy(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("failed to solve", report)
+        self.assertIn("Step 4/9", report)
+
+    def test_a_log_that_quotes_an_owner_held_value_does_not_disclose_it(self) -> None:
+        """A build log is untrusted text and may echo the environment it was given."""
+
+        instance = FakeInstance(
+            with_application=True, deployment_states=["queued", "failed"]
+        )
+        # Deliberately not written in the shape of a connection string. The
+        # property under test is that a stored owner-held value is masked when
+        # a log quotes it, and that holds for any opaque value - so there is no
+        # need for a credential-shaped literal in this repository, and the
+        # sensitive-reference gate is right to refuse one.
+        stored = "value-that-must-not-appear-in-any-run-log"
+        for entry in instance.environment_entries["app-1"]:
+            if entry["key"] == "AI_GATEWAY_DATABASE_URL":
+                entry["value"] = stored
+        instance.deployment_logs = json.dumps(
+            [{"output": f"connecting with {stored} failed"}]
+        )
+        _, report = self.deploy(instance)
+        self.assertNotIn(stored, report)
+        # Without this the assertion above would also pass if the log were
+        # never printed at all, which is the failure mode being guarded against.
+        self.assertIn("connecting with [redacted] failed", report)
+
+    def test_a_committed_value_stays_legible_because_hiding_it_protects_nothing(self) -> None:
+        """Masking everything would rebuild the opaque verdict this replaces.
+
+        Values under ``configuration`` are committed in this repository in clear
+        text. Redacting them costs the reader the cause and buys no secrecy.
+        """
+
+        instance = FakeInstance(
+            with_application=True, deployment_states=["queued", "failed"]
+        )
+        instance.deployment_logs = json.dumps(
+            [{"output": "AI_GATEWAY_MODEL=gemini-3.1-flash-lite was rejected"}]
+        )
+        _, report = self.deploy(instance)
+        self.assertIn("gemini-3.1-flash-lite", report)
+
+    def test_every_shape_this_instance_has_used_for_logs_is_read(self) -> None:
+        """A log reader that raises fires exactly when something is already wrong."""
+
+        cases = {
+            "json string of entries": (json.dumps([{"output": "alpha"}]), ["alpha"]),
+            "real list of entries": ([{"output": "alpha"}], ["alpha"]),
+            "single entry object": ({"output": "alpha"}, ["alpha"]),
+            "plain text": ("alpha\nbeta", ["alpha", "beta"]),
+            "list of strings": (["alpha", "beta"], ["alpha", "beta"]),
+            "absent": (None, []),
+            "empty": ("", []),
+        }
+        for label, (raw, expected) in cases.items():
+            with self.subTest(shape=label):
+                self.assertEqual(driver.deployment_log_lines({"logs": raw}), expected)
+
+    def test_an_unreadable_entry_is_shown_rather_than_dropped(self) -> None:
+        """Dropping it would hide the one line that does not fit the expected shape."""
+
+        lines = driver.deployment_log_lines({"logs": [{"message": "no output key"}]})
+        self.assertEqual(len(lines), 1)
+        self.assertIn("no output key", lines[0])
+
+    def test_a_long_log_is_tailed_and_says_so(self) -> None:
+        instance = FakeInstance(
+            with_application=True, deployment_states=["queued", "failed"]
+        )
+        instance.deployment_logs = json.dumps(
+            [{"output": f"line-{index}"} for index in range(200)]
+        )
+        _, report = self.deploy(instance)
+        self.assertIn("last 60 of 200 lines", report)
+        self.assertIn("line-199", report)
+        self.assertNotIn("line-0\n", report)
 
     def test_a_deployment_that_never_settles_stops_the_run(self) -> None:
         instance = FakeInstance(with_application=True, deployment_states=["in_progress"])
