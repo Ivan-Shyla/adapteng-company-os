@@ -779,6 +779,23 @@ deployed gateway:
    adds a run alongside the existing one. #121's pre-reset refusal is part of the
    evidence base, and a re-run additionally leaves `created_at` describing an
    execution it no longer matches. See `current-state.md` §12a.
+
+   **#124 has since become a substantive item in its own right, not just the event
+   that falsified this paragraph.** It repairs a live misclassification: a missing
+   or broken trust root — an infrastructure fault — is currently reported as
+   `rollout_trust_anchor.unauthorized.trust_root_file_missing`, exit 1, on **two
+   required, merge-blocking checks** (*Validate repository structure and content*
+   and *Fail on unencrypted secret-like content*, both confirmed against the active
+   `main-protected` ruleset). Reproduced here by executing the real script, not read
+   from a diff. #124 converts the 21 bare raises in `validate_allowed_signers` (15)
+   and `_validate_executable` (6) to `UndeterminedError`, on the stated principle
+   that those functions validate the *instrument* and never the *subject* — neither
+   reads the pull request. Both categories still block, so nothing previously
+   refused becomes admitted, and the `trust_root_not_configured` → exit 0 special
+   case at 3210 is deliberately preserved and pinned by test. **The owner decision
+   is only whether to merge past `commit_delta_invalid`**, which is item 4 below and
+   not specific to #124; the change itself is verified. WS-6 left it open rather
+   than merging, which is the correct application of the standing rule.
 4. **One sentence settling whether an advisory authorization refusal may be
    merged past.** Two sessions answered this oppositely within four minutes —
    platform #122 merged, #121 was left open — from materially identical
