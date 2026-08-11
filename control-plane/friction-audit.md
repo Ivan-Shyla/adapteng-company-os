@@ -727,7 +727,17 @@ offset. The select site does not. #121 inserts `selection_error_file=` at 245 an
 replaces a two-line failure block with a ten-line one at 263–272, so the local
 offset is **+1** at the call and redirect (248→249, 254→255) and **+7** at the
 label (262→269). Applying the headline +9 to the select site would have been
-wrong by eight.
+wrong by **eight** at the call and redirect (257 and 263 against 249 and 255) and
+by **two** at the label (271 against 269).
+
+*That sentence previously read "wrong by eight", full stop.* True of two
+coordinates out of three, false of the third, and WS-1 independently described the
+same error as "off by two" — citing the label while this document cited the call.
+Two correct magnitudes, different coordinates, appearing to contradict: the exact
+failure this section exists to eliminate, reproduced inside the paragraph
+describing it. A single magnitude cannot summarise an interior insertion for the
+same reason a single offset cannot, and the fix is the same one — say which
+coordinate.
 
 The general form is the §13 one again: a file-level `--numstat` enumerates *net
 lines changed*, which cannot answer *where line N moved to*. It was a safe
@@ -735,10 +745,30 @@ instrument for the question asked and an unsafe one for the adjacent question,
 and nothing in the number says which case you are in.
 
 One consequence for anyone grepping: `f0a2d17` still contains **two**
-`2>/dev/null` occurrences, at 264 and 388. The one at 264 is new and benign — it
-is on the `head -c 512` that reads the captured error file back — so a raw count
-does not show #121 halving the blind sites. It removed one and added a harmless
-one.
+`2>/dev/null` occurrences, at 264 and 388, exactly as `main` contains two at 254
+and 379. A raw count therefore reads *unchanged* while the blind sites have gone
+**2 → 1**. The select site did not lose its redirect; it changed target, to
+`2>"$selection_error_file"`, and 264 is a new occurrence of the string doing
+something structurally opposite.
+
+**The obvious audit predicate does not separate them, and it must.** "Does this
+discard a helper's stderr while capturing its stdout" matches 264 as well as the
+real sites: `selection_error="$(head -c 512 < "$selection_error_file"
+2>/dev/null | tr ... )"` captures `head`'s stdout and discards `head`'s stderr.
+Anyone auditing by that rule finds 264, calls it a defect, and "fixes" the
+degradation path #121 deliberately built. The predicate that separates them is
+**is the failure of this command observable anywhere downstream?** At 264 it is:
+an unreadable or absent error file yields empty output, and line 268
+(`[ -n "$selection_error" ] || selection_error="(none)"`) gives that state a
+printed name. The suppression is there so a missing diagnostic degrades to
+`(none)` instead of tripping `pipefail` and manufacturing a second failure inside
+the reporting path. At `main` 254/379 and `f0a2d17` 388 there is no downstream
+name — the status is checked, the cause is gone.
+
+That is the same distinction the whole finding rests on, applied one level down:
+what matters is not whether a stream is discarded but whether the failure keeps a
+name. Stated as "count the redirects" the rule is cheap and wrong; stated as
+"find the failures nothing downstream can name" it is the rule #121 implements.
 
 **Why `2>&1` is the wrong fix at both, structurally.** Each is a command
 substitution assigning to a variable the script then depends on — `run_id="$("`

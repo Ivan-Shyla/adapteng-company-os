@@ -842,7 +842,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with five sub-shapes and eight instances.** WS-1 proposed the
+**The general rule, with six sub-shapes and ten instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -852,7 +852,16 @@ the instrument's range fails to match the question:
   list for a module. A helper list enumerates *invoked scripts* and structurally
   cannot contain an *imported* one, so the empty result was a true negative about
   the wrong category, read as a finding. Its earlier instance was a function
-  boundary searched against an `except`.
+  boundary searched against an `except`. **A third instance, mine, caught before it
+  was published:** verifying WS-1's coordinate table I grepped `f0a2d17` for
+  `2>/dev/null`, found nothing at line 255, and was one step from telling WS-1 its
+  correct table was wrong. The redirect is at 255; #121 changes its *target* to
+  `2>"$selection_error_file"`. I had searched for the old form of the construct in
+  the tree whose entire purpose is to change that form. **The trigger is worth
+  naming because it recurs: when verifying a change, do not search for the string
+  the change changes** — search for the construct's position, or for what it was
+  changed *into*. What saved it was reading the region rather than trusting the
+  grep, which is the same remedy as everywhere else in this list.
 - **Too narrow, non-empty — a sample read as a census.** WS-6 reported the two
   `authorized` verdicts in the anchor's history; there are seven (§12a). Every
   element it named was true and one was genuinely the last — the quantifier was
@@ -880,14 +889,40 @@ the instrument's range fails to match the question:
   harder, which is a different remedy from every other entry in this list.
 - **Wrong axis — the artefact described instead of the decision.** My "both
   mechanisms" above; the sets are real, and they are not what decides.
+- **Right answer, unstated validity interval — applied outside its domain.**
+  WS-9 derived #121's line offsets from `git diff --numstat`: 10 added, 1 removed,
+  net **+9**. Correct, and exact at the runner site — 379→388 and 384→393, three
+  coordinates, three confirmations. It is exact there because that site lies below
+  every line #121 inserts. At the select site the local offsets are +1, +1 and +7,
+  so the same rule is wrong by eight at the call and by two at the label
+  (F-8). Nothing about the number `9` states the condition under which it
+  transfers. **This is the most dangerous member of the family**, because the
+  other five produce answers that are wrong where you look; this one produces
+  answers that are *right* where you look and wrong elsewhere. Checking it more
+  carefully at the runner site would have raised confidence in it, correctly, and
+  changed nothing about the select site. The remedy is not verification — it is
+  asking what the instrument measures: `--numstat` answers *how many lines
+  changed*, never *where line N went*, and the two coincide only below the last
+  hunk.
 
-Unifying form, and the reason the four belong together: **the instrument's range
-does not match the question, and its output was read as though it did.** Stated
-that way it yields a check that costs one sentence — before believing a result,
-say what the instrument enumerates and compare it to what was asked. Three of the
-four sub-shapes produce *confident* wrong answers, and both narrow shapes produce
-a confident wrong answer that looks like diligence, which is why they are the
-dangerous members of the family.
+Unifying form, and the reason the six belong together: **every one of these
+instruments returned a true statement, and in no case was the true statement about
+the question being asked.** The helper list truly contained no such script. The
+two `authorized` verdicts were truly `authorized`. The sixteen hits truly
+contained the module name. Line 24 truly is not an import statement. The two
+mechanisms truly exist. The net delta truly is +9. Not one of these is a wrong
+answer; each is a right answer to a question nobody asked.
+
+That is why "check it more carefully" is the wrong remedy and why it failed
+visibly in the sixth instance, where more checking *increased* confidence,
+correctly, in a rule that was already outside its domain. The check that works
+costs one sentence and is not about correctness at all: **say what the output is
+true of, then compare that to the question.** Range failures answer about the
+wrong set, granularity failures about the wrong unit, axis failures about the
+wrong artefact, and domain failures about the wrong region of the file. Four of
+the six produce *confident* wrong answers, and the two narrow shapes produce a
+confident wrong answer that looks like diligence — which is why, until the sixth,
+they were the dangerous members of the family.
 
 **And a limit on this section, established by the section itself.** The
 `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256` error above was committed *after* the
