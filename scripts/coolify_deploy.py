@@ -484,6 +484,34 @@ def unreportable_settings(spec: dict) -> dict:
     return declared
 
 
+def settings_written_blind(spec: dict) -> dict:
+    """Return acknowledged settings that are written anyway, and how each is checked.
+
+    The rule everywhere else here is that a write which cannot be re-read must
+    not be reported as success. That rule is about verification, not about
+    reading: a setting whose effect is observable by some other check is
+    verifiable, just not by this endpoint.
+
+    ``connect_to_docker_network`` is the case that forced the distinction. It is
+    not reported, so it was not written, so the container was created detached
+    and nothing noticed until a probe asked the network directly. Refusing to
+    write it did not keep the deployment honest; it kept it broken while
+    reporting PENDING-OWNER-UI, which reads like a formality.
+
+    So a setting may name the check that observes it. Naming one is what makes
+    it eligible to be written, and the check has to be a real thing a person can
+    run - it is quoted in the report so that a claim nobody verifies is visible
+    as such.
+    """
+
+    eligible = {}
+    for name, entry in unreportable_settings(spec).items():
+        verified_by = str(entry.get("verified_by") or "").strip()
+        if verified_by:
+            eligible[name] = verified_by
+    return eligible
+
+
 def settings_delta(spec: dict, application: dict) -> tuple[list, list[str]]:
     """Return the settings that differ, and those the API will not report.
 
@@ -1394,13 +1422,26 @@ def operate_reconcile(client: Client, spec: dict, supplied: dict[str, str] | Non
     stored = read_application(client, uuid)
     field_changes = difference(desired_application_fields(spec), stored)
     setting_changes, unverifiable = settings_delta(spec, stored)
+    blind = settings_written_blind(spec)
     for name in unverifiable:
+        if name in blind:
+            continue
         emit(f"    setting {name}: PENDING-OWNER-UI, this API does not report it")
-    if field_changes or setting_changes:
+    if field_changes or setting_changes or blind:
         body = {name: desired_application_fields(spec)[name] for name, _, _ in field_changes}
         body.update({name: desired_settings(spec)[name] for name, _, _ in setting_changes})
         for name, have, want in field_changes + setting_changes:
             emit(f"    change {name}: {have!r} -> {want!r}")
+        # Written on every reconcile rather than on a detected difference,
+        # because there is nothing to detect a difference against. It is the
+        # declared value either way, so a repeat write converges on the same
+        # state; what it must never do is claim confirmation.
+        for name, verified_by in sorted(blind.items()):
+            body[name] = desired_settings(spec)[name]
+            emit(
+                f"    write-blind {name}: {desired_settings(spec)[name]!r} "
+                f"(not reported back; observed by {verified_by})"
+            )
         call(client, "PATCH", f"/applications/{uuid}", body=body)
     else:
         emit("    application fields and settings already match the spec")
@@ -1462,18 +1503,25 @@ def operate_reconcile(client: Client, spec: dict, supplied: dict[str, str] | Non
         return EXIT_FAILED
 
     changed = bool(field_changes or setting_changes or create or update) or application is None
-    if still_unverifiable:
+    withheld = [name for name in still_unverifiable if name not in blind]
+    if withheld:
         emit(
             "    VERIFY OK for everything this API reports; "
-            f"{len(still_unverifiable)} declared setting(s) are not reported and were not written: "
-            f"{still_unverifiable}"
+            f"{len(withheld)} declared setting(s) are not reported and were not written: "
+            f"{withheld}"
         )
     else:
         emit("    VERIFY OK stored state matches the declared spec")
+    for name, verified_by in sorted(blind.items()):
+        # Stated separately and never folded into VERIFY OK. This run wrote the
+        # value and cannot read it back, so the honest report is that it was
+        # sent and where the confirmation has to come from.
+        emit(f"    WRITTEN NOT VERIFIED {name}; confirm with {verified_by}")
     emit("")
     emit(
         f"RESULT reconcile ok uuid={uuid} changed={'yes' if changed else 'no'} "
-        f"pending_owner_env={len(absent)} unreported_settings={len(still_unverifiable)}"
+        f"pending_owner_env={len(absent)} unreported_settings={len(withheld)} "
+        f"written_blind={len(blind)}"
     )
     return EXIT_OK
 
