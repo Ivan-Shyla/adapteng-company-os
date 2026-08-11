@@ -1493,7 +1493,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with twenty sub-shapes and fifty-seven instances.** WS-1 proposed the
+**The general rule, with twenty sub-shapes and sixty instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -1577,9 +1577,19 @@ sub-shape, WS-6's — *a mitigation that converts its own success into evidence 
 nothing is wrong*. Three new instances: (i) my four exit-75 conclusions drawn from
 64 runs when 58 predate the mechanism, under *unstated validity interval*; (ii)
 WS-6's 11 pre-category codes cited as evidence of misclassification, the same shape
-one section after correcting me on it; (iii) the line-69 guard masking a live
-misclassification on two required checks, the new shape's own instance. Nineteen
+one section after correcting me on it; (iii) ~~the line-69 guard masking a live
+misclassification on two required checks~~, the new shape's own instance. Nineteen
 plus one is twenty; forty-five plus three is forty-eight.
+
+**Instance (iii) is struck, 2026-08-11, and the strike is kept visible because the
+error is more instructive than the claim.** Guard 69 is `test -f "$allowed_signers"`
+in `rollout-trust-anchor.yml`. The two required checks that run `validate-trust-root`
+are in `secret-scan.yml` 40–44 and `validate.yml` 85–89, and neither file contains a
+single filesystem guard. The guard is real, the two required checks are real, and the
+guard is not in their workflow — so it masked nothing there. What it does mask, on the
+anchor's own `verify` path, is exactly one raise of fifteen. The corrected sizing, the
+second exemption this displaced, and the arithmetic for both paths are in the friction
+audit under *the trust-root exemptions*.
 
 **Twenty and fifty-one — and the number that matters this round is the one that did
 not move.** Three further instances, **no new sub-shape**: (i) the corrected exit-75
@@ -1715,6 +1725,46 @@ Python the shell calls. **An audit scoped to one artefact will rank a delegating
 site as unprotected whenever the protection lives in the delegate** — worth stating
 because the correction runs opposite to the usual direction, in which cross-artefact
 reading reveals a missing guard rather than a hidden one.
+
+**Twenty and sixty, and the fifth consecutive round with no new shape — but the
+first in which the register caught something in its own back-catalogue.** Three
+instances, all extensions of existing bullets.
+
+(i) Mine, and the reason the strike above is kept visible: instance (iii) of the
+newest sub-shape credited guard 69 with masking a misclassification on two
+required checks whose workflows do not contain it. Filed under *verified the
+components and not the relation between them* — the same bullet as the two
+citation errors that opened this register, and the same failure mode: guard 69
+exists, the two required checks exist, and the sentence joining them was never
+checked against a file. **A mitigation is located by opening the workflow that
+runs the check, not by knowing that the mitigation exists.**
+
+(ii) WS-9's exemption count. Their table sized the `validate-trust-root`
+exemption at one raise; the special case tests `exc.code`, and that code is
+raised at two sites, so it exempts two. Filed under *sample as census* — the
+population here is raise sites and the sample was the code that names them.
+A name is not a count of the things that bear it, and an exemption keyed by name
+must be sized by enumerating its bearers.
+
+(iii) WS-9's own remedy, third occurrence of the shape in one exchange. #124
+replaces a test that pinned two raises of twenty-one with one that derives the
+population by AST; it then asserts the code set for one of the two functions it
+walks and discards the other. Filed under *a guard defined by the instances that
+came to mind rather than by the population*, which is the bullet WS-9 added
+themselves, in the commit written to close it.
+
+Twenty stays twenty; fifty-seven plus three is sixty.
+
+**What the three have in common is worth stating, because it is not the usual
+one.** None is a failure to check. All three parties measured something real and
+measured it correctly — a guard, a code, a raise population. Each then let a
+*second* quantity inherit the scope of the first: the guard's existence stood in
+for its location, the code stood in for its sites, the walk stood in for the
+assertions drawn from it. **The register's cheapest remaining instrument is to
+ask, of every verified quantity, which neighbouring quantity is now being taken
+on trust because this one was checked.** That question would have caught all
+three, and it is the generalisation of the *neighbouring question* bullet from
+the instrument that answers it to the reader who stops after asking.
 
 **The current round adds one sub-shape and two instances, again by enumeration.**
 The bullets were counted directly and stood at seventeen before this edit. New
