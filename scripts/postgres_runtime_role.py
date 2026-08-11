@@ -33,6 +33,7 @@ import shlex
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 EXIT_OK = 0
@@ -89,13 +90,27 @@ def emit(line: str = "") -> None:
 # --------------------------------------------------------------------------- #
 
 
-def run(command: list[str], stdin: str | None = None, check: bool = True):
+def run(
+    command: list[str],
+    stdin: str | None = None,
+    check: bool = True,
+    environment: dict[str, str] | None = None,
+):
     """Run a command and return (returncode, stdout, stderr), all decoded.
 
     stdin carries SQL. It is never logged, because a provisioning statement
     contains the password.
+
+    environment carries connection settings for the network route, including the
+    password. It is passed this way rather than in a connection string on the
+    command line because argv is readable by any other process on the machine
+    and an environment is not.
     """
 
+    merged = None
+    if environment is not None:
+        merged = dict(os.environ)
+        merged.update(environment)
     completed = subprocess.run(
         command,
         input=stdin,
@@ -103,6 +118,7 @@ def run(command: list[str], stdin: str | None = None, check: bool = True):
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=merged,
     )
     if check and completed.returncode != 0:
         raise Abort(
@@ -163,35 +179,91 @@ def find_container(explicit: str | None) -> str:
     return choose_container(postgres_containers(parse_container_table(stdout)))
 
 
-def psql(container: str, sql: str, database: str = DATABASE, check: bool = True):
-    """Run SQL as the container's postgres superuser over the local socket.
+PSQL_FLAGS = ("psql", "-v", "ON_ERROR_STOP=1", "-At", "-f", "-")
+
+
+class DockerTarget:
+    """SQL delivered by the host's Docker daemon, over the container's local socket.
+
+    This route requires the Docker socket, which is root-equivalent on the host.
+    It is the right route when the operator already has a shell there, and the
+    wrong one for anything automated, which is why it is no longer the default.
+    """
+
+    def __init__(self, container: str) -> None:
+        self.container = container
+
+    def command(self, database: str) -> list[str]:
+        head = ["docker", "exec", "-i", "-u", "postgres", self.container]
+        return head + [PSQL_FLAGS[0], *PSQL_FLAGS[1:-2], "-d", database, *PSQL_FLAGS[-2:]]
+
+    def environment(self) -> dict[str, str] | None:
+        return None
+
+    def describe(self) -> str:
+        return f"container {self.container}"
+
+
+class NetworkTarget:
+    """SQL delivered over the Docker network to the database's own port.
+
+    This is the route an automated operator can hold without holding the host:
+    a container on the predefined network reaches the database directly, with no
+    Docker socket, no shell and no root anywhere in the path.
+
+    The credential travels in the environment. A connection string on the
+    command line would be readable by every other process on the machine.
+    """
+
+    def __init__(self, host: str, port: int, user: str, credential: str, sslmode: str) -> None:
+        if not host:
+            raise Abort("the network route needs a database host and none was given")
+        if not user or not credential:
+            raise Abort(
+                "the network route needs an administrative database user and its "
+                "credential, and at least one was not supplied"
+            )
+        self.host = host
+        self.port = port
+        self.user = user
+        self._credential = credential
+        self.sslmode = sslmode
+
+    def command(self, database: str) -> list[str]:
+        return [PSQL_FLAGS[0], *PSQL_FLAGS[1:-2], "-d", database, *PSQL_FLAGS[-2:]]
+
+    def environment(self) -> dict[str, str]:
+        return {
+            "PGHOST": self.host,
+            "PGPORT": str(self.port),
+            "PGUSER": self.user,
+            "PGPASSWORD": self._credential,
+            "PGSSLMODE": self.sslmode,
+            "PGCONNECT_TIMEOUT": "15",
+        }
+
+    def describe(self) -> str:
+        return f"{self.host}:{self.port} as {self.user} sslmode={self.sslmode}"
+
+
+def psql(target, sql: str, database: str = DATABASE, check: bool = True):
+    """Run SQL against the database, by whichever route the target describes.
 
     -At gives unaligned, untitled output so a result is a bare value that can be
     compared exactly. ON_ERROR_STOP makes a failed statement a failed command
     rather than a zero exit with an error printed to stderr.
     """
 
-    command = [
-        "docker",
-        "exec",
-        "-i",
-        "-u",
-        "postgres",
-        container,
-        "psql",
-        "-v",
-        "ON_ERROR_STOP=1",
-        "-At",
-        "-d",
-        database,
-        "-f",
-        "-",
-    ]
-    return run(command, stdin=sql, check=check)
+    return run(
+        target.command(database),
+        stdin=sql,
+        check=check,
+        environment=target.environment(),
+    )
 
 
-def scalar(container: str, sql: str, database: str = DATABASE) -> str:
-    _, stdout, _ = psql(container, sql, database=database)
+def scalar(target, sql: str, database: str = DATABASE) -> str:
+    _, stdout, _ = psql(target, sql, database=database)
     return stdout.strip()
 
 
@@ -222,13 +294,46 @@ def sql_literal(value: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def operate_recon(container: str | None = None) -> int:
+def report_transport_encryption(target) -> str:
+    """Answer whether this connection is actually encrypted, rather than assuming.
+
+    Two recorded facts about this deployment contradict each other: the database
+    is configured enable_ssl=false, and the runtime connection string declares
+    ssl_mode=require. Exactly one of those can survive contact with the server,
+    and which one is not decidable from either document.
+
+    The server itself knows. pg_stat_ssl reports the encryption state of the
+    connection asking the question, so a single read-only query settles it from
+    the actual network contract. A route that is not encrypted is reported as
+    such and not repaired here, because changing the transport of the canonical
+    production database is an owner decision, not a side effect of a survey.
+    """
+
+    answer = scalar(
+        target,
+        "SELECT ssl::text || ' ' || coalesce(version, 'none') || ' ' || "
+        "coalesce(cipher, 'none') FROM pg_stat_ssl WHERE pid = pg_backend_pid();",
+        database="postgres",
+    )
+    encrypted = answer.split(" ")[0] if answer else ""
+    if encrypted == "t":
+        emit(f"    transport: ENCRYPTED (ssl version cipher: {answer})")
+    elif encrypted == "f":
+        emit("    transport: NOT ENCRYPTED - the server accepted this connection in the clear")
+        emit("      the recorded ssl_mode=require cannot be honoured against this server as")
+        emit("      configured; reconciling the two is an owner decision and is not done here")
+    else:
+        emit(f"    transport: undetermined (pg_stat_ssl returned {answer!r})")
+    return encrypted
+
+
+def operate_recon(target) -> int:
     emit("--- recon ai_gateway_runtime")
     _, hostname, _ = run(["hostname"])
     emit(f"    host: {hostname.strip()}")
 
-    name = find_container(container)
-    emit(f"    postgres container: {name}")
+    name = target
+    emit(f"    database reached over: {target.describe()}")
 
     emit(f"    server version: {scalar(name, 'SHOW server_version;', database='postgres')}")
     databases = scalar(
@@ -244,6 +349,7 @@ def operate_recon(container: str | None = None) -> int:
     emit(f"    database {DATABASE}: present")
     emit(f"    connected as: {scalar(name, 'SELECT current_user;')}")
     emit(f"    superuser: {scalar(name, 'SELECT usesuper FROM pg_user WHERE usename = current_user;')}")
+    report_transport_encryption(name)
 
     role_present = scalar(
         name, f"SELECT count(*) FROM pg_roles WHERE rolname = {sql_literal(ROLE)};"
@@ -495,7 +601,7 @@ def publish_environment_value(
 
 
 def operate_provision(
-    container: str | None,
+    target,
     application_uuid: str,
     base_url: str,
     credential: str,
@@ -515,8 +621,8 @@ def operate_provision(
             "a wrong one produces a role that works and a gateway that cannot connect"
         )
 
-    name = find_container(container)
-    emit(f"    postgres container: {name}")
+    name = target
+    emit(f"    database reached over: {target.describe()}")
 
     for function_name, signature in GRANTED_FUNCTIONS:
         if scalar(name, function_exists_sql(function_name, signature)) != "t":
@@ -565,24 +671,124 @@ def operate_provision(
 # --------------------------------------------------------------------------- #
 
 
+def parse_internal_dsn(url: str) -> dict[str, str]:
+    """Split a Postgres URL into parts without importing a driver.
+
+    Only the pieces needed to connect are taken. The credential is returned in
+    the mapping and must be treated like any other credential: it is never
+    emitted, and it reaches psql through the environment.
+    """
+
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme not in ("postgres", "postgresql"):
+        raise Abort("the recorded internal database address is not a Postgres URL")
+    return {
+        "host": parsed.hostname or "",
+        "port": str(parsed.port or 5432),
+        "user": urllib.parse.unquote(parsed.username or ""),
+        "credential": urllib.parse.unquote(parsed.password or ""),
+    }
+
+
+def discover_admin_connection(base_url: str, credential: str) -> dict[str, str]:
+    """Ask Coolify where the managed database is and how to log into it.
+
+    This exists so the operator needs no database credential of its own. The
+    Coolify credential it already holds is sufficient, and using it means no new
+    secret is created, stored or rotated for this purpose.
+
+    A single unambiguous Postgres database is required. Two would make the
+    choice a guess, and guessing which database is production is the one error
+    this script must never make.
+    """
+
+    if not base_url or not credential:
+        raise Abort(
+            "no database host was given and the Coolify credentials needed to "
+            "discover one are absent, so there is nothing to connect to"
+        )
+    status, payload = coolify_request(base_url, credential, "GET", "/databases", None)
+    if status != 200 or not isinstance(payload, list):
+        raise Abort(f"listing databases returned HTTP {status}")
+    candidates = [
+        item
+        for item in payload
+        if isinstance(item, dict) and "postgres" in str(item.get("type", "")).lower()
+    ]
+    if not candidates:
+        raise Abort("Coolify reports no Postgres database on this instance")
+    if len(candidates) > 1:
+        names = ", ".join(sorted(str(item.get("name")) for item in candidates))
+        raise Abort(
+            f"Coolify reports {len(candidates)} Postgres databases ({names}); "
+            "name the one to use with --db-host rather than having it guessed"
+        )
+    database = candidates[0]
+    emit(f"    database discovered from Coolify: {database.get('name')}")
+    url = str(database.get("internal_db_url") or "")
+    if not url:
+        raise Abort(
+            "the database record carries no internal address, so its position on "
+            "the Docker network cannot be established without guessing"
+        )
+    return parse_internal_dsn(url)
+
+
+def choose_target(arguments: argparse.Namespace):
+    """Build the route to the database that the declared transport describes.
+
+    The default is the network, because the operator this script is written for
+    is a container that deliberately holds no Docker socket. The Docker route
+    stays available for a human with a shell on the host, where it is the
+    simpler of the two.
+    """
+
+    if arguments.transport == "docker":
+        return DockerTarget(find_container(arguments.container))
+    host = arguments.db_host
+    port = arguments.db_port
+    user = arguments.db_user
+    admin_credential = os.environ.get("PGPASSWORD_ADMIN", "")
+    if not host:
+        discovered = discover_admin_connection(
+            os.environ.get("COOLIFY_URL", ""), os.environ.get("COOLIFY_API_TOKEN", "")
+        )
+        host = discovered["host"]
+        port = int(discovered["port"])
+        user = user or discovered["user"]
+        admin_credential = admin_credential or discovered["credential"]
+    return NetworkTarget(host, port, user, admin_credential, arguments.admin_sslmode)
+
+
 def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("recon", "provision"))
+    parser.add_argument("--transport", choices=("network", "docker"), default="network")
     parser.add_argument("--container", default=None)
+    parser.add_argument("--db-host", default=os.environ.get("PG_ADMIN_HOST", ""))
+    parser.add_argument("--db-port", type=int, default=int(os.environ.get("PG_ADMIN_PORT", "5432")))
+    parser.add_argument("--db-user", default=os.environ.get("PG_ADMIN_USER", "postgres"))
     parser.add_argument("--application-uuid", default=os.environ.get("COOLIFY_APP_UUID", ""))
     parser.add_argument("--dsn-host", default=os.environ.get("PG_DSN_HOST", ""))
     parser.add_argument("--dsn-port", type=int, default=int(os.environ.get("PG_DSN_PORT", "5432")))
     parser.add_argument("--sslmode", default=os.environ.get("PG_SSLMODE", "verify-full"))
+    # The mode this script connects with is a different question from the mode
+    # the gateway's published connection string declares. prefer is the right
+    # default for a survey: it encrypts when the server offers it and connects
+    # when it does not, so recon can report which of the two contradictory
+    # recorded facts is true instead of failing before it can find out.
+    parser.add_argument("--admin-sslmode", default=os.environ.get("PG_ADMIN_SSLMODE", "prefer"))
     return parser.parse_args(argv)
 
 
 def main(argv: list[str]) -> int:
     arguments = parse_arguments(argv)
     try:
+        target = choose_target(arguments)
         if arguments.operation == "recon":
-            return operate_recon(arguments.container)
+            return operate_recon(target)
         return operate_provision(
-            arguments.container,
+            target,
             arguments.application_uuid,
             os.environ.get("COOLIFY_URL", ""),
             os.environ.get("COOLIFY_API_TOKEN", ""),

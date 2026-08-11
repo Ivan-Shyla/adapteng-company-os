@@ -2,19 +2,26 @@ name: Postgres runtime role
 
 # Provisions the least-privilege Postgres role the AI Gateway connects as.
 #
-# The work happens on the production host, not on this runner, and that is a
-# constraint rather than a style choice: canonical production Postgres accepts
-# connections only from the host, and the runtime password must not exist
-# anywhere a runner can read it. This job copies a script to the host, runs it
-# there, and reads back only the non-secret report it prints. The password is
-# generated on the host, used there, and posted from there to the Coolify API,
-# which is also local to that host.
+# This runs on the dedicated operations runner, which sits on the same private
+# Docker network as the managed database. That placement is what makes the job
+# possible at all: canonical production Postgres is not published, and no route
+# to it exists from a GitHub-hosted runner.
 #
-# recon reads and writes nothing. provision creates or rotates the role, applies
-# the grants from the platform runbook, runs that runbook's own verifications,
-# and publishes the DSN. Run recon first and read it: provision refuses to
-# proceed unless the objects it grants on already exist with the exact shapes
-# migration 008a defines.
+# The runner holds no Docker socket, no host shell and no root, so the database
+# is reached over the network rather than through the daemon. It also holds no
+# database credential of its own: the Coolify credential it already has is used
+# to look up where the database is and how to log in, so no new secret is
+# created, stored or rotated for this. Nothing is written to disk and nothing is
+# printed - the value travels from the API response into the environment of the
+# psql process and no further.
+#
+# recon reads and writes nothing, and answers one question this deployment has
+# recorded two contradictory answers to: whether the connection is actually
+# encrypted. provision creates or rotates the role, applies the grants from the
+# platform runbook, runs that runbook's own verifications, and publishes the
+# DSN. Run recon first and read it: provision refuses to proceed unless the
+# objects it grants on already exist with the exact shapes migration 008a
+# defines.
 
 on:
   workflow_dispatch:
@@ -27,8 +34,8 @@ on:
         options:
           - recon
           - provision
-      container:
-        description: "Postgres container name. Leave empty to discover it by image."
+      db_host:
+        description: "Database host on the private network. Leave empty to discover it from Coolify."
         required: false
         default: ""
         type: string
@@ -36,8 +43,9 @@ on:
 permissions:
   contents: read
 
-# One run at a time. Two overlapping provisions would each rotate a password the
-# other is about to publish, and the loser would publish a DSN that cannot log in.
+# One run at a time. Two overlapping provisions would each rotate a credential
+# the other is about to publish, and the loser would publish a DSN that cannot
+# log in.
 concurrency:
   group: postgres-runtime-role
   cancel-in-progress: false
@@ -45,21 +53,21 @@ concurrency:
 jobs:
   drive:
     name: Postgres role ${{ inputs.operation }}
-    runs-on: ubuntu-latest
+    # The label is the whole access-control story: this job runs only on the
+    # dedicated operations runner, which is registered to this repository alone.
+    runs-on: [self-hosted, adapteng-ops]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Refuse to start without the access this needs
         env:
-          SSH_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
-          SSH_HOST: ${{ vars.PROD_SSH_HOST }}
-          SSH_USER: ${{ vars.PROD_SSH_USER }}
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_URL: ${{ vars.COOLIFY_URL }}
         run: |
           set -euo pipefail
           missing=""
-          for name in SSH_KEY SSH_KNOWN_HOSTS SSH_HOST SSH_USER; do
+          for name in COOLIFY_API_TOKEN COOLIFY_URL; do
             if [ -z "${!name:-}" ]; then
               missing="$missing $name"
             fi
@@ -70,102 +78,35 @@ jobs:
           fi
           echo "all required configuration is present"
 
-      - name: Authorise this runner against the recorded host key
-        env:
-          SSH_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      - name: Prove this runner can reach the database at all
         run: |
           set -euo pipefail
-          mkdir -m 700 -p ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_prod
-          chmod 600 ~/.ssh/id_prod
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-          # StrictHostKeyChecking stays on and the known_hosts file is the only
-          # authority, so a substituted host fails the connection instead of
-          # being trusted on first use.
-          {
-            echo "Host production"
-            echo "  HostName ${{ vars.PROD_SSH_HOST }}"
-            echo "  User ${{ vars.PROD_SSH_USER }}"
-            echo "  Port ${{ vars.PROD_SSH_PORT || '22' }}"
-            echo "  IdentityFile ~/.ssh/id_prod"
-            echo "  IdentitiesOnly yes"
-            echo "  StrictHostKeyChecking yes"
-            echo "  UserKnownHostsFile ~/.ssh/known_hosts"
-            echo "  BatchMode yes"
-            echo "  ConnectTimeout 20"
-          } > ~/.ssh/config
-          chmod 600 ~/.ssh/config
-
-      - name: Prove the host is reachable before blaming the credential
-        run: |
-          set -euo pipefail
-          # An ssh failure reports "connection timed out" whether the address is
-          # wrong, the daemon is down, or the packets are dropped by a firewall
-          # that does not permit this source. Those have different owners, so the
-          # cause is established here rather than inferred from a later failure.
-          host='${{ vars.PROD_SSH_HOST }}'
-          port='${{ vars.PROD_SSH_PORT || '22' }}'
-          echo "runner egress address: $(curl -fsS --max-time 20 https://api.ipify.org || echo unavailable)"
-          if timeout 20 bash -c "cat < /dev/null > /dev/tcp/${host}/${port}" 2>/dev/null; then
-            echo "tcp ${host}:${port} reachable from this runner"
-          else
-            echo "::error::No TCP route from this runner to ${host}:${port}."
-            echo "The Coolify API on the same host answers over 443 from runners, and"
-            echo "port ${port} answers from an operator workstation, so the daemon is up"
-            echo "and the address is right: this source is not permitted. Reaching it"
-            echo "needs a decision the owner holds - a self-hosted runner on the host,"
-            echo "an allowance for GitHub's published runner ranges, or running this"
-            echo "operation from a workstation that is already permitted. Nothing was"
-            echo "sent to the host and nothing was changed."
+          # A psql failure reads the same whether the address is wrong, the
+          # server is down, or this container is not on the network. Those have
+          # different owners, so the client's presence is established here
+          # rather than inferred from a later failure.
+          if ! command -v psql > /dev/null; then
+            echo "::error::psql is not installed on this runner. The runner image"
+            echo "installs postgresql-client at build time, so an image without it"
+            echo "is a stale build rather than a configuration mistake."
             exit 1
           fi
+          psql --version
 
-      - name: Copy the script to the host
-        run: |
-          set -euo pipefail
-          # The script is sent on stdin rather than left on the host, and the
-          # destination is created empty first so a previous run's file can never
-          # be executed by this one.
-          ssh production 'umask 077; rm -f /tmp/postgres_runtime_role.py; cat > /tmp/postgres_runtime_role.py'  < scripts/postgres_runtime_role.py
-          ssh production 'python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" /tmp/postgres_runtime_role.py'
-          echo "script copied and parses on the host"
-
-      - name: Run the operation on the host
+      - name: Run the operation
         env:
           OPERATION: ${{ inputs.operation }}
-          CONTAINER: ${{ inputs.container }}
+          DB_HOST: ${{ inputs.db_host }}
           COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
           COOLIFY_URL: ${{ vars.COOLIFY_URL }}
           COOLIFY_APP_UUID: ${{ vars.AI_GATEWAY_COOLIFY_APP_UUID }}
           PG_DSN_HOST: ${{ vars.AI_GATEWAY_PG_DSN_HOST }}
         run: |
           set -euo pipefail
-          # The environment is handed over in a file on stdin, not on the command
-          # line, so the token never appears in the host's process list. The
-          # remote shell removes it before this step can return.
-          if [ "$OPERATION" = "provision" ]; then
-            printf 'COOLIFY_API_TOKEN=%s\nCOOLIFY_URL=%s\nCOOLIFY_APP_UUID=%s\nPG_DSN_HOST=%s\n' \
-              "$COOLIFY_API_TOKEN" "$COOLIFY_URL" "$COOLIFY_APP_UUID" "$PG_DSN_HOST" \
-              | ssh production 'umask 077; cat > /tmp/postgres_runtime_role.env'
+          # The credential is never placed on a command line: psql receives it
+          # through its own environment, which other processes cannot read.
+          host_argument=""
+          if [ -n "${DB_HOST:-}" ]; then
+            host_argument="--db-host $DB_HOST"
           fi
-          container_argument=""
-          if [ -n "${CONTAINER:-}" ]; then
-            container_argument="--container $CONTAINER"
-          fi
-          set +e
-          ssh production "set -a; [ -f /tmp/postgres_runtime_role.env ] && . /tmp/postgres_runtime_role.env; set +a; python3 /tmp/postgres_runtime_role.py $OPERATION $container_argument; status=\$?; rm -f /tmp/postgres_runtime_role.env /tmp/postgres_runtime_role.py; exit \$status"
-          status=$?
-          set -e
-          exit $status
-
-      - name: Leave nothing behind on the host
-        if: always()
-        run: |
-          set -euo pipefail
-          # The previous step removes both files on its own path out, including
-          # when the script fails. This runs anyway, because a connection that
-          # dropped mid-step would not have reached that cleanup.
-          ssh production 'rm -f /tmp/postgres_runtime_role.env /tmp/postgres_runtime_role.py' || true
-          ssh production 'ls /tmp/postgres_runtime_role.env /tmp/postgres_runtime_role.py 2>/dev/null && echo "::error::files remain on the host" && exit 1 || echo "host is clean"'
+          python3 scripts/postgres_runtime_role.py "$OPERATION" $host_argument
