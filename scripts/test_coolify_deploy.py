@@ -130,6 +130,22 @@ class FakeInstance:
             }
         ]
         self.environment_entries: dict[str, list[dict]] = {}
+        # Same reasoning as the database fixture above: the file body is the
+        # part that must never be reported, so it has to be present here or the
+        # assertion proves nothing.
+        self.storages: dict = {
+            "file_storages": [
+                {
+                    "uuid": "storage-1",
+                    "name": "adc",
+                    "mount_path": "/var/run/adapteng/adc.json",
+                    "is_directory": False,
+                    "resource_type": "App\\Models\\Application",
+                    "content": "not-for-a-log-a-stand-in-for-a-real-service-account-key",
+                }
+            ],
+            "persistent_storages": [],
+        }
         self.deployment_states = list(deployment_states or ["queued", "in_progress", "finished"])
         self.deployments: dict[str, dict] = {}
         self.calls: list[tuple[str, str]] = []
@@ -202,6 +218,11 @@ class FakeInstance:
             if not self.destinations_endpoint_present:
                 return 404, {"message": "Not found."}
             return 200, copy.deepcopy(self.destinations.get(match.group(1), []))
+        match = re.fullmatch(r"/applications/([^/]+)/storages", path)
+        if match:
+            if self.storages is None:
+                return 404, {"message": "Not found."}
+            return 200, copy.deepcopy(self.storages)
         match = re.fullmatch(r"/applications/([^/]+)/envs", path)
         if match:
             return 200, copy.deepcopy(self.environment_entries.get(match.group(1), []))
@@ -885,6 +906,51 @@ class InspectTests(unittest.TestCase):
         code, report = run_operation(driver.operate_inspect, instance)
         self.assertEqual(code, driver.EXIT_OK)
         self.assertIn("databases: 0", report)
+
+    def test_the_storage_report_names_the_mount_without_printing_the_file(self) -> None:
+        """Where the file lands is the fact needed; what is in it is the fact withheld.
+
+        app/config.py fails to boot on a path it cannot open, so the mount path
+        has to be known before the environment key naming it is ever set. That
+        makes the location worth printing. The body of a file storage would be
+        the service account key, so it is the one field a report must drop even
+        though the API hands it over in the same object.
+        """
+
+        instance = FakeInstance(with_application=True)
+        code, report = run_operation(driver.operate_inspect, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("file_storages: 1", report)
+        self.assertIn("mount_path=/var/run/adapteng/adc.json", report)
+        self.assertIn("content", report)
+        self.assertNotIn("not-for-a-log-a-stand-in-for-a-real-service-account-key", report)
+        self.assertEqual(instance.writes(), [])
+
+    def test_an_instance_without_the_storages_endpoint_is_not_an_error(self) -> None:
+        """An absent endpoint is a reading, not a failure, exactly as for destinations.
+
+        This driver has already met one Coolify instance that did not serve an
+        endpoint the upstream specification lists. Inspect exists to find that
+        out, so a 404 here has to leave a line in the report and a zero exit.
+        """
+
+        instance = FakeInstance(with_application=True)
+        instance.storages = None
+        code, report = run_operation(driver.operate_inspect, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("storages: not reported by this instance", report)
+        self.assertEqual(instance.writes(), [])
+
+    def test_the_storage_report_survives_an_instance_answering_with_a_list(self) -> None:
+        instance = FakeInstance(with_application=True)
+        instance.storages = [
+            {"uuid": "storage-9", "mount_path": "/mnt/one", "content": "withheld-body-value"}
+        ]
+        code, report = run_operation(driver.operate_inspect, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("storages: 1", report)
+        self.assertIn("mount_path=/mnt/one", report)
+        self.assertNotIn("withheld-body-value", report)
 
 
 class ReconcileTests(unittest.TestCase):
