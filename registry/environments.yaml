@@ -103,6 +103,26 @@ created_not_yet_deployed:
       - AI_GATEWAY_BEARER_TOKENS
       - AI_GATEWAY_DATABASE_URL      # blocked on the ai_gateway_runtime Postgres role
       - GOOGLE_APPLICATION_CREDENTIALS
+    managed_database:
+      # Read from the instance on 2026-08-11, not assumed. The address half of
+      # internal_db_url is recorded; the credential half of that same string is
+      # not, and is never read into this repository.
+      uuid: pgdgbwzsuuxhw55g8v5opjgn
+      name: adapteng-ops-db
+      image: postgres:16
+      status: running:healthy
+      internal_address: pgdgbwzsuuxhw55g8v5opjgn:5432/adapteng_ops
+      database: adapteng_ops
+      owner_role: adapteng_ops
+      is_public: false          # so no runner can reach it directly either
+      enable_ssl: false
+      ssl_mode_reported: require
+      dsn_host_variable: AI_GATEWAY_PG_DSN_HOST
+      unresolved: >-
+        enable_ssl is false while ssl_mode reports require. A server with no TLS
+        configured refuses a client demanding it, so one of the two does not mean
+        what its name suggests. Settle it by connecting rather than by reading -
+        the recon operation does exactly that - before the DSN is written.
     pending_owner_ui_settings:
       # This Coolify version reports these nowhere on the application resource, so
       # a write to them could not be verified and the driver does not attempt one.
