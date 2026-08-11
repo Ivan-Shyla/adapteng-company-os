@@ -35,13 +35,43 @@ operator_access:
       repository had ever opened an SSH connection to this host before
       postgres-runtime-role.yml, so nothing regressed; the path had simply never
       been exercised.
-    blocks: scripts/postgres_runtime_role.py, and any future host-side workflow
-    owner_decision_required: >-
-      One of: register a self-hosted runner on the production host; permit
-      GitHub's published runner ranges on port 22; or run host-side operations
-      from a workstation that is already permitted. The first is the only one
-      that neither widens the exposed surface nor moves a credential onto a
-      personal machine.
+    blocked: >-
+      ~~scripts/postgres_runtime_role.py, and any future host-side workflow~~
+      Lifted 2026-08-11. The block was real - run 31500471689 failed on the SSH
+      timeout recorded above - but it is no longer a standing condition.
+    resolved: >-
+      The first option was taken, and implemented holding less authority than
+      that option described. The operations runner is not installed on the
+      host: it is a container deployed through Coolify onto the predefined
+      Docker network, so it reaches the managed database at its internal
+      address with no shell on the host, no Docker socket and no root. It
+      cannot touch the host at all. Port 22 stays shut to the published runner
+      ranges, and no credential moved onto a personal machine - which is what
+      the three options were being weighed against.
+    resolved_by: >-
+      reconcile run 31514155983 (uuid o145rw7urft00qoj3y9vnrma) and deploy run
+      31514210128 (deployment kd6zpavgo9j8624lddy3q39k), 2026-08-11
+    runner:
+      label: adapteng-ops
+      registered_to: this repository alone
+      status: online
+      status_verified: >-
+        run 31543437220, 2026-08-11T22:41Z, RESULT status ok runner=online,
+        labels [Linux, X64, adapteng-ops, self-hosted]
+      consumed_by: ".github/workflows/postgres-runtime-role.yml, runs-on: [self-hosted, adapteng-ops]"
+    proof_the_block_lifted: >-
+      postgres_runtime_role.py failed at 14:14Z on the SSH timeout, the runner
+      came online at 16:47Z, and the same script has succeeded three times
+      since - most recently run 31518891559, RESULT provision ok
+      role=ai_gateway_runtime dsn_published=yes. That published DSN is what the
+      gateway connects with, so this runner sits upstream of the readiness
+      proof recorded further down this file.
+    scope_limit: >-
+      This unblocked host-network work, and nothing else. It was not needed for
+      the readiness probe, which runs inside the application container through
+      the Coolify scheduled-task API and needs no host access at all. Do not
+      read this runner as a prerequisite for deploying or verifying the
+      gateway; it is a prerequisite for reaching the database directly.
 
 excluded_personal_projects:
   status: excluded-from-company-os
@@ -138,7 +168,12 @@ created_not_yet_deployed:
       internal_address: pgdgbwzsuuxhw55g8v5opjgn:5432/adapteng_ops
       database: adapteng_ops
       owner_role: adapteng_ops
-      is_public: false          # so no runner can reach it directly either
+      is_public: false
+      reachable_by: >-
+        Not from the public internet and not from a GitHub-hosted runner. The
+        dedicated operations runner reaches it because that runner is itself a
+        container on this same private Docker network, which is the whole
+        reason it was deployed there rather than installed on the host.
       enable_ssl: false
       ssl_mode_reported: require
       dsn_host_variable: AI_GATEWAY_PG_DSN_HOST

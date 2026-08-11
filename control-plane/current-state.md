@@ -115,14 +115,25 @@ Verified from `main` and CI, not from narrative.
   and `n8n-selfhosted` (running), with `ai-gateway` absent. It has since been
   created (`e13v7c6zjof7dmcpywqbyas3`), configured, deployed and proved ready.
 
-  Readiness could not be asked from outside — the application is internal-only
-  on the coolify network and the database refuses every route a runner has — so
-  it is asked from inside, as a Coolify scheduled task in the container, armed
-  for the run and returned to rest afterwards. Run `31542579590` reports
+  Readiness is asked from inside the container, as a Coolify scheduled task,
+  armed for the run and returned to rest afterwards. Run `31542579590` reports
   `verify ok ready=yes answer=200`; run `31540027132` (`diagnose`) shows four
   executions, all `success` with `ADAPTENG_READY 200`, corroborated
   independently by four `"GET /ready HTTP/1.1" 200` lines in the container's own
   access log.
+
+  ~~Readiness could not be asked from outside — the application is internal-only
+  on the coolify network and the database refuses every route a runner has.~~
+  **Half of that is wrong, and it was wrong when I wrote it on 2026-08-11.** A
+  GitHub-hosted runner genuinely has no route: the application is internal-only
+  and port 22 is shut to the published ranges. But the dedicated operations
+  runner is a container on that same coolify network, so it does have a route,
+  and it has been using one since 16:47Z that day — that is how the runtime role
+  was provisioned at all. "Every route a runner has" was an inherited belief,
+  carried into an edit whose subject was a document that went stale by not
+  measuring. The in-container probe remains the better evidence, because it is
+  the container's own answer rather than a neighbour's, but it is now a choice
+  rather than the only option.
 
   `/ready` opens a database connection where `/health` does not (§5b), so this
   is also the database proof: the runtime DSN is in place and usable. It says
