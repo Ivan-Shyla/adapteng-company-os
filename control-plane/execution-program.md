@@ -1034,5 +1034,38 @@ deployed gateway:
    check-run rendering maps outcomes to fixed strings (2771–2787) and never
    carries the code. Latent, not live, and the file is under the hold.
 
+7. **Whether the ungoverned interpreter at `authorize_approved_assets_phase.sh:168`
+   is repaired now or with the #121 receipt.** The script makes two
+   secret-**absence** assertions through the same helper and governs them
+   differently. Line 161 runs `python -I "$metadata_helper" assert-secret-absent`
+   for `$authorization_name`, failing to `lifecycle.authorization_secret_present`
+   (165). Its immediate sibling at 168 runs the identical subcommand for
+   `$reviewed_evidence_name` — **without `-I`** — failing to
+   `lifecycle.reviewed_evidence_secret_present` (172). Seven of the eight helper
+   calls in the file carry `-I` (56, 61, 71, 156, 161, 248, 376); 168 is the sole
+   deviation. **Why it is a security item and not hygiene:** an absence assertion
+   that is subverted returns *success*, so the script proceeds believing a
+   reviewed-evidence secret is absent when it is present — a false negative on a
+   gate, not a crash. Measured, not recalled: without `-I` the interpreter prepends
+   the script's own directory to `sys.path`, the helper's `sys.path.insert(0, …)` at
+   line 20 stacks the repository root on top rather than displacing it (script
+   directory lands at index 1, ahead of the standard library at 4), and the helper's
+   stdlib imports at lines 6–16 all execute *before* that insert. The exposed
+   directory holds 22 modules. **Scope of the exposure today:** none of the 22 shares
+   a name with any module the helper imports, so it is structural, not live; the
+   file's other ungoverned interpreters (`python -c` at 177, 179, 230 and stdin at
+   186, 280) expose the working directory instead, which contains zero `.py` files.
+   **Why it is an owner decision rather than AUTO:** the one-character fix is
+   obvious, but the file is under #121's signature hold, and editing it would
+   invalidate green checks on a PR awaiting signature while smuggling an unrelated
+   change into a receipt. The choice is *repair now and re-run the checks* versus
+   *fold it into the #121 receipt*, not whether to repair. **Note this cuts against
+   the usual CI-versus-local intuition:** no workflow runs this script — it is
+   operator-run — and an operator workstation is precisely where `PYTHONPATH` and
+   user site-packages pollution lives, while line 152 asserts repository-admin
+   before 168 executes. Strength: read at source at `824b4238`, blobs size-checked;
+   interpreter behaviour measured on 3.11.9; **no exploitation observed and none
+   possible today**, since the collision set is empty.
+
 Everything else on the path to a deployed, healthy AI Gateway is either AUTO or
 AUTO + FAIL CLOSED under the [autonomy policy](autonomy-policy.md).
