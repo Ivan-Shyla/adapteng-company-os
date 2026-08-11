@@ -676,10 +676,18 @@ deployed gateway:
    F-8. **Context is already on the pull request:** WS-6 posted the verdict's
    meaning and then corrected its own comment to disclose the §15 hold and the
    fact that it merged #122 past the same verdict four minutes earlier. Opening
-   #121 gives the whole picture without needing these documents. **The line
-   number depends on which tree you edit:** the runner discard is `379` on `main`
-   at `824b4238` and `388` on `f0a2d17`, #121's head, because #121 inserts nine
-   lines above it. The fix ports verbatim from #121's own construct — both sites
+   #121 gives the whole picture without needing these documents. **Anchor the
+   target to text, not to a line number.** The site to extend is *the
+   `2>/dev/null` on the `verify-staged-runner` call whose stdout is captured into
+   `runner_id`, and the `lifecycle.runner_registration_invalid` printf below it*.
+   That description is true in both trees; the coordinates are not, and they
+   invert rather than merely drift — `379`/`384` on `main` at `824b4238`,
+   `388`/`393` on `f0a2d17`, because #121 inserts nine lines above them. A
+   number-only citation here is wrong today and becomes right the moment the
+   receipt is signed, with no edit to the citation, which is worse than a stable
+   error. Do not carry the +9 to other sites in the file: the insertion is
+   interior, so the select-queued-run coordinates shift by +1 and +7 instead. Full
+   table in F-8. The fix ports verbatim from #121's own construct — both sites
    are command substitutions capturing into a variable, so `2>&1` is wrong at
    both for the same reason.
 4. **One sentence settling whether an advisory authorization refusal may be
