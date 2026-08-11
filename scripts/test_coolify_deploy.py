@@ -2149,9 +2149,11 @@ class EntryPointTests(unittest.TestCase):
 class ReadinessInstance(FakeInstance):
     """A Coolify instance that also answers the scheduled-task endpoints.
 
-    It stores the task it is told to store and returns the execution it is
-    configured to return, so a test can tell the difference between "the probe
-    said 200" and "the driver assumed 200".
+    It models the two facts that shape the driver. There is no execute route,
+    matching the deployed instance, so a POST to it is refused; and the
+    scheduler only runs enabled tasks, so an execution appears only while the
+    task is armed. A fake that produced an execution regardless would let a
+    driver that never armed anything pass.
     """
 
     def __init__(self, **kwargs) -> None:
@@ -2162,14 +2164,32 @@ class ReadinessInstance(FakeInstance):
             "status": "success",
             "message": "ADAPTENG_READY 200\n",
         }
-        # A real execution does not appear the instant it is queued, and its
-        # first observable state is not its last. Both delays are modelled so
-        # a driver that reads once and believes the answer is caught.
+        # A real execution does not appear the instant the task is armed, and
+        # its first observable state is not its last. Both delays are modelled
+        # so a driver that reads once and believes the answer is caught.
         self.reveal_after_polls = 0
         self.running_for_polls = 0
-        self.pending: dict | None = None
+        # -1 refuses every disarm; a positive count refuses that many and then
+        # lets one through, which is the transient failure the retry exists for.
+        self.refuse_disarm_times = 0
+        self.refuse_arm = False
         self.execution_polls = 0
-        self.executed = 0
+
+    def armed_task(self) -> dict | None:
+        """The task the scheduler would actually run.
+
+        Coolify dispatches a task only when it is enabled *and* its cron
+        matches the current minute. A fake that checked only the flag would let
+        a driver that armed the flag but left the leap-day schedule pass, and
+        that driver would hang against the real instance.
+        """
+
+        for task in self.tasks:
+            if task.get("name") != driver.READINESS_TASK_NAME:
+                continue
+            if task.get("enabled") and task.get("frequency") == driver.READINESS_ARMED_FREQUENCY:
+                return task
+        return None
 
     def _get(self, path, body, query):
         match = re.fullmatch(r"/applications/([^/]+)/scheduled-tasks", path)
@@ -2180,13 +2200,17 @@ class ReadinessInstance(FakeInstance):
         )
         if match:
             self.execution_polls += 1
-            if self.pending is not None and self.execution_polls > self.reveal_after_polls:
-                entry = dict(self.pending)
+            if (
+                self.armed_task() is not None
+                and self.next_execution is not None
+                and self.execution_polls > self.reveal_after_polls
+            ):
+                entry = dict(self.next_execution)
                 entry["id"] = (
                     max([int(item["id"]) for item in self.executions] or [0]) + 1
                 )
                 self.executions.append(entry)
-                self.pending = None
+                self.next_execution = None
             if self.executions and self.running_for_polls > 0:
                 self.running_for_polls -= 1
                 latest = copy.deepcopy(self.executions)
@@ -2202,23 +2226,31 @@ class ReadinessInstance(FakeInstance):
             record["uuid"] = f"task-{len(self.tasks) + 1}"
             self.tasks.append(record)
             return 201, copy.deepcopy(record)
-        match = re.fullmatch(
-            r"/applications/([^/]+)/scheduled-tasks/([^/]+)/execute", path
-        )
-        if match:
-            self.executed += 1
-            if self.next_execution is not None:
-                self.pending = dict(self.next_execution)
-            return 200, {"message": "Scheduled task execution queued."}
+        # The deployed instance has no execute route and answers the generic
+        # 404 there. Modelling that is what stops the driver quietly relying
+        # on an endpoint the real instance does not have.
+        if re.fullmatch(r"/applications/([^/]+)/scheduled-tasks/([^/]+)/execute", path):
+            return 404, {"message": "Not found.", "docs": "https://coolify.io/docs"}
         return super()._post(path, body, query)
 
     def _patch(self, path, body, query):
         match = re.fullmatch(r"/applications/([^/]+)/scheduled-tasks/([^/]+)", path)
         if match:
             for task in self.tasks:
-                if task.get("uuid") == match.group(2):
-                    task.update(body)
+                if task.get("uuid") != match.group(2):
+                    continue
+                arming = bool(body.get("enabled"))
+                # A write that returns 200 and changes nothing is the failure
+                # shape worth modelling: it is indistinguishable from success
+                # to anything that does not read back.
+                if arming and self.refuse_arm:
                     return 200, copy.deepcopy(task)
+                if not arming and self.refuse_disarm_times != 0:
+                    if self.refuse_disarm_times > 0:
+                        self.refuse_disarm_times -= 1
+                    return 200, copy.deepcopy(task)
+                task.update(body)
+                return 200, copy.deepcopy(task)
             return 404, {"message": "not found"}
         return super()._patch(path, body, query)
 
@@ -2249,7 +2281,127 @@ class VerifyTests(unittest.TestCase):
         code, output = self.run_verify(instance)
         self.assertEqual(code, driver.EXIT_OK)
         self.assertIn("RESULT verify ok ready=yes answer=200", output)
-        self.assertEqual(instance.executed, 1)
+
+    def test_the_task_is_returned_to_rest_after_a_successful_probe(self) -> None:
+        """Arming is temporary, and the resting state is both guards restored."""
+
+        instance = ReadinessInstance()
+        code, _ = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertEqual(len(instance.tasks), 1)
+        at_rest = instance.tasks[0]
+        self.assertIs(at_rest["enabled"], False)
+        self.assertEqual(at_rest["frequency"], driver.READINESS_TASK_FREQUENCY)
+
+    def test_the_task_is_returned_to_rest_even_when_the_probe_fails(self) -> None:
+        """A failed probe must not leave a job firing every minute."""
+
+        instance = ReadinessInstance()
+        instance.next_execution = {"status": "success", "message": "ADAPTENG_READY 503"}
+        code, _ = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIs(instance.tasks[0]["enabled"], False)
+        self.assertEqual(
+            instance.tasks[0]["frequency"], driver.READINESS_TASK_FREQUENCY
+        )
+
+    def test_a_task_that_will_not_disarm_is_reported_loudly_and_fails(self) -> None:
+        """The one outcome that leaves something running must be unmissable.
+
+        Reporting ready=yes here would be the worst case: a true readiness
+        answer paid for with a job nobody knows is running.
+        """
+
+        instance = ReadinessInstance()
+        instance.refuse_disarm_times = -1
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("COULD NOT DISARM", output)
+        self.assertIn("ready=undetermined reason=task_left_armed", output)
+        self.assertNotIn("RESULT verify ok", output)
+
+    def test_a_disarm_that_fails_once_is_retried(self) -> None:
+        """Leaving a job armed because one write was dropped is not acceptable.
+
+        The retry is the difference between a transient API failure costing
+        nothing and it costing a probe that fires every minute until someone
+        notices.
+        """
+
+        instance = ReadinessInstance()
+        instance.refuse_disarm_times = 2
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("did not take effect", output)
+        self.assertIn("returned to rest", output)
+        self.assertIs(instance.tasks[0]["enabled"], False)
+
+    def test_an_arming_write_that_does_not_take_effect_stops_the_run(self) -> None:
+        """Waiting for an execution that cannot happen wastes the budget and
+        then reports undetermined, which reads like a gateway problem. It is
+        not one, so it is refused up front instead."""
+
+        instance = ReadinessInstance()
+        instance.refuse_arm = True
+        with self.assertRaises(driver.Abort) as raised:
+            self.run_verify(instance)
+        self.assertIn("did not arm", str(raised.exception))
+
+    def test_a_disabled_task_on_the_armed_schedule_is_not_at_rest(self) -> None:
+        """Half-disarmed is the state a partial failure leaves behind.
+
+        Rest is both guards restored. Treating the flag alone as rest would
+        let the leap-day schedule quietly stay off, removing the second line of
+        defence for every later run without any visible symptom.
+        """
+
+        instance = ReadinessInstance()
+        instance.tasks.append(
+            {
+                "uuid": "task-old",
+                "name": driver.READINESS_TASK_NAME,
+                "command": driver.readiness_command(self.real_spec()),
+                "enabled": False,
+                "frequency": driver.READINESS_ARMED_FREQUENCY,
+            }
+        )
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("disarmed and corrected", output)
+        self.assertEqual(
+            instance.tasks[0]["frequency"], driver.READINESS_TASK_FREQUENCY
+        )
+
+    def test_a_task_left_armed_by_an_earlier_run_is_disarmed_first(self) -> None:
+        """The next run heals what an interrupted one left behind."""
+
+        instance = ReadinessInstance()
+        instance.tasks.append(
+            {
+                "uuid": "task-old",
+                "name": driver.READINESS_TASK_NAME,
+                "command": driver.readiness_command(self.real_spec()),
+                "enabled": True,
+                "frequency": driver.READINESS_ARMED_FREQUENCY,
+            }
+        )
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("disarmed and corrected", output)
+        self.assertIs(instance.tasks[0]["enabled"], False)
+
+    def test_the_execute_endpoint_is_never_called(self) -> None:
+        """It does not exist on the deployed instance.
+
+        The route answers the generic 404 while its sibling /executions answers
+        401, which is how the absence was established without presenting a
+        credential. A driver that called it would fail against production while
+        passing against a permissive fake.
+        """
+
+        instance = ReadinessInstance()
+        self.run_verify(instance)
+        self.assertEqual([p for _, p in instance.calls if p.endswith("/execute")], [])
 
     def test_a_five_oh_three_is_reported_as_the_gateways_own_verdict(self) -> None:
         instance = ReadinessInstance()
@@ -2511,7 +2663,7 @@ class VerifyTests(unittest.TestCase):
         )
         code, output = self.run_verify(instance)
         self.assertEqual(code, driver.EXIT_OK)
-        self.assertIn("converged", output)
+        self.assertIn("disarmed and corrected", output)
         self.assertEqual(len(instance.tasks), 1)
         self.assertEqual(
             instance.tasks[0]["command"], driver.readiness_command(self.real_spec())
@@ -2525,6 +2677,7 @@ class VerifyTests(unittest.TestCase):
                 "name": driver.READINESS_TASK_NAME,
                 "command": "echo something else",
                 "enabled": True,
+                "frequency": driver.READINESS_ARMED_FREQUENCY,
             }
         )
 
@@ -2534,7 +2687,7 @@ class VerifyTests(unittest.TestCase):
         instance._patch = refuse
         with self.assertRaises(driver.Abort) as raised:
             self.run_verify(instance)
-        self.assertIn("did not hold the command", str(raised.exception))
+        self.assertIn("did not come to rest", str(raised.exception))
 
     def test_a_correct_task_is_reused_rather_than_duplicated(self) -> None:
         instance = ReadinessInstance()
@@ -2544,11 +2697,12 @@ class VerifyTests(unittest.TestCase):
                 "name": driver.READINESS_TASK_NAME,
                 "command": driver.readiness_command(self.real_spec()),
                 "enabled": False,
+                "frequency": driver.READINESS_TASK_FREQUENCY,
             }
         )
         code, output = self.run_verify(instance)
         self.assertEqual(code, driver.EXIT_OK)
-        self.assertIn("already correct", output)
+        self.assertIn("already at rest", output)
         self.assertEqual(len(instance.tasks), 1)
 
     def test_two_tasks_of_the_same_name_are_not_resolved_by_guessing(self) -> None:

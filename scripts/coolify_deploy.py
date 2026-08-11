@@ -1825,6 +1825,13 @@ READINESS_TASK_NAME = "adapteng-readiness-probe"
 # never dispatched whatever its frequency says. Execution happens only through
 # the explicit execute endpoint below, which ignores the enabled flag by design.
 READINESS_TASK_FREQUENCY = "0 0 29 2 *"
+# The armed frequency, held only for as long as it takes Coolify's scheduler to
+# notice. This instance has no execute endpoint -- the route answers the generic
+# 404 while its sibling /executions answers 401, which is how its absence was
+# established without presenting a credential -- so the only way to run the
+# probe is to let the scheduler run it.
+READINESS_ARMED_FREQUENCY = "* * * * *"
+READINESS_DISARM_ATTEMPTS = 4
 READINESS_TASK_TIMEOUT_SECONDS = 60
 READINESS_MARKER = "ADAPTENG_READY"
 # Deliberately not read from health_check.path. That field is the container
@@ -1855,8 +1862,8 @@ READINESS_COMMAND = (
     "print(sys.argv[2],R.urlopen(sys.argv[1],timeout=5).status)"
     '" http://127.0.0.1:{port}{path} ' + READINESS_MARKER
 )
-READINESS_EXECUTION_ATTEMPTS = 20
-READINESS_EXECUTION_INTERVAL_SECONDS = 3
+READINESS_EXECUTION_ATTEMPTS = 24
+READINESS_EXECUTION_INTERVAL_SECONDS = 10
 
 
 def readiness_command(spec: dict) -> str:
@@ -1885,22 +1892,56 @@ def find_readiness_task(client: Client, uuid: str) -> dict | None:
     return matches[0] if matches else None
 
 
-def converge_readiness_task(client: Client, uuid: str, command: str) -> tuple[str, str]:
-    """Create the probe task if absent, or converge its command if it drifted.
+def readiness_task_body(command: str, *, armed: bool) -> dict:
+    """The stored shape of the probe task, in one of its two states.
 
-    Returns (task_uuid, what_happened). Deletion is not attempted and is not
-    reachable: the client refuses DELETE outright. The residue is one disabled
-    task per application, which is disclosed in the output rather than hidden.
+    Disarmed is the resting state and is what the task is left in: disabled,
+    and scheduled for a date that occurs only in leap years. Armed is held for
+    as long as it takes Coolify's scheduler to notice, and no longer.
+    """
+
+    return {
+        "name": READINESS_TASK_NAME,
+        "command": command,
+        "frequency": READINESS_ARMED_FREQUENCY if armed else READINESS_TASK_FREQUENCY,
+        "timeout": READINESS_TASK_TIMEOUT_SECONDS,
+        "enabled": bool(armed),
+    }
+
+
+def task_is_armed(task: dict) -> bool:
+    return bool(task.get("enabled")) or task.get("frequency") == READINESS_ARMED_FREQUENCY
+
+
+def write_readiness_task(client: Client, uuid: str, task_uuid: str, body: dict) -> dict:
+    """Write the task and read it back, because a write that did not hold is
+    the difference between a probe and a guess."""
+
+    call(
+        client,
+        "PATCH",
+        f"/applications/{uuid}/scheduled-tasks/{task_uuid}",
+        body=body,
+        expect=(200, 201),
+    )
+    after = find_readiness_task(client, uuid)
+    if after is None:
+        raise Abort("the readiness task disappeared while it was being written")
+    return after
+
+
+def converge_readiness_task(client: Client, uuid: str, command: str) -> tuple[str, str]:
+    """Create the probe task disarmed, or bring an existing one back to rest.
+
+    Running this first is what makes an interrupted earlier run self-healing:
+    a task left armed by a run that died is disarmed here, before anything
+    else happens. Deletion is not attempted and is not reachable, because the
+    client refuses DELETE outright; the residue is one disabled task per
+    application, disclosed in the output rather than hidden.
     """
 
     existing = find_readiness_task(client, uuid)
-    body = {
-        "name": READINESS_TASK_NAME,
-        "command": command,
-        "frequency": READINESS_TASK_FREQUENCY,
-        "timeout": READINESS_TASK_TIMEOUT_SECONDS,
-        "enabled": False,
-    }
+    body = readiness_task_body(command, armed=False)
     if existing is None:
         created = call(
             client,
@@ -1917,22 +1958,38 @@ def converge_readiness_task(client: Client, uuid: str, command: str) -> tuple[st
     task_uuid = str(existing.get("uuid") or "")
     if not task_uuid:
         raise Abort("the existing readiness task has no uuid")
-    if existing.get("command") == command and existing.get("enabled") in (False, 0):
-        return task_uuid, "already correct"
-    call(
-        client,
-        "PATCH",
-        f"/applications/{uuid}/scheduled-tasks/{task_uuid}",
-        body=body,
-        expect=(200, 201),
-    )
-    after = find_readiness_task(client, uuid)
-    if after is None or after.get("command") != command:
+    was_armed = task_is_armed(existing)
+    if existing.get("command") == command and not was_armed:
+        return task_uuid, "already at rest"
+
+    after = write_readiness_task(client, uuid, task_uuid, body)
+    if after.get("command") != command or task_is_armed(after):
         raise Abort(
-            "the readiness task did not hold the command after it was written; "
-            "refusing to probe with an unverified command"
+            "the readiness task did not come to rest after it was written; "
+            "refusing to arm a task whose stored state is unknown"
         )
-    return task_uuid, "converged"
+    return task_uuid, "disarmed and corrected" if was_armed else "converged"
+
+
+def disarm_readiness_task(client: Client, uuid: str, task_uuid: str, command: str) -> bool:
+    """Return the task to rest, and say plainly whether it got there.
+
+    This runs even when the probe failed, because the alternative is a job
+    that keeps firing every minute. It re-reads rather than trusting the
+    write, and it reports its own failure rather than swallowing it.
+    """
+
+    body = readiness_task_body(command, armed=False)
+    for attempt in range(1, READINESS_DISARM_ATTEMPTS + 1):
+        try:
+            after = write_readiness_task(client, uuid, task_uuid, body)
+        except Abort as failure:
+            emit(f"    disarm attempt {attempt} failed: {failure}")
+            continue
+        if not task_is_armed(after):
+            return True
+        emit(f"    disarm attempt {attempt} did not take effect")
+    return False
 
 
 def newest_execution(client: Client, uuid: str, task_uuid: str) -> dict | None:
@@ -1966,15 +2023,42 @@ def read_marker(message: object) -> str | None:
     return None
 
 
+def await_probe_answer(client: Client, uuid: str, task_uuid: str, before: int, sleep) -> tuple[dict | None, str | None]:
+    """Wait for the scheduler to run the probe once, and read what it said."""
+
+    for attempt in range(1, READINESS_EXECUTION_ATTEMPTS + 1):
+        sleep(READINESS_EXECUTION_INTERVAL_SECONDS)
+        execution = newest_execution(client, uuid, task_uuid)
+        current = int((execution or {}).get("id") or 0)
+        if execution is None or current <= before:
+            continue
+        status = str(execution.get("status") or "")
+        if status in {"running", "queued", ""}:
+            continue
+        emit(f"    execution {current} finished after {attempt} polls: status={status}")
+        return execution, read_marker(execution.get("message"))
+    return None, None
+
+
 def operate_verify(client: Client, spec: dict, sleep=None) -> int:
     """Ask the container itself whether it is ready, from inside the container.
 
     Every other vantage point has been ruled out by measurement rather than by
     assumption: the readiness runner is on a Docker network that contains the
-    managed database but none of the applications, and cannot resolve even the
-    ops runner, so it is not running inside any of them. Coolify's scheduled
-    task is the one instrument that reaches inside without SSH to the host, a
-    Docker socket on the runner, or any change to the network.
+    managed database but none of the applications, so it is not running inside
+    any of them. Coolify's scheduled task runs its command as
+    `docker exec <container> sh -c ...` and captures the output, which reaches
+    inside without SSH to the host, a Docker socket on the runner, or any
+    change to the network.
+
+    The task cannot be triggered directly. This instance has no
+    POST .../scheduled-tasks/{uuid}/execute route -- it answers the generic 404
+    while its sibling /executions answers 401, which is how the absence was
+    established without presenting a credential. So the probe is armed, left
+    for Coolify's own scheduler to notice, and disarmed again. It rests
+    disabled and scheduled for a leap day; both are removed to arm it and both
+    are restored to disarm it, so neither the flag nor the schedule alone is
+    load-bearing.
 
     No credential is presented and no model is called: /ready answers before
     the Authorization header is read, so this cannot produce an inference call.
@@ -2005,55 +2089,65 @@ def operate_verify(client: Client, spec: dict, sleep=None) -> int:
         return EXIT_FAILED
 
     uuid = str(application["uuid"])
-    state = str(application.get("status"))
-    emit(f"    application {target['resource_name']}: uuid={uuid} state={state}")
+    emit(
+        f"    application {target['resource_name']}: uuid={uuid} "
+        f"state={application.get('status')}"
+    )
 
     command = readiness_command(spec)
-    before = None
-    existing = find_readiness_task(client, uuid)
-    if existing is not None:
-        task_uuid = str(existing.get("uuid") or "")
-        if task_uuid:
-            latest = newest_execution(client, uuid, task_uuid)
-            before = int((latest or {}).get("id") or 0)
     task_uuid, disposition = converge_readiness_task(client, uuid, command)
     emit(f"    readiness task {READINESS_TASK_NAME}: {disposition} uuid={task_uuid}")
+
+    latest = newest_execution(client, uuid, task_uuid)
+    before = int((latest or {}).get("id") or 0)
+
+    armed = write_readiness_task(
+        client, uuid, task_uuid, readiness_task_body(command, armed=True)
+    )
+    if not task_is_armed(armed):
+        raise Abort(
+            "the readiness task did not arm; refusing to wait for an execution "
+            "that cannot happen"
+        )
     emit(
-        "    it is disabled and its schedule can never match, so it runs only "
-        "when this operation asks it to. It is left in place rather than "
-        "removed because this tool cannot issue DELETE."
+        f"    armed at {READINESS_ARMED_FREQUENCY} and waiting for Coolify's "
+        "scheduler; it will be returned to rest either way"
     )
-    if before is None:
-        before = 0
 
-    call(
-        client,
-        "POST",
-        f"/applications/{uuid}/scheduled-tasks/{task_uuid}/execute",
-        expect=(200, 201, 202),
-    )
-    emit("    execution queued; waiting for the container to answer")
+    try:
+        execution, verdict = await_probe_answer(client, uuid, task_uuid, before, sleep)
+    finally:
+        at_rest = disarm_readiness_task(client, uuid, task_uuid, command)
+        if at_rest:
+            emit(
+                "    returned to rest: disabled, and scheduled for a leap day. "
+                "It is left in place rather than removed because this tool "
+                "cannot issue DELETE."
+            )
+        else:
+            emit("")
+            emit(
+                f"    COULD NOT DISARM the readiness task {task_uuid} on "
+                f"application {uuid}. It is still enabled at "
+                f"{READINESS_ARMED_FREQUENCY} and will keep running the probe "
+                "every minute until it is disabled. The probe is a loopback "
+                "HTTP request and calls nothing external, but this needs a "
+                "hand: PATCH /applications/"
+                f"{uuid}/scheduled-tasks/{task_uuid} with enabled=false, or "
+                "run this operation again, which disarms before it does "
+                "anything else."
+            )
 
-    verdict = None
-    execution = None
-    for attempt in range(1, READINESS_EXECUTION_ATTEMPTS + 1):
-        sleep(READINESS_EXECUTION_INTERVAL_SECONDS)
-        execution = newest_execution(client, uuid, task_uuid)
-        current = int((execution or {}).get("id") or 0)
-        if execution is None or current <= before:
-            continue
-        status = str(execution.get("status") or "")
-        if status in {"running", "queued", ""}:
-            continue
-        verdict = read_marker(execution.get("message"))
-        emit(f"    execution {current} finished after {attempt} polls: status={status}")
-        break
+    if not at_rest:
+        emit("RESULT verify failed ready=undetermined reason=task_left_armed")
+        return EXIT_FAILED
 
-    if execution is None or int(execution.get("id") or 0) <= before:
+    if execution is None:
         emit("")
         emit(
-            "    no new execution was recorded. The probe did not run, so this "
-            "says nothing about the gateway's readiness either way."
+            "    no new execution was recorded while the task was armed. The "
+            "probe did not run, so this says nothing about the gateway's "
+            "readiness either way."
         )
         emit("RESULT verify failed ready=undetermined reason=no_execution")
         return EXIT_FAILED
