@@ -1,0 +1,89 @@
+name: AI Gateway readiness
+
+# Verifies the deployed gateway actually works, which Coolify cannot tell us.
+#
+# Coolify reports running:healthy from the container's own health check against
+# GET /health. That endpoint is deliberately dependency-free - it answers "is
+# this process listening?" and touches nothing - so a gateway with no database
+# and no configuration reports healthy exactly like a working one. GET /ready is
+# the endpoint that opens a database connection, and it is the only thing that
+# turns "the container started" into "the deployment works".
+#
+# This runs on the operations runner for the same reason the database job does:
+# the gateway has no public address and must not acquire one, so the only place
+# that can reach it is something already on the private Docker network.
+#
+# Neither operation authenticates. In the service, /health and /ready are both
+# answered before the Authorization header is read, and only POST /v1/gateway
+# requires a credential - so this job cannot present the caller token, cannot
+# reach a model and cannot spend anything. Vertex call count stays at zero by
+# construction rather than by care.
+#
+# probe is the deployment gate: it fails unless /ready returns 200. address
+# reports which network aliases answer without judging any of them, for when the
+# probe cannot connect and the open question is whether the name is wrong or the
+# service is.
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "probe fails unless /ready returns 200; address only reports which aliases answer"
+        required: true
+        default: probe
+        type: choice
+        options:
+          - probe
+          - address
+
+permissions:
+  contents: read
+
+# Both operations only read, so overlapping runs cannot corrupt anything. They
+# are serialised anyway: two probes retrying against the same starting container
+# would produce two verdicts about one moment, and the one that lands second
+# would look like the later state.
+concurrency:
+  group: ai-gateway-readiness
+  cancel-in-progress: false
+
+jobs:
+  drive:
+    name: Gateway ${{ inputs.operation }}
+    # The label is the whole access-control story: this job runs only on the
+    # dedicated operations runner, which is registered to this repository alone
+    # and is the only thing with a route to the unpublished gateway.
+    runs-on: [self-hosted, adapteng-ops]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Refuse to start without the access this needs
+        env:
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_URL: ${{ vars.COOLIFY_URL }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for name in COOLIFY_API_TOKEN COOLIFY_URL; do
+            if [ -z "${!name:-}" ]; then
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing required configuration:$missing"
+            exit 1
+          fi
+          echo "all required configuration is present"
+
+      - name: Run the operation
+        env:
+          OPERATION: ${{ inputs.operation }}
+          COOLIFY_API_CREDENTIAL: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_BASE_URL: ${{ vars.COOLIFY_URL }}
+        run: |
+          set -euo pipefail
+          # The Coolify credential is used only to look up where the container
+          # is. It is never sent to the gateway: the probe's requests carry no
+          # Authorization header at all.
+          python3 scripts/gateway_readiness.py "$OPERATION"

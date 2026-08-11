@@ -1,0 +1,315 @@
+#!/usr/bin/env python3
+"""Prove the deployed AI Gateway is reachable and that its database works.
+
+Coolify reporting ``running:healthy`` is a weaker statement than it looks. The
+health check it runs is the container's own, against ``GET /health``, and that
+endpoint is deliberately dependency-free: it answers "is this process
+listening?" and touches nothing. A gateway with no database, no credentials and
+no route to anything answers it exactly the same way as a working one.
+
+``GET /ready`` is the endpoint that means something. It verifies database
+connectivity and configuration, and returns 503 when either is wrong. So the
+deployment's real verification is a readiness call, and it has to come from
+somewhere on the private network, because the gateway has no public address and
+must not acquire one.
+
+That somewhere is this runner. It is an application on the same Coolify
+destination as the gateway, so it reaches the container by its network alias.
+Running the probe here rather than from a hosted runner is what lets the service
+stay unpublished.
+
+Nothing here authenticates, and that is a property of the service rather than an
+omission: ``/health`` and ``/ready`` are answered before the Authorization
+header is read, and only ``POST /v1/gateway`` requires a credential. So this
+probe cannot cause an inference call, cannot spend money, and needs no secret
+beyond the Coolify credential it uses to find the container.
+
+Operations
+----------
+``probe``   read-only. Reports liveness, then readiness, and fails if readiness
+            is anything but 200. This is the deployment gate.
+``address`` read-only. Reports which network aliases answer, without judging
+            them. For when the probe cannot connect and the question is whether
+            the name is wrong or the service is.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import coolify_deploy as driver  # noqa: E402
+
+# How long to wait for one HTTP answer. Readiness opens a database connection,
+# so it is legitimately slower than liveness; this is generous enough that a
+# slow answer is not read as a dead one, and short enough that an unroutable
+# address fails inside the job's budget rather than at its timeout.
+REQUEST_TIMEOUT_SECONDS = 20
+
+# A container that has just started may answer /health before its database pool
+# is up. Retrying readiness distinguishes "not ready yet" from "not ready", which
+# are different findings with different owners.
+READINESS_ATTEMPTS = 6
+READINESS_INTERVAL_SECONDS = 10
+
+
+class ProbeResult:
+    """One HTTP answer, or the reason there was not one."""
+
+    def __init__(self, status: int | None, body: str, error: str = "") -> None:
+        self.status = status
+        self.body = body
+        self.error = error
+
+    @property
+    def answered(self) -> bool:
+        return self.status is not None
+
+
+def fetch(url: str, timeout: int = REQUEST_TIMEOUT_SECONDS) -> ProbeResult:
+    """GET one URL, treating every outcome as data rather than an exception.
+
+    A non-2xx answer is a result, not a failure: 503 from ``/ready`` is the whole
+    point of asking. Only the absence of an answer is an error, and it is
+    reported as the exception's own text so a DNS failure and a refused
+    connection stay distinguishable - they have different causes and different
+    owners, and collapsing them into "unreachable" is what makes an outage take
+    an afternoon.
+    """
+
+    request = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return ProbeResult(response.status, response.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001 - a body is a bonus, not a requirement
+            body = ""
+        return ProbeResult(exc.code, body)
+    except urllib.error.URLError as exc:
+        return ProbeResult(None, "", f"{type(exc.reason).__name__}: {exc.reason}")
+    except OSError as exc:
+        return ProbeResult(None, "", f"{type(exc).__name__}: {exc}")
+
+
+def summarize(result: ProbeResult) -> str:
+    """Describe an answer in one line, without quoting an unbounded body."""
+
+    if not result.answered:
+        return f"no answer ({result.error})"
+    body = result.body.strip().replace("\n", " ")
+    if len(body) > 200:
+        body = body[:200] + "..."
+    return f"HTTP {result.status} {body}" if body else f"HTTP {result.status}"
+
+
+def candidate_addresses(application: dict, spec: dict) -> list[str]:
+    """Names this container might answer to, most specific first.
+
+    Coolify aliases a container by its resource uuid, and that is the name the
+    managed Postgres answered to, so it leads. The declared resource name is
+    tried next because Coolify also aliases by name and the uuid is the thing
+    most likely to change if the resource is ever recreated. Any explicitly
+    configured aliases come last: they are the operator's addition and should not
+    silently take precedence over the platform's own.
+    """
+
+    names: list[str] = []
+    uuid = str(application.get("uuid") or "").strip()
+    if uuid:
+        names.append(uuid)
+    declared = str(spec["target"]["resource_name"]).strip()
+    if declared and declared not in names:
+        names.append(declared)
+    raw = application.get("custom_network_aliases")
+    if isinstance(raw, str):
+        extra = [item.strip() for item in raw.replace("\n", ",").split(",")]
+    elif isinstance(raw, list):
+        extra = [str(item).strip() for item in raw]
+    else:
+        extra = []
+    for item in extra:
+        if item and item not in names:
+            names.append(item)
+    return names
+
+
+def locate_application(client: driver.Client, spec: dict) -> dict:
+    target = spec["target"]
+    project = driver.find_project(client, target["project"])
+    if project is None:
+        raise driver.Abort(f"project {target['project']} was not found")
+    environment = driver.find_environment(client, project["uuid"], target["environment"])
+    if environment is None:
+        raise driver.Abort(f"environment {target['environment']} was not found")
+    application = driver.find_application(
+        driver.applications_in(client, environment), target["resource_name"]
+    )
+    if application is None:
+        raise driver.Abort(
+            f"application {target['resource_name']} does not exist; deploy it first"
+        )
+    return application
+
+
+def resolve_base(client: driver.Client, spec: dict) -> tuple[str, list[tuple[str, ProbeResult]]]:
+    """Find an address that answers liveness, and report everything tried.
+
+    The attempts are returned even on success. When the first candidate fails and
+    the second works, that difference is the finding - it means the alias this
+    deployment relies on is not the one that answers - and discarding it would
+    turn a configuration fact into a silent fallback.
+    """
+
+    application = locate_application(client, spec)
+    port = int(spec["network"]["internal_port"])
+    attempts: list[tuple[str, ProbeResult]] = []
+    for name in candidate_addresses(application, spec):
+        url = f"http://{name}:{port}/health"
+        result = fetch(url)
+        attempts.append((name, result))
+        if result.status == 200:
+            return f"http://{name}:{port}", attempts
+    return "", attempts
+
+
+def operate_address(client: driver.Client, spec: dict) -> int:
+    driver.emit("--- address ai-gateway")
+    application = locate_application(client, spec)
+    port = int(spec["network"]["internal_port"])
+    driver.emit(f"    container port: {port}")
+    answered = 0
+    for name in candidate_addresses(application, spec):
+        result = fetch(f"http://{name}:{port}/health")
+        driver.emit(f"    {name}: {summarize(result)}")
+        if result.status == 200:
+            answered += 1
+    driver.emit("")
+    driver.emit(f"RESULT address ok answering={answered}")
+    return driver.EXIT_OK
+
+
+def operate_probe(client: driver.Client, spec: dict, sleep=None) -> int:
+    import time
+
+    sleep = sleep or time.sleep
+    driver.emit("--- probe ai-gateway")
+    base, attempts = resolve_base(client, spec)
+    for name, result in attempts:
+        driver.emit(f"    liveness at {name}: {summarize(result)}")
+    if not base:
+        driver.emit("")
+        driver.emit(
+            "    no alias answered. This is reachability, not readiness: either "
+            "this runner is not on the gateway's network or the container is not "
+            "listening. Both are visible from the Coolify placement."
+        )
+        driver.emit("RESULT probe failed reachable=no")
+        return driver.EXIT_FAILED
+
+    driver.emit(f"    liveness confirmed at {base}")
+
+    # Readiness is retried and liveness is not, deliberately. A process that is
+    # listening either answers /health now or is not the thing being probed;
+    # whereas a pool that is still opening is a normal state seconds after a
+    # deploy, and reporting it as a failure would make a healthy rollout look
+    # broken depending on when the job happened to run.
+    last = ProbeResult(None, "", "not attempted")
+    for attempt in range(1, READINESS_ATTEMPTS + 1):
+        last = fetch(f"{base}/ready")
+        driver.emit(f"    readiness attempt {attempt}: {summarize(last)}")
+        if last.status == 200:
+            break
+        if attempt < READINESS_ATTEMPTS:
+            sleep(READINESS_INTERVAL_SECONDS)
+
+    driver.emit("")
+    if last.status != 200:
+        driver.emit(
+            "    The process is listening and the network reaches it, so this is "
+            "the gateway's own verdict on its dependencies rather than a "
+            "deployment problem. /ready returns 503 when the database is "
+            "unreachable or the configuration is incomplete; the service logs the "
+            "reason and deliberately does not put it in the response."
+        )
+        driver.emit(f"RESULT probe failed reachable=yes ready=no last={last.status}")
+        return driver.EXIT_FAILED
+
+    driver.emit(
+        "    Readiness passed, which is the database proof: /ready opens a "
+        "database connection and /health does not. No credential was presented "
+        "and no model was called - both endpoints answer before the "
+        "Authorization header is read."
+    )
+    driver.emit("RESULT probe ok reachable=yes ready=yes")
+    return driver.EXIT_OK
+
+
+OPERATIONS = {"probe": operate_probe, "address": operate_address}
+
+
+def client_from_environment(environ=None) -> driver.Client:
+    """Build the API client from the same two variables the deploy driver uses.
+
+    The driver reads these inside its own entry point, which also loads a spec
+    and dispatches an operation, so it cannot be called from here without
+    performing a deployment. The two checks are repeated rather than the entry
+    point reshaped: this probe must not be able to write, and the surest way to
+    guarantee that is for it never to enter the code that can.
+    """
+
+    environ = os.environ if environ is None else environ
+    base_url = (environ.get(driver.BASE_URL_VARIABLE) or "").strip().rstrip("/")
+    if not base_url:
+        raise driver.Abort(
+            f"{driver.BASE_URL_VARIABLE} is empty; the gateway cannot be located",
+            driver.EXIT_MISCONFIGURED,
+        )
+    if not base_url.startswith("https://"):
+        raise driver.Abort(
+            f"{driver.BASE_URL_VARIABLE} must be an https address so the access "
+            "value is not sent in the clear",
+            driver.EXIT_MISCONFIGURED,
+        )
+    credential = (environ.get(driver.CREDENTIAL_VARIABLE) or "").strip()
+    if not credential:
+        raise driver.Abort(
+            f"{driver.CREDENTIAL_VARIABLE} is empty; nothing can be read",
+            driver.EXIT_MISCONFIGURED,
+        )
+    driver.register_redaction(credential)
+    return driver.Client(base_url, credential)
+
+
+def parse_arguments(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("operation", choices=sorted(OPERATIONS))
+    parser.add_argument(
+        "--service",
+        default="ai-gateway",
+        help="Spec file under deploy/, named without its extension",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = parse_arguments(sys.argv[1:] if argv is None else argv)
+    try:
+        spec = driver.load_spec(driver.spec_path(arguments.service))
+        client = client_from_environment()
+        return OPERATIONS[arguments.operation](client, spec)
+    except driver.Abort as exc:
+        driver.emit(f"ABORT {exc}")
+        return exc.code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
