@@ -148,7 +148,19 @@ def candidate_addresses(application: dict, spec: dict) -> list[str]:
     return names
 
 
-def locate_application(client: driver.Client, spec: dict) -> dict:
+def locate_application_and_peers(
+    client: driver.Client, spec: dict
+) -> tuple[dict, list[dict]]:
+    """Return the gateway and the other applications sharing its placement.
+
+    The peers matter more than they look. Coolify places an application on the
+    destination the environment already uses, so every application here reached
+    the network through the same code path the gateway did. That makes a peer
+    the only control that isolates the gateway. A managed database is placed by
+    a different path and can sit on a different network, so its resolvability
+    cannot license any claim about whether an application ought to resolve.
+    """
+
     target = spec["target"]
     project = driver.find_project(client, target["project"])
     if project is None:
@@ -156,14 +168,79 @@ def locate_application(client: driver.Client, spec: dict) -> dict:
     environment = driver.find_environment(client, project["uuid"], target["environment"])
     if environment is None:
         raise driver.Abort(f"environment {target['environment']} was not found")
-    application = driver.find_application(
-        driver.applications_in(client, environment), target["resource_name"]
-    )
+    applications = driver.applications_in(client, environment)
+    application = driver.find_application(applications, target["resource_name"])
     if application is None:
         raise driver.Abort(
             f"application {target['resource_name']} does not exist; deploy it first"
         )
-    return application
+    uuid = application.get("uuid")
+    peers = [item for item in applications if item.get("uuid") != uuid]
+    return application, peers
+
+
+def locate_application(client: driver.Client, spec: dict) -> dict:
+    return locate_application_and_peers(client, spec)[0]
+
+
+def running_peers(peers: list[dict]) -> list[dict]:
+    """Keep only the peers that can serve as controls.
+
+    Docker drops a stopped container's name from the network's DNS, so a peer
+    that is not running would fail to resolve for a reason that has nothing to
+    do with placement. Counting one as a control would manufacture the very
+    conclusion this comparison exists to test.
+    """
+
+    return [
+        item
+        for item in peers
+        if str(item.get("status") or "").startswith("running")
+    ]
+
+
+def attribute_placement(
+    gateway_resolved: int, peers_total: int, peers_resolved: int
+) -> tuple[str, str]:
+    """Say which side an unresolvable gateway belongs to, or refuse to say.
+
+    Three outcomes are genuinely different and were previously reported alike.
+    A peer resolving puts the fault on the gateway. No peer resolving puts it on
+    this runner's placement and leaves the gateway unknown. No peer at all
+    leaves the question open, and saying so is worth more than a guess that
+    reads like a finding.
+    """
+
+    if gateway_resolved:
+        return (
+            "gateway_resolves",
+            "The gateway resolves from here, so placement is not the open question.",
+        )
+    if peers_total == 0:
+        return (
+            "undetermined",
+            "No running peer application exists to compare against, so an "
+            "unresolvable gateway cannot be attributed to its own attachment "
+            "rather than to this runner's placement. The managed database is "
+            "not a substitute: it is placed by a different code path and may "
+            "sit on a different network.",
+        )
+    if peers_resolved:
+        return (
+            "gateway_detached",
+            f"{peers_resolved} of {peers_total} running peer applications "
+            "resolve from here. Peers reach the network through the same code "
+            "path as the gateway, so the gateway alone being unresolvable is "
+            "its own attachment and not this runner's placement.",
+        )
+    return (
+        "runner_off_application_network",
+        f"None of the {peers_total} running peer applications resolve from "
+        "here either, so this runner is not on the network the applications "
+        "are placed on. The gateway's attachment is unknown until that is "
+        "fixed, and a database that does resolve shows only that this runner "
+        "shares the database's network.",
+    )
 
 
 def resolve_base(client: driver.Client, spec: dict) -> tuple[str, list[tuple[str, ProbeResult]]]:
@@ -212,7 +289,7 @@ def resolve(name: str) -> tuple[list[str], str]:
 
 def operate_address(client: driver.Client, spec: dict) -> int:
     driver.emit("--- address ai-gateway")
-    application = locate_application(client, spec)
+    application, peers = locate_application_and_peers(client, spec)
     port = int(spec["network"]["internal_port"])
     driver.emit(f"    container port: {port}")
     answered = 0
@@ -229,11 +306,32 @@ def operate_address(client: driver.Client, spec: dict) -> int:
         else:
             driver.emit(f"    {name}: does not resolve ({error})")
 
-    # A reference point turns "the gateway does not resolve" into "this runner
-    # resolves the database but not the gateway", which is a different finding
-    # with a different owner. Without it, a runner that had lost the network
-    # entirely would produce exactly the same report as a gateway that was never
-    # attached to it, and the two are fixed in different places.
+    # Peers are the control. Each one was placed on the network by the same code
+    # path as the gateway, so the comparison separates "the gateway is not
+    # attached" from "this runner cannot see any application", which look
+    # identical from the gateway's name alone and are fixed in different places.
+    usable = running_peers(peers)
+    peers_resolved = 0
+    for peer in usable:
+        name = str(peer.get("uuid") or "").strip()
+        if not name:
+            continue
+        label = peer.get("name") or name
+        addresses, error = resolve(name)
+        if addresses:
+            peers_resolved += 1
+            driver.emit(f"    peer {label} ({name}): resolves to {', '.join(addresses)}")
+        else:
+            driver.emit(f"    peer {label} ({name}): does not resolve ({error})")
+    if not usable:
+        driver.emit(
+            "    peers: no other running application in this environment to "
+            "compare against"
+        )
+
+    verdict, sentence = attribute_placement(resolved, len(usable), peers_resolved)
+    driver.emit(f"    PLACEMENT {verdict}: {sentence}")
+
     reference = (os.environ.get(REFERENCE_HOST_VARIABLE) or "").strip()
     if reference:
         addresses, error = resolve(reference)
@@ -242,25 +340,27 @@ def operate_address(client: driver.Client, spec: dict) -> int:
                 f"    reference {reference}: resolves to {', '.join(addresses)}"
             )
             driver.emit(
-                "        This runner is on the shared network and can resolve "
-                "names on it, so an unresolvable gateway is the gateway's "
-                "attachment rather than this runner's placement."
+                "        This runner shares the managed database's network, "
+                "which is all it shows. A database is placed by a different "
+                "code path from an application, so it cannot stand in for a "
+                "peer when attributing an unresolvable gateway."
             )
         else:
             driver.emit(f"    reference {reference}: does not resolve ({error})")
             driver.emit(
-                "        The reference is known to have been reachable from here, "
-                "so this runner has lost the shared network. That is the finding, "
-                "and the gateway's own state is unknown until it is fixed."
+                "        The reference is known to have been reachable from "
+                "here, so this runner has lost even the database's network."
             )
     else:
         driver.emit(
-            f"    reference: none given ({REFERENCE_HOST_VARIABLE} is empty), so a "
-            "failure to resolve cannot be attributed to either side"
+            f"    reference: none given ({REFERENCE_HOST_VARIABLE} is empty)"
         )
 
     driver.emit("")
-    driver.emit(f"RESULT address ok resolved={resolved} answering={answered}")
+    driver.emit(
+        f"RESULT address ok resolved={resolved} answering={answered} "
+        f"peers={peers_resolved}/{len(usable)} placement={verdict}"
+    )
     return driver.EXIT_OK
 
 

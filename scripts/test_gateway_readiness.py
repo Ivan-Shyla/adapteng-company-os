@@ -57,7 +57,7 @@ def everything_resolves(_name: str) -> tuple[list[str], str]:
     return ["10.0.0.4"], ""
 
 
-def run(operation, http: FakeHttp, spec=None, resolver=None) -> tuple[int, str]:
+def run(operation, http: FakeHttp, spec=None, resolver=None, peers=None) -> tuple[int, str]:
     """Run one operation with the transport and the resolver faked, and nothing else.
 
     Both seams are faked by default rather than only on request. A test that
@@ -69,9 +69,11 @@ def run(operation, http: FakeHttp, spec=None, resolver=None) -> tuple[int, str]:
     spec = spec or load_spec()
     real_fetch = probe.fetch
     real_locate = probe.locate_application
+    real_locate_peers = probe.locate_application_and_peers
     real_resolve = probe.resolve
     probe.fetch = http
     probe.locate_application = lambda client, spec: APPLICATION
+    probe.locate_application_and_peers = lambda client, spec: (APPLICATION, list(peers or []))
     probe.resolve = resolver or everything_resolves
     try:
         buffer = io.StringIO()
@@ -82,6 +84,7 @@ def run(operation, http: FakeHttp, spec=None, resolver=None) -> tuple[int, str]:
     finally:
         probe.fetch = real_fetch
         probe.locate_application = real_locate
+        probe.locate_application_and_peers = real_locate_peers
         probe.resolve = real_resolve
 
 
@@ -202,11 +205,23 @@ class ReferenceTests(unittest.TestCase):
         self.assertIn("this runner has lost the shared network", report)
         self.assertIn("unknown rather than bad", report)
 
-    def test_without_a_reference_neither_side_is_blamed(self) -> None:
-        self.set_reference("")
-        code, report = run(probe.operate_address, FakeHttp({}))
+    def test_without_a_peer_no_side_is_blamed(self) -> None:
+        """The database reference is not evidence about an application.
+
+        Coolify places a managed database by a different code path from an
+        application, so a resolvable database licenses no claim about whether an
+        application ought to resolve. With no peer to compare against, the only
+        honest verdict is that the question is open.
+        """
+
+        self.set_reference("database-uuid")
+        only_reference = (
+            lambda name: (["10.0.0.9"], "") if name == "database-uuid" else ([], "gaierror")
+        )
+        code, report = run(probe.operate_address, FakeHttp({}), resolver=only_reference)
         self.assertEqual(code, driver.EXIT_OK)
-        self.assertIn("cannot be attributed to either side", report)
+        self.assertIn("placement=undetermined", report)
+        self.assertIn("not a substitute", report)
 
     def test_address_separates_resolving_from_answering(self) -> None:
         """A name that resolves but refuses is a different fault from one that does not resolve."""
@@ -272,6 +287,152 @@ class AddressTests(unittest.TestCase):
         self.assertEqual(code, driver.EXIT_OK)
         self.assertIn("answering=1", report)
         self.assertIn("app-uuid-1", report)
+
+
+class PeerControlTests(unittest.TestCase):
+    """The control that separates a detached gateway from a misplaced runner.
+
+    Every application in the environment reached the network through the same
+    Coolify code path, so a peer is the only reference that holds the placement
+    variable fixed. Before these, a runner that could see the database but no
+    application at all produced the same report as a gateway that was never
+    attached, and the two are fixed in different places by different people.
+    """
+
+    RUNNING = [
+        {"uuid": "peer-uuid-1", "name": "n8n-selfhosted", "status": "running"},
+        {"uuid": "peer-uuid-2", "name": "baserow-adapter", "status": "running:healthy"},
+    ]
+
+    def test_a_resolving_peer_puts_the_fault_on_the_gateway(self) -> None:
+        only_peers = (
+            lambda name: (["10.0.1.9"], "") if name.startswith("peer-") else ([], "gaierror")
+        )
+        code, report = run(
+            probe.operate_address, FakeHttp({}), resolver=only_peers, peers=self.RUNNING
+        )
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("placement=gateway_detached", report)
+        self.assertIn("peers=2/2", report)
+        self.assertIn("n8n-selfhosted", report)
+
+    def test_no_peer_resolving_puts_the_fault_on_the_runner(self) -> None:
+        """The finding this class was added to make reachable at all."""
+
+        only_database = (
+            lambda name: (["10.0.1.7"], "") if name == "database-uuid" else ([], "gaierror")
+        )
+        original = os.environ.get(probe.REFERENCE_HOST_VARIABLE)
+        os.environ[probe.REFERENCE_HOST_VARIABLE] = "database-uuid"
+        try:
+            code, report = run(
+                probe.operate_address,
+                FakeHttp({}),
+                resolver=only_database,
+                peers=self.RUNNING,
+            )
+        finally:
+            if original is None:
+                os.environ.pop(probe.REFERENCE_HOST_VARIABLE, None)
+            else:
+                os.environ[probe.REFERENCE_HOST_VARIABLE] = original
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("placement=runner_off_application_network", report)
+        self.assertIn("peers=0/2", report)
+        self.assertIn("attachment is unknown", report)
+
+    def test_a_stopped_peer_is_not_counted_as_a_control(self) -> None:
+        """Docker drops a stopped container from DNS, so it proves nothing.
+
+        Counting one would turn a peer that is legitimately absent from the
+        network into evidence that this runner is off the application network,
+        which is the exact false verdict the control exists to prevent.
+        """
+
+        stopped = [{"uuid": "peer-uuid-1", "name": "n8n", "status": "exited:unhealthy"}]
+        nothing = lambda _name: ([], "gaierror")
+        code, report = run(
+            probe.operate_address, FakeHttp({}), resolver=nothing, peers=stopped
+        )
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("placement=undetermined", report)
+        self.assertIn("peers=0/0", report)
+        self.assertNotIn("peer n8n", report)
+
+    def test_a_resolving_gateway_ends_the_placement_question(self) -> None:
+        code, report = run(probe.operate_address, FakeHttp({}), peers=self.RUNNING)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("placement=gateway_resolves", report)
+
+
+class AttributionTests(unittest.TestCase):
+    def test_every_branch_names_a_different_owner(self) -> None:
+        self.assertEqual(probe.attribute_placement(1, 2, 0)[0], "gateway_resolves")
+        self.assertEqual(probe.attribute_placement(0, 0, 0)[0], "undetermined")
+        self.assertEqual(probe.attribute_placement(0, 2, 1)[0], "gateway_detached")
+        self.assertEqual(
+            probe.attribute_placement(0, 2, 0)[0], "runner_off_application_network"
+        )
+
+    def test_a_resolving_gateway_wins_over_an_absent_peer_set(self) -> None:
+        """Order matters: with no peers the verdict would otherwise be undetermined."""
+
+        self.assertEqual(probe.attribute_placement(2, 0, 0)[0], "gateway_resolves")
+
+    def test_only_running_peers_survive_the_filter(self) -> None:
+        peers = [
+            {"uuid": "a", "status": "running"},
+            {"uuid": "b", "status": "running:healthy"},
+            {"uuid": "c", "status": "exited:unhealthy"},
+            {"uuid": "d", "status": "restarting"},
+            {"uuid": "e"},
+        ]
+        self.assertEqual(
+            [item["uuid"] for item in probe.running_peers(peers)], ["a", "b"]
+        )
+
+
+class PeerDerivationTests(unittest.TestCase):
+    """Exercise the peer list itself, not a stand-in for it.
+
+    Every other test here patches ``locate_application_and_peers`` wholesale, so
+    the derivation was invisible to the suite: a mutant that let the gateway
+    count itself as a peer survived. That mutant is not cosmetic. With no real
+    peer present it turns the honest ``undetermined`` into a confident
+    ``runner_off_application_network``, which points the fix at the wrong host.
+    """
+
+    def patch(self, applications: list[dict]) -> None:
+        real = (driver.find_project, driver.find_environment, driver.applications_in)
+
+        def restore() -> None:
+            driver.find_project, driver.find_environment, driver.applications_in = real
+
+        self.addCleanup(restore)
+        driver.find_project = lambda client, name: {"uuid": "project-uuid", "name": name}
+        driver.find_environment = lambda client, uuid, name: {"uuid": "env-uuid", "name": name}
+        driver.applications_in = lambda client, environment: applications
+
+    def test_the_gateway_is_not_counted_as_its_own_peer(self) -> None:
+        self.patch(
+            [
+                {"uuid": "app-uuid-1", "name": "ai-gateway", "status": "running"},
+                {"uuid": "peer-uuid-1", "name": "n8n-selfhosted", "status": "running"},
+            ]
+        )
+        application, peers = probe.locate_application_and_peers(object(), load_spec())
+        self.assertEqual(application["uuid"], "app-uuid-1")
+        self.assertEqual([item["uuid"] for item in peers], ["peer-uuid-1"])
+
+    def test_a_lone_gateway_yields_no_peers_rather_than_itself(self) -> None:
+        self.patch([{"uuid": "app-uuid-1", "name": "ai-gateway", "status": "running"}])
+        _, peers = probe.locate_application_and_peers(object(), load_spec())
+        self.assertEqual(peers, [])
+
+    def test_an_absent_application_aborts_instead_of_reporting_peers(self) -> None:
+        self.patch([{"uuid": "peer-uuid-1", "name": "n8n-selfhosted", "status": "running"}])
+        with self.assertRaises(driver.Abort):
+            probe.locate_application_and_peers(object(), load_spec())
 
 
 class CandidateTests(unittest.TestCase):
