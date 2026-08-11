@@ -1082,7 +1082,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with ten sub-shapes and twenty-six instances.** WS-1 proposed the
+**The general rule, with twelve sub-shapes and twenty-eight instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -1211,8 +1211,32 @@ the instrument's range fails to match the question:
   is recorded in §12a; what would have been published is a defect report about a
   phantom symptom, arriving with a plausible cause already attached, which is the
   hardest kind to refuse.
-- **A cost declined, reported as a limit of the instrument.** WS-6 wrote that the
-  absence of `live_ref_changed` was "not observable by the means I used". The
+- **A chain whose every link was checked except the one that inverts it.** WS-6
+  classified `.gitattributes:4` — the LF pin on the trust root — as silent on
+  drift, "no CI effect on Linux". That scoping invites the correction this document
+  had just made in #84: CI is *not* only Linux, and `ai-gateway-tests.yml` runs a
+  `windows-latest` matrix leg. The chain built from there was that no `pytest.ini`,
+  `pyproject.toml`, `setup.cfg` or `tox.ini` exists anywhere in the repository — all
+  four confirmed absent — so a bare `python -m pytest -q -m "not postgres"` collects
+  the whole tree, so the Windows leg runs `tests/test_rollout_trust_anchor.py`, so
+  the LF pin is load-bearing in CI and belongs in the loud class. Every link was
+  verified. The conclusion is false: **`defaults.run.working-directory:
+  services/ai-gateway` at lines 67–69 is job-level and governs the pytest step at
+  87**, so the leg cannot reach the anchor tests on any platform. WS-6's row stands,
+  and on a better reason than the one it gave — the only non-Linux leg is
+  directory-scoped away from the anchor, so the verdict does not depend on the
+  operating system at all.
+  **Three properties make this the reference case for the family.** The unchecked
+  link was not obscure, it was *categorical*: every other link was a question about
+  the contents of a file, and the missing one was "where does this command run
+  from", which is not a property of any file that was read. It ran in the
+  flattering direction — the payoff was a dramatic correction to a workstream on
+  the very leg this document had corrected it about a round earlier, which is the
+  third time in this correspondence that the error pointing at the more satisfying
+  conclusion is the one that survived furthest. And it was caught by continuing to
+  check *after* the conclusion was already available, which no rule in this list
+  mandates and which is the only thing that would have caught it.
+- **A cost declined, reported as a limit of the instrument.** WS-6 wrote that the  absence of `live_ref_changed` was "not observable by the means I used". The
   codes were in the run logs the whole time under an exact, greppable prefix; what
   actually stopped it was 64 log downloads against one check-runs API call. It
   re-diagnosed this itself, unprompted, and the re-diagnosis is the entry: not a
@@ -1229,6 +1253,21 @@ the instrument's range fails to match the question:
   occurrences was sitting in the same output. The declined cost was larger than the
   claim it was declined for, which it always is, because an unpaid query answers
   every question it would have answered and not only the one that prompted it.
+- **An internal-consistency assertion read as verification.** `tests/test_rollout_trust_anchor.py`
+  1935–1948 asserts that one hard-coded trust-root path string appears in both
+  `validate.yml` and `secret-scan.yml`. It is correct, it is on a required check,
+  it genuinely prevents those copies from diverging — and it says nothing about
+  whether the path exists. Three copies going stale *together* is a passing state,
+  so the assertion supplies positive reassurance about wiring while the thing it
+  names is unbound (§15). This belongs beside the exit-status entry above and
+  generalises it: **an exit status is a claim about the command, and an
+  internal-consistency assertion is a claim about the set of copies. Neither is a
+  claim about the world.** It is the more dangerous of the two, because an exit
+  status is at least known to be a weak signal, whereas a cross-file assertion is
+  usually cited — as it was here — as the reason a literal is safe to duplicate.
+  The discriminator is one question: **is any member of the compared set checked
+  against something outside the set?** For these three, no. For `REQUIRED_FILES`,
+  yes, at 272 — which is why the guard's assertion has to anchor there.
 - **A number that is correct in two frames and means two different things — the
   collision.** WS-6's earlier record cites `f0a2d17 388` and this document cites
   `main 388`. Both are accurate and they are **different sites**: at `f0a2d175`,
@@ -1327,7 +1366,7 @@ the instrument's range fails to match the question:
   independently derived hash of the LF content (`a9aeef04`). A probe that reads the
   world through a converting layer reports the layer.
 
-Unifying form, and the reason the ten belong together: **every one of these
+Unifying form, and the reason the twelve belong together: **every one of these
 instruments returned a true statement, and in no case was the true statement about
 the question being asked.** The helper list truly contained no such script. The
 two `authorized` verdicts were truly `authorized`. The sixteen hits truly
@@ -2137,5 +2176,82 @@ having to be careless.
 
 Recorded, not built. It is a protected-path change encoding an undecided policy,
 and it waits for both the ruling and the authority to ask for it.
+
+**What binds the trust-root literal, checked rather than assumed — and it is one
+mechanism, not fourteen and not two.** Two competing intuitions were in play. The
+first, this document's, was that fourteen scattered copies of
+`.github/trust/rollout-policy/allowed_signers` mean no cross-copy check can fire.
+The second, WS-6's, was that fourteen copies mean fourteen chances to disagree.
+Both are wrong, and the second is wrong twice: **none of the six axes classifies
+the path**, so drift among them means *rename*, never *misclassification*; and
+most of the copies are silent on a rename anyway. WS-6 established both points and
+its classification is adopted. The one thing worth correcting is the conclusion it
+drew, because it is the part the guard's encoding depends on.
+
+WS-6 named two binding mechanisms, both on required checks, and called that
+sufficient. The count is right and **what they bind is not the same thing**:
+
+| Mechanism | Asserts | Claim about |
+| --- | --- | --- |
+| `validate_repo.py:34` in `REQUIRED_FILES`, consumed at 268–272 as `check(path.is_file(), …)` | a file exists at the literal | **the world** |
+| `tests/test_rollout_trust_anchor.py` 1935–1948 | the literal string appears in *both* `validate.yml` and `secret-scan.yml` | **the set of copies** |
+
+The second was verified by running it rather than reading it: the test's expected
+string is assembled starting mid-invocation, at `verify_rollout_trust_anchor.py`,
+which is what lets one string match `python -I …` at `validate.yml:87–89` and
+`python3 -I …` at `secret-scan.yml:42–44`. Executed against both blobs at
+`824b4238`, both `assertIn` calls return true. It is a real cross-copy consistency
+check and WS-6 is right that it exists for this literal.
+
+**But consistency is not currency, and the gap is reachable in one step.** Rename
+the trust root and do only what turns CI red:
+
+1. `validate_repo.py:34` fails — `path.is_file()` is false. The renamer fixes that
+   one line. This is the only thing that fails.
+2. The test still **passes**: its hard-coded old path still matches both workflows,
+   because all three went stale together.
+3. Both workflows still pass the old path to `validate-trust-root`, which reaches
+   `_validate_trust_root_command` 3210–3217 — on `trust_root_not_configured` it
+   prints `{"trust_root":"unconfigured"}` and **`return 0`**. Deliberate, since an
+   unarmed anchor is a legitimate state, and silent by consequence.
+
+End state: **green, with both trust-root validations validating a file that does
+not exist**, and a passing test whose subject is trust-anchor wiring. The test does
+not merely fail to catch this; it supplies positive reassurance while the thing it
+names is unbound. So WS-6's summary — "they can't drift apart, and they can't drift
+from the test" — is exactly right and is exactly the limit: **nothing binds the
+trio to the filesystem.** Two mechanisms exist; one is a claim about the world.
+
+This is WS-2's rule one level up. An exit status is a claim about the command, not
+the world; **an internal-consistency assertion is a claim about the set of copies,
+not about the thing they name.** Both read as verification and neither is.
+
+**Which improves WS-6's third option and changes the instruction that implements
+it.** WS-6 proposes neither hard-code-and-hope nor a cross-file constant, but
+*hard-code plus a consistency assertion*, justified by the precedent at 1935–1948.
+The proposal is right and the justification is the wrong half of it. Followed
+literally — assert the verifier's new literal appears in `validate.yml` — the guard
+joins the **silent** class, because 1935–1948 is the pattern that permits
+coordinated staleness. What makes the proposal work is its *anchor*:
+`REQUIRED_FILES` is existence-checked at 272, so a copy chained to it is
+transitively bound to the filesystem. The instruction is therefore **anchor the
+assertion on `REQUIRED_FILES`, and the reason is line 272, not line 1935** — a
+distinction invisible in the diff, since both encodings are one `assertIn`.
+
+**Cost re-checked and it is zero, as WS-6 says.** Only pins 408
+(`verify_rollout_trust_anchor.py`) and 423 (`tests/test_rollout_trust_anchor.py`)
+are touched, both already spent by the encoding; both digests were re-derived
+from the blobs and are current. No third pin: the test already reads repository
+files as text at 1941–1946 and already names `validate_repo.py` at 2025, 4048 and
+4063, so the assertion needs no import, and `validate_repo.py`'s own pin at
+431–432 is unaffected by being read.
+
+**One live consequence in the silent class, low severity and conditional.**
+`ROLLOUT_ONLY_PATHS:137` is consumed only at 509 as a set intersection. After a
+rename in which only the loud site is repaired, the stale entry matches nothing and
+the routing rule quietly stops covering the trust root, so a workflow could route
+on the new name into credential-aware Adapter Tests. That makes the constant this
+document already scored as the most dangerous candidate **also** a silent-drift
+site — two independent defects in one enumeration.
 
 
