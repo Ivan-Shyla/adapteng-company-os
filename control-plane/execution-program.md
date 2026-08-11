@@ -701,6 +701,12 @@ deployed gateway:
    default set, so no other check re-runs and no review is dismissed. Signing the
    receipt then yields the first `authorized` one, which cannot arrive from
    ordinary traffic at all. The receipt and the promotion evidence are one action.
+   **Use the edit, not `gh run rerun`.** Re-running #121's existing run would also
+   pick up the current verifier — the checkout resolves `refs/heads/main` at
+   execution time — but it replaces that run's conclusion in place, while an edit
+   adds a run alongside the existing one. #121's pre-reset refusal is part of the
+   evidence base, and a re-run additionally leaves `created_at` describing an
+   execution it no longer matches. See `current-state.md` §12a.
 4. **One sentence settling whether an advisory authorization refusal may be
    merged past.** Two sessions answered this oppositely within four minutes —
    platform #122 merged, #121 was left open — from materially identical

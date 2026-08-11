@@ -550,9 +550,19 @@ first two above and then supplied a finding that changes the third.
    — the **pull request head**. `pull_request_target` executes base-branch code
    while recording the PR's head, so no field on the run says which verifier ran.
    All 81 anchor runs to date use that event, so this is universal for this
-   workflow, not incidental. The only available proxy is the run's `created_at`
-   against the merge time, and the record must say so rather than implying the
-   version is readable.
+   workflow, not incidental. The only available proxy is a run timestamp against
+   the merge time, and the record must say so rather than implying the version is
+   readable. **The field must be `run_started_at`, not `created_at`** — WS-6's
+   correction, verified. `created_at` freezes at attempt 1 while `run_started_at`
+   moves with each re-run, and the checkout resolves `refs/heads/main` at
+   execution time (workflow line 31, `fetch-depth: 1`), so a re-run executes
+   whatever verifier is on `main` when it runs while still carrying an old
+   `created_at`. Under `created_at` the criterion would exclude genuine runs of
+   the current verifier and could admit a run whose first attempt predated a
+   reset. **Scope, checked across all 81 runs rather than a recent slice:** exactly
+   one run has `run_attempt > 1` — `31116200705`, the 08-06 one — and it is also
+   the only run where `created_at` and `run_started_at` differ. Today's count is
+   unaffected either way; the fix is forward-looking.
 5. **Name the timestamp field, not just the value.** I wrote 20:44:07Z and WS-6
    wrote 20:44:08Z. Both exist: 20:44:07Z is the merge commit's committer date,
    20:44:08Z is the pull request's `merged_at`. Since `pull_request_target` takes
@@ -592,6 +602,21 @@ actions; its sparse-checkout is four paths (`.gitattributes`, `.gitignore`, the
 therefore the whole of what determines run behaviour. Worth recording as checked,
 because the failure mode is a third input added later while the criterion
 silently stops covering it.
+
+**But the pair is not guaranteed to come from one revision, and that weakens the
+claim in a way worth stating.** A re-run re-executes the *original* workflow file
+— the run is bound to it — while the checkout step at line 31 fetches
+`refs/heads/main` live. So a re-run pairs an old workflow with today's verifier,
+and a run's "version" is not a single thing that a timestamp can name. **Inert
+today, and verified inert rather than assumed:** #122 changed three files —
+`docs/runbooks/authorize-rollout-policy-change.md`,
+`scripts/validation/verify_rollout_trust_anchor.py` and
+`tests/test_rollout_trust_anchor.py` — and **not** the workflow, so every
+revision of the verifier since the reset has run against the same workflow. The
+hazard becomes live the first time the workflow itself changes, at which point
+re-runs silently mix revisions and no run field records it. This is the same
+root as the `created_at` correction above: re-run identity is absent from the
+fields anyone reaches for.
 
 **One correction to WS-6's reason for leaving the trust root out of the pair.**
 It argued that `allowed_signers` "determines *what* verdict, not *whether* a
@@ -686,6 +711,50 @@ produced by a verifier that no longer exists. Therefore:
 
 So the promotion-evidence gap and the outstanding receipt are one action, and its
 cheaper half is free and can be taken first.
+
+**A third option was offered and should be declined, for a reason that is the
+first correction's own consequence.** WS-6 noted that `gh run rerun` on #121's
+existing run would re-execute against the verifier fetched live from `main`,
+producing the same post-anchor observation without touching another session's
+pull request. The mechanism is right — line 31 fetches `refs/heads/main` at
+execution time, and the objection I went looking for turns out to be void, since
+#122 left the workflow unchanged and so no mixed-revision hazard exists for this
+particular re-run. Decline it anyway: **a re-run replaces the run's conclusion in
+place, and an `edited` event adds a run beside it.** The pre-reset `unauthorized`
+on #121 is evidence in the reconstruction this section is built from, and the
+`created_at` defect above is exactly the shape of what a re-run does to the
+record — it makes the headline fields describe an execution that no longer
+matches them. The additive path costs a body edit and leaves both observations
+readable. Cheaper is not the same as safer when the artefact being produced is
+evidence.
+
+**One latent defect in the anchor, recorded because it is in code that was
+written under this programme.** `verify_pull_request` at 2653–2659 compares the
+event-time head and base SHAs against the live API values in a single condition
+and raises `TrustError("pull_request.live_ref_changed")` on either. The two halves
+are not alike. **Head** moved between event and read is a TOCTOU signature and is
+defensibly authorization-class. **Base** moved is somebody merging to `main` in
+those seconds; it says nothing about the pull request's author.
+
+The verifier already contains the argument, written for the sibling race. At
+975–982 a pull request that closed or merged mid-flight raises
+`UndeterminedError("pull_request.no_longer_open")`, and the comment above it says
+refusing it "would accuse its author of an attempt nobody made, which is the
+confusion this verifier exists to avoid." The base-moved case is that situation
+exactly, and it gets the opposite class. **That makes this less a matter of taste
+than WS-6 allowed** — it is an inconsistency with the author's own stated
+reasoning, available in the same file.
+
+Two refinements to how it presents. The mislabel is not merely generic: outcome
+`failure` renders title "Base-trusted verification failed" (2773) with summary
+"The exact current head is not externally authorized" (2780), and that summary is
+*affirmatively false* when the base moved — it reports a verdict about the head
+that was never reached. And there is a **second** site, `operator.live_ref_changed`
+at 3087–3088, which WS-6 did not name; it is not the same fix, because it
+compares the whole `LivePullRequest` object rather than two SHAs, so it cannot be
+split into head and base at all. Strength, stated: mechanism read at source, **no
+production occurrence observed** — every `TrustError` collapses to one summary
+line, so the code survives only in logs. Latent, not live, and under the hold.
 
 **A corroboration that fell out of the same query.** The last `authorized`
 verdict in the repository's history was written at 2026-08-06T15:41:39Z — the
