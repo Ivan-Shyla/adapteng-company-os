@@ -108,12 +108,62 @@ Verified from `main` and CI, not from narrative.
   construction. The platform repository still holds only Coolify *specifications*
   and manual runbooks, which is now correct — the API driver belongs here,
   with the credential.
-- **The AI Gateway is not deployed.** Confirmed, no longer inferred: a read-only
-  `inspect` run on 2026-08-10 found project `adapteng-ops` and environment
+- ~~**The AI Gateway is not deployed.**~~ **Deployed, and answering `/ready`
+  with 200.** The struck claim was correct when written, on a read-only
+  `inspect` of 2026-08-10 that found project `adapteng-ops` and environment
   `production` present, containing `adapteng-baserow-adapter` (running, healthy)
-  and `n8n-selfhosted` (running). **`ai-gateway` is absent**, so the first
-  `reconcile` will create rather than update. This resolves the `UNVERIFIED`
-  mark previously carried here.
+  and `n8n-selfhosted` (running), with `ai-gateway` absent. It has since been
+  created (`e13v7c6zjof7dmcpywqbyas3`), configured, deployed and proved ready.
+
+  Readiness is asked from inside the container, as a Coolify scheduled task,
+  armed for the run and returned to rest afterwards. Run `31542579590` reports
+  `verify ok ready=yes answer=200`; run `31540027132` (`diagnose`) shows four
+  executions, all `success` with `ADAPTENG_READY 200`, corroborated
+  independently by four `"GET /ready HTTP/1.1" 200` lines in the container's own
+  access log.
+
+  ~~Readiness could not be asked from outside — the application is internal-only
+  on the coolify network and the database refuses every route a runner has.~~
+  **One clause of that is wrong, and my first attempt to fix it was wrong in the
+  other direction.** The database does not refuse every route a runner has: the
+  dedicated operations runner resolves it to `10.0.1.7` and has been using that
+  route since 16:47Z on 2026-08-11, which is how the runtime role was
+  provisioned at all. I then over-corrected, writing that the runner therefore
+  had a route to the application too. It does not. Run `31531842811` reports
+  `placement=runner_off_application_network`: the runner resolves none of the
+  three running applications — not even itself — while resolving the database.
+  Applications and databases are placed by different code paths, so the database
+  cannot stand in for a peer.
+
+  So the conclusion survives while both justifications failed: readiness really
+  could not be asked from outside, because the only runner with any route to
+  this deployment sits on the database's network and not the applications'. The
+  in-container probe was necessary, not merely preferable. Note also what the
+  200 proves on its own: `/ready` opens a database connection, so answering it
+  from inside the container is only possible if the container reaches the
+  managed database over the shared network. That, rather than the address probe,
+  is what establishes the gateway's attachment.
+
+  `/ready` opens a database connection where `/health` does not (§5b), so this
+  is also the database proof: the runtime DSN is in place and usable. It says
+  nothing about the other two credentials and nothing about model access —
+  both endpoints answer before the `Authorization` header is read, and no model
+  is called. Those two are confirmed bound separately: `ai_gateway_credentials.py
+  status` (run `31543126097`) reports `credentials=bound`, with the storage
+  `/secrets/vertex-service-account.json` present and both environment keys set.
+  Bound is not the same as correct — a secret cannot be read back from either
+  store, by design — so the first live model call is what would prove the Vertex
+  key, and it is held for the owner's GO. **Vertex inference calls remain 0.**
+
+  The entry stayed wrong for one turn after it had become false, and the reason
+  is worth keeping: `verify` ranked executions by an `id` that this Coolify
+  instance always returns as `null`, so no row ever counted as new and the tool
+  reported `ready=undetermined reason=no_execution` against four successful
+  executions sitting in the response it had just read. The instrument failed in
+  exactly the way this workstream exists to catch — a determinate state reported
+  as undeterminable — and 200 green tests did not see it, because the test
+  double minted rising ids the real instance never sends. Fixed in PR #132 and
+  pinned by a mutant that reproduces the live defect.
 - **The approval writer is unbound.** `external_draft_dispatcher` is `None` at
   construction. This is a deliberate open seam, not an omission — see §7.
 
@@ -219,7 +269,7 @@ column now records the outcome rather than an outstanding instruction.
 |---|---|---|---|---|
 | D-1 | Migrations 002, 003, 005, 006, 007 and both 008 units "remain repo-only and unapplied" | [`owner/action-items.md`](../owner/action-items.md) | Owner's post-rollout manual production check: all nine logical units exact | **Corrected in PR #40.** The item now records the verified state and forbids replay; [`registry/data-stores.yaml`](../registry/data-stores.yaml) carries all nine units as `live: true` with `replay: forbidden`. |
 | D-2 | Rollout authorization blocked pending an automation-evidence lifecycle PR | [`owner/action-items.md`](../owner/action-items.md) | The referenced chain merged through platform PRs #93, #94, #98 | **Closed in PR #40**, each PR re-verified merged with its SHA. Status literal is now `BLOCKED_ON_UNCONFIGURED_PRODUCTION_BACKUP` on all five status surfaces. |
-| D-3 | AI Gateway readiness reads as cost-and-runtime blocked | `ai/` notes | Gateway tests and supply-chain gates green on `main`; only deployment is missing | **Narrowed in PR #40** to "implemented and tested, not deployed", citing AI Gateway Tests run `31214858400` (5/5 jobs green). |
+| D-3 | AI Gateway readiness reads as cost-and-runtime blocked | `ai/` notes | Gateway tests and supply-chain gates green on `main`; only deployment is missing | **Narrowed in PR #40** to "implemented and tested, not deployed", citing AI Gateway Tests run `31214858400` (5/5 jobs green). **Now closed:** the gateway is deployed and `/ready` answers 200 from inside the container — run `31542579590`, corroborated by run `31540027132`. See §4. |
 | D-4 | Coolify deployment assumed to be manual console work | platform runbooks | Credential for API automation exists in this repository | **Obsolete.** Out of scope for PR #40, which touched only this repository; closed instead by PR #41, which added the API driver and committed spec. The platform runbooks still describe console work and are now the fallback path, not the standard one. |
 | D-5 | Migration 001 allocator schema incident open | prior narrative | Fixed and merged in platform PR #108 | **Root cause closed in code**, recorded in PR #40. Narrower than this row's original "Closed": #108's body states "No production changes in this PR", so the live disposition of the misplaced copy is `UNVERIFIED`. |
 

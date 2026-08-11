@@ -14,6 +14,7 @@ makes no writes on a second run, and no operation can reach a removal endpoint.
 from __future__ import annotations
 
 import copy
+import datetime
 import io
 import json
 import re
@@ -2124,7 +2125,10 @@ class EntryPointTests(unittest.TestCase):
         stops a destructive operation being offered by a later edit.
         """
 
-        self.assertEqual(set(driver.OPERATIONS), {"inspect", "reconcile", "deploy", "status"})
+        self.assertEqual(
+            set(driver.OPERATIONS),
+            {"inspect", "reconcile", "deploy", "status", "verify", "diagnose"},
+        )
         workflow = (
             Path(driver.ROOT) / ".github" / "workflows" / "coolify-deploy.yml"
         ).read_text(encoding="utf-8")
@@ -2140,6 +2144,1104 @@ class EntryPointTests(unittest.TestCase):
 
     def test_an_absent_poll_setting_uses_the_default(self) -> None:
         self.assertEqual(driver.positive_integer({}, driver.POLL_VARIABLE, 10), 10)
+
+
+class ReadinessInstance(FakeInstance):
+    """A Coolify instance that also answers the scheduled-task endpoints.
+
+    It models the two facts that shape the driver. There is no execute route,
+    matching the deployed instance, so a POST to it is refused; and the
+    scheduler only runs enabled tasks, so an execution appears only while the
+    task is armed. A fake that produced an execution regardless would let a
+    driver that never armed anything pass.
+    """
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(with_application=True, **kwargs)
+        self.tasks: list[dict] = []
+        self.executions: list[dict] = []
+        self.next_execution: dict | None = {
+            "status": "success",
+            "message": "ADAPTENG_READY 200\n",
+        }
+        # A real execution does not appear the instant the task is armed, and
+        # its first observable state is not its last. Both delays are modelled
+        # so a driver that reads once and believes the answer is caught.
+        self.reveal_after_polls = 0
+        self.running_for_polls = 0
+        # -1 refuses every disarm; a positive count refuses that many and then
+        # lets one through, which is the transient failure the retry exists for.
+        self.refuse_disarm_times = 0
+        self.refuse_arm = False
+        self.execution_polls = 0
+        # The live instance returns every execution with id null and a distinct
+        # created_at. Minting rising ids here is exactly what let a driver that
+        # keyed novelty on id pass this suite and then fail to see four real
+        # executions against the real thing. The id-bearing variant stays
+        # available so both shapes are covered.
+        self.mint_execution_ids = False
+        self.execution_clock = 0
+        # Extra rows revealed in the same poll as next_execution.
+        self.also_reveal: list[dict] = []
+        # None models the 400 "Application is not running." the endpoint returns
+        # when no container is up -- the same condition the scheduler skips on.
+        self.logs: str | None = "listening on 8081\n"
+
+    def armed_task(self) -> dict | None:
+        """The task the scheduler would actually run.
+
+        Coolify dispatches a task only when it is enabled *and* its cron
+        matches the current minute. A fake that checked only the flag would let
+        a driver that armed the flag but left the leap-day schedule pass, and
+        that driver would hang against the real instance.
+        """
+
+        for task in self.tasks:
+            if task.get("name") != driver.READINESS_TASK_NAME:
+                continue
+            if task.get("enabled") and task.get("frequency") == driver.READINESS_ARMED_FREQUENCY:
+                return task
+        return None
+
+    def _get(self, path, body, query):
+        if re.fullmatch(r"/applications/([^/]+)/logs", path):
+            if self.logs is None:
+                return 400, {"message": "Application is not running."}
+            return 200, {"logs": self.logs}
+        match = re.fullmatch(r"/applications/([^/]+)/scheduled-tasks", path)
+        if match:
+            return 200, copy.deepcopy(self.tasks)
+        match = re.fullmatch(
+            r"/applications/([^/]+)/scheduled-tasks/([^/]+)/executions", path
+        )
+        if match:
+            self.execution_polls += 1
+            if (
+                self.armed_task() is not None
+                and self.next_execution is not None
+                and self.execution_polls > self.reveal_after_polls
+            ):
+                # A slow poll can reveal more than one run at once: the
+                # scheduler fires once a minute and this polls faster.
+                for pending in [self.next_execution, *self.also_reveal]:
+                    entry = dict(pending)
+                    self.execution_clock += 1
+                    entry.setdefault(
+                        "created_at",
+                        f"2026-08-11T21:{self.execution_clock:02d}:00.000000Z",
+                    )
+                    if self.mint_execution_ids:
+                        numbers = [
+                            int(item["id"])
+                            for item in self.executions
+                            if item.get("id")
+                        ]
+                        entry["id"] = (max(numbers) if numbers else 0) + 1
+                    else:
+                        entry["id"] = None
+                    self.executions.append(entry)
+                self.also_reveal = []
+                self.next_execution = None
+            rows = copy.deepcopy(self.executions)
+            if rows and self.running_for_polls > 0:
+                self.running_for_polls -= 1
+                rows[-1] = dict(rows[-1], status="running", message="")
+            # The live instance returns executions newest first. A fake that
+            # returned them oldest first would let a driver that reads rows[-1]
+            # pass here and read the oldest row against the real thing.
+            rows.reverse()
+            return 200, rows
+        return super()._get(path, body, query)
+
+    def _post(self, path, body, query):
+        match = re.fullmatch(r"/applications/([^/]+)/scheduled-tasks", path)
+        if match:
+            record = dict(body)
+            record["uuid"] = f"task-{len(self.tasks) + 1}"
+            self.tasks.append(record)
+            return 201, copy.deepcopy(record)
+        # The deployed instance has no execute route and answers the generic
+        # 404 there. Modelling that is what stops the driver quietly relying
+        # on an endpoint the real instance does not have.
+        if re.fullmatch(r"/applications/([^/]+)/scheduled-tasks/([^/]+)/execute", path):
+            return 404, {"message": "Not found.", "docs": "https://coolify.io/docs"}
+        return super()._post(path, body, query)
+
+    def _patch(self, path, body, query):
+        match = re.fullmatch(r"/applications/([^/]+)/scheduled-tasks/([^/]+)", path)
+        if match:
+            for task in self.tasks:
+                if task.get("uuid") != match.group(2):
+                    continue
+                arming = bool(body.get("enabled"))
+                # A write that returns 200 and changes nothing is the failure
+                # shape worth modelling: it is indistinguishable from success
+                # to anything that does not read back.
+                if arming and self.refuse_arm:
+                    return 200, copy.deepcopy(task)
+                if not arming and self.refuse_disarm_times != 0:
+                    if self.refuse_disarm_times > 0:
+                        self.refuse_disarm_times -= 1
+                    return 200, copy.deepcopy(task)
+                task.update(body)
+                return 200, copy.deepcopy(task)
+            return 404, {"message": "not found"}
+        return super()._patch(path, body, query)
+
+
+class VerifyTests(unittest.TestCase):
+    """The in-container readiness probe.
+
+    Every network vantage point was ruled out by measurement: the readiness
+    runner sits on a Docker network holding the managed database but none of
+    the applications. Coolify's scheduled task reaches inside the container
+    without SSH, a Docker socket, or a network change, so these tests cover the
+    one instrument that can answer the question.
+    """
+
+    def real_spec(self):
+        return driver.load_spec(driver.spec_path(RESOURCE))
+
+    def run_verify(self, instance, spec=None):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_verify(
+                instance, spec or self.real_spec(), sleep=lambda _seconds: None
+            )
+        return code, buffer.getvalue()
+
+    def test_a_two_hundred_from_inside_the_container_is_the_database_proof(self) -> None:
+        instance = ReadinessInstance()
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("RESULT verify ok ready=yes answer=200", output)
+
+    def test_the_task_is_returned_to_rest_after_a_successful_probe(self) -> None:
+        """Arming is temporary, and the resting state is both guards restored."""
+
+        instance = ReadinessInstance()
+        code, _ = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertEqual(len(instance.tasks), 1)
+        at_rest = instance.tasks[0]
+        self.assertIs(at_rest["enabled"], False)
+        self.assertEqual(at_rest["frequency"], driver.READINESS_TASK_FREQUENCY)
+
+    def test_the_task_is_returned_to_rest_even_when_the_probe_fails(self) -> None:
+        """A failed probe must not leave a job firing every minute."""
+
+        instance = ReadinessInstance()
+        instance.next_execution = {"status": "success", "message": "ADAPTENG_READY 503"}
+        code, _ = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIs(instance.tasks[0]["enabled"], False)
+        self.assertEqual(
+            instance.tasks[0]["frequency"], driver.READINESS_TASK_FREQUENCY
+        )
+
+    def test_a_task_that_will_not_disarm_is_reported_loudly_and_fails(self) -> None:
+        """The one outcome that leaves something running must be unmissable.
+
+        Reporting ready=yes here would be the worst case: a true readiness
+        answer paid for with a job nobody knows is running.
+        """
+
+        instance = ReadinessInstance()
+        instance.refuse_disarm_times = -1
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("COULD NOT DISARM", output)
+        self.assertIn("ready=undetermined reason=task_left_armed", output)
+        self.assertNotIn("RESULT verify ok", output)
+
+    def test_a_disarm_that_fails_once_is_retried(self) -> None:
+        """Leaving a job armed because one write was dropped is not acceptable.
+
+        The retry is the difference between a transient API failure costing
+        nothing and it costing a probe that fires every minute until someone
+        notices.
+        """
+
+        instance = ReadinessInstance()
+        instance.refuse_disarm_times = 2
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("did not take effect", output)
+        self.assertIn("returned to rest", output)
+        self.assertIs(instance.tasks[0]["enabled"], False)
+
+    def test_an_arming_write_that_does_not_take_effect_stops_the_run(self) -> None:
+        """Waiting for an execution that cannot happen wastes the budget and
+        then reports undetermined, which reads like a gateway problem. It is
+        not one, so it is refused up front instead."""
+
+        instance = ReadinessInstance()
+        instance.refuse_arm = True
+        with self.assertRaises(driver.Abort) as raised:
+            self.run_verify(instance)
+        self.assertIn("did not arm", str(raised.exception))
+
+    def test_a_disabled_task_on_the_armed_schedule_is_not_at_rest(self) -> None:
+        """Half-disarmed is the state a partial failure leaves behind.
+
+        Rest is both guards restored. Treating the flag alone as rest would
+        let the leap-day schedule quietly stay off, removing the second line of
+        defence for every later run without any visible symptom.
+        """
+
+        instance = ReadinessInstance()
+        instance.tasks.append(
+            {
+                "uuid": "task-old",
+                "name": driver.READINESS_TASK_NAME,
+                "command": driver.readiness_command(self.real_spec()),
+                "enabled": False,
+                "frequency": driver.READINESS_ARMED_FREQUENCY,
+            }
+        )
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("disarmed and corrected", output)
+        self.assertEqual(
+            instance.tasks[0]["frequency"], driver.READINESS_TASK_FREQUENCY
+        )
+
+    def test_a_task_left_armed_by_an_earlier_run_is_disarmed_first(self) -> None:
+        """The next run heals what an interrupted one left behind."""
+
+        instance = ReadinessInstance()
+        instance.tasks.append(
+            {
+                "uuid": "task-old",
+                "name": driver.READINESS_TASK_NAME,
+                "command": driver.readiness_command(self.real_spec()),
+                "enabled": True,
+                "frequency": driver.READINESS_ARMED_FREQUENCY,
+            }
+        )
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("disarmed and corrected", output)
+        self.assertIs(instance.tasks[0]["enabled"], False)
+
+    def test_the_execute_endpoint_is_never_called(self) -> None:
+        """It does not exist on the deployed instance.
+
+        The route answers the generic 404 while its sibling /executions answers
+        401, which is how the absence was established without presenting a
+        credential. A driver that called it would fail against production while
+        passing against a permissive fake.
+        """
+
+        instance = ReadinessInstance()
+        self.run_verify(instance)
+        self.assertEqual([p for _, p in instance.calls if p.endswith("/execute")], [])
+
+    def test_a_five_oh_three_is_reported_as_the_gateways_own_verdict(self) -> None:
+        instance = ReadinessInstance()
+        instance.next_execution = {"status": "success", "message": "ADAPTENG_READY 503"}
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("RESULT verify failed ready=no answer=503", output)
+        self.assertIn("gateway's own verdict", output)
+
+    def test_a_transport_failure_inside_the_container_is_reported_by_name(self) -> None:
+        instance = ReadinessInstance()
+        instance.next_execution = {
+            "status": "success",
+            "message": "ADAPTENG_READY URLError",
+        }
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("RESULT verify failed ready=no answer=URLError", output)
+
+    def test_output_without_the_marker_is_undetermined_not_unready(self) -> None:
+        """A missing answer is not a negative answer.
+
+        This is the distinction the whole workstream exists to keep: an absent
+        verdict must not be reported as a refusal.
+        """
+
+        instance = ReadinessInstance()
+        instance.next_execution = {
+            "status": "failed",
+            "message": "sh: 1: python: not found",
+        }
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("ready=undetermined reason=no_marker", output)
+        self.assertNotIn("ready=no ", output)
+
+    def test_an_execution_that_never_appears_is_undetermined(self) -> None:
+        instance = ReadinessInstance()
+        instance.next_execution = None
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("ready=undetermined reason=no_execution", output)
+
+    def test_a_stale_execution_is_not_mistaken_for_this_run(self) -> None:
+        """The previous run's answer must not be read as this run's answer."""
+
+        instance = ReadinessInstance()
+        instance.tasks.append(
+            {
+                "uuid": "task-old",
+                "name": driver.READINESS_TASK_NAME,
+                "command": driver.readiness_command(self.real_spec()),
+                "enabled": False,
+            }
+        )
+        instance.executions.append(
+            {
+                "id": None,
+                "status": "success",
+                "created_at": "2026-08-11T20:00:00.000000Z",
+                "message": "ADAPTENG_READY 200",
+            }
+        )
+        instance.next_execution = None
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("ready=undetermined reason=no_execution", output)
+
+    def test_a_stale_execution_does_not_end_the_wait_for_a_slow_one(self) -> None:
+        """The previous run's row must not be read as this run's answer.
+
+        This is the sharper form of the stale-row case: a driver that stops at
+        the newest row it can see will stop at the old one, before the new one
+        has appeared, and report an absent answer for a probe that did in fact
+        answer 200.
+        """
+
+        instance = ReadinessInstance()
+        instance.tasks.append(
+            {
+                "uuid": "task-old",
+                "name": driver.READINESS_TASK_NAME,
+                "command": driver.readiness_command(self.real_spec()),
+                "enabled": False,
+            }
+        )
+        instance.executions.append(
+            {
+                "id": None,
+                "status": "success",
+                "created_at": "2026-08-11T20:00:00.000000Z",
+                "message": "ADAPTENG_READY 503",
+            }
+        )
+        instance.reveal_after_polls = 4
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("RESULT verify ok ready=yes answer=200", output)
+
+    def test_a_running_execution_is_waited_out_rather_than_read(self) -> None:
+        """An execution that has started has no verdict yet.
+
+        Reading its empty output would report a missing marker, which is the
+        undetermined verdict, for a probe that simply had not finished.
+        """
+
+        instance = ReadinessInstance()
+        instance.running_for_polls = 3
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("RESULT verify ok ready=yes answer=200", output)
+
+    def test_an_execution_without_an_id_is_still_seen(self) -> None:
+        """The shape the live instance actually returns.
+
+        Every execution came back with id null. Keying novelty on a rising id
+        made all of them compare equal to each other and to the baseline, so
+        four probe runs that each answered 200 were reported as no execution at
+        all -- this operation committing the exact conflation of "not ready"
+        with "could not tell" that it exists to prevent.
+        """
+
+        instance = ReadinessInstance()
+        instance.mint_execution_ids = False
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("RESULT verify ok ready=yes answer=200", output)
+        self.assertTrue(
+            all(row["id"] is None for row in instance.executions),
+            "the fake stopped modelling the live shape",
+        )
+
+    def test_an_instance_that_does_number_its_executions_also_works(self) -> None:
+        """Fixing the null-id case must not break the case that has ids."""
+
+        instance = ReadinessInstance()
+        instance.mint_execution_ids = True
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("RESULT verify ok ready=yes answer=200", output)
+
+    def test_a_repeated_answer_is_told_apart_from_the_one_before_it(self) -> None:
+        """Consecutive runs produce identical messages, so content cannot identify.
+
+        The live probe answers ADAPTENG_READY 200 every single time. With no id
+        and an identical message, created_at is the only thing separating this
+        run's answer from the last one's, and the count is the only thing left
+        if created_at ties.
+        """
+
+        instance = ReadinessInstance()
+        instance.executions.append(
+            {
+                "id": None,
+                "status": "success",
+                "created_at": "2026-08-11T20:00:00.000000Z",
+                "message": "ADAPTENG_READY 200",
+            }
+        )
+        instance.reveal_after_polls = 3
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("RESULT verify ok ready=yes answer=200", output)
+        self.assertEqual(len(instance.executions), 2)
+
+    def test_an_execution_that_nothing_identifies_is_not_guessed_at(self) -> None:
+        """A row that cannot be told apart is not an answer.
+
+        With neither id nor created_at, the count still proves something ran,
+        but nothing says which row it is. Reporting the newest-looking row
+        would present a guess as a measurement -- and it would report the
+        stale row, since order is all that is left to sort by.
+        """
+
+        instance = ReadinessInstance()
+        instance.executions.append(
+            {"id": None, "created_at": None, "status": "success", "message": "old"}
+        )
+        instance.next_execution = {
+            "id": None,
+            "created_at": None,
+            "status": "success",
+            "message": "ADAPTENG_READY 200",
+        }
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn(
+            "ready=undetermined reason=unidentifiable_execution", output
+        )
+        self.assertNotIn("ready=no ", output)
+
+    def test_the_newest_of_two_simultaneous_executions_is_the_answer(self) -> None:
+        """Two runs can appear between polls, and only the later one is current.
+
+        The scheduler fires once a minute while this polls every ten seconds,
+        so one slow poll can reveal two new rows at once. Both are new, so both
+        pass the novelty filter and only created_at separates them.
+
+        Both orderings are exercised because position must not be standing in
+        for recency. The live instance happens to return rows newest first, but
+        nothing in the contract says so, and a driver that reads the first or
+        the last row would pass under one ordering and read the wrong answer
+        under the other.
+        """
+
+        older = {
+            "status": "success",
+            "created_at": "2026-08-11T21:29:00.000000Z",
+            "message": "ADAPTENG_READY 503",
+        }
+        newer = {
+            "status": "success",
+            "created_at": "2026-08-11T21:30:00.000000Z",
+            "message": "ADAPTENG_READY 200",
+        }
+        for label, batch in (
+            ("older first", [older, newer]),
+            ("newer first", [newer, older]),
+        ):
+            with self.subTest(order=label):
+                instance = ReadinessInstance()
+                instance.next_execution = dict(batch[0])
+                instance.also_reveal = [dict(batch[1])]
+                code, output = self.run_verify(instance)
+                self.assertEqual(code, driver.EXIT_OK)
+                self.assertIn("RESULT verify ok ready=yes answer=200", output)
+
+    def test_the_wait_is_bounded_and_ends_in_undetermined(self) -> None:
+        """A probe that never finishes must not poll forever, or lie."""
+
+        instance = ReadinessInstance()
+        instance.running_for_polls = 10_000
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("ready=undetermined", output)
+        self.assertLessEqual(
+            instance.execution_polls, driver.READINESS_EXECUTION_ATTEMPTS + 1
+        )
+
+    def test_the_task_is_created_disabled_and_can_never_fire_on_its_own(self) -> None:
+        """Disabled is the guard; the rare date is only a second line.
+
+        Coolify's scheduler selects tasks with where('enabled', true), so a
+        disabled task is never dispatched whatever its frequency says. The
+        frequency still has to be a valid expression, because the API builds a
+        next run date to validate it and refuses one that has none -- which is
+        how an unmatchable date like February 31st is rejected, as the live
+        instance demonstrated.
+        """
+
+        instance = ReadinessInstance()
+        self.run_verify(instance)
+        self.assertEqual(len(instance.tasks), 1)
+        created = instance.tasks[0]
+        self.assertIs(created["enabled"], False)
+        self.assertEqual(created["frequency"], driver.READINESS_TASK_FREQUENCY)
+        # February 29th: valid, and only in leap years.
+        self.assertEqual(driver.READINESS_TASK_FREQUENCY.split()[2:4], ["29", "2"])
+
+    def test_the_frequency_is_a_date_that_can_actually_occur(self) -> None:
+        """The live instance rejected February 31st, and this is why.
+
+        Coolify validates a cron expression by building its next run date, so
+        an expression naming a date that never occurs is refused outright and
+        the probe cannot be created at all. Field-range checking would not have
+        caught it: 31 is a legal day and 2 is a legal month. Only asking
+        whether the pair can ever coincide catches it.
+        """
+
+        fields = driver.READINESS_TASK_FREQUENCY.split()
+        self.assertEqual(len(fields), 5)
+        day, month = int(fields[2]), int(fields[3])
+        start = datetime.date.today()
+        horizon = start.replace(year=start.year + 8)
+        cursor, found = start, False
+        while cursor < horizon:
+            if cursor.day == day and cursor.month == month:
+                found = True
+                break
+            cursor += datetime.timedelta(days=1)
+        self.assertTrue(
+            found,
+            f"{driver.READINESS_TASK_FREQUENCY} names a date that never occurs; "
+            "Coolify will refuse it and the probe will never be created",
+        )
+
+    def test_the_command_comes_from_the_spec_and_carries_no_single_quote(self) -> None:
+        """Coolify wraps the command in sh -c '...' and escapes single quotes.
+
+        A command containing none cannot be broken by that wrapping, so the
+        absence is a property worth asserting rather than a coincidence. The
+        same goes for $ and backtick, which sh would expand inside the double
+        quotes the command does use, and for the newline: the first version of
+        this command spanned several lines and the API answered HTTP 500 when
+        asked to store it.
+        """
+
+        spec = self.real_spec()
+        spec["network"]["internal_port"] = 9099
+        command = driver.readiness_command(spec)
+        self.assertIn("http://127.0.0.1:9099/ready", command)
+        self.assertNotIn("'", command)
+        self.assertNotIn("$", command)
+        self.assertNotIn("`", command)
+        self.assertNotIn("\n", command)
+        self.assertIn(driver.READINESS_MARKER, command)
+
+    def test_the_probe_reports_a_status_rather_than_raising_on_it(self) -> None:
+        """503 is the interesting answer, and urlopen raises on it by default.
+
+        /ready returns 503 when it cannot reach the database, which is the
+        condition this operation exists to detect. A probe that raised there
+        would report undetermined for the one case it was built to see. This
+        runs the exact command against a real server to check it does not.
+        """
+
+        import http.server
+        import subprocess
+        import sys as sys_module
+        import threading
+
+        answers = {}
+        for status in (200, 503, 404):
+            class Handler(http.server.BaseHTTPRequestHandler):
+                code = status
+
+                def do_GET(self):
+                    self.send_response(self.code)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+
+                def log_message(self, *_args):
+                    pass
+
+            server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                spec = self.real_spec()
+                spec["network"]["internal_port"] = server.server_port
+                command = driver.readiness_command(spec)
+                # Recover the argument vector the container would receive.
+                code_start = command.index('"') + 1
+                code_end = command.index('"', code_start)
+                argv = [
+                    sys_module.executable,
+                    "-c",
+                    command[code_start:code_end],
+                    *command[code_end + 1 :].split(),
+                ]
+                result = subprocess.run(
+                    argv, capture_output=True, text=True, timeout=30
+                )
+            finally:
+                server.shutdown()
+            answers[status] = result.stdout.strip()
+
+        for status, line in answers.items():
+            self.assertEqual(line, f"{driver.READINESS_MARKER} {status}")
+            self.assertEqual(driver.read_marker(line), str(status))
+
+    def test_the_probe_targets_ready_even_when_the_gate_polls_health(self) -> None:
+        """The probe must not inherit the container gate's path.
+
+        health_check.path is /health today, and /health touches nothing. Only
+        /ready opens a database connection, which is the whole point of this
+        operation, so a spec change must not be able to silently retarget it
+        at an endpoint that proves nothing.
+        """
+
+        spec = self.real_spec()
+        spec["health_check"]["path"] = "/health"
+        self.assertIn("/ready", driver.readiness_command(spec))
+        self.assertNotIn("/health", driver.readiness_command(spec))
+
+    def test_a_drifted_command_is_rewritten_and_read_back(self) -> None:
+        instance = ReadinessInstance()
+        instance.tasks.append(
+            {
+                "uuid": "task-old",
+                "name": driver.READINESS_TASK_NAME,
+                "command": "echo something else",
+                "enabled": True,
+            }
+        )
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("disarmed and corrected", output)
+        self.assertEqual(len(instance.tasks), 1)
+        self.assertEqual(
+            instance.tasks[0]["command"], driver.readiness_command(self.real_spec())
+        )
+
+    def test_a_write_that_does_not_hold_stops_the_run(self) -> None:
+        instance = ReadinessInstance()
+        instance.tasks.append(
+            {
+                "uuid": "task-old",
+                "name": driver.READINESS_TASK_NAME,
+                "command": "echo something else",
+                "enabled": True,
+                "frequency": driver.READINESS_ARMED_FREQUENCY,
+            }
+        )
+
+        def refuse(path, body, query):
+            return 200, {}
+
+        instance._patch = refuse
+        with self.assertRaises(driver.Abort) as raised:
+            self.run_verify(instance)
+        self.assertIn("did not come to rest", str(raised.exception))
+
+    def test_a_correct_task_is_reused_rather_than_duplicated(self) -> None:
+        instance = ReadinessInstance()
+        instance.tasks.append(
+            {
+                "uuid": "task-old",
+                "name": driver.READINESS_TASK_NAME,
+                "command": driver.readiness_command(self.real_spec()),
+                "enabled": False,
+                "frequency": driver.READINESS_TASK_FREQUENCY,
+            }
+        )
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("already at rest", output)
+        self.assertEqual(len(instance.tasks), 1)
+
+    def test_two_tasks_of_the_same_name_are_not_resolved_by_guessing(self) -> None:
+        instance = ReadinessInstance()
+        for index in (1, 2):
+            instance.tasks.append(
+                {
+                    "uuid": f"task-{index}",
+                    "name": driver.READINESS_TASK_NAME,
+                    "command": "echo",
+                    "enabled": False,
+                }
+            )
+        with self.assertRaises(driver.Abort) as raised:
+            self.run_verify(instance)
+        self.assertIn("ambiguous", str(raised.exception))
+
+    def test_an_absent_application_is_a_failure_not_a_readiness_verdict(self) -> None:
+        instance = ReadinessInstance()
+        instance.applications = []
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("RESULT verify failed application=absent", output)
+
+    def test_no_removal_is_ever_attempted(self) -> None:
+        instance = ReadinessInstance()
+        self.run_verify(instance)
+        self.assertEqual([m for m, _ in instance.calls if m == "DELETE"], [])
+
+    def test_the_marker_reader_refuses_to_invent_a_verdict(self) -> None:
+        self.assertEqual(driver.read_marker("ADAPTENG_READY 200"), "200")
+        self.assertEqual(driver.read_marker("noise\nADAPTENG_READY 503\nmore"), "503")
+        self.assertIsNone(driver.read_marker("ADAPTENG_READY"))
+        self.assertIsNone(driver.read_marker(""))
+        self.assertIsNone(driver.read_marker(None))
+        self.assertIsNone(driver.read_marker({"status": 200}))
+
+
+class ForeignTextRedactionTests(unittest.TestCase):
+    """Container output is the one thing this tool prints that it did not build.
+
+    The registered-value list cannot protect it, because a traceback can carry
+    a credential this process never saw. These cases are the shapes that
+    actually occur in a database failure, plus the ones a shape-based masker is
+    most likely to get wrong.
+    """
+
+    def setUp(self) -> None:
+        driver.reset_redactions()
+
+    def tearDown(self) -> None:
+        driver.reset_redactions()
+
+    def test_a_password_inside_a_connection_string_is_masked(self) -> None:
+        text, masked = driver.redact_foreign_text(
+            "could not connect: postgresql://ai_gateway:hunter2swordfish@db:5432/x"
+        )
+        self.assertNotIn("hunter2swordfish", text)
+        self.assertIn("postgresql://ai_gateway:[redacted]@db:5432/x", text)
+        self.assertGreaterEqual(masked, 1)
+
+    def test_the_user_and_host_survive_so_the_error_stays_readable(self) -> None:
+        """Masking that removes the diagnosis defeats its own purpose."""
+
+        text, _ = driver.redact_foreign_text(
+            "FATAL: postgresql://ai_gateway:hunter2swordfish@db:5432/adapteng_ops"
+        )
+        self.assertIn("ai_gateway", text)
+        self.assertIn("db:5432", text)
+        self.assertIn("FATAL", text)
+
+    def test_labelled_credentials_are_masked_with_the_label_kept(self) -> None:
+        # Each case carries its own value and its own label. Sharing one value
+        # across the cases made three of the four assertions vacuous: the value
+        # was absent because it had never been in that line, not because it was
+        # masked.
+        for line, value, label in (
+            ("PGPASSWORD=examplealpha", "examplealpha", "PGPASSWORD"),
+            ("password: examplebravo", "examplebravo", "password"),
+            ('api_key="examplecharlie"', "examplecharlie", "api_key"),
+            ("Authorization: Basic exampledelta", "exampledelta", "Authorization"),
+        ):
+            with self.subTest(line=line):
+                text, masked = driver.redact_foreign_text(line)
+                self.assertNotIn(value, text)
+                self.assertIn(label, text)
+                self.assertIn("[redacted]", text)
+                self.assertGreaterEqual(masked, 1)
+
+    def test_a_long_dense_run_is_masked_even_unlabelled(self) -> None:
+        """The case that matters: a secret whose shape is all there is to go on.
+
+        A masker that only knows labels fails exactly when the log line was
+        written by something that did not label it.
+        """
+
+        text, masked = driver.redact_foreign_text(
+            "unexpected token tokn.a0AfB_byDx7KqR3nVpZ2mLwT8sQ4hJc6XbN1 rejected"
+        )
+        self.assertNotIn("tokn.a0AfB_byDx7KqR3nVpZ2mLwT8sQ4hJc6XbN1", text)
+        self.assertIn("unexpected token", text)
+        self.assertIn("rejected", text)
+        self.assertGreaterEqual(masked, 1)
+
+    def test_the_long_names_worth_reading_a_log_for_survive(self) -> None:
+        """The discriminator's whole job, stated as the cases that decide it.
+
+        Length is not the signal. An exception class and a dotted module path
+        are long and dense-looking, and they are the two things a failure log
+        is actually read for. Masking them leaves a redactor that is safe and
+        useless.
+
+        psycopg2.OperationalError is here because it broke the first
+        discriminator: scoring distinct characters over length put it at 0.68,
+        above a threshold set at 0.65, so the redactor masked the exception
+        class and left the diagnosis unreadable.
+        """
+
+        for candidate in (
+            "sqlalchemy.exc.OperationalError",
+            "psycopg2.OperationalError",
+            "psycopg2.errors.InsufficientPrivilege",
+            "asyncpg.exceptions.InvalidPasswordError",
+            "django.db.utils.OperationalError",
+            "urllib3.exceptions.NewConnectionError",
+            "adapteng.ai_gateway.http.ai_gateway.http_access",
+            "adapteng-readiness-probe-application",
+            "AI_GATEWAY_PG_DSN_HOST_VARIABLE_NAME",
+            "ConnectionRefusedError.errno.ECONNREFUSED",
+        ):
+            with self.subTest(candidate=candidate):
+                self.assertFalse(driver.looks_like_a_key(candidate))
+
+        # The prefixes below are deliberately synthetic. Earlier revisions
+        # used real ones and GitHub push protection correctly refused the
+        # push, because a fixture credential is shape-identical to a real one.
+        # That is this redactor's own argument turned back on its own tests,
+        # so the fixtures conform rather than the scanner being told to ignore
+        # them. Nothing is lost: the rule never reads a prefix, only the
+        # density of the body.
+        for candidate in (
+            "tokn.a0AfB_byDx7KqR3nVpZ2mLwT8sQ4hJc6XbN1",
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+            "gAAAAABm3xQ7pLkR2vN8sT4wY6zC1bD5eF9hJ0mK",
+            "opaque-9Xk2Lm4Np7Qr1Tv5Wy8Zb3Cd6Fg0Hj",
+            "opaque_16C7e42F292c6912E7710c838347Ae178B4a",
+            "svc-2401278980-2402343Hqr8Xk2Lm4Np7Qr1",
+            "a3f5e9c1b2d4a6f8e0c2b4d6a8f0e2c4b6d8a0f2",
+            # A digest with a vowel every second character. Its longest
+            # consonant run is 2, so the run rule does not see it at all and
+            # only the all-hex rule catches it. The previous digest here has a
+            # run of 7, which meant both rules fired and deleting the all-hex
+            # rule broke nothing -- the rule was load-bearing and untested.
+            "deadbeefcafedeadbeefcafedeadbeefcafedead",
+        ):
+            with self.subTest(candidate=candidate):
+                self.assertTrue(driver.looks_like_a_key(candidate))
+
+    def test_a_short_dense_token_is_left_alone_on_purpose(self) -> None:
+        """The length floor is a policy, not an accident, so it is stated here.
+
+        Nothing in the measured corpus of real names needs the floor to
+        survive, so no other test exercises it and removing it broke nothing.
+        It is kept because the trade is asymmetric below 24 characters: short
+        dense strings are overwhelmingly identifiers, abbreviations and hashes
+        of nothing, while a credential short enough to qualify would be a weak
+        one. Masking them would cost readability everywhere to protect almost
+        nothing.
+        """
+
+        candidate = "x1B4gT7qZ9"
+        self.assertGreaterEqual(
+            driver.longest_nonvowel_run(candidate), driver.KEYLIKE_NONVOWEL_RUN
+        )
+        self.assertFalse(driver.looks_like_a_key(candidate))
+
+    def test_an_identifier_this_tool_resolved_survives_the_shape_rule(self) -> None:
+        """Coolify mints uuids the way it mints secrets, so shape cannot judge.
+
+        The application uuid scores a consonant run of 11 and was masked inside
+        the container log -- while the line above printed it in the clear. That
+        protected nothing and destroyed the only thing that says which
+        application a log line came from.
+        """
+
+        uuid = "e13v7c6zjof7dmcpywqbyas3"
+        self.assertTrue(driver.looks_like_a_key(uuid))
+
+        masked_text, masked = driver.redact_foreign_text(f"container {uuid} started")
+        self.assertNotIn(uuid, masked_text)
+        self.assertEqual(masked, 1)
+
+        kept_text, kept = driver.redact_foreign_text(
+            f"container {uuid} started", known=(uuid,)
+        )
+        self.assertIn(uuid, kept_text)
+        self.assertEqual(kept, 0)
+
+    def test_an_exemption_cannot_unmask_a_labelled_credential(self) -> None:
+        """The allowlist is one-directional or it is a hole.
+
+        Exempting a span suppresses the shape rule only. If a caller passed a
+        real secret as a known identifier -- by mistake or otherwise -- the
+        labelled patterns still mask it, so the exemption can never be used to
+        widen what gets printed.
+        """
+
+        example_value = "examplekeymaterialexamplekeymaterial"
+        text, masked = driver.redact_foreign_text(
+            f"api_key={example_value}", known=(example_value,)
+        )
+        self.assertNotIn(example_value, text)
+        self.assertIn("[redacted]", text)
+        self.assertGreaterEqual(masked, 1)
+
+    def test_ordinary_prose_is_left_alone(self) -> None:
+        """Over-masking is a real cost, not a free safety margin.
+
+        A redactor that eats the message is one that gets switched off.
+        """
+
+        message = (
+            "2026-08-11T21:30:00Z readiness check failed: connection refused "
+            "after 5 seconds, retrying"
+        )
+        text, masked = driver.redact_foreign_text(message)
+        self.assertEqual(text, message)
+        self.assertEqual(masked, 0)
+
+    def test_a_registered_value_is_masked_even_without_a_credential_shape(self) -> None:
+        driver.register_redaction("plainword")
+        text, _ = driver.redact_foreign_text("the value plainword appeared")
+        self.assertNotIn("plainword", text)
+
+    def test_the_count_reports_masking_so_an_eaten_message_is_visible(self) -> None:
+        """The count is what distinguishes "nothing sensitive" from "all of it"."""
+
+        _, none_masked = driver.redact_foreign_text("all clear")
+        _, some_masked = driver.redact_foreign_text(
+            "token=exampleecho password=examplefoxtrot"
+        )
+        self.assertEqual(none_masked, 0)
+        self.assertGreaterEqual(some_masked, 2)
+
+
+class DiagnoseTests(unittest.TestCase):
+    """diagnose reads and reports; it must never write.
+
+    It exists because "no execution was recorded" has several causes that look
+    identical from outside, and Coolify skips a task silently in two of them.
+    """
+
+    def setUp(self) -> None:
+        driver.reset_redactions()
+
+    def tearDown(self) -> None:
+        driver.reset_redactions()
+
+    def real_spec(self) -> dict:
+        return driver.load_spec(driver.spec_path(RESOURCE))
+
+    def run_diagnose(self, instance) -> tuple[int, str]:
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_diagnose(instance, self.real_spec())
+        return code, buffer.getvalue()
+
+    def test_it_writes_nothing(self) -> None:
+        instance = ReadinessInstance()
+        self.run_diagnose(instance)
+        self.assertEqual(
+            [(method, path) for method, path in instance.calls if method != "GET"], []
+        )
+
+    def test_a_stopped_container_is_named_as_the_reason_a_probe_never_ran(self) -> None:
+        """The finding, not an error: it is the same predicate the scheduler uses."""
+
+        instance = ReadinessInstance()
+        instance.logs = None
+        code, output = self.run_diagnose(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("Application is not running", output)
+        self.assertIn("Coolify skips a scheduled task", output)
+
+    def test_the_dispatch_predicate_is_reported_from_the_status(self) -> None:
+        instance = ReadinessInstance()
+        instance.applications[0]["status"] = "exited:unhealthy"
+        code, output = self.run_diagnose(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("scheduler would dispatch a task for it: False", output)
+
+    def test_container_logs_are_masked_before_they_are_printed(self) -> None:
+        instance = ReadinessInstance()
+        instance.logs = (
+            "starting\nOperationalError: postgresql://ai_gateway:hunter2swordfish@db:5432/x\n"
+        )
+        code, output = self.run_diagnose(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertNotIn("hunter2swordfish", output)
+        self.assertIn("OperationalError", output)
+        self.assertIn("spans masked", output)
+
+    def test_the_application_uuid_survives_inside_its_own_log(self) -> None:
+        """The wiring, not the rule: diagnose must say what it resolved.
+
+        A Coolify uuid is shape-identical to a credential -- this one scores a
+        consonant run of 11 -- so the redactor masks it unless the caller says
+        it already knows it. diagnose prints that uuid in the clear two lines
+        earlier, so masking it inside the log protected nothing and removed the
+        only marker tying a log line to an application.
+        """
+
+        uuid = "e13v7c6zjof7dmcpywqbyas3"
+        instance = ReadinessInstance()
+        instance.applications[0]["uuid"] = uuid
+        instance.logs = (
+            f"container {uuid} bound 0.0.0.0:8081\n"
+            "unexpected tokn.a0AfB_byDx7KqR3nVpZ2mLwT8sQ4hJc6XbN1 rejected\n"
+        )
+        code, output = self.run_diagnose(instance)
+
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn(f"container {uuid} bound", output)
+        # The exemption is for this identifier only; an unknown dense run in
+        # the same text is still masked.
+        self.assertNotIn("tokn.a0AfB_byDx7KqR3nVpZ2mLwT8sQ4hJc6XbN1", output)
+        self.assertIn("1 credential-shaped spans masked", output)
+
+    def test_an_execution_message_is_masked_before_it_is_printed(self) -> None:
+        """An execution message is container output too.
+
+        It is the captured stdout and stderr of docker exec, so it can carry a
+        credential this process never registered, exactly as the container log
+        can.
+        """
+
+        instance = ReadinessInstance()
+        instance.tasks.append(
+            {
+                "uuid": "task-old",
+                "name": driver.READINESS_TASK_NAME,
+                "command": driver.readiness_command(self.real_spec()),
+                "enabled": False,
+            }
+        )
+        instance.executions.append(
+            {
+                "id": None,
+                "status": "failed",
+                "created_at": "2026-08-11T21:29:00.000000Z",
+                "message": "psycopg2.OperationalError PGPASSWORD=examplegolf denied",
+            }
+        )
+        code, output = self.run_diagnose(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertNotIn("examplegolf", output)
+        self.assertIn("OperationalError", output)
+
+    def test_an_absent_application_is_reported_rather_than_crashed_on(self) -> None:
+        instance = FakeInstance(with_application=False)
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_diagnose(instance, self.real_spec())
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("RESULT diagnose failed application=absent", buffer.getvalue())
+
+    def test_execution_history_is_reported_including_none(self) -> None:
+        instance = ReadinessInstance()
+        instance.tasks.append(
+            {
+                "uuid": "task-old",
+                "name": driver.READINESS_TASK_NAME,
+                "command": driver.readiness_command(self.real_spec()),
+                "enabled": False,
+                "frequency": driver.READINESS_TASK_FREQUENCY,
+            }
+        )
+        code, output = self.run_diagnose(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("executions ever recorded: 0", output)
 
 
 if __name__ == "__main__":

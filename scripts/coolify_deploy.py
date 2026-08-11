@@ -34,6 +34,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Iterable
 from pathlib import Path
 
 
@@ -55,7 +56,7 @@ TIMEOUT_VARIABLE = "DEPLOY_TIMEOUT_SECONDS"
 # in this process only for the length of one request.
 SUPPLY_PREFIX = "COOLIFY_SECRET_"
 
-OPERATIONS = ("inspect", "reconcile", "deploy", "status")
+OPERATIONS = ("inspect", "reconcile", "deploy", "status", "verify", "diagnose")
 FORBIDDEN_METHODS = frozenset({"DELETE"})
 
 # Coolify reports a deployment through these states. Anything outside the two
@@ -171,6 +172,131 @@ def redact(text: str) -> str:
     for value in _REDACTIONS:
         result = result.replace(value, "[redacted]")
     return BEARER_HEADER.sub("bearer [redacted]", result)
+
+
+# Container output is the one input this tool prints that it did not construct,
+# so the registered-value list cannot cover it: a traceback can carry a
+# credential this process never saw and therefore never registered. These
+# patterns mask by shape instead of by value, which is what makes them work on
+# an unknown secret.
+CREDENTIAL_SHAPES = (
+    # A DSN's password, between the first colon after the scheme and the @.
+    (re.compile(r"(?i)(://[^\s:/@]+:)[^\s@]+(@)"), r"\1[redacted]\2"),
+    # An auth header's value is a scheme followed by the credential, so masking
+    # one token would leave the credential in place. Everything after the label
+    # goes.
+    (
+        re.compile(r"(?im)^(.*?\b(?:authorization|auth)\s*[=:]\s*).+$"),
+        r"\1[redacted]",
+    ),
+    # key=value and key: value for the words that introduce a credential.
+    (
+        re.compile(
+            r"(?i)\b(pass|passwd|password|pgpassword|secret|token|api[_-]?key|"
+            r"access[_-]?key|private[_-]?key|credential)"
+            r"(\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|\S+)"
+        ),
+        r"\1\2[redacted]",
+    ),
+)
+
+# A run long and dense enough to be a key. Dots are inside the run because the
+# tokens that matter most here are dotted -- a JWT and a Google access token
+# both are -- and excluding them let exactly those through.
+DENSE_RUN = re.compile(r"[A-Za-z0-9+/=_.-]{24,}")
+HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+VOWELS = frozenset("aeiouAEIOU")
+# Measured over a corpus of real exception classes, dotted module paths and
+# real credential formats. The first attempt scored the ratio of distinct
+# characters to length and put the threshold at 0.65, on the claim that the
+# densest real name was psycopg2.errors.InsufficientPrivilege at 0.51. That was
+# an artifact of the corpus: psycopg2.OperationalError scores 0.68 and so was
+# masked, while a hex digest scores 0.375 and so was not. The two classes are
+# interleaved under that measure, so no threshold separates them.
+#
+# Consonant structure does separate them, because these names are built from
+# English words and credentials are not. Worst real name is 6
+# (asyncpg.exceptions.InvalidPasswordError); sparsest real credential is 7.
+KEYLIKE_NONVOWEL_RUN = 7
+
+
+def longest_nonvowel_run(text: str) -> int:
+    """The longest stretch with no vowel in it.
+
+    Words put a vowel in every few characters; random tokens do not. Anything
+    that is not a letter or a digit ends a run, so a separator does not join
+    two words into one apparent stretch.
+    """
+
+    best = 0
+    current = 0
+    for character in text:
+        if character in VOWELS or not character.isalnum():
+            current = 0
+            continue
+        current += 1
+        best = max(best, current)
+    return best
+
+
+def looks_like_a_key(candidate: str) -> bool:
+    """Decide whether a long run is a credential or just a long name.
+
+    Length is not the signal. ``psycopg2.OperationalError`` and
+    ``sqlalchemy.exc.OperationalError`` are long, dotted and dense-looking, and
+    they are exactly what a failure log is read for. Masking them leaves a
+    redactor that is safe and useless, which is a redactor that gets switched
+    off.
+    """
+
+    core = candidate.strip("._-")
+    if len(core) < 24:
+        return False
+    if all(character in HEX_DIGITS for character in core):
+        return True
+    return longest_nonvowel_run(core) >= KEYLIKE_NONVOWEL_RUN
+
+
+def redact_foreign_text(text: str, known: Iterable[str] = ()) -> tuple[str, int]:
+    """Mask credential-shaped spans in output this tool did not produce.
+
+    Returns the masked text and how many spans were masked, because a redactor
+    that quietly eats the error message is indistinguishable from one that
+    found nothing -- and the count is what tells the two apart without
+    disclosing what was removed.
+
+    Masking is by shape, so an unregistered secret is still caught. It is
+    deliberately eager: a hex digest is masked too. That is the correct trade
+    here. Losing an identifier costs a second query; printing a credential
+    cannot be undone.
+
+    ``known`` names strings the caller resolved itself and has already emitted
+    in the clear -- the application and task uuids. Coolify mints those the way
+    it mints secrets, so shape cannot tell them apart, and measuring said so:
+    the application uuid scores a consonant run of 11. Masking them hid the one
+    identifier that says which application a log line came from, while the line
+    above printed it unmasked, so nothing was protected and the correlation was
+    lost. An exemption only ever suppresses the shape rule; a span that a
+    labelled pattern already matched stays masked even if it is listed here, so
+    this cannot be used to unmask a real secret.
+    """
+
+    result = redact(text)
+    masked = 0
+    for pattern, replacement in CREDENTIAL_SHAPES:
+        result, count = pattern.subn(replacement, result)
+        masked += count
+
+    exempt = {item for item in known if item}
+
+    def mask_dense(match: re.Match) -> str:
+        nonlocal masked
+        if match.group(0) in exempt or not looks_like_a_key(match.group(0)):
+            return match.group(0)
+        masked += 1
+        return "[redacted]"
+
+    return DENSE_RUN.sub(mask_dense, result), masked
 
 
 def emit(text: str = "") -> None:
@@ -1815,6 +1941,582 @@ def poll_deployment(
         sleep(poll_seconds)
 
 
+READINESS_TASK_NAME = "adapteng-readiness-probe"
+# February 29th exists only in leap years, so this is the rarest schedule that
+# is still a valid expression. It has to be valid: Coolify's validator builds a
+# next run date and rejects an expression that has none, which is how the live
+# instance refused an unmatchable February 31st with HTTP 422. Rarity is not
+# what makes this safe, though. The task is created disabled, and Coolify's
+# scheduler selects tasks with where('enabled', true), so a disabled task is
+# never dispatched whatever its frequency says. Execution happens only through
+# the explicit execute endpoint below, which ignores the enabled flag by design.
+READINESS_TASK_FREQUENCY = "0 0 29 2 *"
+# The armed frequency, held only for as long as it takes Coolify's scheduler to
+# notice. This instance has no execute endpoint -- the route answers the generic
+# 404 while its sibling /executions answers 401, which is how its absence was
+# established without presenting a credential -- so the only way to run the
+# probe is to let the scheduler run it.
+READINESS_ARMED_FREQUENCY = "* * * * *"
+READINESS_DISARM_ATTEMPTS = 4
+READINESS_TASK_TIMEOUT_SECONDS = 60
+READINESS_MARKER = "ADAPTENG_READY"
+# Deliberately not read from health_check.path. That field is the container
+# gate's target and is currently /health, which touches nothing. This probe
+# exists to prove the database is reachable, and only /ready opens a
+# connection, so the path is fixed here rather than inherited.
+READINESS_PATH = "/ready"
+# Coolify runs this as: docker exec <container> sh -c '<command>'. It escapes
+# single quotes, so the command deliberately contains none; the outer single
+# quotes make the double quotes below literal to sh, which then applies them.
+# There is no $ or backtick either, so sh cannot expand anything.
+#
+# It is one line. The first version spanned several, and the API answered HTTP
+# 500 when asked to store it; a single line removes that whole question.
+#
+# Patching HTTPErrorProcessor is what makes a 503 a reported number instead of
+# a raised exception, which matters because 503 is the interesting answer here:
+# it is what /ready returns when it cannot reach the database. Verified against
+# a real server at 200, 401, 404 and 503.
+#
+# The URL and the marker arrive as argv rather than as literals inside the
+# source, which is what keeps the source free of quotes.
+READINESS_COMMAND = (
+    'python -c "'
+    "import urllib.request as R,sys;"
+    "R.HTTPErrorProcessor.http_response=lambda s,q,r:r;"
+    "R.HTTPErrorProcessor.https_response=lambda s,q,r:r;"
+    "print(sys.argv[2],R.urlopen(sys.argv[1],timeout=5).status)"
+    '" http://127.0.0.1:{port}{path} ' + READINESS_MARKER
+)
+READINESS_EXECUTION_ATTEMPTS = 24
+READINESS_EXECUTION_INTERVAL_SECONDS = 10
+
+
+def readiness_command(spec: dict) -> str:
+    """Build the in-container probe from the committed spec, not from guesses."""
+
+    return READINESS_COMMAND.format(
+        port=spec["network"]["internal_port"],
+        path=READINESS_PATH,
+    )
+
+
+def find_readiness_task(client: Client, uuid: str) -> dict | None:
+    tasks = call(client, "GET", f"/applications/{uuid}/scheduled-tasks")
+    if not isinstance(tasks, list):
+        raise Abort("the scheduled-task listing was not a JSON array")
+    matches = [
+        task
+        for task in tasks
+        if isinstance(task, dict) and task.get("name") == READINESS_TASK_NAME
+    ]
+    if len(matches) > 1:
+        raise Abort(
+            f"{len(matches)} scheduled tasks are named {READINESS_TASK_NAME}; "
+            "an ambiguous match is not resolved by guessing"
+        )
+    return matches[0] if matches else None
+
+
+def readiness_task_body(command: str, *, armed: bool) -> dict:
+    """The stored shape of the probe task, in one of its two states.
+
+    Disarmed is the resting state and is what the task is left in: disabled,
+    and scheduled for a date that occurs only in leap years. Armed is held for
+    as long as it takes Coolify's scheduler to notice, and no longer.
+    """
+
+    return {
+        "name": READINESS_TASK_NAME,
+        "command": command,
+        "frequency": READINESS_ARMED_FREQUENCY if armed else READINESS_TASK_FREQUENCY,
+        "timeout": READINESS_TASK_TIMEOUT_SECONDS,
+        "enabled": bool(armed),
+    }
+
+
+def task_is_armed(task: dict) -> bool:
+    return bool(task.get("enabled")) or task.get("frequency") == READINESS_ARMED_FREQUENCY
+
+
+def write_readiness_task(client: Client, uuid: str, task_uuid: str, body: dict) -> dict:
+    """Write the task and read it back, because a write that did not hold is
+    the difference between a probe and a guess."""
+
+    call(
+        client,
+        "PATCH",
+        f"/applications/{uuid}/scheduled-tasks/{task_uuid}",
+        body=body,
+        expect=(200, 201),
+    )
+    after = find_readiness_task(client, uuid)
+    if after is None:
+        raise Abort("the readiness task disappeared while it was being written")
+    return after
+
+
+def converge_readiness_task(client: Client, uuid: str, command: str) -> tuple[str, str]:
+    """Create the probe task disarmed, or bring an existing one back to rest.
+
+    Running this first is what makes an interrupted earlier run self-healing:
+    a task left armed by a run that died is disarmed here, before anything
+    else happens. Deletion is not attempted and is not reachable, because the
+    client refuses DELETE outright; the residue is one disabled task per
+    application, disclosed in the output rather than hidden.
+    """
+
+    existing = find_readiness_task(client, uuid)
+    body = readiness_task_body(command, armed=False)
+    if existing is None:
+        created = call(
+            client,
+            "POST",
+            f"/applications/{uuid}/scheduled-tasks",
+            body=body,
+            expect=(200, 201),
+        )
+        task_uuid = str((created or {}).get("uuid") or "")
+        if not task_uuid:
+            raise Abort("the API accepted the task but returned no uuid")
+        return task_uuid, "created"
+
+    task_uuid = str(existing.get("uuid") or "")
+    if not task_uuid:
+        raise Abort("the existing readiness task has no uuid")
+    was_armed = task_is_armed(existing)
+    if existing.get("command") == command and not was_armed:
+        return task_uuid, "already at rest"
+
+    after = write_readiness_task(client, uuid, task_uuid, body)
+    if after.get("command") != command or task_is_armed(after):
+        raise Abort(
+            "the readiness task did not come to rest after it was written; "
+            "refusing to arm a task whose stored state is unknown"
+        )
+    return task_uuid, "disarmed and corrected" if was_armed else "converged"
+
+
+def disarm_readiness_task(client: Client, uuid: str, task_uuid: str, command: str) -> bool:
+    """Return the task to rest, and say plainly whether it got there.
+
+    This runs even when the probe failed, because the alternative is a job
+    that keeps firing every minute. It re-reads rather than trusting the
+    write, and it reports its own failure rather than swallowing it.
+    """
+
+    body = readiness_task_body(command, armed=False)
+    for attempt in range(1, READINESS_DISARM_ATTEMPTS + 1):
+        try:
+            after = write_readiness_task(client, uuid, task_uuid, body)
+        except Abort as failure:
+            emit(f"    disarm attempt {attempt} failed: {failure}")
+            continue
+        if not task_is_armed(after):
+            return True
+        emit(f"    disarm attempt {attempt} did not take effect")
+    return False
+
+
+def list_executions(client: Client, uuid: str, task_uuid: str) -> list[dict]:
+    executions = call(
+        client,
+        "GET",
+        f"/applications/{uuid}/scheduled-tasks/{task_uuid}/executions",
+    )
+    if not isinstance(executions, list):
+        raise Abort("the execution listing was not a JSON array")
+    return [item for item in executions if isinstance(item, dict)]
+
+
+def execution_identity(row: dict) -> tuple[str, str]:
+    """Name an execution by the fields the instance actually populates.
+
+    Not by id alone. The live instance returns every execution with id null,
+    so an id comparison made all of them equal to each other and to the
+    baseline: four successful probe runs were reported as no execution at all.
+    created_at is the field that is actually filled in, and the pair degrades
+    safely if either is missing.
+    """
+
+    return (str(row.get("id") or ""), str(row.get("created_at") or ""))
+
+
+def execution_sort_key(row: dict) -> tuple[str, int]:
+    try:
+        numeric = int(row.get("id") or 0)
+    except (TypeError, ValueError):
+        numeric = 0
+    return (str(row.get("created_at") or ""), numeric)
+
+
+def executions_snapshot(rows: list[dict]) -> tuple[int, set[tuple[str, str]]]:
+    """What was already there, as both a count and a set of identities.
+
+    Two measures rather than one because either can be defeated alone: an
+    instance that caps the retained history keeps the count flat while the
+    identities change, and an instance that populates neither id nor created_at
+    keeps the identities equal while the count grows.
+    """
+
+    return len(rows), {execution_identity(row) for row in rows}
+
+
+def newest_execution(rows: list[dict]) -> dict | None:
+    if not rows:
+        return None
+    return max(rows, key=execution_sort_key)
+
+
+def read_marker(message: object) -> str | None:
+    """Pull the probe's own word out of the captured container output.
+
+    The marker exists so that an empty message, a shell error, or any other
+    output cannot be mistaken for a verdict. Absence is reported as absence.
+    """
+
+    if not isinstance(message, str):
+        return None
+    for line in message.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(READINESS_MARKER):
+            remainder = stripped[len(READINESS_MARKER) :].strip()
+            return remainder or None
+    return None
+
+
+def await_probe_answer(
+    client: Client,
+    uuid: str,
+    task_uuid: str,
+    before: tuple[int, set[tuple[str, str]]],
+    sleep,
+) -> tuple[dict | None, str | None, str]:
+    """Wait for the scheduler to run the probe once, and read what it said.
+
+    Novelty is decided by identity and by count. Deciding it by a rising id is
+    what made the first live run report ready=undetermined reason=no_execution
+    while the probe had in fact run four times and answered 200 each time --
+    this operation committing, against itself, the exact conflation of "not
+    ready" with "could not tell" that it was built to prevent.
+    """
+
+    before_count, before_identities = before
+    for attempt in range(1, READINESS_EXECUTION_ATTEMPTS + 1):
+        sleep(READINESS_EXECUTION_INTERVAL_SECONDS)
+        rows = list_executions(client, uuid, task_uuid)
+        fresh = [
+            row for row in rows if execution_identity(row) not in before_identities
+        ]
+        if not fresh:
+            if len(rows) > before_count:
+                # Something ran, but nothing in the reply says which row it is.
+                # Picking one would be a guess presented as a measurement, so
+                # this reports the ambiguity instead of resolving it.
+                return None, None, "unidentifiable_execution"
+            continue
+        execution = max(fresh, key=execution_sort_key)
+        status = str(execution.get("status") or "")
+        if status in {"running", "queued", ""}:
+            continue
+        emit(
+            f"    execution at {execution.get('created_at')!r} finished after "
+            f"{attempt} polls: status={status}"
+        )
+        return execution, read_marker(execution.get("message")), ""
+    return None, None, "no_execution"
+
+
+def operate_verify(client: Client, spec: dict, sleep=None) -> int:
+    """Ask the container itself whether it is ready, from inside the container.
+
+    Every other vantage point has been ruled out by measurement rather than by
+    assumption: the readiness runner is on a Docker network that contains the
+    managed database but none of the applications, so it is not running inside
+    any of them. Coolify's scheduled task runs its command as
+    `docker exec <container> sh -c ...` and captures the output, which reaches
+    inside without SSH to the host, a Docker socket on the runner, or any
+    change to the network.
+
+    The task cannot be triggered directly. This instance has no
+    POST .../scheduled-tasks/{uuid}/execute route -- it answers the generic 404
+    while its sibling /executions answers 401, which is how the absence was
+    established without presenting a credential. So the probe is armed, left
+    for Coolify's own scheduler to notice, and disarmed again. It rests
+    disabled and scheduled for a leap day; both are removed to arm it and both
+    are restored to disarm it, so neither the flag nor the schedule alone is
+    load-bearing.
+
+    No credential is presented and no model is called: /ready answers before
+    the Authorization header is read, so this cannot produce an inference call.
+    """
+
+    import time
+
+    sleep = sleep or time.sleep
+    target = spec["target"]
+    emit(f"--- verify {spec['service']}")
+    project = find_project(client, target["project"])
+    environment = (
+        find_environment(client, project["uuid"], target["environment"])
+        if project
+        else None
+    )
+    if project is None or environment is None:
+        emit("    project or environment absent; nothing to verify")
+        emit("RESULT verify failed application=absent")
+        return EXIT_FAILED
+
+    application = find_application(
+        applications_in(client, environment), target["resource_name"]
+    )
+    if application is None:
+        emit(f"    application {target['resource_name']}: ABSENT")
+        emit("RESULT verify failed application=absent")
+        return EXIT_FAILED
+
+    uuid = str(application["uuid"])
+    emit(
+        f"    application {target['resource_name']}: uuid={uuid} "
+        f"state={application.get('status')}"
+    )
+
+    command = readiness_command(spec)
+    task_uuid, disposition = converge_readiness_task(client, uuid, command)
+    emit(f"    readiness task {READINESS_TASK_NAME}: {disposition} uuid={task_uuid}")
+
+    rows_before = list_executions(client, uuid, task_uuid)
+    before = executions_snapshot(rows_before)
+    latest = newest_execution(rows_before)
+    emit(
+        f"    executions already recorded: {before[0]}"
+        + (f", newest at {latest.get('created_at')!r}" if latest else "")
+    )
+
+    armed = write_readiness_task(
+        client, uuid, task_uuid, readiness_task_body(command, armed=True)
+    )
+    if not task_is_armed(armed):
+        raise Abort(
+            "the readiness task did not arm; refusing to wait for an execution "
+            "that cannot happen"
+        )
+    emit(
+        f"    armed at {READINESS_ARMED_FREQUENCY} and waiting for Coolify's "
+        "scheduler; it will be returned to rest either way"
+    )
+
+    try:
+        execution, verdict, reason = await_probe_answer(
+            client, uuid, task_uuid, before, sleep
+        )
+    finally:
+        at_rest = disarm_readiness_task(client, uuid, task_uuid, command)
+        if at_rest:
+            emit(
+                "    returned to rest: disabled, and scheduled for a leap day. "
+                "It is left in place rather than removed because this tool "
+                "cannot issue DELETE."
+            )
+        else:
+            emit("")
+            emit(
+                f"    COULD NOT DISARM the readiness task {task_uuid} on "
+                f"application {uuid}. It is still enabled at "
+                f"{READINESS_ARMED_FREQUENCY} and will keep running the probe "
+                "every minute until it is disabled. The probe is a loopback "
+                "HTTP request and calls nothing external, but this needs a "
+                "hand: PATCH /applications/"
+                f"{uuid}/scheduled-tasks/{task_uuid} with enabled=false, or "
+                "run this operation again, which disarms before it does "
+                "anything else."
+            )
+
+    if not at_rest:
+        emit("RESULT verify failed ready=undetermined reason=task_left_armed")
+        return EXIT_FAILED
+
+    if execution is None and reason == "unidentifiable_execution":
+        emit("")
+        emit(
+            "    an execution appeared while the task was armed, but the reply "
+            "carries neither an id nor a created_at that tells it apart from "
+            "the ones already there. The probe ran; which row is its answer "
+            "cannot be established, so no answer is reported. Guessing the "
+            "newest-looking row would present a guess as a measurement."
+        )
+        emit(
+            "RESULT verify failed ready=undetermined "
+            "reason=unidentifiable_execution"
+        )
+        return EXIT_FAILED
+
+    if execution is None:
+        emit("")
+        emit(
+            "    no new execution was recorded while the task was armed. The "
+            "probe did not run, so this says nothing about the gateway's "
+            "readiness either way."
+        )
+        emit("RESULT verify failed ready=undetermined reason=no_execution")
+        return EXIT_FAILED
+
+    if verdict is None:
+        emit("")
+        emit(
+            "    the execution finished but its output does not carry the "
+            f"{READINESS_MARKER} marker, so the probe did not run to completion "
+            "inside the container. Reporting undetermined rather than not-ready: "
+            "a missing answer is not a negative answer."
+        )
+        emit(f"    captured output: {str(execution.get('message'))[:400]!r}")
+        emit("RESULT verify failed ready=undetermined reason=no_marker")
+        return EXIT_FAILED
+
+    emit(f"    the container answered {READINESS_MARKER} {verdict}")
+    if verdict != "200":
+        emit("")
+        emit(
+            "    /ready did not return 200, and it is the gateway's own verdict "
+            "on its dependencies rather than a network or placement problem: "
+            "the probe ran inside the container and reached the process. /ready "
+            "opens a database connection and answers 503 when it cannot; the "
+            "service logs the reason and deliberately keeps it out of the body."
+        )
+        emit(f"RESULT verify failed ready=no answer={verdict}")
+        return EXIT_FAILED
+
+    emit("")
+    emit(
+        "    Readiness confirmed from inside the container. This is the "
+        "database proof: /ready opens a database connection and /health does "
+        "not. No credential was presented and no model was called, because both "
+        "endpoints answer before the Authorization header is read."
+    )
+    emit("RESULT verify ok ready=yes answer=200")
+    return EXIT_OK
+
+
+DIAGNOSE_LOG_LINES = 200
+
+
+def container_logs(client: Client, uuid: str) -> tuple[str | None, str]:
+    """Read the container's own account of itself, or say why it cannot be read.
+
+    The endpoint answers 400 "Application is not running." when no container is
+    up, which is a finding rather than an error: it is the same condition
+    Coolify's scheduler checks before it dispatches a task, so a 400 here
+    explains a probe that never ran without needing a second query.
+    """
+
+    status, body = client.request(
+        "GET",
+        f"/applications/{uuid}/logs",
+        query={"lines": str(DIAGNOSE_LOG_LINES), "show_timestamps": "true"},
+    )
+    if status == 400:
+        message = (body or {}).get("message") if isinstance(body, dict) else None
+        return None, str(message or "the API refused with 400")
+    if status >= 400:
+        return None, f"the API answered {status}"
+    logs = body.get("logs") if isinstance(body, dict) else None
+    if not isinstance(logs, str):
+        return None, "the reply carried no logs field"
+    return logs, ""
+
+
+def operate_diagnose(client: Client, spec: dict) -> int:
+    """Report what the instance says about this application, and change nothing.
+
+    This exists because the readiness probe produced no execution, and "no
+    execution" has several causes that are indistinguishable from outside: the
+    container is not running, the server is not functional, or the scheduler
+    did not dispatch. Coolify skips a task silently in the first two cases, so
+    the absence of an execution is not evidence for any one of them.
+
+    Every call here is a GET. Nothing is created, armed or written.
+    """
+
+    target = spec["target"]
+    emit(f"--- diagnose {spec['service']}")
+    project = find_project(client, target["project"])
+    environment = (
+        find_environment(client, project["uuid"], target["environment"])
+        if project
+        else None
+    )
+    if project is None or environment is None:
+        emit("    project or environment absent; nothing to diagnose")
+        emit("RESULT diagnose failed application=absent")
+        return EXIT_FAILED
+
+    application = find_application(
+        applications_in(client, environment), target["resource_name"]
+    )
+    if application is None:
+        emit(f"    application {target['resource_name']}: ABSENT")
+        emit("RESULT diagnose failed application=absent")
+        return EXIT_FAILED
+
+    uuid = str(application["uuid"])
+    state = str(application.get("status") or "")
+    emit(f"    application {target['resource_name']}: uuid={uuid} state={state!r}")
+    # This is the exact predicate Coolify applies before dispatching a task:
+    # str($task->application->status)->contains('running'). Reproducing it here
+    # turns a silent skip into a stated reason.
+    dispatchable = "running" in state
+    emit(
+        f"    scheduler would dispatch a task for it: {dispatchable} "
+        "(it requires the status to contain 'running')"
+    )
+
+    tasks = call(client, "GET", f"/applications/{uuid}/scheduled-tasks")
+    entries = [item for item in tasks if isinstance(item, dict)] if isinstance(tasks, list) else []
+    emit(f"    scheduled tasks: {len(entries)}")
+    for task in entries:
+        task_uuid = str(task.get("uuid") or "")
+        emit(
+            f"      {task.get('name')!r} uuid={task_uuid} "
+            f"enabled={task.get('enabled')} frequency={task.get('frequency')!r}"
+        )
+        executions = call(
+            client,
+            "GET",
+            f"/applications/{uuid}/scheduled-tasks/{task_uuid}/executions",
+        )
+        rows = [item for item in executions if isinstance(item, dict)] if isinstance(executions, list) else []
+        emit(f"        executions ever recorded: {len(rows)}")
+        for row in rows[-5:]:
+            body, masked = redact_foreign_text(
+                str(row.get("message") or ""), known=(uuid, task_uuid)
+            )
+            emit(
+                f"        id={row.get('id')} status={row.get('status')!r} "
+                f"at={row.get('created_at')!r} message={body[:300]!r}"
+                + (f" ({masked} spans masked)" if masked else "")
+            )
+
+    emit("    container logs:")
+    logs, refusal = container_logs(client, uuid)
+    if logs is None:
+        emit(f"      unavailable: {refusal}")
+        if "not running" in refusal.lower():
+            emit(
+                "      that is the whole answer to the missing execution: "
+                "Coolify skips a scheduled task whose application is not "
+                "running, and it skips it silently."
+            )
+    else:
+        cleaned, masked = redact_foreign_text(logs, known=(uuid,))
+        lines = [line for line in cleaned.splitlines() if line.strip()]
+        emit(f"      {len(lines)} non-empty lines, {masked} credential-shaped spans masked")
+        for line in lines[-60:]:
+            emit(f"      | {line[:300]}")
+
+    emit("RESULT diagnose ok")
+    return EXIT_OK
+
+
 def operate_status(client: Client, spec: dict) -> int:
     target = spec["target"]
     emit(f"--- status {spec['service']}")
@@ -1928,6 +2630,10 @@ def run(environ: dict) -> int:
         return operate_reconcile(client, spec, supplied)
     if operation == "status":
         return operate_status(client, spec)
+    if operation == "verify":
+        return operate_verify(client, spec)
+    if operation == "diagnose":
+        return operate_diagnose(client, spec)
     return operate_deploy(
         client,
         spec,
