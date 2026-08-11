@@ -119,6 +119,17 @@ class Abort(Exception):
         self.code = code
 
 
+class Unreachable(Abort):
+    """The API could not be spoken to at all, as distinct from refusing.
+
+    This is a subclass rather than a flag so that every existing caller keeps
+    behaving exactly as it did - it is still an Abort and still stops the run.
+    It exists so the one place that legitimately continues past a transport
+    failure can name precisely that condition, instead of catching Abort and
+    thereby also swallowing a refused write or a malformed body.
+    """
+
+
 # --------------------------------------------------------------------------- #
 # Output
 # --------------------------------------------------------------------------- #
@@ -712,7 +723,7 @@ class Client:
         except json.JSONDecodeError as error:
             raise Abort(f"the API returned a body that is not JSON: {error}") from error
         except OSError as error:
-            raise Abort(
+            raise Unreachable(
                 f"the API at {self.base_url} is unreachable: {error.__class__.__name__}"
             ) from error
 
@@ -1635,14 +1646,43 @@ def poll_deployment(
     sleep=time.sleep,
     clock=time.monotonic,
 ) -> tuple[str, str]:
-    """Poll one deployment until it is terminal, or stop when the budget runs out."""
+    """Poll one deployment until it is terminal, or stop when the budget runs out.
+
+    A transport failure during polling does not end the run. The deployment is
+    proceeding on the server whether or not this process can currently ask about
+    it, so treating one unanswered question as a failed deployment reports the
+    observer's problem as the subject's - and has already done so once here,
+    aborting a deployment that then completed successfully.
+
+    What it must not become is unbounded patience. The timeout budget is not
+    extended, and an unreachable API at the end of it is reported as exactly
+    that, rather than as a deployment that failed: the honest verdict is that
+    the outcome is unknown, and the state to check is the application's.
+    """
 
     started = clock()
     last_state = ""
+    unanswered = 0
     while True:
-        parsed = expect_object(
-            call(client, "GET", f"/deployments/{deployment_uuid}"), "deployment"
-        )
+        try:
+            parsed = expect_object(
+                call(client, "GET", f"/deployments/{deployment_uuid}"), "deployment"
+            )
+        except Unreachable as error:
+            unanswered += 1
+            # Reported every time rather than once. These are the ticks during
+            # which the state is unknown, and a single earlier line would let a
+            # long blind stretch read as one blip.
+            emit(f"    deployment {deployment_uuid} not answered ({error}); still waiting")
+            if clock() - started >= timeout_seconds:
+                raise Unreachable(
+                    f"deployment {deployment_uuid} could not be read for the last "
+                    f"{unanswered} of {timeout_seconds}s; its outcome is unknown "
+                    "rather than failed - check the application state before "
+                    "deploying again"
+                ) from error
+            sleep(poll_seconds)
+            continue
         state = str(parsed.get("status") or "unknown")
         if state != last_state:
             emit(f"    deployment {deployment_uuid} state={state}")
