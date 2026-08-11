@@ -327,8 +327,65 @@ class CommittedSpecTests(unittest.TestCase):
         self.assertEqual(fields["git_branch"], "main")
 
     def test_owner_held_values_are_named_and_never_valued(self) -> None:
+        """The section may say what a key is and whether it is secret, never what it is."""
+
         for entry in self.spec["externally_provided_configuration"]:
-            self.assertEqual(set(entry) - {"note"}, {"key", "reason"})
+            self.assertEqual(set(entry) - {"note", "sensitive"}, {"key", "reason"})
+            self.assertNotIn("value", entry)
+
+    def test_the_provider_project_is_no_longer_an_owner_decision(self) -> None:
+        """It is a published identifier, and app/config.py refuses to start without it.
+
+        Holding it back made a value that is already committed as a repository
+        variable on the platform repository into a startup blocker, which is a
+        ceremony that buys nothing.
+        """
+
+        declared = {item["key"]: item["value"] for item in self.spec["configuration"]}
+        self.assertEqual(declared["AI_GATEWAY_PROVIDER_PROJECT"], "adapteng-workspace-automation")
+        owner_held = {item["key"] for item in self.spec["externally_provided_configuration"]}
+        self.assertNotIn("AI_GATEWAY_PROVIDER_PROJECT", owner_held)
+
+    def test_authentication_material_is_sensitive_and_provenance_is_not(self) -> None:
+        """Redaction follows the reviewed flag, not a guess about the value's shape."""
+
+        flags = {
+            item["key"]: driver.is_sensitive(item)
+            for item in self.spec["externally_provided_configuration"]
+        }
+        self.assertTrue(flags["AI_GATEWAY_BEARER_TOKENS"])
+        self.assertTrue(flags["AI_GATEWAY_DATABASE_URL"])
+        for key in (
+            "AI_GATEWAY_FX_USD_EUR",
+            "AI_GATEWAY_FX_AS_OF",
+            "AI_GATEWAY_FX_SOURCE",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+        ):
+            self.assertFalse(flags[key], f"{key} is provenance or a path, not a credential")
+
+    def test_the_reservation_lease_clears_the_floor_config_computes(self) -> None:
+        """app/config.py refuses a lease at or below the provider attempt window.
+
+        The floor is derived from three other declared values, so changing any of
+        them can make a previously valid lease refuse to start. Recomputing it
+        here means that arrives as a failing test rather than a boot loop.
+        """
+
+        declared = {item["key"]: item["value"] for item in self.spec["configuration"]}
+        timeout = int(declared["AI_GATEWAY_PROVIDER_TIMEOUT_SECONDS"])
+        attempts = int(declared["AI_GATEWAY_PROVIDER_MAX_ATTEMPTS"])
+        backoff = float(declared["AI_GATEWAY_PROVIDER_RETRY_BACKOFF_SECONDS"])
+        lease = int(declared["AI_GATEWAY_RESERVATION_LEASE_SECONDS"])
+        floor = timeout * attempts + backoff * (2 ** (attempts - 1) - 1) + 15
+        self.assertGreater(lease, floor)
+
+    def test_the_adc_path_is_declared_but_not_asserted_inline(self) -> None:
+        """Setting it before the file exists is a boot-time failure, not a warning."""
+
+        owner_held = {item["key"] for item in self.spec["externally_provided_configuration"]}
+        self.assertIn("GOOGLE_APPLICATION_CREDENTIALS", owner_held)
+        declared = {item["key"] for item in self.spec["configuration"]}
+        self.assertNotIn("GOOGLE_APPLICATION_CREDENTIALS", declared)
 
     def test_a_push_to_the_platform_repository_does_not_release(self) -> None:
         self.assertFalse(driver.desired_settings(self.spec)["is_auto_deploy_enabled"])
@@ -483,6 +540,117 @@ class EnvironmentPlanTests(unittest.TestCase):
         ]
         with self.assertRaises(driver.Abort):
             driver.environment_plan(self.spec, entries)
+
+    def test_a_supplied_owner_held_value_is_created_and_stops_being_pending(self) -> None:
+        create, update, _, absent = driver.environment_plan(
+            self.spec, [], {"WIDGET_DATABASE_URL": "postgresql://example"}
+        )
+        self.assertIn(("WIDGET_DATABASE_URL", "postgresql://example"), create)
+        self.assertEqual(update, [])
+        self.assertEqual(absent, [])
+
+    def test_a_supplied_owner_held_value_that_differs_is_updated(self) -> None:
+        entries = [
+            {"key": "WIDGET_HTTP_HOST", "value": "0.0.0.0"},
+            {"key": "WIDGET_DATABASE_URL", "value": "postgresql://stale"},
+        ]
+        create, update, _, absent = driver.environment_plan(
+            self.spec, entries, {"WIDGET_DATABASE_URL": "postgresql://fresh"}
+        )
+        self.assertEqual(create, [])
+        self.assertEqual(update, [("WIDGET_DATABASE_URL", "postgresql://fresh")])
+        self.assertEqual(absent, [])
+
+    def test_an_unsupplied_owner_held_value_is_never_written_over(self) -> None:
+        """The property that makes a partially configured resource safe to reconcile.
+
+        Nothing in this repository holds the value, so there is nothing to push,
+        so a value set by someone else cannot be replaced by a stale one.
+        """
+
+        entries = [
+            {"key": "WIDGET_HTTP_HOST", "value": "0.0.0.0"},
+            {"key": "WIDGET_DATABASE_URL", "value": "postgresql://set-elsewhere"},
+        ]
+        create, update, unchanged, absent = driver.environment_plan(self.spec, entries)
+        self.assertEqual((create, update, absent), ([], [], []))
+        self.assertNotIn("WIDGET_DATABASE_URL", unchanged)
+
+
+class SuppliedValueTests(unittest.TestCase):
+    """An owner-held value may be handed over by reference, and only by reference."""
+
+    def setUp(self) -> None:
+        driver.reset_redactions()
+        self.addCleanup(driver.reset_redactions)
+        self.spec = minimal_spec()
+
+    def test_a_declared_key_is_accepted(self) -> None:
+        supplied = driver.supplied_values(
+            self.spec, {"COOLIFY_SECRET_WIDGET_DATABASE_URL": "postgresql://example"}
+        )
+        self.assertEqual(supplied, {"WIDGET_DATABASE_URL": "postgresql://example"})
+
+    def test_an_undeclared_key_stops_the_run(self) -> None:
+        """A dispatch must not be able to introduce configuration nobody reviewed."""
+
+        with self.assertRaises(driver.Abort) as raised:
+            driver.supplied_values(self.spec, {"COOLIFY_SECRET_WIDGET_SMUGGLED": "value"})
+        self.assertEqual(raised.exception.code, driver.EXIT_MISCONFIGURED)
+        self.assertIn("WIDGET_SMUGGLED", str(raised.exception))
+
+    def test_an_inline_key_cannot_be_overridden_from_the_environment(self) -> None:
+        """The reviewed spec stays the only source for a declared value."""
+
+        with self.assertRaises(driver.Abort):
+            driver.supplied_values(self.spec, {"COOLIFY_SECRET_WIDGET_HTTP_HOST": "127.0.0.1"})
+
+    def test_an_empty_variable_is_not_a_supplied_value(self) -> None:
+        """An unset repository variable expands to an empty string, not to nothing."""
+
+        for blank in ("", "   "):
+            self.assertEqual(
+                driver.supplied_values(self.spec, {"COOLIFY_SECRET_WIDGET_DATABASE_URL": blank}),
+                {},
+            )
+
+    def test_unrelated_variables_are_ignored(self) -> None:
+        self.assertEqual(
+            driver.supplied_values(self.spec, {"PATH": "/usr/bin", "HOME": "/root"}), {}
+        )
+
+    def test_a_sensitive_value_is_registered_for_redaction(self) -> None:
+        driver.supplied_values(
+            self.spec, {"COOLIFY_SECRET_WIDGET_DATABASE_URL": "postgresql://secret-value"}
+        )
+        self.assertNotIn("postgresql://secret-value", driver.redact("postgresql://secret-value"))
+
+    def test_a_value_marked_not_sensitive_stays_readable(self) -> None:
+        """Provenance is evidence. Masking it would defeat the reason it is recorded."""
+
+        spec = minimal_spec()
+        spec["externally_provided_configuration"] = [
+            {"key": "WIDGET_FX_SOURCE", "reason": "published reference", "sensitive": False}
+        ]
+        driver.supplied_values(spec, {"COOLIFY_SECRET_WIDGET_FX_SOURCE": "ECB daily 2026-08-10"})
+        self.assertEqual(driver.redact("ECB daily 2026-08-10"), "ECB daily 2026-08-10")
+
+    def test_the_default_is_sensitive(self) -> None:
+        """Forgetting the flag must hide a value, not expose one."""
+
+        self.assertTrue(driver.is_sensitive({"key": "K", "reason": "r"}))
+        self.assertTrue(driver.is_sensitive({"key": "K", "reason": "r", "sensitive": True}))
+        self.assertFalse(driver.is_sensitive({"key": "K", "reason": "r", "sensitive": False}))
+
+    def test_a_non_boolean_sensitive_flag_is_refused(self) -> None:
+        spec = minimal_spec()
+        spec["externally_provided_configuration"] = [
+            {"key": "WIDGET_DATABASE_URL", "reason": "owner held", "sensitive": "no"}
+        ]
+        with TemporaryDirectory() as directory:
+            path = write_spec(Path(directory), spec)
+            with self.assertRaises(driver.Abort):
+                driver.load_spec(path)
 
 
 class UniqueMatchTests(unittest.TestCase):
@@ -660,6 +828,72 @@ class ReconcileTests(unittest.TestCase):
         self.assertIn("change env AI_GATEWAY_HTTP_HOST", report)
         stored = {item["key"]: item["value"] for item in instance.environment_entries["app-1"]}
         self.assertEqual(stored["AI_GATEWAY_HTTP_HOST"], "0.0.0.0")
+
+    def test_a_supplied_owner_held_value_is_stored_and_clears_the_pending_line(self) -> None:
+        instance = FakeInstance()
+        secret = "postgresql://ai_gateway_runtime:example-password@db:5432/adapteng_ops"
+        driver.register_redaction(secret)
+        code, report = run_operation(
+            driver.operate_reconcile, instance, supplied={"AI_GATEWAY_DATABASE_URL": secret}
+        )
+        self.assertEqual(code, driver.EXIT_OK)
+        stored = {
+            item["key"]: item["value"]
+            for item in instance.environment_entries[instance.applications[0]["uuid"]]
+        }
+        self.assertEqual(stored["AI_GATEWAY_DATABASE_URL"], secret)
+        self.assertNotIn("PENDING-OWNER env AI_GATEWAY_DATABASE_URL", report)
+
+    def test_a_supplied_secret_never_reaches_the_report(self) -> None:
+        """The property the whole binding-by-reference design exists to hold."""
+
+        instance = FakeInstance()
+        # "example" inside the literal is what marks this a placeholder to
+        # validate_sensitive_references.py. It must appear in the source text, not
+        # only in the interpolated result: the checker reads the line, not the run.
+        # A test fixture is not an exception to that rule — the checker cannot tell
+        # a fake credential from a real one, and it is right not to try.
+        marker = "example-password-must-not-appear"
+        secret = "postgresql://ai_gateway_runtime:example-password-must-not-appear@db/ops"
+        driver.register_redaction(secret)
+        _, report = run_operation(
+            driver.operate_reconcile, instance, supplied={"AI_GATEWAY_DATABASE_URL": secret}
+        )
+        self.assertNotIn(secret, report)
+        self.assertNotIn(marker, report)
+        self.assertIn("AI_GATEWAY_DATABASE_URL", report)
+
+    def test_supplying_a_value_twice_writes_once(self) -> None:
+        """Binding by reference must not make every run a write."""
+
+        instance = FakeInstance()
+        supplied = {"AI_GATEWAY_FX_USD_EUR": "0.865426"}
+        first, _ = run_operation(driver.operate_reconcile, instance, supplied=supplied)
+        self.assertEqual(first, driver.EXIT_OK)
+        instance.calls.clear()
+        second, report = run_operation(driver.operate_reconcile, instance, supplied=supplied)
+        self.assertEqual(second, driver.EXIT_OK)
+        self.assertIn("changed=no", report)
+        self.assertEqual(instance.writes(), [])
+
+    def test_an_unsupplied_owner_held_key_is_still_reported_as_pending(self) -> None:
+        """Supplying one key must not silence the pending line for the others."""
+
+        instance = FakeInstance(with_application=True)
+        instance.environment_entries["app-1"] = [
+            entry
+            for entry in instance.environment_entries["app-1"]
+            if entry["key"] not in {"AI_GATEWAY_DATABASE_URL", "AI_GATEWAY_FX_USD_EUR"}
+        ]
+        code, report = run_operation(
+            driver.operate_reconcile, instance, supplied={"AI_GATEWAY_FX_USD_EUR": "0.865426"}
+        )
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("PENDING-OWNER env AI_GATEWAY_DATABASE_URL", report)
+        self.assertNotIn("PENDING-OWNER env AI_GATEWAY_FX_USD_EUR", report)
+        stored = {item["key"]: item["value"] for item in instance.environment_entries["app-1"]}
+        self.assertEqual(stored["AI_GATEWAY_FX_USD_EUR"], "0.865426")
+        self.assertNotIn("AI_GATEWAY_DATABASE_URL", stored)
 
     def test_an_accepted_write_that_stored_nothing_fails(self) -> None:
         """The reason the run re-reads instead of trusting the write response."""

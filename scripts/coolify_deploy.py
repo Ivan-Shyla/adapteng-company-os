@@ -48,6 +48,13 @@ SERVICE_VARIABLE = "SERVICE"
 POLL_VARIABLE = "DEPLOY_POLL_SECONDS"
 TIMEOUT_VARIABLE = "DEPLOY_TIMEOUT_SECONDS"
 
+# An owner-held value may be handed to this run through the environment under
+# this prefix, so a credential can be moved from one store to another without
+# ever being written to a file in this repository. The value is bound by
+# reference: the spec still names the key and nothing else, and the value exists
+# in this process only for the length of one request.
+SUPPLY_PREFIX = "COOLIFY_SECRET_"
+
 OPERATIONS = ("inspect", "reconcile", "deploy", "status")
 FORBIDDEN_METHODS = frozenset({"DELETE"})
 
@@ -261,13 +268,65 @@ def check_configuration_entry(path: Path, entry: object, section: str, field: st
                 f"spec {path.name} section {section} has an entry without a usable {name}",
                 EXIT_MISCONFIGURED,
             )
-    unexpected = set(entry) - {"key", field, "note"}
+    allowed = {"key", field, "note"}
+    if section == "externally_provided_configuration":
+        allowed.add("sensitive")
+        if "sensitive" in entry and not isinstance(entry["sensitive"], bool):
+            raise Abort(
+                f"spec {path.name} section {section} entry {entry['key']} "
+                "declares a non-boolean sensitive flag",
+                EXIT_MISCONFIGURED,
+            )
+    unexpected = set(entry) - allowed
     if unexpected:
         raise Abort(
             f"spec {path.name} section {section} entry {entry['key']} "
             f"has unknown keys {sorted(unexpected)}",
             EXIT_MISCONFIGURED,
         )
+
+
+def is_sensitive(entry: dict) -> bool:
+    """Return whether an owner-held value must be kept out of the run log.
+
+    The default is ``True``. An owner-held value is assumed to carry
+    authentication material unless the spec says otherwise in reviewed text, so
+    forgetting the flag hides a value rather than exposing one.
+    """
+
+    return bool(entry.get("sensitive", True))
+
+
+def supplied_values(spec: dict, environ: dict) -> dict[str, str]:
+    """Return the owner-held values handed to this run through the environment.
+
+    Only a key the spec already declares under
+    ``externally_provided_configuration`` can be supplied. A variable naming any
+    other key is refused rather than ignored: the spec is the reviewed list of
+    what this resource may be given, and silently accepting an extra key would
+    let a dispatch introduce configuration that no one reviewed.
+    """
+
+    declared = {entry["key"]: entry for entry in spec["externally_provided_configuration"]}
+    supplied: dict[str, str] = {}
+    for name, raw in sorted(environ.items()):
+        if not name.startswith(SUPPLY_PREFIX):
+            continue
+        key = name[len(SUPPLY_PREFIX) :]
+        value = (raw or "").strip()
+        if not value:
+            continue
+        entry = declared.get(key)
+        if entry is None:
+            raise Abort(
+                f"{name} supplies {key}, which spec {spec['service']}.json does not "
+                "declare under externally_provided_configuration",
+                EXIT_MISCONFIGURED,
+            )
+        if is_sensitive(entry):
+            register_redaction(value)
+        supplied[key] = value
+    return supplied
 
 
 # --------------------------------------------------------------------------- #
@@ -401,13 +460,19 @@ def runtime_environment(entries: list) -> dict:
     return indexed
 
 
-def environment_plan(spec: dict, entries: list) -> tuple[list, list, list, list]:
+def environment_plan(
+    spec: dict, entries: list, supplied: dict[str, str] | None = None
+) -> tuple[list, list, list, list]:
     """Return ``(create, update, unchanged, absent_external)`` for the environment.
 
-    Only the keys declared inline are written. Owner-held values are checked for
-    presence by name and never read, written or printed.
+    Keys declared inline are always written. An owner-held key is written only
+    when this run was handed its value; otherwise it is checked for presence by
+    name and never read, written or printed. That asymmetry is deliberate: a
+    value this repository does not hold cannot be pushed over a fresher one set
+    elsewhere, because nothing here knows what to push.
     """
 
+    supplied = supplied or {}
     indexed = runtime_environment(entries)
     create: list[tuple[str, str]] = []
     update: list[tuple[str, str]] = []
@@ -420,11 +485,20 @@ def environment_plan(spec: dict, entries: list) -> tuple[list, list, list, list]
             update.append((key, value))
         else:
             unchanged.append(key)
-    absent = [
-        item["key"]
-        for item in spec["externally_provided_configuration"]
-        if item["key"] not in indexed
-    ]
+    absent: list[str] = []
+    for item in spec["externally_provided_configuration"]:
+        key = item["key"]
+        value = supplied.get(key)
+        if value is None:
+            if key not in indexed:
+                absent.append(key)
+            continue
+        if key not in indexed:
+            create.append((key, value))
+        elif normalize(key, indexed[key].get("value")) != normalize(key, value):
+            update.append((key, value))
+        else:
+            unchanged.append(key)
     return create, update, unchanged, absent
 
 
@@ -877,9 +951,12 @@ def read_environment_entries(client: Client, uuid: str) -> list:
     )
 
 
-def operate_reconcile(client: Client, spec: dict) -> int:
+def operate_reconcile(client: Client, spec: dict, supplied: dict[str, str] | None = None) -> int:
+    supplied = supplied or {}
     target = spec["target"]
     emit(f"--- reconcile {spec['service']}")
+    if supplied:
+        emit(f"    supplied owner-held keys: {sorted(supplied)}")
     project, environment = ensure_placement(client, spec)
     applications = applications_in(client, environment)
     application = find_application(applications, target["resource_name"])
@@ -903,7 +980,7 @@ def operate_reconcile(client: Client, spec: dict) -> int:
         emit("    application fields and settings already match the spec")
 
     entries = read_environment_entries(client, uuid)
-    create, update, unchanged, absent = environment_plan(spec, entries)
+    create, update, unchanged, absent = environment_plan(spec, entries, supplied)
     for key, value in create:
         emit(f"    change env {key}: created")
         call(
@@ -932,7 +1009,9 @@ def operate_reconcile(client: Client, spec: dict) -> int:
     verified_entries = read_environment_entries(client, uuid)
     residual_fields = difference(desired_application_fields(spec), verified)
     residual_settings = difference(desired_settings(spec), stored_settings(verified))
-    residual_create, residual_update, _, absent = environment_plan(spec, verified_entries)
+    residual_create, residual_update, _, absent = environment_plan(
+        spec, verified_entries, supplied
+    )
     fqdn = (verified.get("fqdn") or "").strip()
 
     problems: list[str] = []
@@ -1161,13 +1240,20 @@ def run(environ: dict) -> int:
         )
     register_redaction(credential)
 
+    # Gathered for every operation so that a supplied value is masked in the log
+    # even when this run will not write it. Only reconcile applies them: deploy
+    # deliberately re-reads the stored state instead, so its readiness check
+    # answers whether the resource is configured, not whether this run was
+    # handed the values.
+    supplied = supplied_values(spec, environ)
+
     client = Client(base_url, credential)
     emit(f"operation={operation} service={spec['service']} api={base_url}")
 
     if operation == "inspect":
         return operate_inspect(client, spec)
     if operation == "reconcile":
-        return operate_reconcile(client, spec)
+        return operate_reconcile(client, spec, supplied)
     if operation == "status":
         return operate_status(client, spec)
     return operate_deploy(

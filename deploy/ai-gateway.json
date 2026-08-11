@@ -101,33 +101,43 @@
     },
     {
       "key": "AI_GATEWAY_RESERVATION_LEASE_SECONDS",
-      "value": "90"
+      "value": "90",
+      "note": "app/config.py refuses any lease at or below timeout*attempts + retry backoff + 15s. With the values above that floor is 75.5s, so 90 is the smallest round value that starts."
+    },
+    {
+      "key": "AI_GATEWAY_PROVIDER_PROJECT",
+      "value": "adapteng-workspace-automation",
+      "note": "Not a secret and not an owner decision: it is already the committed repository variable GOOGLE_CLOUD_PROJECT_ID on the platform repository and GOOGLE_CLOUD_PROJECT on its approved-assets environments. app/config.py requires it with no default, so leaving it owner-held made a published identifier into a startup blocker."
     }
   ],
   "externally_provided_configuration": [
     {
       "key": "AI_GATEWAY_BEARER_TOKENS",
-      "reason": "Caller authentication material. Held only in the Coolify environment store, set by the owner, referenced here by name and never written by this automation."
+      "reason": "Caller authentication material. Never written to this repository; supplied to a reconcile run by reference and held in the Coolify environment store."
     },
     {
       "key": "AI_GATEWAY_DATABASE_URL",
-      "reason": "Connection string for the adapteng_ops budget ledger. Carries authentication material, so it is owner-set and name-referenced only."
-    },
-    {
-      "key": "AI_GATEWAY_PROVIDER_PROJECT",
-      "reason": "Google Cloud project identifier. An external resource identifier, kept out of this repository by the same rule that keeps resource ids uncommitted."
+      "reason": "Connection string for the adapteng_ops budget ledger, carrying the ai_gateway_runtime password. Generated on the production host and posted to Coolify from there, so the password never reaches a runner, a log or this repository."
     },
     {
       "key": "AI_GATEWAY_FX_USD_EUR",
-      "reason": "Operator-set exchange rate. Pinning a dated rate in git would make the reconciler push a stale rate back over a fresher one."
+      "sensitive": false,
+      "reason": "Operational data, not a secret and not a standing owner decision: the published ECB euro reference rate, inverted. Supplied at reconcile time from the AI_GATEWAY_FX_USD_EUR repository variable so refreshing the rate is one variable edit rather than a commit, and so a dated rate committed here can never be pushed back over a fresher one."
     },
     {
       "key": "AI_GATEWAY_FX_AS_OF",
-      "reason": "Timestamp for the operator-set rate above, for the same reason."
+      "sensitive": false,
+      "reason": "The reference date of the rate above, as an ISO-8601 timestamp with offset. Not sensitive, and deliberately visible in the reconcile log: the provenance is the audit evidence."
     },
     {
       "key": "AI_GATEWAY_FX_SOURCE",
-      "reason": "Provenance label for the operator-set rate above, for the same reason."
+      "sensitive": false,
+      "reason": "Provenance label naming the publication, its date and the published direction that was inverted, so a stored cost can be traced to the quote it used."
+    },
+    {
+      "key": "GOOGLE_APPLICATION_CREDENTIALS",
+      "sensitive": false,
+      "reason": "A filesystem path, not a credential. app/config.py fails closed at boot when it is set but does not name a readable file, so it is declared here rather than inline: it must be set only once the credential file is actually mounted, and never before."
     }
   ]
 }
