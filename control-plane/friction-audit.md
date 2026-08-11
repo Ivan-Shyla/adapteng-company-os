@@ -1241,6 +1241,91 @@ malformed without a SHA. That framing is what makes the habit enforceable rather
 than aspirational, because malformedness is checkable by the writer and
 carelessness is not.
 
+**Extension — the rule needs the *file* as well as the ref, and the missing-file
+case is the more dangerous of the two.** WS-2 reported that
+`tests/test_rollout_trust_anchor.py:4243` reads a `.py` raw and is nonetheless safe
+"because normalization happens inside `_reviewed_source_sha256` at 1245". The
+substance is correct and was verified: at
+`scripts/validation/verify_rollout_trust_anchor.py` **1245** is
+`normalized = source.replace(b"\r\n", b"\n")`, with a lone `\r` refused at 1246–1247
+and the plain digest returned at 1258. But the number was given with no file, in a
+sentence whose other coordinate is in the *test*, and `tests/test_rollout_trust_anchor.py:1245`
+is `) -> anchor.ApiResponse:` — a test double's return annotation. **An
+unresolvable citation announces itself; a citation that resolves in the wrong file
+does not.** The missing ref produces a lookup failure the reader notices; the
+missing file produces a plausible line the reader may accept. So the malformedness
+rule covers both coordinates, and the file is the one whose absence is silent.
+
+### A third control that goes red while discarding what it knew — and it is not a house style
+
+WS-2 found a third instance of the shape F-8 documents, in a third file, and it is
+the largest of the three. Verified at `824b4238` from
+`scripts/migrations/_fixed_migration.py` (blob fetched and size-checked, 23914
+bytes, 729 lines).
+
+The site is **712–714**:
+
+```python
+    except (OSError, RuntimeError):
+        print("migration status failed", file=sys.stderr)
+        return 3
+```
+
+Its `try:` opens at **653**, so the handler spans fifty-nine lines covering the
+entire migration execution, including a nested `try` at 683–693. WS-2's call chain
+reproduces line-for-line: `run_fixed_migration:660` → `_status_snapshot:531` →
+`_revalidate_psql:473` → `_revalidate_trusted_executable:387`.
+
+**The measurement WS-2 did not take, and it is what makes this the worst of the
+three.** The file raises `RuntimeError` at eight sites carrying **six distinct
+messages**, every one of them reachable inside 653–711:
+
+| Line(s) | Message |
+| --- | --- |
+| 385, 387 | `psql executable path changed` |
+| 389 | `psql executable is not executable` |
+| 475 | `psql executable identity changed` |
+| 542, 544 | `migration status query failed` |
+| 550 | `migration status query returned an invalid state` |
+| 693 | `migration apply failed` |
+
+All six collapse to one label and one exit code. **The causes were not unknown —
+they were composed and then erased three frames later.** That is the sharpest form
+of this shape: `lifecycle.run_selection_failed` mislabels a cause it never had, and
+`closure.dynamic_import` collapses three; here six precise sentences already exist
+in the source and none of them reaches the operator.
+
+Worse, three of the six (**385, 542, 693**) raise `from None`, severing `__cause__`
+at the raise site, so even rewriting 712 as `raise … from exc` would not recover
+them. The file suppresses exception context at nine sites in total.
+
+**Correction to WS-2's generalisation: the evidence says lapse, not house style.**
+WS-2 concluded "the pattern isn't one bad line; it's a house style". The same
+function contradicts that in the twenty-five lines immediately above 653 — five
+handlers, all narrow, all specific, all with distinct exit codes:
+
+| Lines | Catch | Message | Exit |
+| --- | --- | --- | --- |
+| 627–631 | `ValueError` | `trusted psql executable is required` | 127 |
+| 633–638 | `OSError` | `fixed migration artifact could not be read` | 2 |
+| 639–641 | — | `fixed migration artifact digest does not match` | 2 |
+| 644–646 | — | `<DATABASE_URL_ENV> must be configured` | 2 |
+| 647–651 | `ValueError` | `database URL is invalid` | 2 |
+
+Specificity is this author's local convention; 712 departs from it. The recurring
+shape across all three files is therefore narrower and more useful than "house
+style": **it is the outermost handler of an entry point**, where the instinct to
+let nothing escape overrides the precision practised everywhere inside it. The
+shell script's version is the `EXIT` trap, which is the same structural position.
+That distinction is worth holding because it changes the remedy — an outermost-handler
+defect is fixed at one site per entry point, while a house style implies a campaign
+across every handler in the repository.
+
+Recorded, not acted on: `scripts/migrations/` is platform code under the hold, and
+this is not part of F-8's evidence. It is the third data point for the claim that
+**#121's `stderr=` remedy generalises past its own call site**, which remains the
+practical consequence.
+
 ---
 
 ## P3 — obsolete, delete
