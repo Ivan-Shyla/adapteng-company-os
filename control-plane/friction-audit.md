@@ -1564,6 +1564,7 @@ and they do not share a mechanism either:
 | shell `254` → `262` | **call-site discard** | callee names the cause; caller sends it to `/dev/null` | stop discarding — #121's `stderr=` capture |
 | `_fixed_migration:712` | **in-process erasure** | a 59-line handler has nothing specific left to say | `print(str(exc))`, one line, six sentences |
 | `closure.dynamic_import` | **token reuse** | narrow checks decline to encode what they know | discriminate the token; no handler edit helps |
+| `github_metadata.page_invalid` | **token reuse** (second member, added 2026-08-11) | nine narrow raise sites share one name | same remedy; see the resolution below |
 
 The helper is not at fault in the first row: `approved_assets_github_metadata.py`
 prints the specific code correctly at **510–511** (`except MetadataError as exc:` /
@@ -1572,7 +1573,8 @@ both re-raise with a specific code and `from exc`. **WS-2 placed `metadata:510` 
 the erasure column while stating one paragraph earlier that it reports correctly at
 511** — the two halves of its own message disagree, and the source settles it in
 favour of the earlier half. The metadata helper is clean; the shell is where the
-sentence is thrown away.
+sentence is thrown away. *(Refined 2026-08-11: clean **on the erasure axis**. WS-1
+showed it is a token-reuse site at the raise — see the resolution below.)*
 
 **And the third row refutes the property WS-2 proposed to replace position with.**
 WS-2 argued the unifier is *width, not position* — a handler wide enough has
@@ -1608,8 +1610,89 @@ no equivalent of. Forty-six sites converging on one token is at least as consist
 with an intentional convention as with a lapse — which also means WS-2's original
 "house style" reading, which this document corrected to "lapse", has more support
 here than that correction allowed, while remaining wrong for `_fixed_migration.py`
-where five narrow neighbours prove the author's local practice. **Not classified.**
-Deciding it needs the author's intent, and the observation belongs to the owner.
+where five narrow neighbours prove the author's local practice. ~~**Not classified.**
+Deciding it needs the author's intent, and the observation belongs to the owner.~~
+**Resolved 2026-08-11 — see immediately below. Classified *lapse*, on measurement
+rather than on intent.**
+
+**The caveat is resolved, and it was resolved by evidence rather than by asking the
+author.** WS-1 returned with an AST pass; I re-ran every count independently against
+blobs byte-verified at `824b4238` (`verify_rollout_trust_anchor.py` `ec4c82d6`,
+`approved_assets_github_metadata.py` `f2493a27`, `_fixed_migration.py` `37c802a5`,
+each recomputed locally). "Inside an `except`" is an ancestor question that a
+line-oriented pass cannot answer, so it was done with a parent map over the tree:
+**46 `closure.dynamic_import` sites, zero with an `ExceptHandler` anywhere in their
+ancestry**, all eight cited lines present. The wider counts reproduce exactly —
+**183 `TrustError` raises carrying 97 distinct tokens** — with one detail worth
+keeping: the file holds **190** `TrustError` raises, of which **seven** pass a
+non-constant code. So 183/97 is the count *of raises carrying a literal*, the two
+figures never disagreed, and the seven are a small separate population nobody has
+examined.
+
+Three grounds, in increasing order of force:
+
+1. **The shape appears where security cannot explain it.**
+   `approved_assets_github_metadata.py` collects run metadata and has no adversary,
+   yet `github_metadata.page_invalid` is raised at **nine** sites (112, 120, 133,
+   171, 175, 214, 225, 249, 294) and `pagination_race` at three (257, 290, 318).
+   That makes the helper a **second member of the token-reuse row**, and it exposes
+   an imprecision in this document's own wording: it was called "clean" without
+   saying on which axis. It is clean on *erasure* — 510 prints `exc.code`
+   faithfully — and it is a token-reuse site at the raise. Both are true; the table
+   now says so.
+
+2. **The local practice is one-token-one-condition, and the exception is not
+   marginal.** A repo-wide "96 of 97 tokens are precise" invites the objection that
+   different subsystems keep different conventions. Measured inside the closure
+   namespace alone — one author, one runbook table, one subsystem — there are **15
+   tokens across 65 raise sites**, and `closure.dynamic_import` is **46 of them,
+   71 % of the family**. Eleven of the remaining fourteen are used **exactly once**.
+   The convention is not merely "precise"; it is one condition per token, eleven
+   times over, with a single exception covering more sites than the rest of its own
+   family combined.
+
+3. **Decisively, the distinctions are already published — in the operator runbook,
+   in prose.** `docs/runbooks/authorize-rollout-policy-change.md` at **218–222**
+   enumerates the shapes that raise it — a non-literal or computed argument, a
+   `package` keyword argument, `import importlib.util`, `from importlib import` anything but
+   `import_module`, `from importlib.X import Y`, and any `importlib.<attr>` other
+   than `import_module`. **A token cannot be withholding for security when the
+   document written for the operator lists what it is withholding.** This is
+   stronger than the allowlist-constants argument, because a constant is machinery
+   the reader must interpret, whereas this is the enumeration itself, in English, in
+   the same file the decoder table lives in.
+
+**The one reading that would have revived the caveat is checked and does not.** An
+external consumer parsing the token would justify keeping it stable regardless of
+its coarseness, and that check had been flagged as unperformed. Searched across the
+whole tree at `824b4238`: `closure.dynamic_import` appears in exactly **three**
+files — the verifier (46), `tests/test_rollout_trust_anchor.py` (**8**) and the
+runbook (**2**). No workflow, no script, no schema, nothing outside the repository.
+There is no parsing contract to preserve, and the fix's blast radius is bounded by
+those three files.
+
+**But the eight test sites are a finding of their own, and they run the other way
+from "harmless".** Each is `assertEqual(raised.exception.code,
+"closure.dynamic_import")` after constructing one specific dynamic-import shape
+(3818, 3840, 3965, 4039, 4080, 4118, 4210, 4347). Because 46 conditions produce that
+token, **each of those assertions passes if any of the 46 fires** — including the
+wrong one. Eight tests written to distinguish specific shapes cannot distinguish
+them, and the suite would not notice if two conditions were transposed. So the
+remedy's cost is not 46 edits; it is 46 edits plus **8 assertions that currently
+certify only that some closure check fired**.
+
+**A defect neither side went looking for, found while reading the runbook to check
+ground 3.** The runbook's operator decoder table (**291–304**) documents **14**
+closure codes. The verifier raises **15**. **`closure.import_name_invalid` — raised
+at 1151 and 1998 — is absent from the table**, and the set difference is exactly
+that one entry in one direction and empty in the other. The asymmetry around it is
+the point: the runbook sits in `PROTECTED_EXACT_PATHS`, pinned by
+`test_rollout_trust_anchor.py` at ~2000, so **it cannot be modified without a signed
+receipt** — and *nothing whatever* checks that its table matches the codes the
+verifier can emit. **It is fully guarded against tampering and entirely unguarded
+against being wrong.** An operator who meets `closure.import_name_invalid` consults
+a document that has been cryptographically protected into a state that does not
+mention it.
 
 **Recorded, not acted on.** `scripts/migrations/`, `scripts/operations/` and
 `scripts/validation/` are all platform code under the #121 hold, and none of this
