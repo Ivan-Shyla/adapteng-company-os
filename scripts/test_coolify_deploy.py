@@ -520,6 +520,13 @@ class CommittedSpecTests(unittest.TestCase):
         health = self.spec["health_check"]
         note = health["container_gate_note"]
         if "HEALTHCHECK" not in note:
+            if health["container_gate"] == "image":
+                self.fail(
+                    "container_gate is 'image', so the image's HEALTHCHECK is the "
+                    "only thing gating a rolling update, and its directives "
+                    "overwrite the four numbers declared here. The note has to "
+                    "quote them or nothing checks that they still agree."
+                )
             self.skipTest("no image directives quoted")
         for directive, field in (
             ("--interval=", "interval_seconds"),
