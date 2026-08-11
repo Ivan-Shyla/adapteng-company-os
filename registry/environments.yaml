@@ -19,6 +19,29 @@ operator_access:
   coolify_api_ref: COOLIFY_API_TOKEN
   verified: 2026-08-06
   note: "The production host accepted the managed adapteng-ai identity. Local owner-key filenames are not an authority; use the managed GitHub SSH identity or its verified local counterpart."
+  reachable_from:
+    # Measured 2026-08-11, both directions of the same question.
+    github_hosted_runner:
+      ssh_22: false
+      https_443: true
+      evidence: "run 31500471689 - ssh: connect to host 37.27.213.220 port 22: Connection timed out, twice, on a runner whose Coolify API calls over 443 succeed from the same job"
+    operator_workstation:
+      ssh_22: true
+      https_443: true
+      evidence: "TCP connect succeeded to both ports from a permitted workstation on the same date"
+    reading: >-
+      The daemon is up and the address is right, so the difference is the source.
+      Port 22 does not accept GitHub-hosted runners. No workflow in this
+      repository had ever opened an SSH connection to this host before
+      postgres-runtime-role.yml, so nothing regressed; the path had simply never
+      been exercised.
+    blocks: scripts/postgres_runtime_role.py, and any future host-side workflow
+    owner_decision_required: >-
+      One of: register a self-hosted runner on the production host; permit
+      GitHub's published runner ranges on port 22; or run host-side operations
+      from a workstation that is already permitted. The first is the only one
+      that neither widens the exposed surface nor moves a credential onto a
+      personal machine.
 
 excluded_personal_projects:
   status: excluded-from-company-os
