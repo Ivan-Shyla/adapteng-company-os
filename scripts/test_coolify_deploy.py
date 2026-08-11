@@ -985,6 +985,46 @@ class ReconcileTests(unittest.TestCase):
         self.assertIn("server", str(raised.exception))
 
 
+class ApiMessageTests(unittest.TestCase):
+    """An error body must report why, not merely that."""
+
+    def setUp(self) -> None:
+        driver.reset_redactions()
+        self.addCleanup(driver.reset_redactions)
+
+    def test_field_errors_are_not_shadowed_by_the_generic_message(self) -> None:
+        """The defect this replaced: a 422 read "Validation failed." and no more.
+
+        Coolify sends the generic message and the field-level errors together.
+        Returning the first key found discarded the only actionable half.
+        """
+
+        rendered = driver.api_message(
+            {
+                "message": "Validation failed.",
+                "errors": {"ports_exposes": ["The ports exposes field is required."]},
+            }
+        )
+        self.assertIn("Validation failed.", rendered)
+        self.assertIn("ports_exposes", rendered)
+
+    def test_a_lone_message_still_renders(self) -> None:
+        self.assertIn("Not found.", driver.api_message({"message": "Not found."}))
+
+    def test_a_body_with_no_known_key_is_still_shown(self) -> None:
+        self.assertIn("unexpected", driver.api_message({"unexpected": "shape"}))
+
+    def test_an_empty_body_is_named(self) -> None:
+        self.assertEqual(driver.api_message(None), "no body")
+
+    def test_a_registered_secret_is_redacted_from_an_error_body(self) -> None:
+        driver.register_redaction("example-password-in-an-error")
+        self.assertNotIn(
+            "example-password-in-an-error",
+            driver.api_message({"message": "rejected example-password-in-an-error"}),
+        )
+
+
 class DestinationResolutionTests(unittest.TestCase):
     """Placement must survive an instance that does not expose a destination list.
 

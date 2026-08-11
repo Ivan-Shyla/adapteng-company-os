@@ -662,10 +662,24 @@ def call(
 
 
 def api_message(parsed: object) -> str:
+    """Render an API error body, keeping the part that says what was wrong.
+
+    A validation failure arrives as a generic message plus a field-level errors
+    object. Returning the first key found meant the generic message shadowed the
+    specific one, so a 422 reported "Validation failed." and nothing else --
+    true, unactionable, and indistinguishable from every other 422. Both are
+    kept here, because the reason a call was rejected is the whole diagnostic
+    value of the response.
+    """
+
     if isinstance(parsed, dict):
-        for key in ("message", "error", "errors"):
-            if key in parsed:
-                return redact(json.dumps(parsed[key])[:300])
+        parts = [
+            redact(json.dumps(parsed[key])[:300])
+            for key in ("message", "error", "errors")
+            if key in parsed
+        ]
+        if parts:
+            return " ".join(parts)
         return redact(json.dumps(parsed)[:300])
     if parsed is None:
         return "no body"
