@@ -1070,6 +1070,60 @@ def report_databases(client: Client) -> None:
         emit(f"        keys: {sorted(item)}")
 
 
+SAFE_STORAGE_FIELDS = (
+    "uuid",
+    "name",
+    "mount_path",
+    "host_path",
+    "fs_path",
+    "is_directory",
+    "resource_type",
+)
+
+
+def report_storages(client: Client, application_uuid: str) -> None:
+    """Print where this application's file mounts land, never what is in them.
+
+    A file storage carries the body of the file in a `content` field, so for the
+    binding this gateway still needs that field would hold the service account
+    key itself. Location is reportable and body is not, so this prints mount
+    paths and key names and stops there.
+
+    The reason to look at all is that app/config.py checks the Vertex binding by
+    opening the path it is given, and treats an unreadable path as a boot
+    failure rather than an absence. So the binding has to be a real file inside
+    the container, which is what a mount supplies, and the environment key has
+    to be set only once that file is there. Reporting the mounts is how that
+    ordering gets checked before anything is written.
+    """
+
+    storages = call(
+        client, "GET", f"/applications/{application_uuid}/storages", allow_absent=True
+    )
+    if isinstance(storages, dict):
+        groups = [(name, storages.get(name)) for name in ("file_storages", "persistent_storages")]
+    elif isinstance(storages, list):
+        groups = [("storages", storages)]
+    else:
+        emit("    storages: not reported by this instance")
+        return
+    for label, items in groups:
+        if not isinstance(items, list):
+            emit(f"      {label}: not reported by this instance")
+            continue
+        emit(f"      {label}: {len(items)}")
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            shown = " ".join(
+                f"{name}={item.get(name)}"
+                for name in SAFE_STORAGE_FIELDS
+                if item.get(name) is not None
+            )
+            emit(f"        - {shown}")
+            emit(f"          keys: {sorted(item)}")
+
+
 def report_object_shape(client: Client, application: dict) -> dict:
     """Print the key names the API reports for this application, and nothing else.
 
@@ -1204,6 +1258,7 @@ def operate_inspect(client: Client, spec: dict) -> int:
         f"    application {target['resource_name']}: present "
         f"uuid={application.get('uuid')} status={application.get('status')}"
     )
+    report_storages(client, application["uuid"])
     # The delta is computed against the detail read, because that is the object
     # reconcile verifies a write against. Comparing the list entry here would let
     # inspect report agreement for a resource reconcile would still change.
