@@ -512,10 +512,22 @@ def creation_payload(
     destination_uuid: str | None,
     github_app_uuid: str | None,
 ) -> dict:
-    """Return the body that creates the application in its declared placement."""
+    """Return the body that creates the application in its declared placement.
+
+    Settings are deliberately not sent here. The creation endpoint rejects
+    is_preview_deployments_enabled outright ("This field is not allowed."), and
+    which of the others it tolerates is undocumented and would be discovered one
+    422 at a time. Reconcile re-reads the application immediately after creating
+    it and converges every setting through the same path that repairs drift on
+    an existing resource, so nothing is lost by leaving them out -- and that path
+    verifies what was stored, which the creation call does not.
+
+    Nothing is exposed in the interval: instant_deploy is false, so a created
+    application is not running, and autogenerate_domain is false with no fqdn
+    declared, so no public route exists at any point.
+    """
 
     payload = dict(desired_application_fields(spec))
-    payload.update(desired_settings(spec))
     payload.update(
         {
             "project_uuid": project_uuid,

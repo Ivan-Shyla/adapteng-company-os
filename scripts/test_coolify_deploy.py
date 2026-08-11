@@ -231,6 +231,16 @@ class FakeInstance:
 
     def _create_application(self, body):
         settings_keys = set(driver.desired_settings(driver.load_spec(driver.spec_path(RESOURCE))))
+        # The real endpoint answers 422 for is_preview_deployments_enabled with
+        # "This field is not allowed." Reproducing that here is the point: with a
+        # fixture that accepted settings on creation, the payload that production
+        # rejects passed every test in this file.
+        rejected = sorted(settings_keys & set(body))
+        if rejected:
+            return 422, {
+                "message": "Validation failed.",
+                "errors": {name: ["This field is not allowed."] for name in rejected},
+            }
         record = {
             "id": 12,
             "uuid": "app-created",
@@ -832,6 +842,40 @@ class ReconcileTests(unittest.TestCase):
         self.assertEqual(len(captured), 1)
         self.assertFalse(captured[0]["instant_deploy"])
         self.assertFalse(captured[0]["autogenerate_domain"])
+
+    def test_the_creation_call_carries_no_settings(self) -> None:
+        """The creation endpoint refuses them; convergence applies them instead."""
+
+        instance = FakeInstance()
+        captured: list[dict] = []
+        original = instance.request
+
+        def recording(method, path, body=None, query=None):
+            if method.upper() == "POST" and path in {
+                "/applications/private-github-app",
+                "/applications/public",
+            }:
+                captured.append(dict(body or {}))
+            return original(method, path, body, query)
+
+        instance.request = recording
+        code, _ = run_operation(driver.operate_reconcile, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertEqual(len(captured), 1)
+        spec = driver.load_spec(driver.spec_path(RESOURCE))
+        for name in driver.desired_settings(spec):
+            self.assertNotIn(name, captured[0])
+
+    def test_settings_are_converged_after_a_creation(self) -> None:
+        """Omitting them from creation must not mean they go unset."""
+
+        instance = FakeInstance()
+        code, report = run_operation(driver.operate_reconcile, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        spec = driver.load_spec(driver.spec_path(RESOURCE))
+        stored = instance.applications[0]["settings"]
+        self.assertEqual(stored, driver.desired_settings(spec))
+        self.assertIn("change connect_to_docker_network", report)
 
     def test_drift_is_written_and_confirmed(self) -> None:
         instance = FakeInstance(with_application=True)
