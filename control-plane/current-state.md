@@ -1493,7 +1493,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with twenty sub-shapes and fifty-four instances.** WS-1 proposed the
+**The general rule, with twenty sub-shapes and fifty-six instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -1645,6 +1645,40 @@ from either side.** The check is one query: ask each instrument for the *other's
 result and confirm it returns nothing. Run here, it returns nothing — 28 failing
 runs, zero check runs — which is what turned an apparent contradiction between §12a
 and the annotation census into two correct answers to two different questions.
+
+**Twenty and fifty-six, and the third consecutive round with no new shape.** Two
+instances, both found while resolving the `closure.dynamic_import` caveat in the
+friction audit, and both in the platform's own controls rather than in anyone's
+reporting. (i) **Eight test assertions that cannot fail for the reason they were
+written.** `tests/test_rollout_trust_anchor.py` asserts
+`raised.exception.code == "closure.dynamic_import"` at eight sites, each after
+constructing one specific dynamic-import shape; because 46 conditions in the
+verifier emit that token, every one of those assertions passes if *any* of the 46
+fires. They certify that some closure check fired, which was never in doubt, and
+they would not notice two conditions being transposed. This is the section's own
+thesis applied one level down — the assertion, not the check, is the control that
+cannot fail — and it is filed under the existing bullet, not coined, because a
+coarse assertion over a coarse token is the same phenomenon seen twice. (ii) **A
+document guarded on the wrong axis.** `docs/runbooks/authorize-rollout-policy-change.md`
+is in `PROTECTED_EXACT_PATHS` and pinned by a test, so it cannot be changed without
+a signed receipt; its operator decoder table lists 14 closure codes while the
+verifier raises 15, and `closure.import_name_invalid` (1151, 1998) is absent.
+Nothing checks the table against the code. Filed under *guards nothing* — the same
+shape as the inert `.gitattributes` assertion, one level up, and the sharpest
+statement of it yet available: **integrity and accuracy are different properties,
+and cryptographic protection of a file's bytes says nothing about whether those
+bytes are true.** Fifty-four plus two is fifty-six; twenty stays twenty.
+
+**The methodological note that belongs with (ii), because it is the reason it was
+found at all.** It was not looked for. It surfaced while checking a third party's
+security-opacity defence by reading the runbook to see whether the distinctions the
+token withholds were published — they are, at 218–222, which settles that argument —
+and the decoder table happened to be fourteen rows below the prose. **The defect was
+adjacent to the evidence, not to the question.** No enumeration aimed at it would
+have covered it, because the enumerations in play were over emitters and over
+tokens, and this is a defect of a table. Recorded as an argument for reading the
+whole of a document one is already opening, which is cheap, rather than for adding
+a further enumeration, which is not.
 
 **The current round adds one sub-shape and two instances, again by enumeration.**
 The bullets were counted directly and stood at seventeen before this edit. New

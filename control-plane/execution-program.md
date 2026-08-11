@@ -1022,6 +1022,15 @@ deployed gateway:
    digest and a CRLF-inflated digest are three different errors that present
    identically. Verify the digest before pushing rather than diagnosing after.
 
+   **And the runbook you would consult is missing a code.** Its operator decoder
+   table lists **14** `closure.*` codes; the verifier raises **15**. The absent one
+   is `closure.import_name_invalid` (raised at 1151 and 1998). Because
+   `docs/runbooks/authorize-rollout-policy-change.md` is itself in
+   `PROTECTED_EXACT_PATHS`, correcting the table needs a signed receipt — so the
+   cheapest moment to fix it is *inside* whichever authorization exercise is
+   performed next, not as a change of its own. One row, and it costs nothing if it
+   rides along.
+
    **Use the recipe that cannot see the working tree at all:**
 
    ```
