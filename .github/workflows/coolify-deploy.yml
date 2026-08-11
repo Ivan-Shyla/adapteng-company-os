@@ -9,8 +9,14 @@ name: Coolify deploy
 #
 # inspect and status only read. reconcile writes configuration and then re-reads
 # it to confirm what was stored. deploy releases the already-reconciled resource
-# and follows the deployment to a terminal state. Nothing here removes anything:
-# the script refuses the DELETE method outright.
+# and follows the deployment to a terminal state. verify asks the container
+# itself whether /ready answers, through a disabled Coolify scheduled task whose
+# schedule can never match; it writes only that task, and only to keep the probe
+# command correct. Nothing here removes anything: the script refuses the DELETE
+# method outright, which is also why the probe task is left in place.
+#
+# verify presents no credential to the gateway and cannot cause a model call:
+# /ready answers before the Authorization header is read.
 #
 # The access value is passed through the environment and is never printed. The
 # base address comes from a repository variable, so neither is written into a
@@ -20,7 +26,7 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: "inspect and status read only; reconcile writes config; deploy releases"
+        description: "inspect, status and verify read; reconcile writes config; deploy releases"
         required: true
         default: inspect
         type: choice
