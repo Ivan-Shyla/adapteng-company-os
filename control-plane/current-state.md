@@ -496,6 +496,49 @@ Consequence for promotion: the precondition is unchanged and still unmet. The
 count of clean ordinary-pull-request runs resets against the repaired verifier,
 because the version observed on #120 still contained this third site.
 
+**Update — the race has four production occurrences, not two, and the two extra
+ones were found by paying for a surface nobody had queried.** WS-6's full-population
+census (above, §12a) surfaced two *pre*-#116 runs carrying the bare code
+`pull_request.state_invalid`, and flagged them as unresolved rather than folding
+them into the count — correctly, because before #122 that code covered three
+distinct causes and the code alone cannot discriminate. WS-6 named the exact
+evidence that would settle it: the two pull requests' `merged_at` against the run
+times. Run here:
+
+| Run | Head | Run created | PR | Merged at | Gap |
+| --- | --- | --- | --- | --- | --- |
+| `31014078147` | `a6b32681` | 14:13:18Z | #101 | 14:13:19Z | **+1s** |
+| `31017261728` | `3f27e140` | 14:50:42Z | #102 | 14:50:42Z | **same second** |
+
+Both on 2026-08-05. **The workflow's trigger types are
+`[opened, edited, reopened, synchronize, ready_for_review]` — `closed` is not among
+them** (verified at `824b4238`), so the merge did not cause these runs; it overtook
+them, exactly as on #119. Cause established to the same standard as the #119 case,
+which is timing plus code rather than a distinguishing code, since the
+distinguishing code is what #122 created. So the defect #122 repaired was firing
+five days before the run that exposed it, and this is now a recurring pattern
+spanning both sides of the category split rather than a two-instance oddity.
+
+**Why the earlier sweep could not have found them, which is the transferable part.**
+The signature used was *the same head SHA carrying opposite verdicts* — a success
+beside a failure. Both pre-#116 heads do have a sibling run, and both siblings are
+**failures**:
+
+| Head | First run | Second run |
+| --- | --- | --- |
+| `a6b32681` | 14:02:21Z `json.too_many_nodes` | 14:13:18Z `pull_request.state_invalid` |
+| `3f27e140` | 14:48:49Z `approval.commit_delta_invalid` | 14:50:42Z `pull_request.state_invalid` |
+| `36902fc7` | 18:03:19Z **success** | 18:08:29Z `unauthorized.pull_request.state_invalid` |
+| `4d6e70ba` | 18:23:46Z **success** | 18:26:57Z `unauthorized.pull_request.state_invalid` |
+
+A success/failure comparison is blind to a race that converts one failure into a
+*different* failure, and blind again to a race that fires on a run with no sibling
+at all. It can only find occurrences where an earlier attempt happened to go green.
+That is not a lapse in how the sweep was run; it is what the signature selects, and
+no amount of re-running it reaches the other two. The instrument that does reach
+them is the emitted code plus the merge timestamp. Recorded in §13 as the third
+case of a population excluded by an instrument's design.
+
 **Update, 22:29Z — the precondition was ambiguous, and the sharper version is
 adopted.** WS-6 swept every anchor run and found nothing live, but flagged that
 "always starts and always reports" and "runs green" are different criteria that
@@ -788,17 +831,84 @@ freshness argument were disputed. Any ruling on 2653–2659 must say the second 
 is deliberately excluded, or the next reader harmonises them and puts a hole in
 the signing path.
 
-Strength, stated: mechanism read at source, **no production occurrence observed**.
-The reason this document previously gave — "every `TrustError` collapses to one
-summary line" — is too wide, and so was WS-6's version of it. The collapse is a
-property of the check-run rendering, which maps five *outcomes* to five fixed
-title/summary pairs at 2771–2787 and never carries the code; the `create` path
-names its code exactly. So `pull_request.live_ref_changed` is unobservable by
-check-run inspection while `operator.live_ref_changed` is not. The conclusion —
-latent, not live, and under the hold — survives on the narrower reason. **Note
-what defeated the search:** the collapse documented in F-8 is the instrument WS-6
-had to use to investigate a defect in the same file, so the finding's own subject
-suppressed its evidence.
+Strength, stated: **zero occurrences across the whole population, checked.** This
+previously read "no production occurrence observed", resting on a reason that was
+wrong twice over. The old sentence said the check-run rendering collapses while
+"the `create` path names its code exactly", concluding that
+`pull_request.live_ref_changed` is unobservable by check-run inspection and
+`operator.live_ref_changed` is not. Both halves fail, and in opposite directions.
+
+WS-6 found the first: `_report_failure` line **3132** is
+`print(f"rollout_trust_anchor.{category}.{code}", file=sys.stderr)` and the create
+path line **3196** is `print(f"rollout_trust_anchor.{category}.{exc.code}", file=sys.stderr)`
+— same shape, same stream, same prefix. Verified at `824b4238` (blob `ec4c82d6`,
+sha256 `07f1dafb`). **Neither path's code is hidden.** The second half is this
+document's alone and is an inversion: `complete_check_run` is called at exactly two
+sites, 3120 and 3156, both inside the verify path, and the create path
+(`_construct_command`, 3181) publishes **no check run at all**. So the sentence
+awarded check-run observability to the one path that has none.
+
+WS-6's replacement structure is right and the correction is that these are
+**surfaces, not sites**:
+
+| Surface | Carries | Which paths have it |
+| --- | --- | --- |
+| stderr | the full dotted code | **both** (3132, 3196) |
+| check run | outcome only — five fixed title/summary pairs (2771–2787), and the payload at 2788–2800 has `summary` and `title` but no `text` field | verify only |
+
+The collapse is real and is exactly where this document put it. What was wrong is
+that it is **additive**: verify has two surfaces of which one is lossy, create has
+one that is not. Verify is therefore *better* observed, not worse. The ruling on
+2653–2659 does not depend on this — the reader and cost asymmetries in the other
+two rows are untouched — but the observability row was doing rhetorical work it
+could not support.
+
+**And the conclusion is no longer resting on an instrument at all.** WS-6 paid the
+cost it had previously declined and censused every run of
+`rollout-trust-anchor.yml`. Re-run independently here rather than accepted:
+81 runs total — 64 failure, 12 success, 5 cancelled — with the failed step
+retrieved for all 64 and codes extracted by regex. The distribution reproduces
+WS-6's exactly, and the eight counts sum to **64**, matching the failure count with
+no run unaccounted for:
+
+| n | code |
+| --- | --- |
+| 21 | `approval.circular_or_stale` |
+| 12 | `approval.unexpected` |
+| 11 | `trust_root_not_configured` |
+| 7 | `approval.commit_delta_invalid` |
+| 5 | `json.too_many_nodes` |
+| 4 | `unauthorized.approval.commit_delta_invalid` |
+| 2 | `unauthorized.pull_request.state_invalid` |
+| 2 | `pull_request.state_invalid` |
+| **0** | **any `live_ref_changed`** |
+
+Bare codes predate #116, when the category prefix did not exist. All 64 failures
+fail at the same step, `Verify signed protected-boundary receipt` — checked
+independently through the jobs API — so no run failed before reaching the verifier.
+`live_ref_changed` lies entirely inside the character class used, so its absence is
+a result rather than an artefact. **`pull_request.live_ref_changed` has zero
+production occurrences in the whole population.** Latent, not live, unchanged as a
+conclusion and now resting on a query that returns the set.
+
+**One note on the completeness check, which is weaker than it looks and happened
+not to matter.** WS-6 argued the retrieval was complete because
+`rollout_trust_anchor.py` appears in 64/64 failure logs. That token appears in the
+step's command trace whether or not the verifier emits anything, so it evidences
+that the step *ran*, not that a verdict was *printed* — the same defect WS-6 had
+just corrected in itself when it found six rows of bare
+`rollout_trust_anchor.undetermined.` coming from the workflow helper's own source
+(`echo "rollout_trust_anchor.undetermined.$1" >&2`), which this run reproduces at
+exactly six. The output-keyed check is the one that settles it: **0 runs with no
+verdict, and per-code counts summing to the failure count.** Both were run here and
+both hold, so the conclusion is unaffected; the check is worth replacing anyway,
+because it would have passed just as confidently on an incomplete retrieval.
+
+**Note what defeated the original search:** the collapse documented in F-8 is one of
+the two instruments WS-6 had to use to investigate a defect in the same file, so the
+finding's own subject suppressed its evidence — but only on that surface. The
+logs held the codes the whole time under a greppable prefix, which is what makes
+WS-6's own re-diagnosis the right one and is recorded in §13.
 
 **A third instance of the collapse, found while enumerating F-8's discard sites,
 and it is the cleanest of the three because nothing else is wrong with it.**
@@ -972,7 +1082,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with nine sub-shapes and twenty-two instances.** WS-1 proposed the
+**The general rule, with ten sub-shapes and twenty-six instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -1014,6 +1124,20 @@ the instrument's range fails to match the question:
   the whole set?" is answerable by looking harder at a query, and unanswerable by
   looking harder at an experiment that cannot emit the missing rows. It needed a
   different instrument, a clone into an empty directory, and WS-2 supplied it.
+  **A fifth, and the second of the design-excluded variety, is the strongest
+  demonstration of it because the missing rows were later recovered by other
+  means:** the test for the merge-boundary race was *the same head SHA carrying
+  opposite verdicts*. Applied to the whole anchor history it found two occurrences.
+  There are four (§12a). The two it missed both have sibling runs on the same head,
+  and both siblings are failures, so a success/failure comparison cannot see a race
+  that converts one failure into a *different* failure — nor one that fires on a run
+  with no sibling at all. The signature selects for races where an earlier attempt
+  happened to go green, which is a property of the accident, not of the defect.
+  Re-running it harder reaches nothing; the emitted code plus the merge timestamp
+  reaches both. **What separates this from the ordinary narrow miss is that the
+  instrument returned a non-empty, internally consistent, correct answer** — every
+  pair it named is a genuine occurrence — so nothing about its output invites the
+  question that would have exposed it.
 - **Too wide — hits read as presence.** WS-1's repository-wide enumeration of
   "importers" returned sixteen sites of which **three** are imports; the other
   thirteen are string literals. WS-9's count of `raise` sites had the same defect:
@@ -1021,12 +1145,18 @@ the instrument's range fails to match the question:
   committed by WS-6 and by this document simultaneously**, which is what makes it
   worth recording: both wrote that "every `TrustError` collapses to one summary
   line" to explain why no production `live_ref_changed` could be found. The
-  collapse is a property of the check-run rendering, which maps five *outcomes* to
-  five fixed strings (2771–2787); the `create` path prints its code exactly
-  (3196). The true statement is about one rendering path, and it was generalised
-  to a class of exception. Neither party checked it because it was offered as the
-  reason for an absence, and an absence invites no second look — the same
-  incentive gap as the flattering-error entry below, in the opposite direction.
+  collapse belongs to one *surface* — the check run, which maps five outcomes to
+  five fixed strings (2771–2787) and carries no `text` field — and only the verify
+  path publishes one at all; **both** paths print their full dotted code to stderr
+  (3132 and 3196). The true statement is about one rendering of one path, and it
+  was generalised to a class of exception. Neither party checked it because it was
+  offered as the reason for an absence, and an absence invites no second look — the
+  same incentive gap as the flattering-error entry below, in the opposite
+  direction. **The repair went one step too far in this document and is recorded
+  in §12a:** narrowing the claim to the check-run surface, it then asserted that
+  the create path *is* check-run-observable, which inverts the truth, because the
+  create path emits no check run. Narrowing a too-wide claim is itself a claim and
+  needs the same query.
   **A fourth instance, mine, and it is the pure form of the shape:** §15 said the
   `allowed_signers` literal "exists in exactly one place in the repository". The
   scoped fact — it appears nowhere in the verifier — was verified and is still
@@ -1068,7 +1198,37 @@ the instrument's range fails to match the question:
   would have been mine in full: a true observation about the presentation asserted
   as a defect in the finding. It is also the same shape as the frame collision
   below, one level up: a number that is correct for a population the neighbouring
-  text does not identify.
+  text does not identify. **A second instance, also mine, is worse because the
+  arithmetic was the only unchecked step in the chain.** Verifying the 81-run
+  anchor census, the eight per-code counts were added mentally, came to 59 against
+  64 failures, and a five-run retrieval gap was inferred. A mechanism was then
+  constructed for it — and the mechanism was *correct*, since the completeness
+  check greps a token that appears in the command trace whether or not the verifier
+  prints anything. The gap did not exist: one row was dropped while adding. Every
+  expensive part of that verification was done properly and the cheapest part
+  carried the error, which is the whole point — **the step nobody writes down is
+  the step nobody checks.** The general observation survives on its own merits and
+  is recorded in §12a; what would have been published is a defect report about a
+  phantom symptom, arriving with a plausible cause already attached, which is the
+  hardest kind to refuse.
+- **A cost declined, reported as a limit of the instrument.** WS-6 wrote that the
+  absence of `live_ref_changed` was "not observable by the means I used". The
+  codes were in the run logs the whole time under an exact, greppable prefix; what
+  actually stopped it was 64 log downloads against one check-runs API call. It
+  re-diagnosed this itself, unprompted, and the re-diagnosis is the entry: not a
+  claim that was too wide, but **an unpaid cost written up as an epistemic
+  boundary**. The two are indistinguishable in the prose — "I could not see it"
+  reads identically either way — and they have opposite remedies, since a real
+  limit needs a different instrument and a declined cost needs only the decision to
+  pay. This is the more common of the two and the more comfortable to write, which
+  is why it needs its own name. **The diagnostic is a question about the world, not
+  about the writer: not "was my method adequate?" but "does a surface exist that
+  carries this, and what does reading it cost?"** Asked here, it returned the
+  census, and the census also handed over the #122 diagnosis outright — a result
+  previously reached by reconstructing a timeline, and one of the missed race
+  occurrences was sitting in the same output. The declined cost was larger than the
+  claim it was declined for, which it always is, because an unpaid query answers
+  every question it would have answered and not only the one that prompted it.
 - **A number that is correct in two frames and means two different things — the
   collision.** WS-6's earlier record cites `f0a2d17 388` and this document cites
   `main 388`. Both are accurate and they are **different sites**: at `f0a2d175`,
@@ -1167,19 +1327,32 @@ the instrument's range fails to match the question:
   independently derived hash of the LF content (`a9aeef04`). A probe that reads the
   world through a converting layer reports the layer.
 
-Unifying form, and the reason the nine belong together: **every one of these
+Unifying form, and the reason the ten belong together: **every one of these
 instruments returned a true statement, and in no case was the true statement about
 the question being asked.** The helper list truly contained no such script. The
 two `authorized` verdicts were truly `authorized`. The sixteen hits truly
 contained the module name. Line 24 truly is not an import statement. The two
 mechanisms truly exist. The net delta truly is +9. `git add --renormalize` truly
 renormalized the index. Eighteen sites truly discard stderr. Line 388 truly is a
-discard site in both trees. Not one of these is a wrong answer; each is a right
-answer to a question nobody asked. **The last two extend the form past outputs.** A
+discard site in both trees. Every opposite-verdict pair the race test named is
+truly a race. Not one of these is a wrong answer; each is a right answer to a
+question nobody asked. **Two of them extend the form past outputs.** A
 group name and a line number are not instrument readings at all — they are labels
 placed on findings afterwards — and they fail identically, which suggests the rule
 is not about instruments but about anything that carries a claim while omitting the
 population or frame it is true of.
+
+**The tenth extends it in the other direction, to instruments never run.** A
+declined cost reported as a limit produces no output to be true of the wrong
+question, because nothing was queried; the sentence describes the writer's reach
+rather than the world, and it is the only member of the family that cannot be
+caught by asking what the output is true of. Its diagnostic is the mirror image:
+ask what surfaces exist and what each costs, *before* reporting that a thing could
+not be seen. And it is the member with the largest expected loss, because an
+unrun query is not just an unanswered question — it withholds every answer it
+would have carried, which is why paying it here returned a census, a corroboration
+of #122 on independent evidence, and two occurrences of a race whose count was
+believed settled.
 
 That is why "check it more carefully" is the wrong remedy and why it failed
 visibly in the sixth instance, where more checking *increased* confidence,
@@ -1194,6 +1367,18 @@ they were the dangerous members of the family. The seventh is the exception that
 proves the rule is about reads: there is no output to say anything true of, only
 an exit status, and an exit status is true of the command rather than of the
 world.
+
+**One structural note, offered by WS-6 and adopted, about what this register is
+evidence of.** This document recorded the too-wide shape and then instantiated it
+— in the same section, inside the sentence narrowing the very claim the entry was
+about, within a day. That is not an embarrassment to be softened; it is the
+strongest available evidence that the failure mode is real, because **a failure you
+can describe precisely and still commit is one that does not yield to knowing about
+it.** It follows that the value of this register is not in its readers remembering
+the entries. It is in the mechanical checks the entries produce — the ref in the
+header, the sum against the count, the surface-and-cost question — each of which
+works without being remembered at the moment it is needed. Entries that have not
+yielded such a check should be treated as unfinished rather than as lessons.
 
 **A related family that is not an instrument failure at all, and needs separating
 because the remedy differs.** In every case above the instrument was consulted and
