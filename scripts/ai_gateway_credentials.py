@@ -245,10 +245,15 @@ def store_repository_secret(repository: str, name: str, value: str) -> None:
     it, so the encryption is delegated rather than reimplemented. The value goes
     in on stdin: an argument would be visible in the process list, and a file
     would outlive the call.
+
+    No flag names the input. --body-file - expresses the same intent and is not
+    understood by every gh build - the runner's rejected it - whereas reading
+    stdin when no value is given is the documented default of every version.
+    Fewer flags is also fewer ways for the value to end up in argv.
     """
 
     completed = subprocess.run(
-        ["gh", "secret", "set", name, "--repo", repository, "--body-file", "-"],
+        ["gh", "secret", "set", name, "--repo", repository],
         input=value,
         capture_output=True,
         text=True,
@@ -275,9 +280,16 @@ def operate_mint_caller(client: driver.Client, repository: str) -> int:
     driver.register_redaction(credential)
     driver.emit(f"    generated caller credential: {describe_material(credential)}")
 
-    write_environment_value(client, uuid, CALLER_KEY, credential)
+    # Order matters, and it is chosen for how a half-failure lands rather than
+    # for readability. Storing the caller's copy first means a failure to write
+    # Coolify leaves the gateway accepting what it accepted before, and a caller
+    # holding a credential that does not work yet - visibly broken. The reverse
+    # order failed here for real: Coolify accepted a credential nobody holds,
+    # which silently revokes every existing caller and reports success up to the
+    # last line.
     store_repository_secret(repository, CALLER_SECRET_NAME, credential)
     driver.emit(f"    repository secret {CALLER_SECRET_NAME}: written")
+    write_environment_value(client, uuid, CALLER_KEY, credential)
 
     entries = driver.read_environment_entries(client, uuid)
     present = any(
