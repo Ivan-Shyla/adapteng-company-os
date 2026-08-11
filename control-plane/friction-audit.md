@@ -1778,6 +1778,96 @@ size-checked at `824b4238` — `_fixed_migration.py` 23914 bytes / 729 lines,
 locally), `approved_assets_github_metadata.py` 518 lines — and the `from None`
 behaviour from execution on 3.11.9, not from documentation.
 
+### The trust-root exemptions, and a mitigation this document filed in the wrong workflow
+
+WS-9 reported that the masking both of us credited with the trust-anchor silence
+covers **one raise out of fifteen**, not the condition. The headline is right and
+the census behind it is exact. Verified by AST at `ffc5bc3`, not by reading:
+`validate_allowed_signers` raises **15** times across **5** codes —
+`allowed_signers.invalid` ×8 (2483, 2489, 2493, 2497, 2499, 2506, 2515, 2525),
+`allowed_signers.key_invalid` ×2 (2529, 2537), `allowed_signers.unavailable` ×2
+(2478, 2487), `trust_root_not_configured` ×2 (2491, 2509), and
+`trust_root_file_missing` ×1 (2476). The second function is `_validate_executable`
+with **6**, so the twenty-one is exact too. `UndeterminedError` subclasses
+`TrustError` at **485**, which is load-bearing: `_validate_trust_root_command`
+catches `TrustError` at **3231**, so severing the hierarchy would convert a
+successful answer into an uncaught internal failure. Every one of those numbers
+survived checking.
+
+**What did not survive is this document's own account of where the mitigation
+lives.** §13's instance (iii) recorded "the line-69 guard masking a live
+misclassification on two required checks". Guard 69 is
+`test -f "$allowed_signers"` in **`rollout-trust-anchor.yml`**. The two required
+checks that run `validate-trust-root` are in **`secret-scan.yml` 40–44** and
+**`validate.yml` 85–89**, and both files contain **zero** occurrences of
+`test -f`, `test ! -L` and `mkdir -m` — no filesystem guard anywhere in either.
+A guard cannot mask anything on a check whose workflow does not contain it. The
+mitigation was placed by plausibility rather than by file, and the check that
+would have caught it is the one this document keeps recommending to others:
+open the artefact the claim names.
+
+**So the two paths have different exemptions in different places, and neither is
+the pair WS-9 tabulated.**
+
+| path | workflow | what actually exempts | reachable and misclassified pre-#124 |
+|---|---|---|---|
+| `verify` | `rollout-trust-anchor.yml` | guard 69 pre-empts `trust_root_file_missing` — **1** site | **14 / 15** |
+| `validate-trust-root` | `secret-scan.yml`, `validate.yml` — no guards at all | the code-keyed special case at **3232** exempts `trust_root_not_configured` — **2** sites | **13 / 15** |
+
+WS-9 gave 14 and 14 and summarised it as "one raise each, neither more than one".
+The second row is **13**, because the exemption at 3232 tests
+`exc.code == "trust_root_not_configured"` — it is keyed on the code, and that code
+is raised from two distinct conditions. The asymmetry they ruled out is the one
+that holds.
+
+**Their stated reason is also stronger than they made it, and wrong for three of
+the fourteen.** The reason offered was that the remaining raises are content
+predicates and a filesystem guard cannot mask a content failure. That is true of
+eleven. It is not true of 2478 and 2487, which are `OSError` from `lstat` and
+`read_bytes` — those are filesystem failures, and they survive the guard because
+a guard cannot close the window between itself and the run, not because they are
+about content. Nor of 2483, which is a disjunction: its `not S_ISREG` arm *is*
+pre-empted (by guard 70, since `path.lstat()` does not follow symlinks), while
+its `st_size > 2_048` arm keeps the raise reachable. Masking a raise requires
+pre-empting **all** of its arms, which is why the count is still one — the
+conclusion holds for two independent reasons where one was claimed.
+
+**A new member of the token-reuse row, and the first whose reuse is load-bearing.**
+The row above records three ways to decouple an emitted token from the knowledge
+at the emission site, and its two existing members — `closure.dynamic_import` and
+`github_metadata.page_invalid` — are both *reporting* coarseness: nothing
+downstream branches on them. `trust_root_not_configured` is different. Its two
+sites are an **empty file** (2491, `data == b""`) and a file whose principal lines
+have all been **commented out** (2509, reached only after every content check has
+already passed — well-formed, non-empty, ASCII, newline-terminated). Those are
+different world-states: one is "nobody configured this yet", the other is "someone
+neutralised what was configured". The shared token is then read at 3232 as a
+**branch predicate**, selecting exit 0 and `{"trust_root": "unconfigured"}` on the
+two required checks. So the reuse is not merely lossy; it decides a status.
+
+That changes the remedy price, which is the axis this audit has been using. For
+the two reporting-only members, splitting a token is free — an author names the
+condition they already tested. Splitting this one is not: whichever half keeps
+`trust_root_not_configured` keeps exit 0, and that is a policy decision about
+whether a commented-out trust root should pass a required check. **A reused token
+that reaches a conditional has been promoted from a label into an interface, and
+the cost of un-reusing it rises accordingly.**
+
+**And #124's own remedy repeats the shape it was written to fix.** Its commit
+message is "pin every trust-root raise, not the two I happened to test", and the
+new test does derive the population by AST-walking both functions, does require
+every raise to be `UndeterminedError`, and does pin both counts. But
+`raised_codes` is populated for both functions at **5306** and compared exactly
+once, at **5312**, for `validate_allowed_signers` alone. `_validate_executable`'s
+five codes — `ssh_keygen.path_invalid` ×2, `ssh_keygen.not_executable`,
+`ssh_keygen.owner_invalid`, `ssh_keygen.permissions_invalid`,
+`ssh_keygen.unavailable` — are collected into a set that is never read. A renamed
+or added code there passes, so long as the total stays 6. The generalisation
+reached the raise type and the counts and stopped one line short of the codes, in
+the commit whose thesis is that stopping short is the error. Third occurrence in
+one exchange; the finding is WS-9's to fix on an open branch, not this document's
+to act on.
+
 ---
 
 ## P3 — obsolete, delete
