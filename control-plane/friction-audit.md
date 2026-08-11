@@ -756,19 +756,58 @@ discard a helper's stderr while capturing its stdout" matches 264 as well as the
 real sites: `selection_error="$(head -c 512 < "$selection_error_file"
 2>/dev/null | tr ... )"` captures `head`'s stdout and discards `head`'s stderr.
 Anyone auditing by that rule finds 264, calls it a defect, and "fixes" the
-degradation path #121 deliberately built. The predicate that separates them is
-**is the failure of this command observable anywhere downstream?** At 264 it is:
-an unreadable or absent error file yields empty output, and line 268
-(`[ -n "$selection_error" ] || selection_error="(none)"`) gives that state a
-printed name. The suppression is there so a missing diagnostic degrades to
-`(none)` instead of tripping `pipefail` and manufacturing a second failure inside
-the reporting path. At `main` 254/379 and `f0a2d17` 388 there is no downstream
-name — the status is checked, the cause is gone.
+degradation path #121 deliberately built.
+
+**The predicate this document proposed instead was worse, and the error is
+mine.** It read *is the failure of this command observable anywhere downstream?*
+— and the answer at every site is **yes**. Verified at `824b4238`: the select
+site's status is checked at 261 and labelled `lifecycle.run_selection_failed` at
+262; the runner-verify site is labelled `lifecycle.runner_registration_invalid`
+at 384; the runner-start site is labelled `lifecycle.runner_start_failed` at 392.
+All three exit non-zero. So the predicate does not merely admit a false positive
+at 264 — **it clears all three real sites**, and an auditor applying it as written
+would conclude #121 fixes a non-defect. The sentence that made it appear to work
+("at `main` 254/379 and `f0a2d17` 388 there is no downstream name") was false, and
+it was written in the same paragraph as the predicate it was needed to support.
+
+**What is actually destroyed is the cause, not the failure.** Every one of these
+sites announces *that* it failed and destroys *why*. #121 does not add the failure
+label — 269 on the branch is the same label `main` already prints at 262. What it
+adds is `lifecycle.run_selection_stderr=`, the account of the cause. So the
+working predicate has to be about information, not about visibility:
+
+> **Does discarding this stream destroy the only account of why the failure
+> happened?**
+
+Scored against all four sites: `main` 254, `main` 379 and 388 — yes, the label
+names the failure and nothing names its cause. `f0a2d17` 264 — no; what is
+discarded is `head`'s own complaint about retrieval, the account of the cause
+lives in the file and is printed at 271, and the retrieval failure itself renders
+as `(none)` via line 268. Four for four.
+
+**That is WS-9's screen, which WS-9 demoted.** Offering *does the discarded stream
+carry the diagnostic, or metadata about retrieving it?* as a fast triage
+subordinate to the observability test, WS-9 had the ordering backwards, and so did
+this document in accepting it. The information question decides; the visibility
+question decides nothing, because these scripts are careful about labels and
+careless about causes, so visibility is uniformly present and carries no signal.
+
+**A structural consequence for how the audit is run.** None of these verdicts can
+be reached at the redirect site. 264 is safe because of lines 268 and 271; 254 is
+defective because 261–263 contain no cause. Both judgements live five to seven
+lines away, in different commands. A grep for `2>/dev/null` is therefore the only
+practical way to *find* candidates and cannot *decide* any of them — the search
+must be line-granular and the decision must be block-granular, and that mismatch
+is a property of the problem rather than a lapse. Stated as procedure: the grep
+yields candidates; each candidate is settled by reading forward to wherever the
+captured value is consumed or printed, and asking what the reader of that output
+would learn about the cause.
 
 That is the same distinction the whole finding rests on, applied one level down:
-what matters is not whether a stream is discarded but whether the failure keeps a
-name. Stated as "count the redirects" the rule is cheap and wrong; stated as
-"find the failures nothing downstream can name" it is the rule #121 implements.
+what matters is not whether a stream is discarded, nor whether the failure is
+announced, but whether anything downstream can still say *why*. Stated as "count
+the redirects" the rule is cheap and wrong; stated as "find the failures whose
+cause nothing downstream can recover" it is the rule #121 implements.
 
 **Why `2>&1` is the wrong fix at both, structurally.** Each is a command
 substitution assigning to a variable the script then depends on — `run_id="$("`
