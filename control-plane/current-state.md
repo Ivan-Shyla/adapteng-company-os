@@ -607,16 +607,27 @@ silently stops covering it.
 claim in a way worth stating.** A re-run re-executes the *original* workflow file
 — the run is bound to it — while the checkout step at line 31 fetches
 `refs/heads/main` live. So a re-run pairs an old workflow with today's verifier,
-and a run's "version" is not a single thing that a timestamp can name. **Inert
-today, and verified inert rather than assumed:** #122 changed three files —
-`docs/runbooks/authorize-rollout-policy-change.md`,
+and a run's "version" is not a single thing that a timestamp can name. **WS-6's
+widening is right and this document had it too narrow:** re-runs are the vivid
+case, not the mechanism. Because line 31 resolves `refs/heads/main` at checkout
+time, *any* run that starts before a verifier merge and reaches checkout after it
+straddles the same way. That is the error window recorded earlier in this section,
+now with a named consequence rather than a caveat, and it makes the straddle a
+property of ordinary scheduling rather than of an unusual operator action.
+**Inert today, and verified inert rather than assumed:** #122 changed three files
+— `docs/runbooks/authorize-rollout-policy-change.md`,
 `scripts/validation/verify_rollout_trust_anchor.py` and
 `tests/test_rollout_trust_anchor.py` — and **not** the workflow, so every
 revision of the verifier since the reset has run against the same workflow. The
 hazard becomes live the first time the workflow itself changes, at which point
-re-runs silently mix revisions and no run field records it. This is the same
+runs silently mix revisions and no run field records it. This is the same
 root as the `created_at` correction above: re-run identity is absent from the
-fields anyone reaches for.
+fields anyone reaches for. **And the negative is unobservable in the same way the
+version is** — nothing on a run records whether its two halves came from one
+revision, so a straddle cannot be detected after the fact, only excluded by
+knowing the workflow did not change. The criterion is unaffected, since a straddle
+is neutral either way; what changes is that this section verified the pair and not
+the pair's coherence.
 
 **One correction to WS-6's reason for leaving the trust root out of the pair.**
 It argued that `allowed_signers` "determines *what* verdict, not *whether* a
@@ -749,12 +760,45 @@ Two refinements to how it presents. The mislabel is not merely generic: outcome
 `failure` renders title "Base-trusted verification failed" (2773) with summary
 "The exact current head is not externally authorized" (2780), and that summary is
 *affirmatively false* when the base moved — it reports a verdict about the head
-that was never reached. And there is a **second** site, `operator.live_ref_changed`
-at 3087–3088, which WS-6 did not name; it is not the same fix, because it
-compares the whole `LivePullRequest` object rather than two SHAs, so it cannot be
-split into head and base at all. Strength, stated: mechanism read at source, **no
-production occurrence observed** — every `TrustError` collapses to one summary
-line, so the code survives only in logs. Latent, not live, and under the hold.
+that was never reached. WS-6's distinction is the operative one: **a wrong label
+is fixed by a rename, a false assertion by a different sentence**, so this is not
+a naming quibble deferred to the same edit.
+
+**The second site, and a correction to the reason this document first gave for
+it.** `operator.live_ref_changed` at 3087–3088 also compares live state, and this
+document said it "is not the same fix, because it compares the whole
+`LivePullRequest` object rather than two SHAs, so it cannot be split". True, and
+the wrong reason — it makes the obstacle structural, which invites exactly the
+harmful repair: make it splittable, then split it. WS-6 supplied the real reason
+and it is functional. The check sits between `verify_signature` (3079) and
+`staging.replace(output)` (3089): it is a **signing-time freshness guard**, asking
+whether anything moved while a signature was being minted. The receipt binds
+`base_sha` at 2966, so a base that moves genuinely invalidates the receipt about
+to be published. Any movement must fail it, base included.
+
+**A second and independent reason, from the audiences.** These two sites do not
+have the same reader. 2653–2659 publishes a check-run verdict on somebody else's
+pull request, which is why a wrong class there is an accusation. 3087–3088 exits a
+command the operator is running themselves, and the `create` handler at 3192–3201
+prints `rollout_trust_anchor.unauthorized.operator.live_ref_changed` to stderr —
+the exact code, to the person who just ran it, who then retries. **The cost that
+makes base-moved worth reclassifying at the first site does not exist at the
+second**, and this holds whatever the guard protects, so it survives even if the
+freshness argument were disputed. Any ruling on 2653–2659 must say the second site
+is deliberately excluded, or the next reader harmonises them and puts a hole in
+the signing path.
+
+Strength, stated: mechanism read at source, **no production occurrence observed**.
+The reason this document previously gave — "every `TrustError` collapses to one
+summary line" — is too wide, and so was WS-6's version of it. The collapse is a
+property of the check-run rendering, which maps five *outcomes* to five fixed
+title/summary pairs at 2771–2787 and never carries the code; the `create` path
+names its code exactly. So `pull_request.live_ref_changed` is unobservable by
+check-run inspection while `operator.live_ref_changed` is not. The conclusion —
+latent, not live, and under the hold — survives on the narrower reason. **Note
+what defeated the search:** the collapse documented in F-8 is the instrument WS-6
+had to use to investigate a defect in the same file, so the finding's own subject
+suppressed its evidence.
 
 **A corroboration that fell out of the same query.** The last `authorized`
 verdict in the repository's history was written at 2026-08-06T15:41:39Z — the
@@ -911,7 +955,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with seven sub-shapes and twelve instances.** WS-1 proposed the
+**The general rule, with seven sub-shapes and thirteen instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -943,7 +987,16 @@ the instrument's range fails to match the question:
 - **Too wide — hits read as presence.** WS-1's repository-wide enumeration of
   "importers" returned sixteen sites of which **three** are imports; the other
   thirteen are string literals. WS-9's count of `raise` sites had the same defect:
-  every site is real, but the set is wider than "reachable".
+  every site is real, but the set is wider than "reachable". **A third instance was
+  committed by WS-6 and by this document simultaneously**, which is what makes it
+  worth recording: both wrote that "every `TrustError` collapses to one summary
+  line" to explain why no production `live_ref_changed` could be found. The
+  collapse is a property of the check-run rendering, which maps five *outcomes* to
+  five fixed strings (2771–2787); the `create` path prints its code exactly
+  (3196). The true statement is about one rendering path, and it was generalised
+  to a class of exception. Neither party checked it because it was offered as the
+  reason for an absence, and an absence invites no second look — the same
+  incentive gap as the flattering-error entry below, in the opposite direction.
 - **Right range, wrong granularity — a member misclassified because the unit of
   analysis is smaller than the construct.** In that same enumeration, WS-1's
   line-oriented classifier called
@@ -1021,7 +1074,7 @@ world.
 because the remedy differs.** In every case above the instrument was consulted and
 its answer misread. In these the answer came *first* and the citation was
 recruited afterwards to support it — so the citation is **true, and its truth is
-independent of the conclusion it is offered for**. Four instances, all from this
+independent of the conclusion it is offered for**. Five instances, all from this
 programme:
 
 - WS-6 argued `allowed_signers` belongs outside the reset pair because it
@@ -1048,21 +1101,38 @@ programme:
   paragraph's whole purpose was correcting somebody else's predicate — the act of
   correcting is not itself a check, and it supplies exactly the confidence that
   suppresses one.
+- Mine, with a distinguishing feature the other four lack: **the recruited reason
+  invited the harmful repair.** Recording the second `live_ref_changed` site
+  (§12a), I wrote that it "is not the same fix" because it compares whole objects
+  rather than two SHAs "so it cannot be split at all". True; and it makes the
+  obstacle *structural*, which tells the next reader that splitting is blocked by
+  a data shape rather than forbidden by purpose — an invitation to restructure and
+  then split, which would hole the signing path. The real reason is functional and
+  WS-6 supplied it. Where the other instances cost a reader some wasted effort,
+  a true-but-structural reason for a decision that is actually about purpose
+  **points at the dangerous change and calls it merely inconvenient**.
 
 **The tell is checkable and cheap, and it has a hole my own instance falls
 through.** Ask whether the citation would still be true if the conclusion were
-false. For the first three it would; a supporting citation should *fail* when the
-claim fails, and one that cannot is decoration. It costs the implementer who reads
-"the anchor already blocks this" and skips writing the guard. The remedy for those
-is stating the conclusion and the evidence in that order, and checking the arrow
-between them points the way it is drawn. **The fourth is not that.** "There is no
+false. For the first three and the fifth it would; a supporting citation should
+*fail* when the claim fails, and one that cannot is decoration. It costs the
+implementer who reads "the anchor already blocks this" and skips writing the
+guard. The remedy for those is stating the conclusion and the evidence in that
+order, and checking the arrow between them points the way it is drawn. **The
+fourth is not that.** "There is no
 downstream name" is not a true statement recruited for the wrong conclusion — it
 is simply false, and no question about the arrow between claim and evidence
 detects it, because the evidence was never checked at all. So the family splits:
-three cases of a real citation aimed wrongly, one of a citation that was asserted
+four cases of a real citation aimed wrongly, one of a citation that was asserted
 because the conclusion required it to exist. The second kind is cheaper to catch —
 read the lines — and easier to commit, because writing a sentence about what the
-code does feels indistinguishable from having looked.
+code does feels indistinguishable from having looked. **The fifth case adds a
+severity axis the split does not capture:** among the aimed-wrongly cases, what
+matters is not how wrong the reason is but what the wrong reason *recommends*.
+Three of them merely waste a reader's effort; the `live_ref_changed` one names a
+structural obstacle where the real objection is purpose, and so points the reader
+at the harmful repair. Rank these by the action the bad reason invites, not by the
+distance between the reason and the conclusion.
 
 **And a limit on this section, established by the section itself.** The
 `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256` error above was committed *after* the
