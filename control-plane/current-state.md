@@ -1382,7 +1382,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with twenty sub-shapes and forty-eight instances.** WS-1 proposed the
+**The general rule, with twenty sub-shapes and fifty-one instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -1469,6 +1469,19 @@ WS-6's 11 pre-category codes cited as evidence of misclassification, the same sh
 one section after correcting me on it; (iii) the line-69 guard masking a live
 misclassification on two required checks, the new shape's own instance. Nineteen
 plus one is twenty; forty-five plus three is forty-eight.
+
+**Twenty and fifty-one — and the number that matters this round is the one that did
+not move.** Three further instances, **no new sub-shape**: (i) the corrected exit-75
+inference surviving in two further copies for a round, under *unstated validity
+interval*, fourth instance; (ii) WS-6's "five required checks green on both" applied
+to a pull request no ruleset governs, same bullet, fifth instance, where the domain
+is a branch scope; (iii) WS-6's citation of the root `.gitattributes` reader as a
+bound on the trust-root pins it does not assert, under *instrument answering a
+neighbouring question*, seventh instance. Twenty stays twenty; forty-eight plus three
+is fifty-one. **This is the first round in which a full exchange produced no new
+shape**, which is the first evidence the population is converging rather than
+accumulating — and the reason to say it explicitly is that a register which grows by
+one every round is indistinguishable from one that is being padded.
 
 **The register's own result this round is that both directions now work.** The last
 entry recorded that every new instance was mine and none was found by me. Here one
@@ -1767,6 +1780,18 @@ plus two is **forty-one**. Bullets re-enumerated, not incremented.
   property of the adjacent channel, measured correctly, describing nothing about
   where the payload lived. The cost was a mispriced remedy — three of six declared
   beyond reach when one line recovers all six.
+  **Seventh instance, WS-6's, and it is the shape applied to a test rather than to a
+  measurement.** Asking who else reads root `.gitattributes` returned
+  `tests/test_migrate_approved_assets.py:2060` —
+  `test_migration_files_are_forced_to_lf_checkout`, an unconditional
+  `(ROOT / ".gitattributes").read_text()` on the required `root-rollout-tests`, so
+  deleting the file does fail a required check pre-merge. Correct, and it is cited to
+  bound a hazard about the **trust root's** byte pins. The two `text eol=lf` pins it
+  asserts are the two **`database/migrations/*.sql`** pins. The three trust-root pins
+  — `allowed_signers`, `approval.json`, `approval.sig` — are asserted **nowhere**:
+  zero occurrences across all four files on `root-rollout-tests`. The right file, on
+  the right required check, answering about a different subject. Finding the reader is
+  not reading it.
 - **Right answer, unstated validity interval — applied outside its domain.**
   WS-9 derived #121's line offsets from `git diff --numstat`: 10 added, 1 removed,
   net **+9**. Correct, and exact at the runner site — 379→388 and 384→393, three
@@ -1808,6 +1833,28 @@ plus two is **forty-one**. Bullets re-enumerated, not incremented.
   then committed the same shape one section later, citing 11 pre-category
   occurrences as evidence of misclassification, so the round contains the error, its
   correction, and its recurrence.
+
+  **Fourth instance, mine, and it is the recurrence rather than the error.** The
+  correction above was applied to one of **three** copies of the same inference in
+  this file — §12a — while §14 (the 79 % passage) and the
+  `anchor_trust_root_absent` caveat kept it, in different words, for a further round.
+  Both are now struck in place with their repairs. The adopted remedy was *grep your
+  own corpus for the entity before citing it*; it never occurred to me to grep for
+  the **claim**, which is the thing that recurs, and which cannot be found by
+  searching for its wording because the three copies share no sentence. The search
+  term for a withdrawn claim is its *inference*.
+
+  **Fifth instance, WS-6's, where the domain is a branch scope rather than a time
+  interval.** WS-6 reported platform #124 and #125 as "five required checks green on
+  both". The checks are green on both — verified, 10 runs on #125's head. But
+  `main-protected` is the repository's **only** ruleset and its `ref_name.include` is
+  **`~DEFAULT_BRANCH`** alone. #125's base is `fix/trust-root-undetermined`, so no
+  ruleset governs it and **none of those checks is required there**. Requiredness is a
+  property of a *check on a target branch*, not of a check; carried onto a stacked
+  pull request it describes a gate that does not exist. #125 is in fact ungated
+  end-to-end — no ruleset, and no anchor verdict either, since the workflow's own
+  scope is `branches: [main]`. What holds it is the standing hold, which is a
+  discipline, not a control.
 - **Success mistaken for effect — an action that reports success while changing
   something other than what its name promises.** The six above are all *read*
   instruments, misread. This one is a write, and the remedy is different in kind.
@@ -3118,14 +3165,57 @@ streak charged to innocent authors.
 **And the condition it would create already largely obtains — measured, from the
 runs.** Of the **81** recorded runs of `rollout-trust-anchor.yml`, **64 failed, 12
 succeeded, 5 were cancelled**: the check is red on **79 %** of its runs today, before
-any rename. Every one of those 64 exited **1** (`unauthorized`), so the exit-**75**
-pathology described above has provably never occurred — the failures are the
-authorization verdict, not the anchor guard. This cuts both ways and both are worth
-holding. It weakens any claim that a rename would *introduce* habitual redness, since
-the habit is already available to be formed; and it strengthens the promotion
-argument, because a check at 79 % red is one whose signal is already discounted, so
-adding a permanent failure mode to it costs almost nothing in attention and buys
-nothing in detection.
+any rename. ~~Every one of those 64 exited **1** (`unauthorized`), so the exit-**75**
+pathology described above has provably never occurred~~ — **struck; see the
+measurement-window correction at §12a.** Exit 75 did not exist for 58 of those runs,
+and neither did the word `unauthorized`. The conclusion survives — the pathology has
+not occurred — but on the 6 post-`1a5d84e` runs, and for the 58 it survives *a
+fortiori*, because the code path was absent rather than untaken. The 79 % figure and
+the red/green split are unaffected: those rest on run conclusions, which exist for the
+whole window. This cuts both ways and both are worth holding. It weakens any claim
+that a rename would *introduce* habitual redness, since the habit is already available
+to be formed; and it strengthens the promotion argument, because a check at 79 % red is
+one whose signal is already discounted, so adding a permanent failure mode to it costs
+almost nothing in attention and buys nothing in detection.
+
+**That strike is itself the finding.** The identical inference was corrected at §12a
+in the same edit that left this copy and one more (below, on
+`anchor_trust_root_absent`) standing — three sites, one corrected. The remedy adopted
+two rounds ago was *grep your own corpus for the entity before citing it*; it was
+applied to **entities** and never to **corrected claims**, which are the thing that
+actually recurs. A withdrawn claim is not retired by being withdrawn once. **When a
+claim is corrected, grep the corpus for the claim, not only for the correction's
+subject** — and the search term is the inference, not its wording, because the three
+copies here share no sentence.
+
+**A separate defect in the same population, found by WS-6 building a stacked pull
+request.** `rollout-trust-anchor.yml` **4–5** is `pull_request_target:` with
+`branches: [main]`, so the workflow fires only when the pull request's *base* is
+`main`. Verified against the check-runs API rather than inferred: platform **#124**
+(base `main`) carries **12** check runs including both anchor checks, and platform
+**#125** (base `fix/trust-root-undetermined`) carries **10** with the anchor checks
+**absent entirely** — not pending, not neutral, never created. So a stacked pull
+request receives **no anchor verdict at all**, and in the checks list that is not
+distinguishable at a glance from a passing one. Two consequences for the numbers on
+this page: the 81 is a count of pull requests **targeting `main`**, not of pull
+requests; and the population excludes stacked work *silently*, in the same surface
+where the failures are counted.
+
+**And it prices the promotion, which is the part that is actionable.** Promotion is
+safe against this only because two independently-written scopes happen to coincide:
+the workflow's `branches: [main]` and the ruleset's `ref_name.include` of
+**`~DEFAULT_BRANCH`** — verified, and `main-protected` is the repository's only
+ruleset. Because they coincide, a promoted anchor would be required exactly on the
+pull requests where it fires, and stacked pull requests would remain ungoverned
+rather than blocked. **Nothing asserts the coincidence.** Widening the ruleset, or
+narrowing the workflow to a subset of governed branches, produces a required check
+that never reports — and `execution-program.md` line 115 already states what that
+does, in the n8n item, for a different check: *a required check that never starts
+blocks a pull request forever*. The rule needed to price this promotion was already
+written down for another one. So the promotion is sound and its soundness is
+contingent: **if the anchor is promoted, the two scopes must be pinned to each
+other by a test**, or the next edit to either one is a repository-wide merge stop
+with no failing assertion to explain it.
 
 **The consequence WS-6 draws is correct and it indicts the criterion I wrote.** By
 the adopted criterion above (line 553 and its point 2 at 563–569),
@@ -3141,7 +3231,13 @@ that detects nothing.
 raised against its own earlier report.** `anchor_trust_root_absent` has **never
 fired**. §12a now establishes this structurally rather than by log absence: across
 all 81 recorded runs every failure exited **1**, and every path that reaches this
-code exits **75**. The guard is therefore load-bearing *in principle* and has never
+code exits **75**. **That support is invalid for 58 of the 81 and the conclusion is
+nonetheless stronger than stated** — the third copy of the corrected inference, kept
+here with its repair rather than deleted. `undetermined()`, `exit 75` and `::error`
+are all absent from `rollout-trust-anchor.yml` at `8a4d87e7`, so for the pre-#116
+runs the code did not exist to fire. "Never fired" holds across the whole window:
+by the exit-code argument for the 6, and by non-existence for the 58. The guard is
+therefore load-bearing *in principle* and has never
 been load-bearing *in practice* — the same status as `live_ref_changed`, mechanism
 read at source with no production occurrence. This does not weaken the argument,
 because a guard's correctness does not depend on its having fired, and the promotion

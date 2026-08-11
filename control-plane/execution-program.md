@@ -822,6 +822,22 @@ deployed gateway:
    that "the anchor's own machinery" is not a set that exists anywhere in the
    code, and that constraining only protected paths leaves the unprotected payload
    unexamined. Do not hand this to an implementer without that section.
+
+   **One fact this ruling now has to survive, discovered by WS-6 stacking a pull
+   request.** A pull request whose base is not `main` is governed by **nothing**:
+   `main-protected` is the repository's only ruleset and includes `~DEFAULT_BRANCH`
+   alone, and `rollout-trust-anchor.yml` fires only on `branches: [main]`. Verified
+   against the check-runs API — platform #125 (base `fix/trust-root-undetermined`)
+   has **10** check runs, all green, **none required**, and **no anchor verdict at
+   all**; #124 (base `main`) has 12 including both anchor checks. So the standing
+   "leave such pull requests open" instruction is currently enforced by agent
+   discipline alone on any stacked pull request, not by a control. That does not
+   change the ruling, and it is not an argument for merging — it is an argument that
+   the sentence must say what it governs. **A rule that says "do not merge past an
+   advisory refusal" is silent about a pull request that never received one.** State
+   the stacked case explicitly, in whichever direction: either the layer retargets to
+   `main` and takes a verdict before merging, or the rule names the base-branch
+   condition under which no verdict is expected.
 5. **Whether to re-pin the verifier so the F-8 fixture can be repaired.** The
    defective fake `gh` lives in a file that is both protected and digest-pinned,
    and the pin lives in a verifier that pins itself. The fix is known, was
@@ -1028,6 +1044,36 @@ deployed gateway:
    `notes.txt`, which carries no attribute, keeps its `autocrlf` behaviour. WS-2's
    caveat is worth keeping: `git reset --hard` discards uncommitted work, so if it
    is ever used during a signing sitting it belongs *before* the edit.
+
+   **The three trust-root pins in this same file are asserted by nothing, which
+   changes what the owner is deciding.** Root `.gitattributes` carries six
+   `text eol=lf` entries: two `database/migrations/*.sql`, `.secrets.baseline`, and
+   the three that fix the trust root's bytes —
+   `.github/trust/rollout-policy/allowed_signers`, `approval.json` and
+   `approval.sig`. The only test that reads the file is
+   `tests/test_migrate_approved_assets.py:2060`, on the required
+   `root-rollout-tests`, and it asserts the **two migration pins only**. Across all
+   four files on that check, zero assertions name the trust-root pins. So deleting
+   those three lines passes **all five required checks**; the sole objection is the
+   anchor, because `.gitattributes` is in `PROTECTED_EXACT_PATHS` (anchor line 69) —
+   and the anchor is advisory, and its refusals have already been merged past once
+   (§15). **Measured, not reasoned**, on scratch clones at `core.autocrlf=true`,
+   reading the checked-out bytes of `allowed_signers` (blob stored LF):
+
+   | arrangement | bytes | CRLF pairs |
+   |---|---|---|
+   | root pin `text eol=lf` (today) | 4 | 0 |
+   | nested `.gitattributes` with `allowed_signers -text` | 4 | **0 — still pinned** |
+   | nested `.gitattributes` with `allowed_signers text eol=crlf` | 6 | 2 |
+   | **three lines deleted from root `.gitattributes`** | 6 | 2 |
+
+   Two consequences. The natural override form — `-text` — does **not** unpin:
+   disabling conversion preserves the stored LF, so it is the *wrong* attack and the
+   one a reviewer would expect. And the simplest route to unpinned bytes is deleting
+   three lines from the root file, which no test notices. **Recommendation: assert
+   the three trust-root pins on `root-rollout-tests`.** It is a required check, the
+   assertion is three `assertIn`s, and it converts an advisory-only guard into a
+   pre-merge one for the specific bytes the signature is taken over.
 
    **Why the original table could not have found this, which is the part worth
    carrying.** The experiment mutated a worktree that already existed, so every
