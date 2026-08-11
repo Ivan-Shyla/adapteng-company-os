@@ -55,7 +55,7 @@ TIMEOUT_VARIABLE = "DEPLOY_TIMEOUT_SECONDS"
 # in this process only for the length of one request.
 SUPPLY_PREFIX = "COOLIFY_SECRET_"
 
-OPERATIONS = ("inspect", "reconcile", "deploy", "status")
+OPERATIONS = ("inspect", "reconcile", "deploy", "status", "verify")
 FORBIDDEN_METHODS = frozenset({"DELETE"})
 
 # Coolify reports a deployment through these states. Anything outside the two
@@ -1815,6 +1815,276 @@ def poll_deployment(
         sleep(poll_seconds)
 
 
+READINESS_TASK_NAME = "adapteng-readiness-probe"
+# February 31st never occurs, so the expression is syntactically valid and can
+# never match. Coolify validates the field but never fires it, and the task is
+# additionally created disabled. Execution happens only through the explicit
+# execute endpoint below, so nothing here introduces a recurring job.
+READINESS_TASK_FREQUENCY = "0 0 31 2 *"
+READINESS_TASK_TIMEOUT_SECONDS = 60
+READINESS_MARKER = "ADAPTENG_READY"
+# Deliberately not read from health_check.path. That field is the container
+# gate's target and is currently /health, which touches nothing. This probe
+# exists to prove the database is reachable, and only /ready opens a
+# connection, so the path is fixed here rather than inherited.
+READINESS_PATH = "/ready"
+# Coolify runs this as: docker exec <container> sh -c '<command>'. It escapes
+# single quotes, so the command deliberately contains none: the URL and the
+# marker arrive as argv rather than as quoted literals inside the source. A
+# 503 is reported as 503 rather than as a traceback, because the point is to
+# learn the gateway's own verdict, not merely that something went wrong.
+READINESS_COMMAND = (
+    'python -c "'
+    "import sys, urllib.request, urllib.error\n"
+    "def probe(target):\n"
+    "    try:\n"
+    "        return urllib.request.urlopen(target, timeout=5).status\n"
+    "    except urllib.error.HTTPError as exc:\n"
+    "        return exc.code\n"
+    "    except Exception as exc:\n"
+    "        return type(exc).__name__\n"
+    'print(sys.argv[2], probe(sys.argv[1]))" '
+    "http://127.0.0.1:{port}{path} " + READINESS_MARKER
+)
+READINESS_EXECUTION_ATTEMPTS = 20
+READINESS_EXECUTION_INTERVAL_SECONDS = 3
+
+
+def readiness_command(spec: dict) -> str:
+    """Build the in-container probe from the committed spec, not from guesses."""
+
+    return READINESS_COMMAND.format(
+        port=spec["network"]["internal_port"],
+        path=READINESS_PATH,
+    )
+
+
+def find_readiness_task(client: Client, uuid: str) -> dict | None:
+    tasks = call(client, "GET", f"/applications/{uuid}/scheduled-tasks")
+    if not isinstance(tasks, list):
+        raise Abort("the scheduled-task listing was not a JSON array")
+    matches = [
+        task
+        for task in tasks
+        if isinstance(task, dict) and task.get("name") == READINESS_TASK_NAME
+    ]
+    if len(matches) > 1:
+        raise Abort(
+            f"{len(matches)} scheduled tasks are named {READINESS_TASK_NAME}; "
+            "an ambiguous match is not resolved by guessing"
+        )
+    return matches[0] if matches else None
+
+
+def converge_readiness_task(client: Client, uuid: str, command: str) -> tuple[str, str]:
+    """Create the probe task if absent, or converge its command if it drifted.
+
+    Returns (task_uuid, what_happened). Deletion is not attempted and is not
+    reachable: the client refuses DELETE outright. The residue is one disabled
+    task per application, which is disclosed in the output rather than hidden.
+    """
+
+    existing = find_readiness_task(client, uuid)
+    body = {
+        "name": READINESS_TASK_NAME,
+        "command": command,
+        "frequency": READINESS_TASK_FREQUENCY,
+        "timeout": READINESS_TASK_TIMEOUT_SECONDS,
+        "enabled": False,
+    }
+    if existing is None:
+        created = call(
+            client,
+            "POST",
+            f"/applications/{uuid}/scheduled-tasks",
+            body=body,
+            expect=(200, 201),
+        )
+        task_uuid = str((created or {}).get("uuid") or "")
+        if not task_uuid:
+            raise Abort("the API accepted the task but returned no uuid")
+        return task_uuid, "created"
+
+    task_uuid = str(existing.get("uuid") or "")
+    if not task_uuid:
+        raise Abort("the existing readiness task has no uuid")
+    if existing.get("command") == command and existing.get("enabled") in (False, 0):
+        return task_uuid, "already correct"
+    call(
+        client,
+        "PATCH",
+        f"/applications/{uuid}/scheduled-tasks/{task_uuid}",
+        body=body,
+        expect=(200, 201),
+    )
+    after = find_readiness_task(client, uuid)
+    if after is None or after.get("command") != command:
+        raise Abort(
+            "the readiness task did not hold the command after it was written; "
+            "refusing to probe with an unverified command"
+        )
+    return task_uuid, "converged"
+
+
+def newest_execution(client: Client, uuid: str, task_uuid: str) -> dict | None:
+    executions = call(
+        client,
+        "GET",
+        f"/applications/{uuid}/scheduled-tasks/{task_uuid}/executions",
+    )
+    if not isinstance(executions, list):
+        raise Abort("the execution listing was not a JSON array")
+    entries = [item for item in executions if isinstance(item, dict)]
+    if not entries:
+        return None
+    return max(entries, key=lambda item: int(item.get("id") or 0))
+
+
+def read_marker(message: object) -> str | None:
+    """Pull the probe's own word out of the captured container output.
+
+    The marker exists so that an empty message, a shell error, or any other
+    output cannot be mistaken for a verdict. Absence is reported as absence.
+    """
+
+    if not isinstance(message, str):
+        return None
+    for line in message.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(READINESS_MARKER):
+            remainder = stripped[len(READINESS_MARKER) :].strip()
+            return remainder or None
+    return None
+
+
+def operate_verify(client: Client, spec: dict, sleep=None) -> int:
+    """Ask the container itself whether it is ready, from inside the container.
+
+    Every other vantage point has been ruled out by measurement rather than by
+    assumption: the readiness runner is on a Docker network that contains the
+    managed database but none of the applications, and cannot resolve even the
+    ops runner, so it is not running inside any of them. Coolify's scheduled
+    task is the one instrument that reaches inside without SSH to the host, a
+    Docker socket on the runner, or any change to the network.
+
+    No credential is presented and no model is called: /ready answers before
+    the Authorization header is read, so this cannot produce an inference call.
+    """
+
+    import time
+
+    sleep = sleep or time.sleep
+    target = spec["target"]
+    emit(f"--- verify {spec['service']}")
+    project = find_project(client, target["project"])
+    environment = (
+        find_environment(client, project["uuid"], target["environment"])
+        if project
+        else None
+    )
+    if project is None or environment is None:
+        emit("    project or environment absent; nothing to verify")
+        emit("RESULT verify failed application=absent")
+        return EXIT_FAILED
+
+    application = find_application(
+        applications_in(client, environment), target["resource_name"]
+    )
+    if application is None:
+        emit(f"    application {target['resource_name']}: ABSENT")
+        emit("RESULT verify failed application=absent")
+        return EXIT_FAILED
+
+    uuid = str(application["uuid"])
+    state = str(application.get("status"))
+    emit(f"    application {target['resource_name']}: uuid={uuid} state={state}")
+
+    command = readiness_command(spec)
+    before = None
+    existing = find_readiness_task(client, uuid)
+    if existing is not None:
+        task_uuid = str(existing.get("uuid") or "")
+        if task_uuid:
+            latest = newest_execution(client, uuid, task_uuid)
+            before = int((latest or {}).get("id") or 0)
+    task_uuid, disposition = converge_readiness_task(client, uuid, command)
+    emit(f"    readiness task {READINESS_TASK_NAME}: {disposition} uuid={task_uuid}")
+    emit(
+        "    it is disabled and its schedule can never match, so it runs only "
+        "when this operation asks it to. It is left in place rather than "
+        "removed because this tool cannot issue DELETE."
+    )
+    if before is None:
+        before = 0
+
+    call(
+        client,
+        "POST",
+        f"/applications/{uuid}/scheduled-tasks/{task_uuid}/execute",
+        expect=(200, 201, 202),
+    )
+    emit("    execution queued; waiting for the container to answer")
+
+    verdict = None
+    execution = None
+    for attempt in range(1, READINESS_EXECUTION_ATTEMPTS + 1):
+        sleep(READINESS_EXECUTION_INTERVAL_SECONDS)
+        execution = newest_execution(client, uuid, task_uuid)
+        current = int((execution or {}).get("id") or 0)
+        if execution is None or current <= before:
+            continue
+        status = str(execution.get("status") or "")
+        if status in {"running", "queued", ""}:
+            continue
+        verdict = read_marker(execution.get("message"))
+        emit(f"    execution {current} finished after {attempt} polls: status={status}")
+        break
+
+    if execution is None or int(execution.get("id") or 0) <= before:
+        emit("")
+        emit(
+            "    no new execution was recorded. The probe did not run, so this "
+            "says nothing about the gateway's readiness either way."
+        )
+        emit("RESULT verify failed ready=undetermined reason=no_execution")
+        return EXIT_FAILED
+
+    if verdict is None:
+        emit("")
+        emit(
+            "    the execution finished but its output does not carry the "
+            f"{READINESS_MARKER} marker, so the probe did not run to completion "
+            "inside the container. Reporting undetermined rather than not-ready: "
+            "a missing answer is not a negative answer."
+        )
+        emit(f"    captured output: {str(execution.get('message'))[:400]!r}")
+        emit("RESULT verify failed ready=undetermined reason=no_marker")
+        return EXIT_FAILED
+
+    emit(f"    the container answered {READINESS_MARKER} {verdict}")
+    if verdict != "200":
+        emit("")
+        emit(
+            "    /ready did not return 200, and it is the gateway's own verdict "
+            "on its dependencies rather than a network or placement problem: "
+            "the probe ran inside the container and reached the process. /ready "
+            "opens a database connection and answers 503 when it cannot; the "
+            "service logs the reason and deliberately keeps it out of the body."
+        )
+        emit(f"RESULT verify failed ready=no answer={verdict}")
+        return EXIT_FAILED
+
+    emit("")
+    emit(
+        "    Readiness confirmed from inside the container. This is the "
+        "database proof: /ready opens a database connection and /health does "
+        "not. No credential was presented and no model was called, because both "
+        "endpoints answer before the Authorization header is read."
+    )
+    emit("RESULT verify ok ready=yes answer=200")
+    return EXIT_OK
+
+
 def operate_status(client: Client, spec: dict) -> int:
     target = spec["target"]
     emit(f"--- status {spec['service']}")
@@ -1928,6 +2198,8 @@ def run(environ: dict) -> int:
         return operate_reconcile(client, spec, supplied)
     if operation == "status":
         return operate_status(client, spec)
+    if operation == "verify":
+        return operate_verify(client, spec)
     return operate_deploy(
         client,
         spec,

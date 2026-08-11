@@ -29,6 +29,7 @@ on:
           - reconcile
           - deploy
           - status
+          - verify
       service:
         description: "Spec file under deploy/, named without its extension"
         required: true
