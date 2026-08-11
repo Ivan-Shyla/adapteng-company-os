@@ -377,6 +377,36 @@ def run_operation(operation, instance, spec=None, **kwargs) -> tuple[int, str]:
     return code, buffer.getvalue()
 
 
+def load_committed_spec() -> dict:
+    return driver.load_spec(driver.spec_path(RESOURCE))
+
+
+def application_patches(instance) -> list[dict]:
+    """Bodies of the PATCHes made to the application resource itself."""
+
+    return [
+        body
+        for method, path, body in instance.call_bodies
+        if method == "PATCH" and re.fullmatch(r"/applications/[^/]+", path)
+    ]
+
+
+def environment_writes(instance) -> list[tuple[str, str]]:
+    """Writes that change stored state, which a repeat run must not produce.
+
+    A blind setting has to be re-sent on every run because nothing can be
+    compared against it, so counting every write would make idempotency
+    untestable. Environment writes are the ones that carry values, so they are
+    the ones a second run must not make.
+    """
+
+    return [
+        (method, path)
+        for method, path in instance.writes()
+        if not re.fullmatch(r"/applications/[^/]+", path)
+    ]
+
+
 class CommittedSpecTests(unittest.TestCase):
     """The AI Gateway spec is the artefact a deployment depends on, so it is pinned."""
 
@@ -972,16 +1002,27 @@ class ReconcileTests(unittest.TestCase):
         self.assertEqual(len(instance.applications), 1)
 
     def test_the_second_run_changes_nothing(self) -> None:
-        """Idempotency is the property that makes this safe to run from a chat prompt."""
+        """Idempotency is the property that makes this safe to run from a chat prompt.
+
+        A setting the API will not report has to be written on every run, because
+        there is nothing to compare against - so "no calls at all" is no longer
+        the right shape of this guard. What still has to hold is that a second
+        run changes no state: the only write is the declared blind value, and it
+        carries nothing else.
+        """
 
         instance = FakeInstance()
         first, _ = run_operation(driver.operate_reconcile, instance)
         self.assertEqual(first, driver.EXIT_OK)
         instance.calls.clear()
+        instance.call_bodies.clear()
         second, report = run_operation(driver.operate_reconcile, instance)
         self.assertEqual(second, driver.EXIT_OK)
         self.assertIn("changed=no", report)
-        self.assertEqual(instance.writes(), [])
+        blind = set(driver.settings_written_blind(load_committed_spec()))
+        for body in application_patches(instance):
+            self.assertEqual(set(body), blind)
+        self.assertEqual(environment_writes(instance), [])
 
     def test_a_created_application_is_never_released_by_the_creation_call(self) -> None:
         instance = FakeInstance()
@@ -1093,7 +1134,7 @@ class ReconcileTests(unittest.TestCase):
         self.assertIn("AI_GATEWAY_DATABASE_URL", report)
 
     def test_supplying_a_value_twice_writes_once(self) -> None:
-        """Binding by reference must not make every run a write."""
+        """Binding by reference must not make every run an environment write."""
 
         instance = FakeInstance()
         supplied = {"AI_GATEWAY_FX_USD_EUR": "0.865426"}
@@ -1103,7 +1144,7 @@ class ReconcileTests(unittest.TestCase):
         second, report = run_operation(driver.operate_reconcile, instance, supplied=supplied)
         self.assertEqual(second, driver.EXIT_OK)
         self.assertIn("changed=no", report)
-        self.assertEqual(instance.writes(), [])
+        self.assertEqual(environment_writes(instance), [])
 
     def test_an_unsupplied_owner_held_key_is_still_reported_as_pending(self) -> None:
         """Supplying one key must not silence the pending line for the others."""
@@ -1366,22 +1407,67 @@ class UnverifiableSettingsTests(unittest.TestCase):
         code, report = run_operation(driver.operate_reconcile, instance)
         self.assertEqual(code, driver.EXIT_OK)
         self.assertIn("VERIFY OK", report)
-        self.assertIn("unreported_settings=4", report)
+        self.assertIn("unreported_settings=3", report)
+        self.assertIn("written_blind=1", report)
         self.assertIn("PENDING-OWNER-UI", report)
 
-    def test_an_unreportable_setting_is_never_written(self) -> None:
-        """A write that cannot be re-read must not be attempted."""
+    def test_an_unreportable_setting_without_a_verifier_is_never_written(self) -> None:
+        """A write that can be confirmed by nothing at all must not be attempted.
+
+        The rule narrowed rather than relaxed: it is about whether anything
+        observes the setting, not about whether this endpoint reads it back. A
+        setting that names no check is still unverifiable and is still withheld.
+        """
 
         instance = FakeInstance()
         instance.settings_response_shape = "none"
         run_operation(driver.operate_reconcile, instance)
-        written = [
-            body
-            for method, path, body in instance.call_bodies
-            if method == "PATCH" and re.fullmatch(r"/applications/[^/]+", path)
-        ]
-        for body in written:
-            self.assertEqual(set(body) & set(driver.SETTING_KEYS), set())
+        blind = set(driver.settings_written_blind(load_committed_spec()))
+        self.assertTrue(blind, "the spec should exercise this path")
+        withheld = set(driver.SETTING_KEYS) - blind
+        for body in application_patches(instance):
+            self.assertEqual(set(body) & withheld, set())
+
+    def test_a_blind_write_is_never_folded_into_the_verified_result(self) -> None:
+        """This run sent it and cannot read it back. Saying otherwise invents a check."""
+
+        instance = FakeInstance()
+        instance.settings_response_shape = "none"
+        _, report = run_operation(driver.operate_reconcile, instance)
+        self.assertIn("WRITTEN NOT VERIFIED connect_to_docker_network", report)
+        self.assertIn("gateway_readiness.py probe", report)
+
+    def test_a_setting_becomes_writable_only_by_naming_its_check(self) -> None:
+        """The named check is the whole permission, so an empty name grants nothing."""
+
+        spec = load_committed_spec()
+        keys = spec["settings_not_reported_by_api"]["keys"]
+        self.assertIn("verified_by", keys["connect_to_docker_network"])
+        for name in ("is_auto_deploy_enabled", "is_force_https_enabled"):
+            with self.subTest(name=name):
+                self.assertNotIn("verified_by", keys[name])
+        stripped = copy.deepcopy(spec)
+        stripped["settings_not_reported_by_api"]["keys"]["connect_to_docker_network"].pop(
+            "verified_by"
+        )
+        self.assertEqual(driver.settings_written_blind(stripped), {})
+        blank = copy.deepcopy(spec)
+        blank["settings_not_reported_by_api"]["keys"]["connect_to_docker_network"][
+            "verified_by"
+        ] = "   "
+        self.assertEqual(driver.settings_written_blind(blank), {})
+
+    def test_the_blind_value_written_is_the_declared_one(self) -> None:
+        """A blind write that sent something other than the spec would be undetectable."""
+
+        instance = FakeInstance()
+        instance.settings_response_shape = "none"
+        run_operation(driver.operate_reconcile, instance)
+        declared = driver.desired_settings(load_committed_spec())
+        seen = {}
+        for body in application_patches(instance):
+            seen.update({k: v for k, v in body.items() if k in driver.SETTING_KEYS})
+        self.assertEqual(seen.get("connect_to_docker_network"), declared["connect_to_docker_network"])
 
 
 class ApiMessageTests(unittest.TestCase):

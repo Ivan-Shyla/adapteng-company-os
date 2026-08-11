@@ -71,8 +71,9 @@
         "compensating_control": "Redirection only applies to a public route. The spec declares public_fqdn null and reconcile fails if an FQDN appears, so there is no HTTP route to redirect."
       },
       "connect_to_docker_network": {
-        "reason": "Not reported on this version.",
-        "compensating_control": "The application is placed on destination c3dnc3udkoenz9zhw148mbu0, the same destination as adapteng-baserow-adapter and n8n-selfhosted, which reach the shared network from there. Reachability is not assumed from this flag: it is proven separately by the Postgres connectivity check, which is deliberately not the /health check."
+        "reason": "Not reported on this version. Not writing it was wrong: the container was created detached from the shared network and the first readiness probe found neither alias resolvable, while reconcile reported PENDING-OWNER-UI as though a formality were outstanding.",
+        "compensating_control": "Superseded. The previous entry claimed reachability was proven by the Postgres connectivity check; that check proves the operations runner reaches Postgres and says nothing about whether this container is attached to anything. It reasoned about the wrong container, which is exactly why a detached gateway went unnoticed. The value is now written on every reconcile and confirmed by the check named in verified_by, which asks the network about this container directly.",
+        "verified_by": "scripts/gateway_readiness.py probe, run by .github/workflows/gateway-readiness.yml on the adapteng-ops runner: it resolves this container by uuid and by name from inside the shared network, with the managed database as a control so that a failure names which side is detached."
       }
     }
   },
