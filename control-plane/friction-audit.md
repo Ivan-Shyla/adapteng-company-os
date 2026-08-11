@@ -966,25 +966,43 @@ is the thing that surfaced it.
 wider rather than narrower.** This document previously said only that isolated mode
 "suppresses `PYTHONPATH` and the user site-packages directory". WS-1 added that
 "`sys.path[0]` is the script's directory either way, so this is import-shadowing of
-the helper's own dependencies, not of the helper" — narrowing it. **That is false
-on Python 3.11**, where `-I` implies `-P`. Measured on 3.11.9 rather than recalled:
+the helper's own dependencies, not of the helper" — narrowing it. **That is false.**
+Measured on 3.11.9 rather than recalled, with a third row that separates the
+mechanism from the flag:
 
-| invocation | `sys.path[0]` | script dir on path | `PYTHONPATH` honoured |
-| --- | --- | --- | --- |
-| `python -I probe.py` | `python311.zip` | **no** | no |
-| `python probe.py` | the script's directory | **yes** | yes |
+| invocation | `sys.path[0]` | script dir on path | `flags.isolated` | `flags.safe_path` |
+| --- | --- | --- | --- | --- |
+| `python -I probe.py` | `python311.zip` | **no** | 1 | true |
+| `python probe.py` | the script's directory | **yes** | 0 | false |
+| `python -P probe.py` | `python311.zip` | **no** | 0 | true |
 
 So there are three differences at 168, not two, and the third is the one WS-1
 denied: the interpreter prepends `scripts/validation/` to `sys.path` **ahead of
 everything else**.
+
+**Correcting the version scoping this document gave, because it is the sentence
+that misdirected the next reader.** The claim above was first written as "false on
+Python 3.11, where `-I` implies `-P`". The measurement is right and the stated
+reason is narrower than the truth. The third row shows `-P` alone reproducing the
+path effect with `flags.isolated` still `0`, so the path behaviour is separable
+from `-E`/`-s` rather than a by-product of them; and the **3.10** documentation —
+published before `-P` existed — already states that `-I` "can be used to run the
+script in isolated mode where `sys.path` contains neither the current directory nor
+the user's site-packages directory". `-P` in 3.11 gave a pre-existing behaviour its
+own spelling. **The consequence is not cosmetic: a correct claim advertised as
+version-contingent invites the next reader to go looking for a version, and that is
+exactly what happened** — see the transposition below.
 
 **In this repository that is not generic import hygiene — it bypasses a control the
 repository actually operates.** The helper does not rely on implicit path setup: at
 `approved_assets_github_metadata.py` 18–20 it resolves `parents[2]` and inserts the
 **repository root**, then imports fully qualified (`from scripts.validation.bounded_json
 import …`). That deliberate mutation is what
-`CLOSURE_SYS_PATH_ALLOWED_SOURCE_SHA256` in `validate_repo.py` (427–440) exists to
-pin. `-I` is what makes that pinning exhaustive, by ensuring the governed insert is
+`CLOSURE_SYS_PATH_ALLOWED_SOURCE_SHA256` at `verify_rollout_trust_anchor.py`
+427–440 exists to pin — a four-entry dict in which `validate_repo.py` is one of the
+**governed entries** (431–433), not the container. *This document previously named
+`validate_repo.py` as the container; the correction is the last subsection here.*
+`-I` is what makes that pinning exhaustive, by ensuring the governed insert is
 the *only* repo path present. At 168 the interpreter adds an ungoverned entry at
 higher precedence, and the 22 modules in `scripts/validation/` become importable by
 bare name for that one call — including ahead of the standard library the helper
@@ -992,12 +1010,128 @@ imports (`json`, `re`, `hashlib`, `subprocess`, `argparse`, `pathlib`). No colli
 exists today; the directory already contains `bounded_json.py`, so the naming
 convention is one file away from one.
 
+**Two refinements from WS-1, both confirmed by measurement, and they widen the
+window rather than bound it.** First, the governed insert does not *displace* the
+ungoverned entry. `sys.path.insert(0, str(REPO_ROOT))` at helper line 20 puts the
+repository root at index 0 and pushes the script directory to **1** — still ahead
+of the standard library. Executed on a synthetic tree reproducing the helper's
+prologue: without `-I`, the script directory sits at index 1 with the first
+stdlib entry at 4; with `-I` it is absent from `sys.path` entirely. So without `-I`
+the pinned mutation stacks on top of the ungoverned path instead of neutralising
+it. Second, the helper's own standard-library imports are lines **6–16**
+(`argparse hashlib json re subprocess sys dataclasses datetime pathlib typing
+urllib.parse`) and execute *before* line 20. The script directory is on `sys.path`
+from interpreter startup, so the exposure window is the whole module including its
+stdlib imports — not, as the paragraph above could be read, only the region after
+the governed insert.
+
+**A measurement neither of us took: the script's other ungoverned interpreters are
+a different surface, and it is empty.** Eight calls go through the helper — 56, 61,
+71, 156, 161, **168**, 248, 376 — and seven carry `-I`. But the file also runs
+`python -c` at 177, 179 and 230 and `python -` (stdin) at 186 and 280, none of them
+isolated. Those have a different `sys.path[0]`: measured, `python -c` yields `''`
+and stdin yields the working directory as an absolute path — the **repository
+root**, not `scripts/validation/`. At `824b4238` the repository root contains
+**zero** `.py` files, so that surface has nothing on it, while 168's has 22 modules.
+The extra measurement therefore sharpens WS-1's singling-out of 168 instead of
+diluting it: of the ungoverned invocations, 168 is the only one whose exposed
+directory is populated.
+
+**WS-1's reclassification, verified verbatim, and it moves 168 out of hygiene.**
+The call at 168 is `assert-secret-absent … --name "$reviewed_evidence_name"`,
+failing to `lifecycle.reviewed_evidence_secret_present` at 172. It is an **absence
+assertion**: subverted import resolution makes it exit 0, and the script proceeds
+believing a reviewed-evidence secret is absent when it is present. Its immediate
+sibling at **161** makes the *same* `assert-secret-absent` call for
+`$authorization_name` **with `-I`**, failing to `lifecycle.authorization_secret_present`
+at 165. So the script's two secret-absence gates are governed asymmetrically, and
+the ungoverned one is reviewed-evidence. That is an unprotected security assertion
+rather than an incidental, and it is now [owner item 7](execution-program.md).
+
 **WS-1's decision not to touch it stands, on grounds independent of the reason it
 gave:** the file is under #121's signature hold, and changing it would invalidate
 green checks on a PR awaiting signature while smuggling an unrelated change into a
-receipt. The conclusion survives; the supporting precision does not — the third
-occurrence in this programme of a sound decision resting on a claim that measurement
-reverses.
+receipt. **WS-1's own refinement of how this document framed that is better than the
+framing, and is kept:** this was called the third occurrence of a sound decision
+*resting on* a claim that measurement reverses. It did not rest on it. The signature
+hold and the don't-smuggle-into-a-receipt argument each suffice alone, so the false
+claim was **decoration on an overdetermined decision** — and that is precisely the
+condition under which a wrong claim survives. Nothing downstream needed it to be
+true, so nothing tested it. The diagnostic follows directly and is mechanical:
+**when a decision is overdetermined, its supporting claims are unaudited by
+construction; check them separately or drop them.** A decision with three
+independent reasons is safer than one with a single reason, and its prose is less
+trustworthy — which is not intuitive, and is why it belongs in writing.
+
+### A citation whose subject and object are transposed — twice, in one exchange, in both directions
+
+**WS-1 caught this document naming the wrong file, and the line span it gave was
+exact.** `CLOSURE_SYS_PATH_ALLOWED_SOURCE_SHA256` is declared at
+`scripts/validation/verify_rollout_trust_anchor.py` **427**, its body running
+427–440 and holding four entries: `run_rollout_module.py` (428–430),
+`validate_repo.py` (431–433), `approved_assets_github_metadata.py` (434–436) and
+`create_approved_assets_phase_authorization.py` (437–439). Verified from the blob
+at `824b4238`, size-checked. `scripts/validation/validate_repo.py` — 17131 bytes,
+467 lines, fetched and size-checked — contains the string `SYS_PATH` **zero** times.
+So the relation was inverted: the file named as the pin's *container* is one of the
+things the pin *governs*.
+
+**What makes this worse than a wrong line number, and worse than the wrong-file case
+recorded above.** A bad ref fails to resolve and announces itself. A right ref in
+the wrong file resolves to something arbitrary, which a careful reader may still
+notice. Here the ref resolves to something **on topic**: `validate_repo.py:427` is
+
+```python
+        check(False, f"protected set is not closed under import: {exc.code}", errors)
+```
+
+— a line about *trust closure*, the very subsystem the pin belongs to, inside the
+block that calls `assert_repository_trust_closure` (424–431). A reader who does the
+obvious check lands on corroborating material and stops. The association
+"`validate_repo` ↔ `sys.path` pinning" is genuine and merely reversed, so every
+component of the sentence is individually true and only the composition is wrong.
+
+**The corpus already contained the correct relation, which is what makes the
+diagnostic cheap.** `execution-program.md` line 872 says "`validate_repo.py`'s own
+pin at 431–432" — naming it correctly as a governed entry. So this was never a
+knowledge gap: the two statements sat in the same directory contradicting each
+other. **Grep your own corpus for the entity before citing it.** That is the same
+instrument added for withdrawn reasons in §13's thirteenth sub-shape, generalised
+from *strings a correction retired* to *entities a claim names*, and it would have
+caught this one.
+
+**WS-1 committed the mirror image in the message that delivered the correction, and
+the verification is a clean negative.** Supporting the argument that the `-I`
+divergence "isn't local", WS-1 wrote that `migrate-approved-assets.yml` "pins
+`python-version: "3.11"` at 449 and 1006 — the workflow that runs this script". The
+pins are exact: both lines verified in a 56978-byte, 1126-line blob. **The final
+clause is false.** All 16 workflow files at `824b4238` were fetched, size-checked
+and searched; **zero** reference the script. A repository-wide code search returns
+six references to `authorize_approved_assets_phase` — a runbook
+(`docs/runbooks/migrate-approved-assets.md`), three validators and two test files —
+and the script itself lives at `scripts/operations/`, matching this document's
+cached copy byte-for-byte at 12417 bytes. It is **operator-run, not CI-run**.
+
+**The conclusion survives on better grounds, and the security reading gets
+stronger.** The divergence needs no version pin at all, because isolated mode's
+exclusion of the prepended directory is documented behaviour of `-I` predating `-P`.
+And an operator's workstation is precisely where `PYTHONPATH` and user
+site-packages pollution lives, which a fresh hosted runner does not have — while
+line 152 asserts repository-admin before 168 runs. So the ungoverned call executes
+in the environment *most* likely to carry the pollution, with admin credentials
+live. Being outside CI makes item 7 more serious, not less.
+
+**The shape, since both instances share it and the parties differ.** Each of us
+reached for the artefact *nearest* the claim and assigned it a role it does not
+have: `validate_repo.py` really is in the pin, as a governed entry;
+`migrate-approved-assets.yml` really is about the same subsystem — it is the
+namesake of the runbook that documents the script. **Relatedness is what defeats the
+spot-check**, because the reader verifying the citation finds a true connection and
+reads it as the claimed one. And the two are causally linked in one direction: this
+document's over-narrow "false on Python 3.11" is what made a *version* look like the
+thing needing evidence, which is what sent WS-1 to a workflow with a version pin. An
+imprecise reason does not merely fail to persuade; it selects the next reader's
+search. Filed as §13's eighteenth sub-shape.
 
 **Why `2>&1` is the wrong fix at both, structurally.** Each is a command
 substitution assigning to a variable the script then depends on — `run_id="$("`

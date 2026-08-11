@@ -1135,7 +1135,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with seventeen sub-shapes and thirty-four instances.** WS-1 proposed the
+**The general rule, with eighteen sub-shapes and thirty-seven instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -1164,6 +1164,29 @@ is seventeen; thirty-one plus three is thirty-four. **The first of the three is
 worth naming as mine:** it is the identical error I had just corrected in WS-6's
 emitter table, committed by me in the next document I edited, which is the argument
 for the register being mechanical rather than remembered.
+
+**The count above went stale one round later, in exactly the way this list
+documents, for the third time and again by me.** The round after it added a second
+instance to the thirteenth sub-shape — WS-2 reverting to a withdrawn reason — and
+did **not** move the header, which continued to read thirty-four. Derived from that
+round's own diff rather than from memory: it appended exactly one failure instance
+to §13, plus one entry to the positive-results subsection, which is not a failure
+and is not counted here. So the true figure entering the current round was
+seventeen sub-shapes and **thirty-five** instances. The lesson is narrower than
+"check the arithmetic": the round in question opened by declaring *no new
+sub-shape*, and that true statement is what made the header look settled. **A
+header carries two numbers, and confirming one of them is not evidence about the
+other.**
+
+**The current round adds one sub-shape and two instances, again by enumeration.**
+The bullets were counted directly and stood at seventeen before this edit. New
+sub-shape: *a relation asserted with its terms transposed*. New instances: (i) this
+programme's own citation of `CLOSURE_SYS_PATH_ALLOWED_SOURCE_SHA256` as living in
+`validate_repo.py`, when that file is one of the dict's governed entries; (ii)
+WS-1's citation of `migrate-approved-assets.yml` as "the workflow that runs this
+script", when no workflow runs it. Seventeen plus one is eighteen; thirty-five plus
+two is **thirty-seven**. Both instances are citations, and both were produced by
+parties who verified the components and not the relation between them.
 
 - **Too narrow, empty — silence read as absence.** WS-1 searched a shell helper
   list for a module. A helper list enumerates *invoked scripts* and structurally
@@ -1567,7 +1590,33 @@ for the register being mechanical rather than remembered.
   of a mechanism, apply the rule to the mechanism's own known defect classes and see
   whether any lands in a bin that contradicts its meaning.
 
-Unifying form, and the reason the seventeen belong together: **every one of these
+- **A relation asserted with its terms transposed — every component true, the
+  composition inverted.** This document cited
+  `CLOSURE_SYS_PATH_ALLOWED_SOURCE_SHA256` as living "in `validate_repo.py`
+  (427–440)". The constant is at `verify_rollout_trust_anchor.py` **427**, and
+  `validate_repo.py` — which contains the string `SYS_PATH` zero times — is one of
+  the four paths that dict *governs*, at 431–433. WS-1 then produced the mirror
+  image in the same message: `migrate-approved-assets.yml` does pin
+  `python-version: "3.11"` at 449 and 1006, but it is not, as claimed, "the workflow
+  that runs this script" — none of the sixteen workflow files references it, and the
+  script is operator-run out of `scripts/operations/`. **What distinguishes this from
+  every other entry above is that the instrument was not at fault.** The searches
+  returned the right artefacts; the sentence assigned them the wrong roles. So no
+  amount of widening the query reaches it, and the two standard defences both fail:
+  the line number *corroborates* — `validate_repo.py:427` is itself a trust-closure
+  line — and the entity is *genuinely related*, as a governed entry in one case and
+  the runbook's namesake in the other. **Relatedness is what defeats the
+  spot-check.** One causal link is worth recording because it runs between the two
+  instances: the transposed pin sat beside a claim this document had scoped to
+  "false on Python 3.11", which made a *version* look like the thing needing
+  evidence and sent the next reader to a workflow with a version pin. An imprecise
+  reason selects the next reader's search. **Check, and it is cheap because the
+  corpus already holds the answer:** state the relation as a sentence with subject
+  and object, then grep your own corpus for both terms — `execution-program.md` line
+  872 already named `validate_repo.py` correctly as a pinned entry, so the two
+  statements were contradicting each other in the same directory.
+
+Unifying form, and the reason the eighteen belong together: **every one of these
 instruments returned a true statement, and in no case was the true statement about
 the question being asked.** The helper list truly contained no such script. The
 two `authorized` verdicts were truly `authorized`. The sixteen hits truly
@@ -1577,12 +1626,18 @@ the true statement was about the mechanisms I had read, not about the mechanisms
 there are. The net delta truly is +9. `git add --renormalize` truly
 renormalized the index. Eighteen sites truly discard stderr. Line 388 truly is a
 discard site in both trees. Every opposite-verdict pair the race test named is
-truly a race. Not one of these is a wrong answer; each is a right answer to a
-question nobody asked. **Two of them extend the form past outputs.** A
+truly a race. `validate_repo.py:427` truly is a line about trust closure, and
+`migrate-approved-assets.yml` truly pins Python 3.11 at 449 and 1006. Not one of
+these is a wrong answer; each is a right answer to a
+question nobody asked. **Three of them extend the form past outputs.** A
 group name and a line number are not instrument readings at all — they are labels
 placed on findings afterwards — and they fail identically, which suggests the rule
 is not about instruments but about anything that carries a claim while omitting the
-population or frame it is true of.
+population or frame it is true of. The eighteenth extends it once more, to the
+*relation between two artefacts*: there the reading is not merely unlabelled but
+correct and complete, and the error is entirely in the sentence built from it —
+which is why it is the only member whose remedy is grammatical rather than
+investigative.
 
 **The tenth extends it in the other direction, to instruments never run.** A
 declined cost reported as a limit produces no output to be true of the wrong
