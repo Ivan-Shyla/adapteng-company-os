@@ -24,8 +24,8 @@
     "kind": "private_github_app",
     "git_repository": "Ivan-Shyla/adapteng-automation-platform",
     "git_branch": "main",
-    "github_app": null,
-    "note": "The platform repository is private, so Coolify must read it through an installed GitHub App. github_app is null: the reconciler resolves the single installed app and aborts when several exist."
+    "github_app": "adapteng-coolify",
+    "note": "The platform repository is private, so Coolify must read it through an installed GitHub App. This instance offers two sources: the built-in 'Public GitHub', which can only read public repositories and so cannot read this one, and the installed App 'adapteng-coolify'. With two candidates the choice is a decision rather than a lookup, so it is declared here where it can be reviewed instead of being inferred at run time."
   },
   "build": {
     "build_pack": "dockerfile",

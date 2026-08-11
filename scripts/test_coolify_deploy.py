@@ -100,7 +100,13 @@ class FakeInstance:
         # stays 200 so the existing suites keep exercising the endpoint path, and
         # the tests that reproduce production set it to False explicitly.
         self.destinations_endpoint_present = True
-        self.github_apps = [{"id": 1, "uuid": "gha-1", "name": "adapteng"}]
+        # Mirrors production: two sources are offered, and only the installed App
+        # can read a private repository. A fixture with one app would let a spec
+        # that names none pass here and abort against the real instance.
+        self.github_apps = [
+            {"id": 1, "uuid": "gha-1", "name": "adapteng-coolify"},
+            {"id": 2, "uuid": "gha-2", "name": "Public GitHub"},
+        ]
         self.applications: list[dict] = []
         self.environment_entries: dict[str, list[dict]] = {}
         self.deployment_states = list(deployment_states or ["queued", "in_progress", "finished"])
@@ -303,6 +309,19 @@ class CommittedSpecTests(unittest.TestCase):
         self.assertEqual(self.spec["service"], RESOURCE)
         self.assertEqual(self.spec["target"]["project"], PROJECT)
         self.assertEqual(self.spec["target"]["environment"], ENVIRONMENT)
+
+    def test_the_private_source_names_its_github_app(self) -> None:
+        """Two sources exist on this instance, so the choice cannot be inferred.
+
+        Leaving this null aborted a reconcile against production. Only the
+        installed App can read a private repository; the built-in 'Public GitHub'
+        source cannot. Reverting to null would abort again, one API call before
+        the application is created.
+        """
+
+        source = self.spec["source"]
+        self.assertEqual(source["kind"], "private_github_app")
+        self.assertEqual(source["github_app"], "adapteng-coolify")
 
     def test_the_loopback_bind_is_overridden(self) -> None:
         """The reason this spec exists.
