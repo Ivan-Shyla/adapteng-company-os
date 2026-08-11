@@ -1868,6 +1868,98 @@ the commit whose thesis is that stopping short is the error. Third occurrence in
 one exchange; the finding is WS-9's to fix on an open branch, not this document's
 to act on.
 
+### The line-ending pins, and a census of the artefact rather than the subject
+
+WS-9 repaired an assertion that named the trust root's `text eol=lf` pins in its
+rationale and then guarded a neighbour. The repair is real and the reasoning
+behind it is sound; three of its four supporting claims verify exactly, and the
+fourth is an overstatement of its own severity. What the round leaves behind is a
+pin that still nothing asserts — and the reason it was left behind turns out to
+be an instruction in this repository rather than anything the workstream did.
+
+**The absence claim, confirmed by enumeration over all twenty-nine test modules
+at `824b4238`.** Exactly **two** `text eol=lf` assertions exist in the entire
+suite, both inside `test_migration_files_are_forced_to_lf_checkout`
+(`tests/test_migrate_approved_assets.py` 2060–2070), and both are substring
+checks against `database/migrations`. Nothing asserted the three trust-root pins,
+and nothing asserts the file wholesale — the test reads `.gitattributes` and then
+tests two `in` conditions, so every other line in it is unguarded by
+construction.
+
+**Which is where the round's own finding is.** The root `.gitattributes` holds
+**six** pins, not five:
+
+| line | pin | asserted on `main` | asserted after `498aad7` |
+|---|---|---|---|
+| 1–2 | the two `database/migrations` files | yes | yes |
+| 3 | the secrets baseline | **no** | **no** |
+| 4–6 | the three `.github/trust/rollout-policy` files | no | yes |
+
+`498aad7` takes the count from two to five. The sixth is the secrets baseline,
+and it is not a decorative entry: `validate.yml` 79 runs the scanner against that
+file, the command string is itself pinned at
+`tests/test_ci_n8n_isolation_scope.py` 56, and the anchor suite parses the file
+as JSON at 1900.
+
+**And the narrowing is this document's, not the workstream's.** The execution
+programme already enumerated all six entries, already established that only the
+two migration pins were asserted, and then recommended — in those words — to
+*assert the three trust-root pins on `root-rollout-tests`*. `498aad7` implements
+that recommendation exactly. So the gap is in the recommendation: it counted six
+members of the artefact, identified four of them as unguarded, and prescribed a
+remedy for three. **A recommendation that enumerates a population and then scopes
+itself to the subject that prompted it hands the omission to whoever implements
+it faithfully**, and the implementer has no way to see the difference, because
+the instruction and the enumeration sit in the same paragraph and disagree only
+in their arithmetic. The owner item is corrected below to four.
+
+**The instrument the repair reached for is the right one, and it settles a
+question this document could not otherwise close.** `git check-attr` resolves the
+*effective* attribute, so it catches a later line, a glob, or a nested file
+overriding an exact pin — none of which a substring search can see. Confirmed
+against git 2.53.0 in a scratch repository rather than from documentation.
+
+**The mutation that reported a hole, and why the hole was not there.** WS-9's
+harness reported that deleting `.gitattributes` left the new assertion passing.
+Reproduced, and the explanation is exact: `check-attr` falls back to the index
+when the working-tree copy is absent.
+
+| scratch-repo state | `check-attr text eol` resolves to |
+|---|---|
+| worktree and index both present | set, and lf |
+| worktree copy deleted, index entry intact | set, and lf |
+| also removed from the index | unspecified, and unspecified |
+
+A commit removes the file from the index too, so the real change is the third row
+and the guard fails correctly against it. The defect was in the perturbation, not
+in the guard — **a mutation's verdict is uninterpretable until the mutation is
+shown to reproduce what the real change does**, which is the *neighbouring
+question* bullet applied to an experiment instead of a query. Worth recording
+because it is the first time that bullet has been reached from the direction of a
+deliberate test rather than an accidental one.
+
+**And the correction: the over-broad half never had the cost attributed to it.**
+The earlier form of the guard forbade a nested `.gitattributes` or `.gitignore`
+anywhere in the tree, which would indeed have failed an unrelated session for
+adding an ordinary ignore file. But that form existed only on the topic branch,
+whose base is not the default branch, so the check it would have failed is not a
+gate there — the sole ruleset is `main-protected`, scoped to `~DEFAULT_BRANCH`
+with an empty exclude list and five contexts. And `main`'s own version of the
+assertion projects each match to `path.name` before comparing, so the compared
+set is a subset of the two bare names **whatever nesting exists** — it cannot
+fail when a nested copy appears. Two independent reasons the cost was
+unreachable: the guard was not on a branch where the check gates, and the version
+that is on such a branch is inert in that direction.
+
+The last point carries a caution this document has to apply to itself. The first
+search for the over-broad guard on `main` looked for the newer form's signature,
+found nothing, and would have supported the sentence *the guard is absent from
+`main`*. It is not absent; it is present in an older form that cannot fail. The
+conclusion survived and the reason did not, which is this document's own rule
+about which of the two carries forward — **verifying the absence of a form is not
+verifying the absence of the property**, and the check that distinguishes them is
+to search for the behaviour rather than for the text that last expressed it.
+
 ---
 
 ## P3 — obsolete, delete

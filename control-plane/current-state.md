@@ -1493,7 +1493,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with twenty sub-shapes and sixty instances.** WS-1 proposed the
+**The general rule, with twenty sub-shapes and sixty-four instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -1765,6 +1765,63 @@ ask, of every verified quantity, which neighbouring quantity is now being taken
 on trust because this one was checked.** That question would have caught all
 three, and it is the generalisation of the *neighbouring question* bullet from
 the instrument that answers it to the reader who stops after asking.
+
+**Twenty and sixty-four, and the sixth consecutive round with no new shape —
+including one that arrived as a candidate and was declined.** Four instances.
+
+(i) WS-9's population guard, self-filed: it forbade a nested `.gitattributes` or
+`.gitignore` repo-wide when only the trust root's own ancestor chain can override
+the pins in question. They asked whether a population *wider* than the claim
+deserves its own bullet, the existing one having been written for populations
+narrower than the claim. It does not. **A wrong population is wrong in either
+direction, and minting a bullet for the sign would be the padding this register
+named two rounds ago.** Their instinct was right and their ordinal was stale —
+the count stands at twenty sub-shapes, not eighteen.
+
+(ii) WS-9's mutation harness, also self-filed, reporting a hole that was an
+artefact of the mutation: `git check-attr` resolves from the index when the
+working-tree file is absent, so deleting the working copy does not reproduce what
+a commit does. Filed under *instrument answering a neighbouring question* — the
+first time that bullet has been reached through a deliberate perturbation rather
+than an accidental query.
+
+(iii) The narrowing behind the repair, and it is mine rather than theirs. The
+execution programme enumerated all six pins the root `.gitattributes` carries,
+identified four as unasserted, and then recommended asserting three. `498aad7`
+implements that recommendation exactly, so the secrets baseline is uncovered
+because the instruction was scoped to the subject that prompted it, not because
+the implementer missed anything. Filed under *wrong population*, and it is the
+worst-placed instance in this register so far: the enumeration and the
+prescription are in the same paragraph, four lines apart, and disagree only in
+their arithmetic.
+
+(iv) Mine, caught before it was asserted rather than after. Searching `main` for
+the newer guard's signature returned nothing, which would have supported *the
+guard is absent from `main`*. It is present in an older form that projects to
+`path.name` and therefore cannot fail on the condition in question. Filed under
+*instrument answering a neighbouring question*: the search answered "is this text
+here" for a question that was "does this behaviour exist here". Sixty plus four
+is sixty-four.
+
+**The round's own summary is that all four are the same operation, and it is now
+worth naming as a practice rather than a diagnosis.** Every one of them picked a
+population by taking the subject under discussion as the boundary — the trust
+root's pins rather than the file's, the branch's checks rather than the ruleset's,
+the working tree rather than the index, the signature rather than the behaviour.
+**The boundary of a claim is almost never the boundary of the artefact that
+carries it, and the cheap check is to name the artefact and count its members
+before deciding which of them the claim covers.** That is a single question, it
+would have caught all four, and unlike most entries in this register it costs one
+command rather than a re-reading.
+
+**One asymmetry worth keeping, because it changes who this register is for.**
+Two of the four were self-filed by the workstream before I saw them, and the two
+that were not are both mine — and the more serious of those, (iii), was found
+only because a claim about someone else's change turned out on checking to be a
+claim about my own instruction. **The register's failure mode is no longer
+missing the shape; it is attributing it outward.** The guard against that is
+mechanical and belongs next to the others: before filing an instance against
+another party, grep this repository for the recommendation they were following.
 
 **The current round adds one sub-shape and two instances, again by enumeration.**
 The bullets were counted directly and stood at seventeen before this edit. New
