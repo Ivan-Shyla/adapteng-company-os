@@ -55,6 +55,28 @@ LABELS_KEY = "RUNNER_LABELS"
 REGISTRATION_KEY = "RUNNER_REGISTRATION_" + "TOKEN"
 EXPOSED_PORT = "8080"
 
+# The exact field set the live instance accepted on create. Pinned by a test so
+# that adding one is a deliberate change rather than something discovered by a
+# 422 on the next run.
+ACCEPTED_CREATION_FIELDS = frozenset(
+    {
+        "project_uuid",
+        "environment_name",
+        "environment_uuid",
+        "server_uuid",
+        "destination_uuid",
+        "name",
+        "description",
+        "build_pack",
+        "dockerfile",
+        "ports_exposes",
+        "autogenerate_domain",
+        "health_check_enabled",
+        "connect_to_docker_network",
+        "instant_deploy",
+    }
+)
+
 EXIT_OK = 0
 EXIT_FAILED = 1
 
@@ -290,6 +312,22 @@ def first_difference(desired: str, stored: str) -> str:
 
 
 def creation_body(project: dict, environment: dict, server: dict, destination: dict | None) -> dict:
+    """Build the creation request from the fields this instance actually accepts.
+
+    Every key here was accepted by the live instance. That is not the same as
+    every key the published specification documents: max_restart_count is in the
+    published schema for both create and update, and this instance refuses it
+    outright with "This field is not allowed." It was intended to bound the
+    restarts of a container whose registration credential has expired. Without
+    it that condition is an unbounded restart loop, which is a real limitation
+    rather than a solved problem, and it is visible through the status
+    operation because the application does not reach a running state.
+
+    ACCEPTED_CREATION_FIELDS pins this set so that adding another one is a
+    deliberate act tested against the same instance, rather than a guess that
+    costs a round trip to discover.
+    """
+
     body = {
         "project_uuid": project["uuid"],
         "environment_name": environment["name"],
@@ -309,10 +347,6 @@ def creation_body(project: dict, environment: dict, server: dict, destination: d
         # cannot reach the managed database, and with it it needs no other
         # access to the host at all.
         "connect_to_docker_network": True,
-        # A container whose registration credential has expired cannot register
-        # and will fail on every start. Bounding the restarts turns that into a
-        # stopped application somebody can see rather than a silent loop.
-        "max_restart_count": 3,
         "instant_deploy": False,
     }
     if destination is not None and destination.get("uuid"):
