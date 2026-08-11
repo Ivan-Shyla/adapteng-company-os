@@ -851,9 +851,11 @@ awarded check-run observability to the one path that has none.
 WS-6's replacement structure is right and the correction is that these are
 **surfaces, not sites**. WS-6 then corrected its own table upward, from two paths
 to four (adding `validate-trust-root` at 3221 and `main`'s catch-all at 3266).
-Both additions verified exact. **Enumerating every emitting site rather than
-extending the table again gives six, not four** — blob `07f1dafb`, 3274 lines,
-byte-identical to the cached copy:
+Both additions verified exact. **Enumerating every emitting site in the verifier
+rather than extending the table again gives six, not four** — blob `07f1dafb`,
+3274 lines, byte-identical to the cached copy. The qualifier "in the verifier" was
+absent when this table was first written, and its absence was the next error in the
+sequence; see *A seventh emitter, outside the file the census was bounded by* below.
 
 | Site | Command / condition | Token | Stream | Segments |
 | --- | --- | --- | --- | --- |
@@ -881,13 +883,22 @@ worth carrying: when check-run publication fails, the run prints **two dotted
 codes**, and their categories can disagree — 3129 is hard-coded `undetermined`
 while the verdict at 3132 may be `unauthorized`.
 
-**Which turns an unstated assumption in the census below into a checked fact.**
-That census deduped per run and reported eight codes summing to 64 across 64
-failure runs — one code per run, which is only sound if no run emits twice.
-`check.failure_update_failed` does not appear anywhere in the census, so no run
-took the 3129 branch, and the one-to-one holds on evidence rather than by
-assumption. The census stands unchanged; what changes is that it is now known to
-stand.
+**Which turns an unstated assumption in the census below into a checked fact — but
+only jointly, and this document originally claimed it singly.** That census deduped
+per run and reported eight codes summing to 64 across 64 failure runs. The sentence
+that stood here said `check.failure_update_failed` is absent from the census, so no
+run took the 3129 branch, "and the one-to-one holds on evidence rather than by
+assumption." **That is half an argument.** Absence of the 3129 code establishes that
+no run emits *twice* — an upper bound of one. It says nothing about a lower bound.
+The census arithmetic, 64 codes over 64 runs, establishes that the *mean* is one,
+which is equally satisfied by one run emitting twice and another not at all. WS-6
+identified the gap precisely: neither half alone establishes the claim, and jointly
+they are decisive — 64 values each at most one, summing to 64, are each exactly one.
+The conclusion survives unchanged; the warrant for it was misattributed to the
+mechanism when the mechanism supplies only one of its two bounds. **This is the
+count-versus-population distinction landing on the very claim it was invoked for**,
+which is the third time in this section that a tool has been applied everywhere
+except to the sentence deploying it.
 
 **The token namespace is not uniform, and nothing enforces that it should be.**
 Three shapes exist — two segments at 3202, three at the interpolating sites, four
@@ -906,6 +917,113 @@ sites name their code" nor "create has one surface" managed to say. The ruling o
 2653–2659 does not depend on any of this — the reader and cost asymmetries in the
 other two rows are untouched — but the observability row was doing rhetorical work
 it could not support.
+
+### A seventh emitter, outside the file the census was bounded by
+
+**WS-6 applied the remedy this document had just prescribed and it returned a
+seventh emitter.** The remedy above — re-derive the population from source rather
+than editing the list — was run against the verifier, because the table was about
+verifier call sites. The frame that survived the correction was not the row set but
+the **file**. `.github/workflows/rollout-trust-anchor.yml` line **56** emits the
+same token namespace and is not in the file: blob verified, 5028 bytes, 121 lines.
+
+| | |
+| --- | --- |
+| Helper | `undetermined()`, lines **55–59** |
+| stderr | **56** — `echo "rollout_trust_anchor.undetermined.$1" >&2` |
+| annotation | **57** — `echo "::error title=Rollout trust anchor undetermined::$1"` |
+| exit | **58** — `exit 75` |
+| Call sites | **12** — 67, 68, 69, 70, 71, 88, 89, 91, 100, 102, 105, 106 |
+| Distinct codes | **11** — `trust_head_malformed` occurs twice, at 89 and 91 |
+
+The eleven: `anchor_verifier_absent`, `anchor_verifier_not_regular`,
+`anchor_trust_root_absent`, `anchor_trust_root_not_regular`, `anchor_home_unusable`,
+`trust_head_unreadable`, `trust_head_malformed`, `anchor_head_unreadable`,
+`anchor_head_stale`, `anchor_worktree_unreadable`, `anchor_worktree_dirty`.
+
+**A fourth surface, and it belongs to the emitter outside the file.** Line 57 is a
+GitHub annotation — rendered in the pull request UI without opening a log. The six
+verifier sites have stderr, stdout and the check run; none of them annotates. So the
+surface inventory is stderr, stdout, check run and annotation, and the *best*
+surface — the only one a reviewer sees without deliberate action — is the one that
+was outside the population. (The verifier's `{"trust_root":…}` JSON, recorded above,
+is a fifth thing on stdout carrying no dotted token at all; it is a format, not a
+surface, but it is invisible to any token census by construction.)
+
+**The two emitters cannot both fire in one run, and this is structural rather than
+observed.** All twelve call sites precede **`exec`** at **109–120** —
+`exec /usr/bin/env -i … /usr/bin/python3 -I "$verifier" verify` — inside a single
+`run:` block (`shell: bash` 41, `run: |` 47). `exec` replaces the shell process, so
+control never returns. A workflow emission and a verifier emission are mutually
+exclusive by construction. The one-to-one argument above therefore no longer needs
+the census to rule out cross-emitter double counting; it needs the census only for
+the within-verifier case at 3129.
+
+**Two disjoint vocabularies render as one token shape, and the names are adjacent.**
+Nothing in `rollout_trust_anchor.undetermined.<code>` says which emitter produced it.
+The collision is not hypothetical: the census below carries **11×
+`trust_root_not_configured`** — verifier, raised inside `validate_allowed_signers`
+(def **2451**) at **2475** for an empty file and **2493** for a file with no
+non-comment principal lines — while the workflow's neighbouring code is
+**`anchor_trust_root_absent`**. Same subject, opposite conditions: *present but
+unconfigured* versus *not present at all*.
+
+**And one guard shadows a verifier code outright, which WS-6's account did not
+reach.** `validate_allowed_signers` raises a third trust-root code —
+**`trust_root_file_missing`** at **2460**, its only raise site, on the `lstat`
+failing. That is the same condition the workflow tests at line 69. Because line 69
+runs before `exec` and exits 75, **`trust_root_file_missing` is unreachable on this
+workflow's path**: the guard renames it to `anchor_trust_root_absent`. Line 70
+(`anchor_trust_root_not_regular`) shadows the not-a-regular-file branch at 2464 the
+same way. So of the five pre-flight guards, two do not merely duplicate verifier
+checks — they systematically re-label a class of verifier errors before the verifier
+can name them.
+
+**A third meaning for the same token, inside the verifier.**
+`_validate_trust_root_command` (**3206**) special-cases `trust_root_not_configured`
+at **3210**: it prints `{"trust_root":"unconfigured"}` and **returns 0**. So the
+identical code is a failure verdict on the verify path and a *successful* answer on
+the `validate-trust-root` path. `trust_root_file_missing` gets no such treatment and
+falls through to 3221. The token's category is a property of the command, not of the
+code.
+
+**The documented contract records the shape and is silent on the emitter — in both
+places, and they do not carry the same columns.**
+`docs/runbooks/authorize-rollout-policy-change.md` **147–148** (24489 bytes, 454
+lines) gives shape, **exit code**, meaning and owner; `docs/github-governance-checklist.md`
+**93–94** (9708 bytes, 212 lines) gives shape, meaning and owner and **omits the exit
+code**. Both are accurate. Neither discriminates the emitter, and neither could: the
+exit code does not discriminate it either, because `undetermined()` exits 75 and so
+does `UNDETERMINED_EXIT_CODE` (**159**).
+
+**Zero occurrences — established here through the annotation surface rather than
+through logs, and the result is stronger than the claim it was checking.** WS-6
+reported that none of the eleven workflow codes appears in the 81-run census, and
+withdrew, correctly, its own earlier statement that line 69 is a load-bearing
+detector. Re-derived independently: every run of the workflow was enumerated from the
+API (81 runs — 64 failure, 12 success, 5 cancelled, reproducing the population figure
+below exactly), each run's single job resolved to its check run, and every annotation
+retrieved — **151 annotations across all 81 runs, zero fetch failures**. No
+annotation carries the title `Rollout trust anchor undetermined` or a bare code as
+its message. The messages are 78 Node-20 deprecation warnings, 64 × "Process
+completed with exit code 1.", and 7 cancellations.
+
+That last figure decides more than it was asked to. `UNAUTHORIZED_EXIT_CODE = 1` and
+`UNDETERMINED_EXIT_CODE = 75` (**158–159**), and the runbook table at 147–148
+documents exactly that mapping. **All 64 failures exited 1; none exited 75.**
+Therefore, across the entire recorded history of this check:
+
+- the workflow emitter has never fired — all twelve of its call sites `exit 75`;
+- the verifier has never returned an `undetermined` verdict either;
+- `internal_failure` (3266, returns 75) has never fired;
+- every one of the 64 failures was `unauthorized`, and — since `exec` leaves only
+  the verify path reachable — was emitted at site **3132** specifically.
+
+So the eleven-code vocabulary, the annotation surface, and the runbook's entire
+exit-75 row are latent: correct, unexercised, and owned by "An operator" who has
+never been paged by them. This is the same epistemic status as `live_ref_changed` —
+mechanism read at source, no production occurrence — and it is recorded here so the
+promotion argument in §15 is quoted with the caveat attached rather than without it.
 
 **And the conclusion is no longer resting on an instrument at all.** WS-6 paid the
 cost it had previously declined and censused every run of
@@ -1135,7 +1253,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with eighteen sub-shapes and thirty-seven instances.** WS-1 proposed the
+**The general rule, with eighteen sub-shapes and thirty-nine instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -1188,6 +1306,17 @@ script", when no workflow runs it. Seventeen plus one is eighteen; thirty-five p
 two is **thirty-seven**. Both instances are citations, and both were produced by
 parties who verified the components and not the relation between them.
 
+**This round adds two instances and no sub-shape, so eighteen stands and
+thirty-seven becomes thirty-nine.** Both are extensions of existing bullets rather
+than new forms, and both are named here so the figure is auditable rather than
+incremented: *a correction that inherits the scope of the thing it corrects* gains
+its fourth instance — the bullet's own remedy, which said "in the file" and was
+therefore the defect it described — and *too narrow, empty* gains its fourth — two
+false zeros from one instrument in one measurement, caught by a positive control.
+Eighteen plus zero is eighteen; thirty-seven plus two is **thirty-nine**. The bullet
+count was re-derived by enumeration, not carried forward, because the previous round
+of this section is where a header count went stale by being incremented.
+
 - **Too narrow, empty — silence read as absence.** WS-1 searched a shell helper
   list for a module. A helper list enumerates *invoked scripts* and structurally
   cannot contain an *imported* one, so the empty result was a true negative about
@@ -1202,6 +1331,22 @@ parties who verified the components and not the relation between them.
   the change changes** — search for the construct's position, or for what it was
   changed *into*. What saved it was reading the region rather than trusting the
   grep, which is the same remedy as everywhere else in this list.
+  **A fourth instance, mine, caught by a positive control:** measuring whether the
+  workflow emitter has ever fired (§12a), my first sweep reported "960 annotation
+  rows" — every one of which was the five-line body of a `404` response, iterated as
+  though it were data, because the jobs endpoint had been given a path I had not
+  checked. Corrected, the second sweep round-tripped its results through
+  `ConvertTo-Json`/`ConvertFrom-Json`, which silently flattened the records, and
+  reported `matches: 0` — a clean, plausible, entirely empty negative that agreed
+  with the answer I expected. **Two different mechanisms produced the same
+  false zero within minutes**, and neither announced itself: one dressed an error as
+  a large count, the other dressed a lost field as a small one. What caught it was
+  refusing to accept a negative without a positive control on the same instrument —
+  re-running until the sweep returned known-present rows ("Process completed with
+  exit code 1." × 64) alongside the absent ones. **The rule this yields is narrower
+  and more usable than "verify the artefact, not the call":** a null result is
+  uninterpretable until the same query has demonstrably returned a non-null one.
+  Expecting the answer you get is the condition under which both of these survive.
 - **Too narrow, non-empty — a sample read as a census.** WS-6 reported the two
   `authorized` verdicts in the anchor's history; there are seven (§12a). Every
   element it named was true and one was genuinely the last — the quantifier was
@@ -1531,21 +1676,31 @@ parties who verified the components and not the relation between them.
   when a reason has been formally withdrawn, the withdrawn phrasing is a string. Grep
   for it before sending.
 
-- **A correction that inherits the scope of the thing it corrects.** Three
-  instances in one thread, which is what makes it a shape rather than an accident.
-  This document framed the anchor's failure reporting as two paths; WS-6 corrected
-  the claim *within* that frame and produced a four-row table; enumerating every
-  emitting site returns **six**. Each participant verified the part being changed
-  and adopted the surrounding frame untested. WS-6 diagnosed its own case exactly
-  — "I checked the half I was correcting and adopted the rest" — and the mechanism
-  is that a correction arrives with its scope already fixed by the error, so the
-  one thing it never questions is the boundary it inherited. **The tell is
-  structural, not statistical:** a table produced by correcting a table is
-  evidence about the corrected cells and about nothing else. **Remedy:** when
-  correcting an enumeration, re-derive the population from the source rather than
-  editing the list — here, listing every `rollout_trust_anchor.` literal in the
-  file took one command and returned two sites that three rounds of careful
-  correction had not.
+- **A correction that inherits the scope of the thing it corrects.** **Four**
+  instances in one thread, the fourth being this bullet's own remedy, which is what
+  makes it a shape rather than an accident. This document framed the anchor's failure
+  reporting as two paths; WS-6 corrected the claim *within* that frame and produced a
+  four-row table; enumerating every emitting site in the verifier returns **six**.
+  Each participant verified the part being changed and adopted the surrounding frame
+  untested. WS-6 diagnosed its own case exactly — "I checked the half I was
+  correcting and adopted the rest" — and the mechanism is that a correction arrives
+  with its scope already fixed by the error, so the one thing it never questions is
+  the boundary it inherited. **The tell is structural, not statistical:** a table
+  produced by correcting a table is evidence about the corrected cells and about
+  nothing else. **Remedy, as originally written:** when correcting an enumeration,
+  re-derive the population from the source rather than editing the list — here,
+  listing every `rollout_trust_anchor.` literal in the file took one command and
+  returned two sites that three rounds of careful correction had not.
+  **And the remedy was the fourth instance.** It says *in the file*. WS-6 ran it
+  repository-wide instead and found a seventh emitter in
+  `.github/workflows/rollout-trust-anchor.yml` (§12a). The row set had been
+  re-derived; the frame that survived every correction, including the correction that
+  named this failure mode, was the **file** — because the table had been about
+  verifier call sites and nobody restated what the population was *of*. **Corrected
+  remedy:** re-derive from the boundary of the thing named, not of the artefact being
+  edited. The population here is every emitter of a token namespace, and a namespace's
+  boundary is not a file. The interval between describing this shape precisely and
+  committing it inside the description was one paragraph.
 
 - **A plausible cause makes its symptom less likely to be re-checked.** WS-6's
   formulation, and it inverts the order this register otherwise assumes. When I
@@ -2669,6 +2824,19 @@ repository defect **resets the promotion count** — and resets it toward never
 promoting the only check that can see the defect. WS-6's formulation is right: a
 check that detects a real defect and is ignored *for* detecting it is worse than one
 that detects nothing.
+
+**With one caveat that belongs on this argument wherever it is quoted, and that WS-6
+raised against its own earlier report.** `anchor_trust_root_absent` has **never
+fired**. §12a now establishes this structurally rather than by log absence: across
+all 81 recorded runs every failure exited **1**, and every path that reaches this
+code exits **75**. The guard is therefore load-bearing *in principle* and has never
+been load-bearing *in practice* — the same status as `live_ref_changed`, mechanism
+read at source with no production occurrence. This does not weaken the argument,
+because a guard's correctness does not depend on its having fired, and the promotion
+criterion is defective whether or not the reset has yet been triggered. It does mean
+the sentence "the only mechanism that catches coordinated staleness" describes a
+capability, not an observed event, and it was first stated here without that
+distinction.
 
 **But the deeper fault is that my criterion repeats the defect it was written to
 police.** Point 2 sorts `undetermined.*` into exactly two bins, benign-race and
