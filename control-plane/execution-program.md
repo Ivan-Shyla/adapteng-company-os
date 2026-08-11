@@ -740,6 +740,39 @@ deployed gateway:
    default set, so no other check re-runs and no review is dismissed. Signing the
    receipt then yields the first `authorized` one, which cannot arrive from
    ordinary traffic at all. The receipt and the promotion evidence are one action.
+
+   **Superseded in half, by ordinary traffic, before the owner acted — measured
+   2026-08-11.** The paragraph above says #121 is *the only available source* of
+   both missing verdicts. That is now false for one of the two. Opening **#124**
+   (`fix(ci): report a broken trust root as undetermined, not unauthorized`,
+   head `36119231`) fired the anchor on `pull_request_target` three seconds later,
+   run `31466827525`, and it emitted
+   **`rollout_trust_anchor.unauthorized.approval.commit_delta_invalid`** at
+   06:54:39Z, exit 1 — read from the job log, not inferred from the exit code.
+   That is the first post-reset `unauthorized` observation, and it cost nothing
+   and required no owner action. Enumerated rather than assumed: exactly **two**
+   runs postdate the 20:44:08Z reset — the `success` at 20:45:58Z that the
+   paragraph above calls `not_applicable`, and this one.
+
+   **What survives, and what the owner should now do.** The `authorized` half is
+   untouched: it still cannot arrive from ordinary traffic, because it requires a
+   signed receipt, and #121 remains its only source. So the sentence "the receipt
+   and the promotion evidence are one action" is no longer accurate — half the
+   evidence arrived on its own — and **the title-or-body edit on #121 should not
+   be performed for the purpose of harvesting an `unauthorized` observation,
+   because that observation already exists.** Sign the receipt when the hold
+   lifts; that yields `authorized` and completes the pair. The `edited`-trigger
+   finding stays on the record as the correct instrument if a further
+   `unauthorized` observation is ever wanted deliberately.
+
+   **Why this is worth recording beyond the instruction it repairs.** The claim
+   was true when written and was falsified by an event no one had to take —
+   a workstream opening a routine pull request. It carried no validity interval,
+   so nothing about it announced that it expires the moment any pull request
+   opens against the platform. That is the *right answer, unstated validity
+   interval* shape in `current-state.md` §13, applied to a scarcity claim: "the
+   only available source" is a statement about the world at an instant, written
+   in the present tense of a standing instruction.
    **Use the edit, not `gh run rerun`.** Re-running #121's existing run would also
    pick up the current verifier — the checkout resolves `refs/heads/main` at
    execution time — but it replaces that run's conclusion in place, while an edit

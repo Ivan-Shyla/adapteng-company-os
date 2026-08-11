@@ -182,7 +182,10 @@ closed. Detail, the post-repair merge-race failure that turned out to be a third
 conflation site, and the promotion criterion are in
 [`current-state.md`](current-state.md) §12. Not promoted to required: the
 criterion counts terminal verdicts of any class against the repaired verifier,
-and stands at one. Deliberately not restated here — §12 is the single copy.
+and stood at one when this was written — two as of 2026-08-11. Deliberately not
+restated here beyond the figure, and even that is one copy too many: §12 is the
+single source, and this sentence had to be corrected precisely because it kept a
+number it had just declared it would not keep.
 
 ### F-4 — Owner approval for ordinary pull requests and CI reruns
 
