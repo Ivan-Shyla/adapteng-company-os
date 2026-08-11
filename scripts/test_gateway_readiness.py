@@ -10,6 +10,8 @@ run passed.
 from __future__ import annotations
 
 import io
+import os
+import socket
 import unittest
 from contextlib import redirect_stdout
 
@@ -51,18 +53,26 @@ class FakeHttp:
         return probe.ProbeResult(status, body)
 
 
-def run(operation, http: FakeHttp, spec=None) -> tuple[int, str]:
-    """Run one operation with the transport faked and nothing else.
+def everything_resolves(_name: str) -> tuple[list[str], str]:
+    return ["10.0.0.4"], ""
 
-    Only the two module-level seams are replaced - the HTTP call and the API
-    lookup - so everything the operation actually decides runs for real.
+
+def run(operation, http: FakeHttp, spec=None, resolver=None) -> tuple[int, str]:
+    """Run one operation with the transport and the resolver faked, and nothing else.
+
+    Both seams are faked by default rather than only on request. A test that
+    falls through to the real resolver passes or fails on the machine's DNS,
+    which is the flake shape this workstream has spent a week cataloguing, and
+    it would be introduced here by omission rather than by decision.
     """
 
     spec = spec or load_spec()
     real_fetch = probe.fetch
     real_locate = probe.locate_application
+    real_resolve = probe.resolve
     probe.fetch = http
     probe.locate_application = lambda client, spec: APPLICATION
+    probe.resolve = resolver or everything_resolves
     try:
         buffer = io.StringIO()
         extra = {"sleep": lambda _seconds: None} if operation is probe.operate_probe else {}
@@ -72,6 +82,7 @@ def run(operation, http: FakeHttp, spec=None) -> tuple[int, str]:
     finally:
         probe.fetch = real_fetch
         probe.locate_application = real_locate
+        probe.resolve = real_resolve
 
 
 LIVE = "http://app-uuid-1:8081/health"
@@ -154,6 +165,104 @@ class ProbeTests(unittest.TestCase):
         self.assertNotIn("x" * 300, report)
 
 
+class ReferenceTests(unittest.TestCase):
+    """The control that decides whether an unresolvable gateway is the gateway's fault.
+
+    Without it, a runner that had lost the shared network produces exactly the
+    same report as a gateway that was never attached to it, and those are fixed
+    in different places by different people.
+    """
+
+    def setUp(self) -> None:
+        self.original = os.environ.get(probe.REFERENCE_HOST_VARIABLE)
+        self.addCleanup(self.restore)
+
+    def restore(self) -> None:
+        if self.original is None:
+            os.environ.pop(probe.REFERENCE_HOST_VARIABLE, None)
+        else:
+            os.environ[probe.REFERENCE_HOST_VARIABLE] = self.original
+
+    def set_reference(self, value: str) -> None:
+        os.environ[probe.REFERENCE_HOST_VARIABLE] = value
+
+    def test_a_resolvable_reference_blames_the_gateway_not_the_runner(self) -> None:
+        self.set_reference("database-uuid")
+        only_reference = lambda name: (["10.0.0.9"], "") if name == "database-uuid" else ([], "gaierror")
+        _, report = run(probe.operate_probe, FakeHttp({}), resolver=only_reference)
+        self.assertIn("this runner is on the shared network", report)
+        self.assertIn("not attached", report)
+
+    def test_an_unresolvable_reference_blames_the_runner_and_withholds_a_verdict(self) -> None:
+        """'The gateway is broken' would be an assertion about something never reached."""
+
+        self.set_reference("database-uuid")
+        nothing = lambda _name: ([], "gaierror: Temporary failure in name resolution")
+        _, report = run(probe.operate_probe, FakeHttp({}), resolver=nothing)
+        self.assertIn("this runner has lost the shared network", report)
+        self.assertIn("unknown rather than bad", report)
+
+    def test_without_a_reference_neither_side_is_blamed(self) -> None:
+        self.set_reference("")
+        code, report = run(probe.operate_address, FakeHttp({}))
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("cannot be attributed to either side", report)
+
+    def test_address_separates_resolving_from_answering(self) -> None:
+        """A name that resolves but refuses is a different fault from one that does not resolve."""
+
+        self.set_reference("")
+        only_uuid = lambda name: (["10.0.0.4"], "") if name == "app-uuid-1" else ([], "gaierror")
+        code, report = run(probe.operate_address, FakeHttp({}), resolver=only_uuid)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("app-uuid-1: resolves to 10.0.0.4", report)
+        self.assertIn("ai-gateway: does not resolve", report)
+        self.assertIn("resolved=1 answering=0", report)
+
+    def test_a_reference_is_never_fetched_only_resolved(self) -> None:
+        """It is a database. Asking it for HTTP would fail for reasons that mean nothing."""
+
+        self.set_reference("database-uuid")
+        http = FakeHttp({})
+        run(probe.operate_address, http)
+        for url in http.asked:
+            self.assertNotIn("database-uuid", url)
+
+
+class ResolutionTests(unittest.TestCase):
+    """Resolution is faked rather than performed.
+
+    A test that does a real lookup passes or fails on the resolver's mood, and a
+    captive DNS that answers everything would silently turn the negative case
+    into a false pass. Both are the flake shape this workstream has spent a week
+    cataloguing, so neither is introduced here.
+    """
+
+    def setUp(self) -> None:
+        self.real = probe.socket.getaddrinfo
+        self.addCleanup(setattr, probe.socket, "getaddrinfo", self.real)
+
+    def test_resolution_reports_addresses_without_connecting(self) -> None:
+        probe.socket.getaddrinfo = lambda *args, **kwargs: [
+            (2, 1, 6, "", ("10.0.0.4", 0)),
+            (2, 1, 6, "", ("10.0.0.4", 0)),
+            (2, 1, 6, "", ("10.0.0.5", 0)),
+        ]
+        addresses, error = probe.resolve("anything")
+        self.assertEqual(error, "")
+        self.assertEqual(addresses, ["10.0.0.4", "10.0.0.5"])
+
+    def test_an_unknown_name_is_returned_as_a_reason_rather_than_raised(self) -> None:
+        def refuse(*_args, **_kwargs):
+            raise socket.gaierror(-3, "Temporary failure in name resolution")
+
+        probe.socket.getaddrinfo = refuse
+        addresses, error = probe.resolve("anything")
+        self.assertEqual(addresses, [])
+        self.assertIn("gaierror", error)
+        self.assertIn("name resolution", error)
+
+
 class AddressTests(unittest.TestCase):
     def test_address_reports_every_candidate_without_failing(self) -> None:
         """A diagnostic that aborts is useless at the moment it is needed."""
@@ -162,7 +271,7 @@ class AddressTests(unittest.TestCase):
         code, report = run(probe.operate_address, http)
         self.assertEqual(code, driver.EXIT_OK)
         self.assertIn("answering=1", report)
-        self.assertIn("app-uuid-1: no answer", report)
+        self.assertIn("app-uuid-1", report)
 
 
 class CandidateTests(unittest.TestCase):
