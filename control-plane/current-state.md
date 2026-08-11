@@ -1493,6 +1493,21 @@ for the register being mechanical rather than remembered.
   a claim about any variant has to be tested against each reason separately —
   conjunctions are where a sound argument silently narrows to an unsound one.
 
+  **Second instance, and the party is the one who established the distinction.**
+  WS-2 is the session that corrected "CI is Linux" as false-as-stated, supplying the
+  two-source structure this bullet records. Reporting the `_fixed_migration.py`
+  finding two rounds later, it wrote that the failure is "invisible on CI because CI
+  is Linux". The conclusion is true and the reason is the withdrawn one: at
+  `824b4238`, `ai-gateway-tests.yml:66` still carries `windows-latest`, and what
+  actually protects the root tree is the job's `working-directory:
+  services/ai-gateway` at 67–69 scoping it out of collection. So a correction can
+  fail to propagate to its own author's later prose, in a different file, about a
+  different defect — which is the strongest argument yet that this register has to be
+  a mechanical check rather than a remembered one. Neither party was careless; the
+  correction simply had no instrument attached to it. **Diagnostic, and it is cheap:**
+  when a reason has been formally withdrawn, the withdrawn phrasing is a string. Grep
+  for it before sending.
+
 - **A correction that inherits the scope of the thing it corrects.** Three
   instances in one thread, which is what makes it a shape rather than an accident.
   This document framed the anchor's failure reporting as two paths; WS-6 corrected
@@ -1621,6 +1636,33 @@ unknown drops out. Recorded because the same move is available for the two
 unresolved items in §15 and owner item 5, both of which currently carry
 "representative rather than identical to CI" caveats that a two-endpoint design
 would remove.
+
+**Second positive result, and it is the same move used to refuse an inference
+rather than to complete one.** Running the root tree at both endings, WS-2 hit a
+failure present under LF and absent under CRLF —
+`test_runner_executes_pinned_absolute_client_and_rejects_identity_drift`. The
+available inference, "LF breaks a test", was the round's whole subject and would
+have landed in this document. Instead of reporting it, WS-2 ran the 2×2:
+
+| location | endings | result |
+| --- | --- | --- |
+| worktree | CRLF | pass 3/3 |
+| temp clone | LF | fail 5/5 |
+| temp clone | **CRLF** | **fail 3/3** |
+
+The variable is the checkout *location*, not the endings; the one-sided run had
+confounded the two, and a detached-HEAD control ruled out the remaining
+alternative. Deterministic in both directions, so not a flake either. Mechanism
+traced by patching a scratch clone to re-raise:
+`RuntimeError("psql executable path changed")` out of
+`_revalidate_trusted_executable`, which compares ancestor-directory filesystem
+entries under a POSIX trust model and is therefore location-sensitive on Windows —
+a local artefact, not a repository defect. **The design point is that the second
+positive result has the opposite sign from the first.** The two-endpoint move
+completed a claim there; here the added cell *destroyed* one, and destroyed it
+before it was written down rather than after. An instrument that can only confirm
+is not an instrument, so this is the better evidence that the register has started
+paying for itself.
 
 **A related family that is not an instrument failure at all, and needs separating
 because the remedy differs.** In every case above the instrument was consulted and
@@ -2380,6 +2422,43 @@ subtests fail immediately. **But it does not bear on the `*.py` scope question**
 `ALL_MIGRATIONS` are `.sql`, so no `*.py` entry of any breadth can reach them. It
 is an adjacent `.sql` question — WS-2's point that `*.sql text eol=lf` would retire
 the class is right, and is a wider edit than owner item 5 contemplates.
+
+**Update — the `.sql` scoping is now enumerated rather than asserted, and the
+exposed population is two readers in two files, not one.** The paragraph above
+asserted that `ALL_MIGRATIONS` are all `.sql`. WS-2 checked it and I re-derived it
+independently at `824b4238`: `tests/test_migration_digest_pins.py` **36–46** holds
+nine entries, and every one of the nine `apply_*.py` modules was fetched and its
+`path=` expression extracted across line breaks — all nine end in `.sql`, spanning
+`001`–`008` plus `008_drive_bridge_replay_reservations.sql`. **Nine of nine.** No
+`*.py` entry of any breadth reaches that test, so the scope decision in owner item 5
+is untouched by it.
+
+WS-2 also ran the whole root tree at both endings on one machine at one commit —
+**8 failed under CRLF, 0 of those 8 under LF**, and **zero `.py`-caused failures at
+either ending**. That converts the inertness claim from the two readers we happened
+to inspect into a census, which is the stronger form and the one that should be
+cited.
+
+**The eighth failure is a second raw-byte reader I had not recorded, and it is in a
+different file.** `scripts/validation/validate_ai_gateway.py` **405–406** reads
+`database/migrations/008_ai_gateway_runtime_hardening.sql` with `.read_bytes()`,
+digests it at **209**, and emits at **212–213** the exact text WS-2 extracted from
+its failing run. It is asserted by `tests/test_ai_gateway_hardening.py` **18–19**
+(`test_repository_contract_passes`), which is also in root `tests/` and so sits in
+the same collection-scope-protected population. So the latent condition is:
+
+| Reader | Normalization | Reached by |
+| --- | --- | --- |
+| `tests/test_migration_digest_pins.py:53` | none | 7 migration subtests |
+| `validate_ai_gateway.py:405–406` → digest at 209 | none | `test_ai_gateway_hardening.py:18` |
+
+**And the same validator reads the same file both ways**, which is the detail that
+makes this a defect rather than a choice: `read_text(encoding="utf-8")` at
+**380–381** normalizes, while `.read_bytes()` at **405–406** does not, over one
+migration file in one module. The identical inconsistency appears in
+`tests/test_rollout_trust_anchor.py`, where 4058, 4064, 4238, 4332 and 4553 all read
+`.read_bytes().replace(b"\r\n", b"\n")` and **4243** alone reads raw — safe there,
+because normalization happens downstream, but the same unexplained asymmetry.
 
 **The general pattern, restated on five sets, and the earlier version of it was
 too weak.** This previously read: *a wrong candidate set is dangerous exactly when
