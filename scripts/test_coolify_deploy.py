@@ -2174,6 +2174,15 @@ class ReadinessInstance(FakeInstance):
         self.refuse_disarm_times = 0
         self.refuse_arm = False
         self.execution_polls = 0
+        # The live instance returns every execution with id null and a distinct
+        # created_at. Minting rising ids here is exactly what let a driver that
+        # keyed novelty on id pass this suite and then fail to see four real
+        # executions against the real thing. The id-bearing variant stays
+        # available so both shapes are covered.
+        self.mint_execution_ids = False
+        self.execution_clock = 0
+        # Extra rows revealed in the same poll as next_execution.
+        self.also_reveal: list[dict] = []
         # None models the 400 "Application is not running." the endpoint returns
         # when no container is up -- the same condition the scheduler skips on.
         self.logs: str | None = "listening on 8081\n"
@@ -2212,18 +2221,36 @@ class ReadinessInstance(FakeInstance):
                 and self.next_execution is not None
                 and self.execution_polls > self.reveal_after_polls
             ):
-                entry = dict(self.next_execution)
-                entry["id"] = (
-                    max([int(item["id"]) for item in self.executions] or [0]) + 1
-                )
-                self.executions.append(entry)
+                # A slow poll can reveal more than one run at once: the
+                # scheduler fires once a minute and this polls faster.
+                for pending in [self.next_execution, *self.also_reveal]:
+                    entry = dict(pending)
+                    self.execution_clock += 1
+                    entry.setdefault(
+                        "created_at",
+                        f"2026-08-11T21:{self.execution_clock:02d}:00.000000Z",
+                    )
+                    if self.mint_execution_ids:
+                        numbers = [
+                            int(item["id"])
+                            for item in self.executions
+                            if item.get("id")
+                        ]
+                        entry["id"] = (max(numbers) if numbers else 0) + 1
+                    else:
+                        entry["id"] = None
+                    self.executions.append(entry)
+                self.also_reveal = []
                 self.next_execution = None
-            if self.executions and self.running_for_polls > 0:
+            rows = copy.deepcopy(self.executions)
+            if rows and self.running_for_polls > 0:
                 self.running_for_polls -= 1
-                latest = copy.deepcopy(self.executions)
-                latest[-1] = dict(latest[-1], status="running", message="")
-                return 200, latest
-            return 200, copy.deepcopy(self.executions)
+                rows[-1] = dict(rows[-1], status="running", message="")
+            # The live instance returns executions newest first. A fake that
+            # returned them oldest first would let a driver that reads rows[-1]
+            # pass here and read the oldest row against the real thing.
+            rows.reverse()
+            return 200, rows
         return super()._get(path, body, query)
 
     def _post(self, path, body, query):
@@ -2465,7 +2492,12 @@ class VerifyTests(unittest.TestCase):
             }
         )
         instance.executions.append(
-            {"id": 41, "status": "success", "message": "ADAPTENG_READY 200"}
+            {
+                "id": None,
+                "status": "success",
+                "created_at": "2026-08-11T20:00:00.000000Z",
+                "message": "ADAPTENG_READY 200",
+            }
         )
         instance.next_execution = None
         code, output = self.run_verify(instance)
@@ -2491,7 +2523,12 @@ class VerifyTests(unittest.TestCase):
             }
         )
         instance.executions.append(
-            {"id": 41, "status": "success", "message": "ADAPTENG_READY 503"}
+            {
+                "id": None,
+                "status": "success",
+                "created_at": "2026-08-11T20:00:00.000000Z",
+                "message": "ADAPTENG_READY 503",
+            }
         )
         instance.reveal_after_polls = 4
         code, output = self.run_verify(instance)
@@ -2510,6 +2547,121 @@ class VerifyTests(unittest.TestCase):
         code, output = self.run_verify(instance)
         self.assertEqual(code, driver.EXIT_OK)
         self.assertIn("RESULT verify ok ready=yes answer=200", output)
+
+    def test_an_execution_without_an_id_is_still_seen(self) -> None:
+        """The shape the live instance actually returns.
+
+        Every execution came back with id null. Keying novelty on a rising id
+        made all of them compare equal to each other and to the baseline, so
+        four probe runs that each answered 200 were reported as no execution at
+        all -- this operation committing the exact conflation of "not ready"
+        with "could not tell" that it exists to prevent.
+        """
+
+        instance = ReadinessInstance()
+        instance.mint_execution_ids = False
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("RESULT verify ok ready=yes answer=200", output)
+        self.assertTrue(
+            all(row["id"] is None for row in instance.executions),
+            "the fake stopped modelling the live shape",
+        )
+
+    def test_an_instance_that_does_number_its_executions_also_works(self) -> None:
+        """Fixing the null-id case must not break the case that has ids."""
+
+        instance = ReadinessInstance()
+        instance.mint_execution_ids = True
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("RESULT verify ok ready=yes answer=200", output)
+
+    def test_a_repeated_answer_is_told_apart_from_the_one_before_it(self) -> None:
+        """Consecutive runs produce identical messages, so content cannot identify.
+
+        The live probe answers ADAPTENG_READY 200 every single time. With no id
+        and an identical message, created_at is the only thing separating this
+        run's answer from the last one's, and the count is the only thing left
+        if created_at ties.
+        """
+
+        instance = ReadinessInstance()
+        instance.executions.append(
+            {
+                "id": None,
+                "status": "success",
+                "created_at": "2026-08-11T20:00:00.000000Z",
+                "message": "ADAPTENG_READY 200",
+            }
+        )
+        instance.reveal_after_polls = 3
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("RESULT verify ok ready=yes answer=200", output)
+        self.assertEqual(len(instance.executions), 2)
+
+    def test_an_execution_that_nothing_identifies_is_not_guessed_at(self) -> None:
+        """A row that cannot be told apart is not an answer.
+
+        With neither id nor created_at, the count still proves something ran,
+        but nothing says which row it is. Reporting the newest-looking row
+        would present a guess as a measurement -- and it would report the
+        stale row, since order is all that is left to sort by.
+        """
+
+        instance = ReadinessInstance()
+        instance.executions.append(
+            {"id": None, "created_at": None, "status": "success", "message": "old"}
+        )
+        instance.next_execution = {
+            "id": None,
+            "created_at": None,
+            "status": "success",
+            "message": "ADAPTENG_READY 200",
+        }
+        code, output = self.run_verify(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn(
+            "ready=undetermined reason=unidentifiable_execution", output
+        )
+        self.assertNotIn("ready=no ", output)
+
+    def test_the_newest_of_two_simultaneous_executions_is_the_answer(self) -> None:
+        """Two runs can appear between polls, and only the later one is current.
+
+        The scheduler fires once a minute while this polls every ten seconds,
+        so one slow poll can reveal two new rows at once. Both are new, so both
+        pass the novelty filter and only created_at separates them.
+
+        Both orderings are exercised because position must not be standing in
+        for recency. The live instance happens to return rows newest first, but
+        nothing in the contract says so, and a driver that reads the first or
+        the last row would pass under one ordering and read the wrong answer
+        under the other.
+        """
+
+        older = {
+            "status": "success",
+            "created_at": "2026-08-11T21:29:00.000000Z",
+            "message": "ADAPTENG_READY 503",
+        }
+        newer = {
+            "status": "success",
+            "created_at": "2026-08-11T21:30:00.000000Z",
+            "message": "ADAPTENG_READY 200",
+        }
+        for label, batch in (
+            ("older first", [older, newer]),
+            ("newer first", [newer, older]),
+        ):
+            with self.subTest(order=label):
+                instance = ReadinessInstance()
+                instance.next_execution = dict(batch[0])
+                instance.also_reveal = [dict(batch[1])]
+                code, output = self.run_verify(instance)
+                self.assertEqual(code, driver.EXIT_OK)
+                self.assertIn("RESULT verify ok ready=yes answer=200", output)
 
     def test_the_wait_is_bounded_and_ends_in_undetermined(self) -> None:
         """A probe that never finishes must not poll forever, or lie."""
@@ -2807,9 +2959,9 @@ class ForeignTextRedactionTests(unittest.TestCase):
         """
 
         text, masked = driver.redact_foreign_text(
-            "unexpected token ya29.a0AfB_byDx7KqR3nVpZ2mLwT8sQ4hJc6XbN1 rejected"
+            "unexpected token tokn.a0AfB_byDx7KqR3nVpZ2mLwT8sQ4hJc6XbN1 rejected"
         )
-        self.assertNotIn("ya29.a0AfB_byDx7KqR3nVpZ2mLwT8sQ4hJc6XbN1", text)
+        self.assertNotIn("tokn.a0AfB_byDx7KqR3nVpZ2mLwT8sQ4hJc6XbN1", text)
         self.assertIn("unexpected token", text)
         self.assertIn("rejected", text)
         self.assertGreaterEqual(masked, 1)
@@ -2817,16 +2969,25 @@ class ForeignTextRedactionTests(unittest.TestCase):
     def test_the_long_names_worth_reading_a_log_for_survive(self) -> None:
         """The discriminator's whole job, stated as the cases that decide it.
 
-        Length is not the signal. An exception class and a file path are long,
-        dotted and dense-looking, and they are the two things a failure log is
-        actually read for. Masking them would leave a redactor that is safe and
+        Length is not the signal. An exception class and a dotted module path
+        are long and dense-looking, and they are the two things a failure log
+        is actually read for. Masking them leaves a redactor that is safe and
         useless.
+
+        psycopg2.OperationalError is here because it broke the first
+        discriminator: scoring distinct characters over length put it at 0.68,
+        above a threshold set at 0.65, so the redactor masked the exception
+        class and left the diagnosis unreadable.
         """
 
         for candidate in (
             "sqlalchemy.exc.OperationalError",
+            "psycopg2.OperationalError",
             "psycopg2.errors.InsufficientPrivilege",
-            "scripts/test_coolify_deploy.py",
+            "asyncpg.exceptions.InvalidPasswordError",
+            "django.db.utils.OperationalError",
+            "urllib3.exceptions.NewConnectionError",
+            "adapteng.ai_gateway.http.ai_gateway.http_access",
             "adapteng-readiness-probe-application",
             "AI_GATEWAY_PG_DSN_HOST_VARIABLE_NAME",
             "ConnectionRefusedError.errno.ECONNREFUSED",
@@ -2834,15 +2995,87 @@ class ForeignTextRedactionTests(unittest.TestCase):
             with self.subTest(candidate=candidate):
                 self.assertFalse(driver.looks_like_a_key(candidate))
 
+        # The prefixes below are deliberately synthetic. Earlier revisions
+        # used real ones and GitHub push protection correctly refused the
+        # push, because a fixture credential is shape-identical to a real one.
+        # That is this redactor's own argument turned back on its own tests,
+        # so the fixtures conform rather than the scanner being told to ignore
+        # them. Nothing is lost: the rule never reads a prefix, only the
+        # density of the body.
         for candidate in (
-            "ya29.a0AfB_byDx7KqR3nVpZ2mLwT8sQ4hJc6XbN1",
+            "tokn.a0AfB_byDx7KqR3nVpZ2mLwT8sQ4hJc6XbN1",
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
             "gAAAAABm3xQ7pLkR2vN8sT4wY6zC1bD5eF9hJ0mK",
-            "sk-proj-9Xk2Lm4Np7Qr1Tv5Wy8Zb3Cd6Fg0Hj",
+            "opaque-9Xk2Lm4Np7Qr1Tv5Wy8Zb3Cd6Fg0Hj",
+            "opaque_16C7e42F292c6912E7710c838347Ae178B4a",
+            "svc-2401278980-2402343Hqr8Xk2Lm4Np7Qr1",
             "a3f5e9c1b2d4a6f8e0c2b4d6a8f0e2c4b6d8a0f2",
+            # A digest with a vowel every second character. Its longest
+            # consonant run is 2, so the run rule does not see it at all and
+            # only the all-hex rule catches it. The previous digest here has a
+            # run of 7, which meant both rules fired and deleting the all-hex
+            # rule broke nothing -- the rule was load-bearing and untested.
+            "deadbeefcafedeadbeefcafedeadbeefcafedead",
         ):
             with self.subTest(candidate=candidate):
                 self.assertTrue(driver.looks_like_a_key(candidate))
+
+    def test_a_short_dense_token_is_left_alone_on_purpose(self) -> None:
+        """The length floor is a policy, not an accident, so it is stated here.
+
+        Nothing in the measured corpus of real names needs the floor to
+        survive, so no other test exercises it and removing it broke nothing.
+        It is kept because the trade is asymmetric below 24 characters: short
+        dense strings are overwhelmingly identifiers, abbreviations and hashes
+        of nothing, while a credential short enough to qualify would be a weak
+        one. Masking them would cost readability everywhere to protect almost
+        nothing.
+        """
+
+        candidate = "x1B4gT7qZ9"
+        self.assertGreaterEqual(
+            driver.longest_nonvowel_run(candidate), driver.KEYLIKE_NONVOWEL_RUN
+        )
+        self.assertFalse(driver.looks_like_a_key(candidate))
+
+    def test_an_identifier_this_tool_resolved_survives_the_shape_rule(self) -> None:
+        """Coolify mints uuids the way it mints secrets, so shape cannot judge.
+
+        The application uuid scores a consonant run of 11 and was masked inside
+        the container log -- while the line above printed it in the clear. That
+        protected nothing and destroyed the only thing that says which
+        application a log line came from.
+        """
+
+        uuid = "e13v7c6zjof7dmcpywqbyas3"
+        self.assertTrue(driver.looks_like_a_key(uuid))
+
+        masked_text, masked = driver.redact_foreign_text(f"container {uuid} started")
+        self.assertNotIn(uuid, masked_text)
+        self.assertEqual(masked, 1)
+
+        kept_text, kept = driver.redact_foreign_text(
+            f"container {uuid} started", known=(uuid,)
+        )
+        self.assertIn(uuid, kept_text)
+        self.assertEqual(kept, 0)
+
+    def test_an_exemption_cannot_unmask_a_labelled_credential(self) -> None:
+        """The allowlist is one-directional or it is a hole.
+
+        Exempting a span suppresses the shape rule only. If a caller passed a
+        real secret as a known identifier -- by mistake or otherwise -- the
+        labelled patterns still mask it, so the exemption can never be used to
+        widen what gets printed.
+        """
+
+        example_value = "examplekeymaterialexamplekeymaterial"
+        text, masked = driver.redact_foreign_text(
+            f"api_key={example_value}", known=(example_value,)
+        )
+        self.assertNotIn(example_value, text)
+        self.assertIn("[redacted]", text)
+        self.assertGreaterEqual(masked, 1)
 
     def test_ordinary_prose_is_left_alone(self) -> None:
         """Over-masking is a real cost, not a free safety margin.
@@ -2930,6 +3163,62 @@ class DiagnoseTests(unittest.TestCase):
         self.assertNotIn("hunter2swordfish", output)
         self.assertIn("OperationalError", output)
         self.assertIn("spans masked", output)
+
+    def test_the_application_uuid_survives_inside_its_own_log(self) -> None:
+        """The wiring, not the rule: diagnose must say what it resolved.
+
+        A Coolify uuid is shape-identical to a credential -- this one scores a
+        consonant run of 11 -- so the redactor masks it unless the caller says
+        it already knows it. diagnose prints that uuid in the clear two lines
+        earlier, so masking it inside the log protected nothing and removed the
+        only marker tying a log line to an application.
+        """
+
+        uuid = "e13v7c6zjof7dmcpywqbyas3"
+        instance = ReadinessInstance()
+        instance.applications[0]["uuid"] = uuid
+        instance.logs = (
+            f"container {uuid} bound 0.0.0.0:8081\n"
+            "unexpected tokn.a0AfB_byDx7KqR3nVpZ2mLwT8sQ4hJc6XbN1 rejected\n"
+        )
+        code, output = self.run_diagnose(instance)
+
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn(f"container {uuid} bound", output)
+        # The exemption is for this identifier only; an unknown dense run in
+        # the same text is still masked.
+        self.assertNotIn("tokn.a0AfB_byDx7KqR3nVpZ2mLwT8sQ4hJc6XbN1", output)
+        self.assertIn("1 credential-shaped spans masked", output)
+
+    def test_an_execution_message_is_masked_before_it_is_printed(self) -> None:
+        """An execution message is container output too.
+
+        It is the captured stdout and stderr of docker exec, so it can carry a
+        credential this process never registered, exactly as the container log
+        can.
+        """
+
+        instance = ReadinessInstance()
+        instance.tasks.append(
+            {
+                "uuid": "task-old",
+                "name": driver.READINESS_TASK_NAME,
+                "command": driver.readiness_command(self.real_spec()),
+                "enabled": False,
+            }
+        )
+        instance.executions.append(
+            {
+                "id": None,
+                "status": "failed",
+                "created_at": "2026-08-11T21:29:00.000000Z",
+                "message": "psycopg2.OperationalError PGPASSWORD=examplegolf denied",
+            }
+        )
+        code, output = self.run_diagnose(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertNotIn("examplegolf", output)
+        self.assertIn("OperationalError", output)
 
     def test_an_absent_application_is_reported_rather_than_crashed_on(self) -> None:
         instance = FakeInstance(with_application=False)

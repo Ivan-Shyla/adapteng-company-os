@@ -34,6 +34,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Iterable
 from pathlib import Path
 
 
@@ -204,21 +205,48 @@ CREDENTIAL_SHAPES = (
 # both are -- and excluding them let exactly those through.
 DENSE_RUN = re.compile(r"[A-Za-z0-9+/=_.-]{24,}")
 HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
-# Measured, not chosen. Among long runs that have mixed case and a digit, the
-# densest real name found was psycopg2.errors.InsufficientPrivilege at 0.51 and
-# the sparsest real credential was a JWT header at 0.69. Everything between is
-# empty, so the threshold sits in the gap rather than on either edge.
-KEYLIKE_DISTINCT_RATIO = 0.65
+VOWELS = frozenset("aeiouAEIOU")
+# Measured over a corpus of real exception classes, dotted module paths and
+# real credential formats. The first attempt scored the ratio of distinct
+# characters to length and put the threshold at 0.65, on the claim that the
+# densest real name was psycopg2.errors.InsufficientPrivilege at 0.51. That was
+# an artifact of the corpus: psycopg2.OperationalError scores 0.68 and so was
+# masked, while a hex digest scores 0.375 and so was not. The two classes are
+# interleaved under that measure, so no threshold separates them.
+#
+# Consonant structure does separate them, because these names are built from
+# English words and credentials are not. Worst real name is 6
+# (asyncpg.exceptions.InvalidPasswordError); sparsest real credential is 7.
+KEYLIKE_NONVOWEL_RUN = 7
+
+
+def longest_nonvowel_run(text: str) -> int:
+    """The longest stretch with no vowel in it.
+
+    Words put a vowel in every few characters; random tokens do not. Anything
+    that is not a letter or a digit ends a run, so a separator does not join
+    two words into one apparent stretch.
+    """
+
+    best = 0
+    current = 0
+    for character in text:
+        if character in VOWELS or not character.isalnum():
+            current = 0
+            continue
+        current += 1
+        best = max(best, current)
+    return best
 
 
 def looks_like_a_key(candidate: str) -> bool:
     """Decide whether a long run is a credential or just a long name.
 
-    Length is not the signal. ``psycopg2.errors.InsufficientPrivilege`` and
-    ``scripts/test_coolify_deploy.py`` are long, dotted and dense-looking, and
-    they are two of the things a failure log is actually read for. What
-    separates a key is that it does not reuse characters: a name is built from
-    words and repeats letters, while a random token mostly does not.
+    Length is not the signal. ``psycopg2.OperationalError`` and
+    ``sqlalchemy.exc.OperationalError`` are long, dotted and dense-looking, and
+    they are exactly what a failure log is read for. Masking them leaves a
+    redactor that is safe and useless, which is a redactor that gets switched
+    off.
     """
 
     core = candidate.strip("._-")
@@ -226,16 +254,10 @@ def looks_like_a_key(candidate: str) -> bool:
         return False
     if all(character in HEX_DIGITS for character in core):
         return True
-    if not (
-        any(character.isupper() for character in core)
-        and any(character.islower() for character in core)
-        and any(character.isdigit() for character in core)
-    ):
-        return False
-    return len(set(core)) / len(core) >= KEYLIKE_DISTINCT_RATIO
+    return longest_nonvowel_run(core) >= KEYLIKE_NONVOWEL_RUN
 
 
-def redact_foreign_text(text: str) -> tuple[str, int]:
+def redact_foreign_text(text: str, known: Iterable[str] = ()) -> tuple[str, int]:
     """Mask credential-shaped spans in output this tool did not produce.
 
     Returns the masked text and how many spans were masked, because a redactor
@@ -247,6 +269,16 @@ def redact_foreign_text(text: str) -> tuple[str, int]:
     deliberately eager: a hex digest is masked too. That is the correct trade
     here. Losing an identifier costs a second query; printing a credential
     cannot be undone.
+
+    ``known`` names strings the caller resolved itself and has already emitted
+    in the clear -- the application and task uuids. Coolify mints those the way
+    it mints secrets, so shape cannot tell them apart, and measuring said so:
+    the application uuid scores a consonant run of 11. Masking them hid the one
+    identifier that says which application a log line came from, while the line
+    above printed it unmasked, so nothing was protected and the correlation was
+    lost. An exemption only ever suppresses the shape rule; a span that a
+    labelled pattern already matched stays masked even if it is listed here, so
+    this cannot be used to unmask a real secret.
     """
 
     result = redact(text)
@@ -255,9 +287,11 @@ def redact_foreign_text(text: str) -> tuple[str, int]:
         result, count = pattern.subn(replacement, result)
         masked += count
 
+    exempt = {item for item in known if item}
+
     def mask_dense(match: re.Match) -> str:
         nonlocal masked
-        if not looks_like_a_key(match.group(0)):
+        if match.group(0) in exempt or not looks_like_a_key(match.group(0)):
             return match.group(0)
         masked += 1
         return "[redacted]"
@@ -2084,7 +2118,7 @@ def disarm_readiness_task(client: Client, uuid: str, task_uuid: str, command: st
     return False
 
 
-def newest_execution(client: Client, uuid: str, task_uuid: str) -> dict | None:
+def list_executions(client: Client, uuid: str, task_uuid: str) -> list[dict]:
     executions = call(
         client,
         "GET",
@@ -2092,10 +2126,46 @@ def newest_execution(client: Client, uuid: str, task_uuid: str) -> dict | None:
     )
     if not isinstance(executions, list):
         raise Abort("the execution listing was not a JSON array")
-    entries = [item for item in executions if isinstance(item, dict)]
-    if not entries:
+    return [item for item in executions if isinstance(item, dict)]
+
+
+def execution_identity(row: dict) -> tuple[str, str]:
+    """Name an execution by the fields the instance actually populates.
+
+    Not by id alone. The live instance returns every execution with id null,
+    so an id comparison made all of them equal to each other and to the
+    baseline: four successful probe runs were reported as no execution at all.
+    created_at is the field that is actually filled in, and the pair degrades
+    safely if either is missing.
+    """
+
+    return (str(row.get("id") or ""), str(row.get("created_at") or ""))
+
+
+def execution_sort_key(row: dict) -> tuple[str, int]:
+    try:
+        numeric = int(row.get("id") or 0)
+    except (TypeError, ValueError):
+        numeric = 0
+    return (str(row.get("created_at") or ""), numeric)
+
+
+def executions_snapshot(rows: list[dict]) -> tuple[int, set[tuple[str, str]]]:
+    """What was already there, as both a count and a set of identities.
+
+    Two measures rather than one because either can be defeated alone: an
+    instance that caps the retained history keeps the count flat while the
+    identities change, and an instance that populates neither id nor created_at
+    keeps the identities equal while the count grows.
+    """
+
+    return len(rows), {execution_identity(row) for row in rows}
+
+
+def newest_execution(rows: list[dict]) -> dict | None:
+    if not rows:
         return None
-    return max(entries, key=lambda item: int(item.get("id") or 0))
+    return max(rows, key=execution_sort_key)
 
 
 def read_marker(message: object) -> str | None:
@@ -2115,21 +2185,46 @@ def read_marker(message: object) -> str | None:
     return None
 
 
-def await_probe_answer(client: Client, uuid: str, task_uuid: str, before: int, sleep) -> tuple[dict | None, str | None]:
-    """Wait for the scheduler to run the probe once, and read what it said."""
+def await_probe_answer(
+    client: Client,
+    uuid: str,
+    task_uuid: str,
+    before: tuple[int, set[tuple[str, str]]],
+    sleep,
+) -> tuple[dict | None, str | None, str]:
+    """Wait for the scheduler to run the probe once, and read what it said.
 
+    Novelty is decided by identity and by count. Deciding it by a rising id is
+    what made the first live run report ready=undetermined reason=no_execution
+    while the probe had in fact run four times and answered 200 each time --
+    this operation committing, against itself, the exact conflation of "not
+    ready" with "could not tell" that it was built to prevent.
+    """
+
+    before_count, before_identities = before
     for attempt in range(1, READINESS_EXECUTION_ATTEMPTS + 1):
         sleep(READINESS_EXECUTION_INTERVAL_SECONDS)
-        execution = newest_execution(client, uuid, task_uuid)
-        current = int((execution or {}).get("id") or 0)
-        if execution is None or current <= before:
+        rows = list_executions(client, uuid, task_uuid)
+        fresh = [
+            row for row in rows if execution_identity(row) not in before_identities
+        ]
+        if not fresh:
+            if len(rows) > before_count:
+                # Something ran, but nothing in the reply says which row it is.
+                # Picking one would be a guess presented as a measurement, so
+                # this reports the ambiguity instead of resolving it.
+                return None, None, "unidentifiable_execution"
             continue
+        execution = max(fresh, key=execution_sort_key)
         status = str(execution.get("status") or "")
         if status in {"running", "queued", ""}:
             continue
-        emit(f"    execution {current} finished after {attempt} polls: status={status}")
-        return execution, read_marker(execution.get("message"))
-    return None, None
+        emit(
+            f"    execution at {execution.get('created_at')!r} finished after "
+            f"{attempt} polls: status={status}"
+        )
+        return execution, read_marker(execution.get("message")), ""
+    return None, None, "no_execution"
 
 
 def operate_verify(client: Client, spec: dict, sleep=None) -> int:
@@ -2190,8 +2285,13 @@ def operate_verify(client: Client, spec: dict, sleep=None) -> int:
     task_uuid, disposition = converge_readiness_task(client, uuid, command)
     emit(f"    readiness task {READINESS_TASK_NAME}: {disposition} uuid={task_uuid}")
 
-    latest = newest_execution(client, uuid, task_uuid)
-    before = int((latest or {}).get("id") or 0)
+    rows_before = list_executions(client, uuid, task_uuid)
+    before = executions_snapshot(rows_before)
+    latest = newest_execution(rows_before)
+    emit(
+        f"    executions already recorded: {before[0]}"
+        + (f", newest at {latest.get('created_at')!r}" if latest else "")
+    )
 
     armed = write_readiness_task(
         client, uuid, task_uuid, readiness_task_body(command, armed=True)
@@ -2207,7 +2307,9 @@ def operate_verify(client: Client, spec: dict, sleep=None) -> int:
     )
 
     try:
-        execution, verdict = await_probe_answer(client, uuid, task_uuid, before, sleep)
+        execution, verdict, reason = await_probe_answer(
+            client, uuid, task_uuid, before, sleep
+        )
     finally:
         at_rest = disarm_readiness_task(client, uuid, task_uuid, command)
         if at_rest:
@@ -2232,6 +2334,21 @@ def operate_verify(client: Client, spec: dict, sleep=None) -> int:
 
     if not at_rest:
         emit("RESULT verify failed ready=undetermined reason=task_left_armed")
+        return EXIT_FAILED
+
+    if execution is None and reason == "unidentifiable_execution":
+        emit("")
+        emit(
+            "    an execution appeared while the task was armed, but the reply "
+            "carries neither an id nor a created_at that tells it apart from "
+            "the ones already there. The probe ran; which row is its answer "
+            "cannot be established, so no answer is reported. Guessing the "
+            "newest-looking row would present a guess as a measurement."
+        )
+        emit(
+            "RESULT verify failed ready=undetermined "
+            "reason=unidentifiable_execution"
+        )
         return EXIT_FAILED
 
     if execution is None:
@@ -2370,7 +2487,9 @@ def operate_diagnose(client: Client, spec: dict) -> int:
         rows = [item for item in executions if isinstance(item, dict)] if isinstance(executions, list) else []
         emit(f"        executions ever recorded: {len(rows)}")
         for row in rows[-5:]:
-            body, masked = redact_foreign_text(str(row.get("message") or ""))
+            body, masked = redact_foreign_text(
+                str(row.get("message") or ""), known=(uuid, task_uuid)
+            )
             emit(
                 f"        id={row.get('id')} status={row.get('status')!r} "
                 f"at={row.get('created_at')!r} message={body[:300]!r}"
@@ -2388,7 +2507,7 @@ def operate_diagnose(client: Client, spec: dict) -> int:
                 "running, and it skips it silently."
             )
     else:
-        cleaned, masked = redact_foreign_text(logs)
+        cleaned, masked = redact_foreign_text(logs, known=(uuid,))
         lines = [line for line in cleaned.splitlines() if line.strip()]
         emit(f"      {len(lines)} non-empty lines, {masked} credential-shaped spans masked")
         for line in lines[-60:]:
