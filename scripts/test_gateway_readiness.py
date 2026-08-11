@@ -14,6 +14,7 @@ import os
 import socket
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
 
 try:
     from scripts import gateway_readiness as probe
@@ -433,6 +434,60 @@ class PeerDerivationTests(unittest.TestCase):
         self.patch([{"uuid": "peer-uuid-1", "name": "n8n-selfhosted", "status": "running"}])
         with self.assertRaises(driver.Abort):
             probe.locate_application_and_peers(object(), load_spec())
+
+
+class PositionTests(unittest.TestCase):
+    """Where the process is, because the verdict now turns on it.
+
+    A report that can say "this runner is not on the applications' network" and
+    cannot say where it is instead sends someone to the host to find out by
+    hand, which is the manual step this workstream exists to remove.
+    """
+
+    PEERS = [{"uuid": "o145rw7urft00qoj3y9vnrma", "name": "ops-runner", "status": "running"}]
+
+    def test_the_embedded_resolver_says_the_network_is_the_question(self) -> None:
+        lines = probe.runner_position([], "abc123", ["127.0.0.11"], True)
+        joined = "\n".join(lines)
+        self.assertIn("embedded DNS", joined)
+        self.assertIn("ought to resolve here", joined)
+
+    def test_a_host_resolver_says_no_container_name_can_resolve(self) -> None:
+        lines = probe.runner_position([], "build-01", ["8.8.8.8", "1.1.1.1"], False)
+        joined = "\n".join(lines)
+        self.assertIn("not Docker's embedded DNS", joined)
+        self.assertIn("no application will be visible", joined)
+        self.assertIn("not a Docker container", joined)
+
+    def test_an_unreadable_resolver_file_withholds_the_claim(self) -> None:
+        lines = probe.runner_position([], "abc123", [], True)
+        self.assertIn("cannot be attributed", "\n".join(lines))
+
+    def test_the_process_is_identified_when_it_is_itself_a_peer(self) -> None:
+        lines = probe.runner_position(
+            self.PEERS, "o145rw7urft00qoj3y9vnrma-063523", ["127.0.0.11"], True
+        )
+        self.assertIn("inside the Coolify resource ops-runner", "\n".join(lines))
+
+    def test_an_unrelated_hostname_claims_no_identity(self) -> None:
+        lines = probe.runner_position(self.PEERS, "fv-az1234-5", ["127.0.0.11"], True)
+        self.assertNotIn("inside the Coolify resource", "\n".join(lines))
+
+    def test_nameservers_are_read_from_the_file_and_nothing_else(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "resolv.conf"
+            path.write_text(
+                "# comment\nsearch example\nnameserver 127.0.0.11\nnameserver 10.0.0.1\noptions ndots:0\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                probe.read_nameservers(path), ["127.0.0.11", "10.0.0.1"]
+            )
+
+    def test_a_missing_resolver_file_is_not_an_error(self) -> None:
+        self.assertEqual(probe.read_nameservers(Path("nowhere-at-all.conf")), [])
 
 
 class CandidateTests(unittest.TestCase):

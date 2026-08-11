@@ -64,6 +64,14 @@ READINESS_INTERVAL_SECONDS = 10
 # so its resolvability here is established rather than assumed.
 REFERENCE_HOST_VARIABLE = "READINESS_REFERENCE_HOST"
 
+# Where a Linux process learns its resolvers, and the address Docker gives a
+# container attached to any user-defined network. Seeing that address is the
+# difference between "container names cannot resolve here" and "this process is
+# on a Docker network, just not the applications' one".
+RESOLV_CONF = Path("/etc/resolv.conf")
+DOCKER_EMBEDDED_DNS = "127.0.0.11"
+DOCKER_ENV_MARKER = Path("/.dockerenv")
+
 
 class ProbeResult:
     """One HTTP answer, or the reason there was not one."""
@@ -287,6 +295,68 @@ def resolve(name: str) -> tuple[list[str], str]:
     return addresses, ""
 
 
+def read_nameservers(path: Path = RESOLV_CONF) -> list[str]:
+    """The resolvers this process is actually using, or nothing if unreadable."""
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    servers = []
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] == "nameserver":
+            servers.append(parts[1])
+    return servers
+
+
+def runner_position(
+    peers: list[dict],
+    hostname: str,
+    nameservers: list[str],
+    containerised: bool,
+) -> list[str]:
+    """Say where this process is sitting, because the verdict now turns on it.
+
+    Once the answer can be "this runner is not on the applications' network",
+    the next question is always "then where is it?", and a report that cannot
+    answer sends someone to the host to find out by hand. The resolver is the
+    decisive fact: Docker hands a container on a user-defined network the
+    embedded resolver at 127.0.0.11, so seeing it means container names ought to
+    resolve here and their failure is about which network, not about DNS.
+    """
+
+    lines = [f"    position: hostname {hostname}"]
+    lines.append(
+        "    position: inside a container"
+        if containerised
+        else "    position: no /.dockerenv, so this is not a Docker container"
+    )
+    if not nameservers:
+        lines.append("    position: no resolver file readable, so DNS cannot be attributed")
+    elif DOCKER_EMBEDDED_DNS in nameservers:
+        lines.append(
+            f"    position: resolver {', '.join(nameservers)} includes Docker's "
+            "embedded DNS, so this process is on at least one user-defined "
+            "Docker network and container names ought to resolve here"
+        )
+    else:
+        lines.append(
+            f"    position: resolver {', '.join(nameservers)} is not Docker's "
+            "embedded DNS, so container names cannot resolve here at all and "
+            "no application will be visible from this process"
+        )
+    for peer in peers:
+        uuid = str(peer.get("uuid") or "").strip()
+        if uuid and hostname.startswith(uuid):
+            lines.append(
+                f"    position: this process is inside the Coolify resource "
+                f"{peer.get('name') or uuid}, which is itself one of the peers above"
+            )
+            break
+    return lines
+
+
 def operate_address(client: driver.Client, spec: dict) -> int:
     driver.emit("--- address ai-gateway")
     application, peers = locate_application_and_peers(client, spec)
@@ -331,6 +401,13 @@ def operate_address(client: driver.Client, spec: dict) -> int:
 
     verdict, sentence = attribute_placement(resolved, len(usable), peers_resolved)
     driver.emit(f"    PLACEMENT {verdict}: {sentence}")
+    for line in runner_position(
+        usable,
+        socket.gethostname(),
+        read_nameservers(),
+        DOCKER_ENV_MARKER.exists(),
+    ):
+        driver.emit(line)
 
     reference = (os.environ.get(REFERENCE_HOST_VARIABLE) or "").strip()
     if reference:
