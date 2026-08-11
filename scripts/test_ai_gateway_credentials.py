@@ -65,6 +65,76 @@ class FakeCoolify:
         return {}
 
 
+class LocateTests(unittest.TestCase):
+    """Exercising the one function that speaks to the driver's real API surface.
+
+    Every other test here replaces locate with a stub, which is what let three
+    wrong call signatures reach a live run: the wrong number of arguments, a
+    project dict passed where a uuid string was expected, and an unchecked None.
+    None of them are visible to a caller that never runs the function. So these
+    tests fake only the transport and let the real driver functions run.
+    """
+
+    PROJECTS = [{"id": 2, "uuid": "project-uuid", "name": binder.PROJECT_NAME}]
+    ENVIRONMENTS = [{"id": 7, "uuid": "env-uuid", "name": binder.ENVIRONMENT_NAME}]
+    APPLICATIONS = [
+        {"uuid": "gateway-uuid", "name": binder.RESOURCE_NAME, "environment_id": 7},
+        {"uuid": "other-uuid", "name": "n8n-selfhosted", "environment_id": 7},
+        {"uuid": "elsewhere", "name": binder.RESOURCE_NAME, "environment_id": 99},
+    ]
+
+    def setUp(self) -> None:
+        self.real_call = driver.call
+        self.addCleanup(setattr, driver, "call", self.real_call)
+        self.requested: list[str] = []
+
+    def serve(self, projects=None, environments=None, applications=None) -> None:
+        def fake(client, method, path, body=None, expect=(200,), allow_absent=False):
+            self.requested.append(path)
+            if path == "/projects":
+                return self.PROJECTS if projects is None else projects
+            if path.endswith("/environments"):
+                return self.ENVIRONMENTS if environments is None else environments
+            if path == "/applications":
+                return self.APPLICATIONS if applications is None else applications
+            raise AssertionError(f"unexpected request {path}")
+
+        driver.call = fake
+
+    def test_the_gateway_application_is_found_through_the_real_driver(self) -> None:
+        self.serve()
+        self.assertEqual(binder.locate(None), "gateway-uuid")
+
+    def test_the_project_uuid_is_what_reaches_the_url_not_the_project(self) -> None:
+        """A dict interpolated into a path produced a URL with control characters in it."""
+
+        self.serve()
+        binder.locate(None)
+        self.assertIn("/projects/project-uuid/environments", self.requested)
+
+    def test_an_application_in_another_environment_is_not_mistaken_for_this_one(self) -> None:
+        self.serve()
+        self.assertEqual(binder.locate(None), "gateway-uuid")
+
+    def test_a_missing_project_is_named_rather_than_dereferenced(self) -> None:
+        self.serve(projects=[])
+        with self.assertRaises(driver.Abort) as raised:
+            binder.locate(None)
+        self.assertIn(binder.PROJECT_NAME, str(raised.exception))
+
+    def test_a_missing_environment_is_named_rather_than_dereferenced(self) -> None:
+        self.serve(environments=[])
+        with self.assertRaises(driver.Abort) as raised:
+            binder.locate(None)
+        self.assertIn(binder.ENVIRONMENT_NAME, str(raised.exception))
+
+    def test_a_missing_application_says_what_has_to_happen_first(self) -> None:
+        self.serve(applications=[])
+        with self.assertRaises(driver.Abort) as raised:
+            binder.locate(None)
+        self.assertIn("reconciled first", str(raised.exception))
+
+
 def run_operation(operation, coolify: FakeCoolify, **kwargs) -> tuple[int, str]:
     real_call = driver.call
     real_locate = binder.locate

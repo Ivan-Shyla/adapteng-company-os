@@ -62,9 +62,19 @@ def locate(client: driver.Client) -> str:
     """Find the gateway application, or say plainly that it is not there yet."""
 
     project = driver.find_project(client, PROJECT_NAME)
-    environment = driver.find_environment(client, project, ENVIRONMENT_NAME)
+    if project is None:
+        raise driver.Abort(
+            f"project {PROJECT_NAME} does not exist, so there is no application to "
+            "bind credentials to; reconcile the gateway first"
+        )
+    environment = driver.find_environment(client, project["uuid"], ENVIRONMENT_NAME)
+    if environment is None:
+        raise driver.Abort(
+            f"environment {ENVIRONMENT_NAME} does not exist in {PROJECT_NAME}; "
+            "reconcile the gateway first"
+        )
     application = driver.find_application(
-        client, driver.applications_in(client, environment), RESOURCE_NAME
+        driver.applications_in(client, environment), RESOURCE_NAME
     )
     if application is None:
         raise driver.Abort(
