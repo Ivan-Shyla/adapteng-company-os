@@ -17,7 +17,9 @@ name: Postgres runtime role
 #
 # recon reads and writes nothing, and answers one question this deployment has
 # recorded two contradictory answers to: whether the connection is actually
-# encrypted. provision creates or rotates the role, applies the grants from the
+# encrypted. credentials also reads nothing, and answers a different one: which
+# of the logins Coolify records for this database the server actually accepts,
+# reported by shape and never by value. provision creates or rotates the role, applies the grants from the
 # platform runbook, runs that runbook's own verifications, and publishes the
 # DSN. Run recon first and read it: provision refuses to proceed unless the
 # objects it grants on already exist with the exact shapes migration 008a
@@ -27,12 +29,13 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: "recon reads only; provision creates the role and publishes the DSN"
+        description: "recon and credentials read only; provision creates the role and publishes the DSN"
         required: true
         default: recon
         type: choice
         options:
           - recon
+          - credentials
           - provision
       db_host:
         description: "Database host on the private network. Leave empty to discover it from Coolify."

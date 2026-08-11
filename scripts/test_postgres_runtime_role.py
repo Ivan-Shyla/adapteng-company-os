@@ -666,6 +666,152 @@ class ReconTests(unittest.TestCase):
         self.assertIn("missing_functions=6", report)
 
 
+class CredentialProbeTests(unittest.TestCase):
+    """Reporting which recorded login works, without disclosing any of them."""
+
+    URL_CREDENTIAL = "url-side-cred-1234567890"
+    PART_CREDENTIAL = "part-side-cred-0987654321"
+
+    def setUp(self) -> None:
+        self.real_request = driver.coolify_request
+        self.real_psql = driver.psql
+        self.addCleanup(setattr, driver, "coolify_request", self.real_request)
+        self.addCleanup(setattr, driver, "psql", self.real_psql)
+        self.attempted: list[dict] = []
+
+    def record(self, **overrides) -> dict:
+        base = {
+            "name": "adapteng-ops-db",
+            "uuid": "db-uuid",
+            "type": "standalone-postgresql",
+            "postgres_user": "postgres",
+            "postgres_db": "adapteng_ops",
+            "postgres_password": self.PART_CREDENTIAL,
+            "internal_db_url": (
+                f"postgres://postgres:{self.URL_CREDENTIAL}@db-uuid:5432/postgres"
+            ),
+        }
+        base.update(overrides)
+        return base
+
+    def respond(self, record) -> None:
+        payload = [record] if isinstance(record, dict) else record
+        driver.coolify_request = lambda base, cred, method, path, body: (200, payload)
+
+    def accept(self, *working: str) -> None:
+        def fake(target, sql, database=driver.DATABASE, check=True):
+            environment = target.environment()
+            self.attempted.append(environment)
+            if environment["PGPASSWORD"] in working:
+                return 0, "1\n", ""
+            # psql writes connection failures to stderr, which is where the
+            # reason has to be read from; a report that reads stdout finds an
+            # empty string and says only "exit 2".
+            return 2, "", 'psql: error: FATAL:  password authentication failed for user "postgres"\n'
+
+        driver.psql = fake
+
+    def probe(self) -> tuple[int, str]:
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_credentials("https://c.example", "a-credential", "prefer")
+        return code, buffer.getvalue()
+
+    def test_the_working_login_is_identified_by_source(self) -> None:
+        self.respond(self.record())
+        self.accept(self.PART_CREDENTIAL)
+        code, report = self.probe()
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("postgres_user/postgres_password", report)
+        self.assertIn("AUTHENTICATED", report)
+        self.assertIn("working=1 of 2", report)
+
+    def test_no_credential_is_ever_printed(self) -> None:
+        """The whole point of a shape report is that it is not the value."""
+
+        self.respond(self.record())
+        self.accept(self.URL_CREDENTIAL)
+        _, report = self.probe()
+        self.assertNotIn(self.URL_CREDENTIAL, report)
+        self.assertNotIn(self.PART_CREDENTIAL, report)
+        self.assertIn("len=24", report)
+        self.assertIn("fingerprint=", report)
+
+    def test_both_recorded_copies_are_tried_not_only_the_first(self) -> None:
+        """A rejected first copy must not stop the second from being tested."""
+
+        self.respond(self.record())
+        self.accept(self.PART_CREDENTIAL)
+        self.probe()
+        used = [environment["PGPASSWORD"] for environment in self.attempted]
+        self.assertEqual(used, [self.URL_CREDENTIAL, self.PART_CREDENTIAL])
+
+    def test_two_copies_that_agree_share_a_fingerprint(self) -> None:
+        """Disagreement between the record's two copies is itself the finding."""
+
+        agreed = self.record(postgres_password=self.URL_CREDENTIAL)
+        self.respond(agreed)
+        self.accept()
+        _, report = self.probe()
+        fingerprints = {line.split("fingerprint=")[1].strip()
+                        for line in report.splitlines() if "fingerprint=" in line}
+        self.assertEqual(len(fingerprints), 1)
+
+    def test_every_copy_being_rejected_names_the_owner_action(self) -> None:
+        """A password fixed at initialisation is not recoverable by reading harder."""
+
+        self.respond(self.record())
+        self.accept()
+        code, report = self.probe()
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("none-authenticate", report)
+        self.assertIn("reset the password", report)
+        self.assertIn("password authentication failed", report)
+
+    def test_a_record_with_no_login_at_all_reports_what_it_had(self) -> None:
+        self.respond({"name": "x", "uuid": "u", "type": "standalone-postgresql"})
+        self.accept()
+        with self.assertRaises(driver.Abort) as raised:
+            self.probe()
+        self.assertIn("no usable login", str(raised.exception))
+        self.assertIn("uuid", str(raised.exception))
+
+    def test_the_probe_reads_and_writes_nothing_in_the_database(self) -> None:
+        statements: list[str] = []
+
+        def fake(target, sql, database=driver.DATABASE, check=True):
+            statements.append(sql)
+            return 0, "1\n", ""
+
+        self.respond(self.record())
+        driver.psql = fake
+        self.probe()
+        joined = " ".join(statements).upper()
+        for verb in ("CREATE ", "ALTER ", "GRANT ", "REVOKE ", "INSERT ", "UPDATE ", "DROP "):
+            self.assertNotIn(verb, joined)
+
+    def test_ambiguity_is_refused_here_too(self) -> None:
+        """The probe must not pick a database the other operations would refuse to."""
+
+        self.respond([self.record(), self.record(name="second", uuid="db-two")])
+        self.accept()
+        with self.assertRaises(driver.Abort) as raised:
+            self.probe()
+        self.assertIn("2 Postgres databases", str(raised.exception))
+
+    def test_an_absent_credential_is_described_as_absent_not_as_empty(self) -> None:
+        self.assertEqual(driver.describe_secret(""), "absent")
+
+    def test_punctuation_in_a_credential_is_reported_by_class(self) -> None:
+        """Mangling in transit shows up as a changed character set, not a changed length."""
+
+        described = driver.describe_secret("aB3%/x")
+        self.assertIn("lower", described)
+        self.assertIn("upper", described)
+        self.assertIn("digit", described)
+        self.assertIn("other[%/]", described)
+
+
 class EntryPointTests(unittest.TestCase):
     def test_an_abort_is_reported_and_exits_non_zero(self) -> None:
         buffer = io.StringIO()

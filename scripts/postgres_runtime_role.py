@@ -26,6 +26,7 @@ password.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import secrets
@@ -325,6 +326,127 @@ def report_transport_encryption(target) -> str:
     else:
         emit(f"    transport: undetermined (pg_stat_ssl returned {answer!r})")
     return encrypted
+
+
+def describe_secret(value: str) -> str:
+    """Describe a credential precisely enough to debug it, and never enough to use it.
+
+    A rejected password has several possible causes that read identically from
+    the outside: the wrong field was read, the right field was mangled in
+    transit, or the recorded value no longer matches the running server. Length,
+    character composition and a truncated digest separate all three without
+    disclosing anything, and a truncated digest is what makes two recorded
+    copies comparable without either being printed.
+    """
+
+    if not value:
+        return "absent"
+    classes = []
+    if any(character.islower() for character in value):
+        classes.append("lower")
+    if any(character.isupper() for character in value):
+        classes.append("upper")
+    if any(character.isdigit() for character in value):
+        classes.append("digit")
+    other = sorted({c for c in value if not c.isalnum()})
+    if other:
+        classes.append("other[" + "".join(other) + "]")
+    fingerprint = hashlib.sha256(value.encode("utf-8")).hexdigest()[:8]
+    return f"len={len(value)} {'+'.join(classes)} fingerprint={fingerprint}"
+
+
+def authentication_candidates(record: dict) -> list[dict[str, str]]:
+    """Every login this database's own record offers, in the order recorded.
+
+    Coolify records the same credential in two places - assembled into
+    internal_db_url and separately as its parts - and they are not guaranteed to
+    agree. Enumerating both is what turns 'the password was rejected' into a
+    statement about which recorded copy is wrong.
+    """
+
+    candidates: list[dict[str, str]] = []
+    url = str(record.get("internal_db_url") or "")
+    if url:
+        try:
+            parsed = parse_internal_dsn(url)
+        except Abort:
+            parsed = {}
+        if parsed.get("user") and parsed.get("credential"):
+            parsed["source"] = "internal_db_url"
+            candidates.append(parsed)
+    user = str(record.get("postgres_user") or "")
+    admin_credential = str(record.get("postgres_password") or "")
+    alias = str(record.get("uuid") or "")
+    if user and admin_credential and alias:
+        candidates.append(
+            {
+                "host": alias,
+                "port": "5432",
+                "user": user,
+                "credential": admin_credential,
+                "source": "postgres_user/postgres_password",
+            }
+        )
+    return candidates
+
+
+def operate_credentials(base_url: str, credential: str, sslmode: str) -> int:
+    """Report which recorded login actually authenticates, without printing any.
+
+    This reads and writes nothing in the database. It exists because a rejected
+    password is the least informative failure in this system: it is indexed by
+    the server against a value nobody can see, and every wrong answer produces
+    the same message. Testing each recorded copy converts that into a fact.
+    """
+
+    emit("--- recorded database logins")
+    record = discover_database_record(base_url, credential)
+    emit(f"    database: {record.get('name')} uuid={record.get('uuid')}")
+    emit(f"    record declares user: {record.get('postgres_user') or 'nothing'}")
+    emit(f"    record declares database: {record.get('postgres_db') or 'nothing'}")
+    emit(f"    internal address recorded: {'yes' if record.get('internal_db_url') else 'no'}")
+
+    candidates = authentication_candidates(record)
+    if not candidates:
+        raise Abort(
+            "the database record carries no usable login at all. It offers: "
+            f"{', '.join(sorted(str(key) for key in record))}"
+        )
+
+    working = 0
+    for candidate in candidates:
+        emit(f"    candidate {candidate['source']}:")
+        emit(f"      user={candidate['user']} host={candidate['host']}:{candidate['port']}")
+        emit(f"      credential {describe_secret(candidate['credential'])}")
+        target = NetworkTarget(
+            candidate["host"],
+            int(candidate["port"]),
+            candidate["user"],
+            candidate["credential"],
+            sslmode,
+        )
+        code, _, stderr = psql(target, "SELECT 1;", database="postgres", check=False)
+        if code == 0:
+            working += 1
+            emit("      AUTHENTICATED")
+        else:
+            first = stderr.strip().splitlines()[0] if stderr.strip() else f"exit {code}"
+            emit(f"      rejected: {first}")
+
+    if working:
+        emit(f"RESULT credentials ok working={working} of {len(candidates)}")
+        return 0
+    # Every recorded copy being rejected is a different problem from a bad read,
+    # and the difference decides who fixes it: a rejected-everywhere credential
+    # means the running server was initialised with a value the record no longer
+    # holds, which no amount of reading Coolify will recover.
+    emit("RESULT credentials none-authenticate")
+    emit("    every login this database's own record holds was rejected by the server.")
+    emit("    A Postgres password is fixed at initialisation and is not changed by")
+    emit("    editing the record afterwards, so a record edited after first start")
+    emit("    describes a login that never existed. Recovering this needs the owner")
+    emit("    to reset the password on the server itself.")
+    return 1
 
 
 def operate_recon(target) -> int:
@@ -716,8 +838,8 @@ def parse_internal_dsn(url: str) -> dict[str, str]:
     }
 
 
-def discover_admin_connection(base_url: str, credential: str) -> dict[str, str]:
-    """Ask Coolify where the managed database is and how to log into it.
+def discover_database_record(base_url: str, credential: str) -> dict:
+    """Find the one managed Postgres database this instance runs.
 
     This exists so the operator needs no database credential of its own. The
     Coolify credential it already holds is sufficient, and using it means no new
@@ -750,7 +872,13 @@ def discover_admin_connection(base_url: str, credential: str) -> dict[str, str]:
             f"Coolify reports {len(candidates)} Postgres databases ({names}); "
             "name the one to use with --db-host rather than having it guessed"
         )
-    database = candidates[0]
+    return candidates[0]
+
+
+def discover_admin_connection(base_url: str, credential: str) -> dict[str, str]:
+    """Read the address and login for that database out of its record."""
+
+    database = discover_database_record(base_url, credential)
     emit(f"    database discovered from Coolify: {database.get('name')}")
     url = str(database.get("internal_db_url") or "")
     if url:
@@ -798,7 +926,7 @@ def choose_target(arguments: argparse.Namespace):
 
 def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("recon", "provision"))
+    parser.add_argument("operation", choices=("recon", "provision", "credentials"))
     parser.add_argument("--transport", choices=("network", "docker"), default="network")
     parser.add_argument("--container", default=None)
     parser.add_argument("--db-host", default=os.environ.get("PG_ADMIN_HOST", ""))
@@ -820,6 +948,15 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str]) -> int:
     arguments = parse_arguments(argv)
     try:
+        if arguments.operation == "credentials":
+            # This operation is about the logins themselves, so it must not go
+            # through the target builder: that would pick one of them and fail
+            # on it before the others could be reported.
+            return operate_credentials(
+                os.environ.get("COOLIFY_URL", ""),
+                os.environ.get("COOLIFY_API_TOKEN", ""),
+                arguments.admin_sslmode,
+            )
         target = choose_target(arguments)
         if arguments.operation == "recon":
             return operate_recon(target)
