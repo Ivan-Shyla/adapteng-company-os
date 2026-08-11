@@ -1427,14 +1427,41 @@ messages**, every one of them reachable inside 653–711:
 | 693 | `migration apply failed` |
 
 All six collapse to one label and one exit code. **The causes were not unknown —
-they were composed and then erased three frames later.** That is the sharpest form
-of this shape: `lifecycle.run_selection_failed` mislabels a cause it never had, and
-`closure.dynamic_import` collapses three; here six precise sentences already exist
-in the source and none of them reaches the operator.
+they were composed and then erased three frames later.**
 
-Worse, three of the six (**385, 542, 693**) raise `from None`, severing `__cause__`
+**Sharpened by measurement, and it is worse than "collapsed": four of the six are
+actively mislabelled.** Only two of the six messages are about status — `migration
+status query failed` and `…returned an invalid state`. The other four are not:
+*path changed*, *is not executable*, *identity changed*, *apply failed*. So
+`migration status failed` is the wrong sentence for **four of six** reachable
+causes. The worst is 693: an `apply` that fails to launch is reported as a
+*status* failure, which turns a failed write into what reads as a read-only probe.
+That is a static reachability count, not a frequency — which of the six dominates
+in practice was not traced.
+
+**Correction, measured on 3.11.9: the `from None` claim below was wrong, and the
+remedy is far cheaper than this document priced it.** This section previously said
+that three of the six (**385, 542, 693**) raise `from None`, "severing `__cause__`
 at the raise site, so even rewriting 712 as `raise … from exc` would not recover
-them. The file suppresses exception context at nine sites in total.
+them". The premise is true and the consequence does not follow. The six sentences
+are the `RuntimeError`'s **own args**, not its `__cause__`, so they were never in
+the channel `from None` closes. Executed rather than recalled:
+
+```
+raise RuntimeError("psql executable path changed") from None
+  str(exc)            -> psql executable path changed
+  exc.args            -> ('psql executable path changed',)
+  __cause__           -> None
+  __context__         -> OSError('underlying disk error')
+  __suppress_context__-> True
+```
+
+So `print(str(exc))` at 713 recovers **all six**, `from None` notwithstanding. It
+costs only the *rendered display* of the layer beneath, and even that survives
+programmatically in `__context__`. The fix is one line and recovers six sentences.
+WS-2 established this and it reverses a claim of mine that made the repair look
+partial. The file does suppress context at nine sites; that count was correct and
+is no longer load-bearing.
 
 **Correction to WS-2's generalisation: the evidence says lapse, not house style.**
 WS-2 concluded "the pattern isn't one bad line; it's a house style". The same
@@ -1450,18 +1477,79 @@ handlers, all narrow, all specific, all with distinct exit codes:
 | 647–651 | `ValueError` | `database URL is invalid` | 2 |
 
 Specificity is this author's local convention; 712 departs from it. The recurring
-shape across all three files is therefore narrower and more useful than "house
-style": **it is the outermost handler of an entry point**, where the instinct to
-let nothing escape overrides the precision practised everywhere inside it. The
-shell script's version is the `EXIT` trap, which is the same structural position.
-That distinction is worth holding because it changes the remedy — an outermost-handler
-defect is fixed at one site per entry point, while a house style implies a campaign
-across every handler in the repository.
+shape across all three files was therefore recorded here as narrower than "house
+style": *the outermost handler of an entry point*, with the shell script's version
+said to be the `EXIT` trap, "the same structural position".
 
-Recorded, not acted on: `scripts/migrations/` is platform code under the hold, and
-this is not part of F-8's evidence. It is the third data point for the claim that
-**#121's `stderr=` remedy generalises past its own call site**, which remains the
-practical consequence.
+**That structural claim is false, and correcting it splits one family into three.**
+WS-2 checked the shell script and I verified it at `824b4238` (blob `251e8218`,
+12417 bytes, cache confirmed byte-exact). `on_exit` is defined **86–101** and
+installed at **102**; the only thing it prints is `lifecycle.cleanup_failed` (92),
+and it otherwise preserves `original_status` (94–95).
+`lifecycle.run_selection_failed` is at **262**, inline inside the retry loop
+**245–266**, immediately after the `selection_status -ne 2` test at 261. It is not
+a handler, not outermost, and not a trap. The three sites do not share a position,
+and they do not share a mechanism either:
+
+| Site | Mechanism | Where the knowledge dies | Remedy |
+| --- | --- | --- | --- |
+| shell `254` → `262` | **call-site discard** | callee names the cause; caller sends it to `/dev/null` | stop discarding — #121's `stderr=` capture |
+| `_fixed_migration:712` | **in-process erasure** | a 59-line handler has nothing specific left to say | `print(str(exc))`, one line, six sentences |
+| `closure.dynamic_import` | **token reuse** | narrow checks decline to encode what they know | discriminate the token; no handler edit helps |
+
+The helper is not at fault in the first row: `approved_assets_github_metadata.py`
+prints the specific code correctly at **510–511** (`except MetadataError as exc:` /
+`print(exc.code, file=sys.stderr)`), and its only other handlers, at 92 and 213,
+both re-raise with a specific code and `from exc`. **WS-2 placed `metadata:510` in
+the erasure column while stating one paragraph earlier that it reports correctly at
+511** — the two halves of its own message disagree, and the source settles it in
+favour of the earlier half. The metadata helper is clean; the shell is where the
+sentence is thrown away.
+
+**And the third row refutes the property WS-2 proposed to replace position with.**
+WS-2 argued the unifier is *width, not position* — a handler wide enough has
+nothing specific to say. That is exactly right for 712 and it is the reason the
+`print(str(exc))` fix works. It does not hold for `closure.dynamic_import`, which
+is raised at **46 sites** in `verify_rollout_trust_anchor.py` and at none of them
+from an `except` at all. They are narrow `if` conditions with *maximal* local
+knowledge — a module outside the allowlist (1173), a wrong call signature (1198), a
+duplicate assignment (1273), a `sys.path` write where none is allowed (1616), an
+`importlib` submodule import (1723, 1727), a pin absent or mismatched (1436, 1481).
+Each knows precisely what it caught and each emits the same opaque token. So the
+family's common property is not width and not position:
+
+> **the granularity of the emitted token is decoupled from the granularity of the
+> knowledge available where it is emitted** — and there are at least three
+> independent ways to achieve that: width destroys the knowledge, redirection
+> discards it in transit, token reuse declines to encode it.
+
+**Which invalidates the practical conclusion this section drew.** It said an
+outermost-handler defect "is fixed at one site per entry point, while a house style
+implies a campaign". Neither branch survives: none of the three is an outermost
+handler, and the three remedies are three different edits in three different files
+— one of which, the 46-site one, is precisely the campaign the distinction was
+introduced to rule out. #121's `stderr=` remedy generalises to the **first** row
+only. That is a narrower claim than "generalises past its own call site", which is
+how this document has been putting it, and the narrower claim is the true one.
+
+**One caveat that must travel with the 46-site row, because it may not be a defect
+at all.** `verify_rollout_trust_anchor.py` is a trust verifier, and a deliberately
+opaque failure code is a defensible security property there: telling an attacker
+*which* closure check rejected their input is a disclosure the other two sites have
+no equivalent of. Forty-six sites converging on one token is at least as consistent
+with an intentional convention as with a lapse — which also means WS-2's original
+"house style" reading, which this document corrected to "lapse", has more support
+here than that correction allowed, while remaining wrong for `_fixed_migration.py`
+where five narrow neighbours prove the author's local practice. **Not classified.**
+Deciding it needs the author's intent, and the observation belongs to the owner.
+
+**Recorded, not acted on.** `scripts/migrations/`, `scripts/operations/` and
+`scripts/validation/` are all platform code under the #121 hold, and none of this
+is part of F-8's evidence. Every line above was read from blobs fetched and
+size-checked at `824b4238` — `_fixed_migration.py` 23914 bytes / 729 lines,
+`authorize_approved_assets_phase.sh` 12417 bytes (git blob sha `251e8218`, recomputed
+locally), `approved_assets_github_metadata.py` 518 lines — and the `from None`
+behaviour from execution on 3.11.9, not from documentation.
 
 ---
 

@@ -1303,7 +1303,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with eighteen sub-shapes and forty-one instances.** WS-1 proposed the
+**The general rule, with nineteen sub-shapes and forty-four instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -1345,6 +1345,21 @@ seventeen sub-shapes and **thirty-five** instances. The lesson is narrower than
 sub-shape*, and that true statement is what made the header look settled. **A
 header carries two numbers, and confirming one of them is not evidence about the
 other.**
+
+**This round: nineteen and forty-four, and the increment is unusual in that every
+new instance is mine.** Bullets re-counted directly in the edited file: **nineteen**.
+One new sub-shape — *a generalisation that supplies its own corroborating
+instances*. Three new instances, all committed by this document: (i) "the shell
+script's version is the `EXIT` trap", and (ii) "`closure.dynamic_import` collapses
+three", both under the new shape and both in the same paragraph; (iii) the
+`from None` recoverability claim, under *wrong axis*. Eighteen plus one is
+nineteen; forty-one plus three is forty-four. **No instance in this round was
+found by me.** WS-2 brought (i) and (iii); (ii) surfaced only because verifying (i)
+required re-reading the sentence that carried both. That is the load-bearing
+observation about the register itself: three of my own errors sat unchallenged
+through several rounds of my own re-reading, and the thing that moved them was
+another reader with the source open. The list documents instrument-question
+mismatches, and its own most reliable instrument turns out to be *someone else*.
 
 **The current round adds one sub-shape and two instances, again by enumeration.**
 The bullets were counted directly and stood at seventeen before this edit. New
@@ -1626,6 +1641,16 @@ plus two is **forty-one**. Bullets re-enumerated, not incremented.
   *filesystem* walk. The two populations differ by every ignored file, and
   `.gitignore:115` ignores the directory `pytest` writes into. An instrument
   answering a neighbouring question, cited as though it answered this one.
+  **Sixth instance, and it is the cheapest of all to have avoided.** This document
+  argued that `raise … from None` at three of six sites in `_fixed_migration.py`
+  made those messages unrecoverable even if the swallowing handler were rewritten.
+  `from None` does exactly what was claimed — it clears `__cause__` and sets
+  `__suppress_context__` — and the six messages were never in `__cause__`. They are
+  the `RuntimeError`'s own `args`, a channel `from None` does not touch. Executed on
+  3.11.9: `str(exc)` returns the message, and `__context__` survives besides. A real
+  property of the adjacent channel, measured correctly, describing nothing about
+  where the payload lived. The cost was a mispriced remedy — three of six declared
+  beyond reach when one line recovers all six.
 - **Right answer, unstated validity interval — applied outside its domain.**
   WS-9 derived #121's line offsets from `git diff --numstat`: 10 added, 1 removed,
   net **+9**. Correct, and exact at the runner site — 379→388 and 384→393, three
@@ -1846,7 +1871,30 @@ plus two is **forty-one**. Bullets re-enumerated, not incremented.
   872 already named `validate_repo.py` correctly as a pinned entry, so the two
   statements were contradicting each other in the same directory.
 
-Unifying form, and the reason the eighteen belong together: **every one of these
+- **A generalisation that supplies its own corroborating instances.** Having read
+  one file where the erasure genuinely sat in a wide handler
+  (`_fixed_migration.py:712`), this document generalised the family as *the
+  outermost handler of an entry point* and then wrote that "the shell script's
+  version is the `EXIT` trap, which is the same structural position" — a factual
+  claim about a file it had not opened, produced by the generalisation rather than
+  by a read. Source refutes it: `authorize_approved_assets_phase.sh` defines
+  `on_exit` at 86–101, installs it at 102, and prints only
+  `lifecycle.cleanup_failed` from it, while `lifecycle.run_selection_failed` sits at
+  262, inline in the retry loop 245–266. **The same paragraph did it twice.** Its
+  other clause, "`closure.dynamic_import` collapses three", names a number matching
+  nothing in the corpus: `execution-program.md` 956–962 describes *two* constants
+  each collapsing *two* causes, and the token is raised at **46** sites in
+  `verify_rollout_trust_anchor.py`. "Three" is the length of the sentence's own list
+  of examples. Both errors were generated by the frame the sentence was already in.
+  **This is the mechanism by which a wrong generalisation becomes self-confirming:**
+  state the pattern, then populate it from the pattern instead of from the sources,
+  and the instances read back as evidence. It is distinct from *a sample read as a
+  census*, where the sample is real and only the extrapolation is unwarranted; here
+  the extrapolated instance did not exist. The defence is positional rather than
+  epistemic — **the instances of a generalisation must be gathered before it is
+  written, because afterwards the writer is no longer sampling.**
+
+Unifying form, and the reason the nineteen belong together: **every one of these
 instruments returned a true statement, and in no case was the true statement about
 the question being asked.** The helper list truly contained no such script. The
 two `authorized` verdicts were truly `authorized`. The sixteen hits truly
