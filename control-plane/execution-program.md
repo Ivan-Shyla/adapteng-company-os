@@ -1237,5 +1237,19 @@ deployed gateway:
    interpreter behaviour measured on 3.11.9; **no exploitation observed and none
    possible today**, since the collision set is empty.
 
+   **Two additions, both from execution rather than reading (2026-08-11).** First,
+   the cwd bound has two omitted sites: lines **274** and **347** name their script
+   by literal relative path and appear in no precondition check, so a wrong working
+   directory fails there late and with **no `lifecycle.*` token at all**. Adding
+   those two paths to the 119–130 block is the cheapest half of this item — it
+   cannot change behaviour when the directory is right, and it converts a silent
+   exec failure into `lifecycle.input_invalid`. Second, the same block already
+   existence-checks `current_run_helper` at line **125**, and that variable is never
+   used to invoke anything — line 274 reaches the module through the launcher by
+   module name. **The block validates a path nothing opens and omits two paths that
+   are opened unvalidated.** Neither point changes the scope of the 168 repair; both
+   belong in the same receipt if this is folded into #121, because they are edits to
+   the identical protected file.
+
 Everything else on the path to a deployed, healthy AI Gateway is either AUTO or
 AUTO + FAIL CLOSED under the [autonomy policy](autonomy-policy.md).

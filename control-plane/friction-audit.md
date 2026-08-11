@@ -1108,6 +1108,82 @@ relative path at line 10 and independent of the working directory; the other fiv
 expose cwd, bounded incidentally by 124–125. WS-9's singling-out of 168 stands, and
 so does the count.
 
+**Confirmed by execution, and the mechanism is now exact (WS-2, 2026-08-11).** The
+tier table was read rather than run. WS-2 ran it at `824b4238`: the heredoc import
+succeeds from the repository root, and fails with `ModuleNotFoundError: No module
+named 'scripts'` both under `-I` from the root and without `-I` from elsewhere. The
+structural reason is now established and is stronger than "cwd-rooted package path":
+**there is no `__init__.py` anywhere under `scripts/`** — confirmed against the tree
+at `824b4238`, zero under `scripts/` against twenty elsewhere in the repository — so
+`scripts.validation.bounded_json` is a namespace package resolvable *only* by the
+repository root sitting on `sys.path`. Nothing else can satisfy it.
+
+**Two invocations were missing from every previous count of this file, and they are
+not in the 119–130 guard.** Lines **274** (`python -I
+scripts/validation/run_rollout_module.py`) and **347** (`python -I
+scripts/validation/create_approved_assets_phase_authorization.py`) name their script
+by a *literal* relative path, not through a variable, and neither path appears in
+the seven-clause precondition block. If the working directory is wrong they fail
+when the interpreter cannot open the file — late, and with no `lifecycle.*` token.
+
+**But the ranking WS-2 drew from that is inverted, and the correction matters more
+than the omission.** WS-2 filed 274/347 as "the least guarded". Line 274 is the
+**most** guarded interpreter invocation in the file. `run_rollout_module.py` — read
+in full at `824b4238` — is a launcher whose docstring is *"Run one fixed rollout
+module without adding repository roots to `sys.path`."* Before importing anything it
+calls `_assert_isolated_search_path()`, which raises unless `sys.flags.isolated` is
+set, raises on **any empty `sys.path` entry** — an empty entry *is* the working
+directory — and raises on any entry equal to or beneath the repository root. It then
+installs `scripts` and `scripts.validation` as synthetic namespace packages bound to
+absolute paths derived from `__file__`, checks the resolved spec origin against an
+eleven-entry `ALLOWED_MODULES` table, and only then runs the module. **It is a
+purpose-built anti-cwd mechanism that refuses to start if the working directory is
+reachable from `sys.path` at all.**
+
+**So the file's dependence splits along an axis neither party had separated:
+*locating a file* and *resolving an import* are different dependences with different
+failure modes, and no site has both.**
+
+| construct | sites | cwd on `sys.path` | cwd needed to **resolve imports** | cwd needed to **locate the file** |
+| --- | --- | --- | --- | --- |
+| `python -I "$metadata_helper"` | 56, 61, 71, 156, 161, 248, 376 | no | no — helper self-inserts | yes, **pre-checked at 124** |
+| `python "$metadata_helper"` | **168** | no | no — helper self-inserts | yes, **pre-checked at 124** |
+| `python -c` | 177, 179, 230 | **yes** | no — stdlib only | n/a |
+| `python - <<'PY'` | **186, 280** | **yes** | **yes — the only true dependence** | n/a |
+| `python -I <literal path>` | **274, 347** | no | no — `__file__`-derived | **yes, unchecked** |
+
+**The self-insert is what actually carries the eight helper invocations, and it is
+not `sys.path[0]`.** WS-2 reasoned that a script-file invocation puts `sys.path[0]`
+at the script's directory rather than cwd, so absolutising line 10 cannot change
+168's exposure. The conclusion is right and the mechanism is insufficient:
+`sys.path[0]` would be `scripts/validation/`, which **cannot** satisfy
+`from scripts.validation.bounded_json import …` on its own. What satisfies it is
+`approved_assets_github_metadata.py` lines **18–20** —
+`REPO_ROOT = Path(__file__).resolve().parents[2]` followed by an explicit
+`sys.path.insert` — and the same two-line idiom appears at
+`create_approved_assets_phase_authorization.py` **16–18**. Under `-I` neither the
+script directory nor cwd is on the path at all, so those seven siblings depend on
+the self-insert *entirely*. **The repository already contains the cwd-independence
+pattern, applied in three different modules, derived from `__file__`.**
+
+**Which prices the remedy differently for each half.** For 274/347 the fix is two
+more clauses in the 119–130 block: it converts a late unlabelled exec failure into
+`lifecycle.input_invalid` at 128, and it cannot alter behaviour on a correct working
+directory. For 186/280 the established pattern is **structurally unavailable** — a
+heredoc fed to `python -` has no `__file__` to derive a root from, which is exactly
+why those two are the sites that cannot be isolated. That is a sharper statement of
+the existing third tier: they resist `-I` not because of how they import, but
+because of what they lack.
+
+**And the guard block already contains a clause that guards nothing.**
+`current_run_helper` is set at line 11 and existence-checked at line **125**, and
+those are the only two lines in the file that mention it. It is never invoked:
+line 274 reaches that module through the launcher **by module name**, not by path.
+So the seven-clause precondition block **validates one path that nothing ever opens
+while omitting the two paths that are opened without validation.** The check is
+real, passes, and protects nothing — and it sits four lines from the omission it
+resembles.
+
 **WS-1's reclassification, verified verbatim, and it moves 168 out of hygiene.**
 The call at 168 is `assert-secret-absent … --name "$reviewed_evidence_name"`,
 failing to `lifecycle.reviewed_evidence_secret_present` at 172. It is an **absence
