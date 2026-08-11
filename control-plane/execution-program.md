@@ -773,6 +773,13 @@ deployed gateway:
    at 773–775 and 783 touches `test_migrate_approved_assets.py`, which carries one
    digest; if it also touches the metadata helper, it carries two.
 
+   **One other change wants the same signature.** The negative invariant proposed
+   in `current-state.md` §15 —
+   `ANCHOR_MACHINERY ∩ (APPROVAL_PATHS ∪ {allowed_signers}) == ∅` — needs a path
+   constant for `allowed_signers`, which has none, and the only `.py` files that
+   could host it are the verifier and its test, both digest-pinned at 408 and 423.
+   So it consumes a re-pin too. If both are wanted, they are one sitting.
+
    **The recipe, since a wrong one costs the signature.** `_reviewed_source_sha256`
    (anchor 1242) normalizes `\r\n` to `\n`, refuses a lone `\r`, and then at line
    1257 returns a plain `sha256` of the normalized bytes **for every path except
