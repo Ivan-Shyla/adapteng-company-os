@@ -856,6 +856,52 @@ at 109, `lifecycle.dispatch_failed` at 239) and 151 does not. The group label is
 true of two of its three members, and the one it is false of is the site where the
 predicate bites hardest.
 
+**What the operator actually sees there, traced by WS-1 and verified verbatim at
+`824b4238`.** The failure does not simply vanish — it goes to the `EXIT` trap:
+
+```
+86  on_exit() {
+87    original_status=$?
+88    trap - EXIT INT TERM HUP
+89    cleanup_status=0
+90    cleanup_resources || cleanup_status=$?
+91    if [ "$cleanup_status" -ne 0 ]; then
+92      printf '%s\n' "lifecycle.cleanup_failed" >&2
+93    fi
+94    if [ "$original_status" -ne 0 ]; then
+95      exit "$original_status"
+96    fi
+97    if [ "$cleanup_status" -ne 0 ]; then
+98      exit 90
+99    fi
+```
+
+`lifecycle.cleanup_failed` at 92 is the **only** token reachable on the 151 path,
+and it fires on cleanup's status while the exit code stays `original_status`. So
+when authentication fails *and* cleanup then also fails, the operator gets a token
+naming cleanup and an exit code that is neither 90 nor self-describing.
+
+**WS-1 called that "a false what". It is worth being exact, because the label is
+true.** `lifecycle.cleanup_failed` prints if and only if cleanup really failed. It
+is a true statement, printed on the correct stream, about a real event — and it is
+not about the question the operator is asking, which is why the *run* failed. That
+is verbatim the unifying form of `current-state.md` §13: an instrument returning a
+true statement that is not about the question being asked. **The register was built
+from agent reasoning; this is the same shape in the platform's own error
+reporting**, which is the first evidence that its diagnostic — say what the output
+is true of, then compare that to the question — is a test for artefact design and
+not only for investigation.
+
+**The information is not destroyed, it is split across two surfaces**, exactly as
+with the trust anchor's stderr-versus-check-run split in §12a. The exit code is the
+discriminator: `90` means cleanup was the sole failure, any other non-zero means an
+earlier failure occurred and went unnamed. So the *pair* is unambiguous and the
+token alone is not — and an operator reading the token as the reason will be wrong
+without anything on screen contradicting them. That is the precise sense in which
+151 is the worst site: every other member of the group degrades *what and why* to
+*what*, whereas 151 degrades to nothing, or to a true statement about something
+else standing in the place where the reason would be.
+
 **Correction two: the cleanup group's redirect is defensible and its aggregation
 is not.** All eight sites feed one variable — `[ "$?" -eq 0 ] || cleanup_failed=1`
 after each — and `cleanup_resources` returns that single boolean at line 83. So
@@ -910,13 +956,48 @@ be found by anyone looking for discards.** Line 168 is
 `python "$metadata_helper" assert-secret-absent` — the **only** invocation of a
 script in this file that omits `-I`. The other seven `$metadata_helper` calls
 (56, 61, 71, 156, 161, 248, 376) and both other script calls (274, 347) all use
-`python -I`. Isolated mode suppresses `PYTHONPATH` and the user site-packages
-directory, so 168 is the single call in a repo-admin-credentialed script where
-import resolution is environment-influenced. It sits between two identical
-siblings that both have the flag, which is what makes it look like an omission
-rather than a decision. Unchanged by #121 (still line 168 at `f0a2d175`). Not
-acted on — the file is protected and under the hold — and it is not part of F-8;
-it is recorded here only because this enumeration is the thing that surfaced it.
+`python -I`. It sits between two identical siblings that both have the flag, which
+is what makes it look like an omission rather than a decision. Unchanged by #121
+(still line 168 at `f0a2d175`). Not acted on — the file is protected and under the
+hold — and it is not part of F-8; it is recorded here only because this enumeration
+is the thing that surfaced it.
+
+**The blast radius was understated here and again by WS-1, and measurement makes it
+wider rather than narrower.** This document previously said only that isolated mode
+"suppresses `PYTHONPATH` and the user site-packages directory". WS-1 added that
+"`sys.path[0]` is the script's directory either way, so this is import-shadowing of
+the helper's own dependencies, not of the helper" — narrowing it. **That is false
+on Python 3.11**, where `-I` implies `-P`. Measured on 3.11.9 rather than recalled:
+
+| invocation | `sys.path[0]` | script dir on path | `PYTHONPATH` honoured |
+| --- | --- | --- | --- |
+| `python -I probe.py` | `python311.zip` | **no** | no |
+| `python probe.py` | the script's directory | **yes** | yes |
+
+So there are three differences at 168, not two, and the third is the one WS-1
+denied: the interpreter prepends `scripts/validation/` to `sys.path` **ahead of
+everything else**.
+
+**In this repository that is not generic import hygiene — it bypasses a control the
+repository actually operates.** The helper does not rely on implicit path setup: at
+`approved_assets_github_metadata.py` 18–20 it resolves `parents[2]` and inserts the
+**repository root**, then imports fully qualified (`from scripts.validation.bounded_json
+import …`). That deliberate mutation is what
+`CLOSURE_SYS_PATH_ALLOWED_SOURCE_SHA256` in `validate_repo.py` (427–440) exists to
+pin. `-I` is what makes that pinning exhaustive, by ensuring the governed insert is
+the *only* repo path present. At 168 the interpreter adds an ungoverned entry at
+higher precedence, and the 22 modules in `scripts/validation/` become importable by
+bare name for that one call — including ahead of the standard library the helper
+imports (`json`, `re`, `hashlib`, `subprocess`, `argparse`, `pathlib`). No collision
+exists today; the directory already contains `bounded_json.py`, so the naming
+convention is one file away from one.
+
+**WS-1's decision not to touch it stands, on grounds independent of the reason it
+gave:** the file is under #121's signature hold, and changing it would invalidate
+green checks on a PR awaiting signature while smuggling an unrelated change into a
+receipt. The conclusion survives; the supporting precision does not — the third
+occurrence in this programme of a sound decision resting on a claim that measurement
+reverses.
 
 **Why `2>&1` is the wrong fix at both, structurally.** Each is a command
 substitution assigning to a variable the script then depends on — `run_id="$("`

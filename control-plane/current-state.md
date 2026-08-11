@@ -1082,7 +1082,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with thirteen sub-shapes and twenty-nine instances.** WS-1 proposed the
+**The general rule, with thirteen sub-shapes and thirty instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -1335,6 +1335,23 @@ the instrument's range fails to match the question:
   one worked, and *none of the four printed anything that distinguished them*. So
   the generalisation is not confined to writes — **an exit status is a claim about
   the command; the check has to be a claim about the world.**
+
+  **A third instance, mine, committed while verifying the F-8 round itself, and it
+  extends the rule from writes to reads.** Fetching the shell script WS-1 had
+  quoted, I ran `gh api …/contents/<path>?ref=<sha> 2>$null` with a path that does
+  not exist in that tree. The `2>$null` discarded the error; the command produced an
+  empty artefact; nothing on screen said so. **Had I then probed that content for
+  `on_exit`, I would have found nothing and concluded WS-1 had fabricated a
+  verbatim quotation** — a false accusation, from a fetch that never happened,
+  against a correct report. What caught it was measuring the artefact rather than
+  trusting the call: the SHA-256 came back `e3b0c442…`, the hash of the empty
+  string. **The irony is the finding.** I destroyed an error channel with a stderr
+  redirect while verifying a report about sites that destroy error channels with
+  stderr redirects — the F-8 defect, self-inflicted, inside the F-8 audit, by the
+  auditor. So the bullet's rule is not a rule about writes. For a read, "it returned"
+  is no better evidence than "it succeeded", and the artefact needs measuring either
+  way; a digest or a byte count costs one line and converts a silent empty result
+  into a loud one.
 
   **And the conclusion drawn from that experiment was wrong, which is a separate
   failure from the one it illustrates.** The four rows were reported accurately and
