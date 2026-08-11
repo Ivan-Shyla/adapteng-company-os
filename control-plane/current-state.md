@@ -1493,7 +1493,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with twenty sub-shapes and fifty-six instances.** WS-1 proposed the
+**The general rule, with twenty sub-shapes and fifty-seven instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -1679,6 +1679,42 @@ have covered it, because the enumerations in play were over emitters and over
 tokens, and this is a defect of a table. Recorded as an argument for reading the
 whole of a document one is already opening, which is cheap, rather than for adding
 a further enumeration, which is not.
+
+**Twenty and fifty-seven — one instance, and it was standing in the middle of a
+block four parties had read.** `authorize_approved_assets_phase.sh` opens with a
+seven-clause precondition guard. One of those clauses existence-checks
+`current_run_helper`, a variable mentioned on exactly two lines in the file: its own
+definition and that check. Nothing ever invokes it — the module it names is reached
+through a launcher by module name, not by path. Meanwhile the two invocations that
+*do* name a script by literal relative path, at 274 and 347, appear in no clause at
+all. **The guard validates a path nothing opens and omits the two paths that are
+opened unvalidated**, and the two facts sit within a hundred and fifty lines of each
+other. Filed under *guards nothing*; no new sub-shape. Fifty-six plus one is
+fifty-seven.
+
+**Why it survived four readings, which is the part worth keeping.** Every previous
+pass over this file — including three of mine — enumerated *interpreter
+invocations*, because the question in play was always `-I` and isolation. A guard
+clause is not an interpreter invocation, so no enumeration ever ranged over it, and
+the clause is *correct* in isolation: the file it names exists, the check passes.
+It is only wrong relative to a set nobody had built, the set of paths actually
+opened. **A control that is individually valid and collectively misaimed cannot be
+found by checking controls; it is found by enumerating the thing they are supposed
+to cover and diffing.** That is the same operation the closure-token round needed
+and the same one the runbook table needed, which is now three times in two rounds —
+and unlike those two, this one required no new instrument, only asking which
+variables the guarded names are used by.
+
+**And the round's correction of a live reading.** The two omitted sites were
+reported as "the least guarded" in the file. Line 274 is the **most** guarded
+interpreter invocation in it: the launcher it runs refuses to start unless Python is
+in isolated mode, refuses any empty `sys.path` entry, and refuses any entry at or
+beneath the repository root. The reading was drawn from what the *shell* checks,
+which is a real and complete measurement of the shell; the guarding was in the
+Python the shell calls. **An audit scoped to one artefact will rank a delegating
+site as unprotected whenever the protection lives in the delegate** — worth stating
+because the correction runs opposite to the usual direction, in which cross-artefact
+reading reveals a missing guard rather than a hidden one.
 
 **The current round adds one sub-shape and two instances, again by enumeration.**
 The bullets were counted directly and stood at seventeen before this edit. New
