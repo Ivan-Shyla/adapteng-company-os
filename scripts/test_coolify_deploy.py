@@ -14,6 +14,7 @@ makes no writes on a second run, and no operation can reach a removal endpoint.
 from __future__ import annotations
 
 import copy
+import datetime
 import io
 import json
 import re
@@ -2364,14 +2365,51 @@ class VerifyTests(unittest.TestCase):
         )
 
     def test_the_task_is_created_disabled_and_can_never_fire_on_its_own(self) -> None:
+        """Disabled is the guard; the rare date is only a second line.
+
+        Coolify's scheduler selects tasks with where('enabled', true), so a
+        disabled task is never dispatched whatever its frequency says. The
+        frequency still has to be a valid expression, because the API builds a
+        next run date to validate it and refuses one that has none -- which is
+        how an unmatchable date like February 31st is rejected, as the live
+        instance demonstrated.
+        """
+
         instance = ReadinessInstance()
         self.run_verify(instance)
         self.assertEqual(len(instance.tasks), 1)
         created = instance.tasks[0]
         self.assertIs(created["enabled"], False)
         self.assertEqual(created["frequency"], driver.READINESS_TASK_FREQUENCY)
-        # February 31st: a valid expression that no date can match.
-        self.assertEqual(driver.READINESS_TASK_FREQUENCY.split()[2:4], ["31", "2"])
+        # February 29th: valid, and only in leap years.
+        self.assertEqual(driver.READINESS_TASK_FREQUENCY.split()[2:4], ["29", "2"])
+
+    def test_the_frequency_is_a_date_that_can_actually_occur(self) -> None:
+        """The live instance rejected February 31st, and this is why.
+
+        Coolify validates a cron expression by building its next run date, so
+        an expression naming a date that never occurs is refused outright and
+        the probe cannot be created at all. Field-range checking would not have
+        caught it: 31 is a legal day and 2 is a legal month. Only asking
+        whether the pair can ever coincide catches it.
+        """
+
+        fields = driver.READINESS_TASK_FREQUENCY.split()
+        self.assertEqual(len(fields), 5)
+        day, month = int(fields[2]), int(fields[3])
+        start = datetime.date.today()
+        horizon = start.replace(year=start.year + 8)
+        cursor, found = start, False
+        while cursor < horizon:
+            if cursor.day == day and cursor.month == month:
+                found = True
+                break
+            cursor += datetime.timedelta(days=1)
+        self.assertTrue(
+            found,
+            f"{driver.READINESS_TASK_FREQUENCY} names a date that never occurs; "
+            "Coolify will refuse it and the probe will never be created",
+        )
 
     def test_the_command_comes_from_the_spec_and_carries_no_single_quote(self) -> None:
         """Coolify wraps the command in sh -c '...' and escapes single quotes.

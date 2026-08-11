@@ -1816,11 +1816,15 @@ def poll_deployment(
 
 
 READINESS_TASK_NAME = "adapteng-readiness-probe"
-# February 31st never occurs, so the expression is syntactically valid and can
-# never match. Coolify validates the field but never fires it, and the task is
-# additionally created disabled. Execution happens only through the explicit
-# execute endpoint below, so nothing here introduces a recurring job.
-READINESS_TASK_FREQUENCY = "0 0 31 2 *"
+# February 29th exists only in leap years, so this is the rarest schedule that
+# is still a valid expression. It has to be valid: Coolify's validator builds a
+# next run date and rejects an expression that has none, which is how the live
+# instance refused an unmatchable February 31st with HTTP 422. Rarity is not
+# what makes this safe, though. The task is created disabled, and Coolify's
+# scheduler selects tasks with where('enabled', true), so a disabled task is
+# never dispatched whatever its frequency says. Execution happens only through
+# the explicit execute endpoint below, which ignores the enabled flag by design.
+READINESS_TASK_FREQUENCY = "0 0 29 2 *"
 READINESS_TASK_TIMEOUT_SECONDS = 60
 READINESS_MARKER = "ADAPTENG_READY"
 # Deliberately not read from health_check.path. That field is the container
