@@ -64,4 +64,5 @@ jobs:
           scripts.test_coolify_deploy
           scripts.test_postgres_runtime_role
           scripts.test_ops_runner
+          scripts.test_ai_gateway_credentials
           scripts.test_pre_pr_commands_match_ci

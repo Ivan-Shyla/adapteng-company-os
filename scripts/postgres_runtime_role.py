@@ -671,6 +671,32 @@ def operate_provision(
 # --------------------------------------------------------------------------- #
 
 
+def looks_like_postgres(item: dict) -> bool:
+    """Recognise a Postgres record without depending on one field's spelling.
+
+    Coolify names these records differently across versions and shapes, and a
+    filter on one spelling reports "no database exists" when the truth is "this
+    instance calls it something else". That failure is indistinguishable from a
+    genuinely empty instance, which is the expensive kind of wrong answer.
+    """
+
+    for field in ("type", "image", "database_type"):
+        if "postgres" in str(item.get(field, "")).lower():
+            return True
+    return any(key.startswith("postgres_") for key in item)
+
+
+def describe_candidates(payload: list) -> str:
+    """Say what was actually there, so a wrong filter costs no round trip to find."""
+
+    seen = [
+        f"{item.get('name')!r}:{item.get('type') or item.get('image') or 'untyped'}"
+        for item in payload
+        if isinstance(item, dict)
+    ]
+    return ", ".join(seen) if seen else "nothing at all"
+
+
 def parse_internal_dsn(url: str) -> dict[str, str]:
     """Split a Postgres URL into parts without importing a driver.
 
@@ -711,12 +737,13 @@ def discover_admin_connection(base_url: str, credential: str) -> dict[str, str]:
     if status != 200 or not isinstance(payload, list):
         raise Abort(f"listing databases returned HTTP {status}")
     candidates = [
-        item
-        for item in payload
-        if isinstance(item, dict) and "postgres" in str(item.get("type", "")).lower()
+        item for item in payload if isinstance(item, dict) and looks_like_postgres(item)
     ]
     if not candidates:
-        raise Abort("Coolify reports no Postgres database on this instance")
+        raise Abort(
+            "Coolify reports no Postgres database on this instance. It reported: "
+            f"{describe_candidates(payload)}"
+        )
     if len(candidates) > 1:
         names = ", ".join(sorted(str(item.get("name")) for item in candidates))
         raise Abort(
@@ -726,12 +753,21 @@ def discover_admin_connection(base_url: str, credential: str) -> dict[str, str]:
     database = candidates[0]
     emit(f"    database discovered from Coolify: {database.get('name')}")
     url = str(database.get("internal_db_url") or "")
-    if not url:
+    if url:
+        return parse_internal_dsn(url)
+    # Not every version reports the assembled address. The parts are enough,
+    # and the network alias is the resource uuid, which is the same value the
+    # runtime DSN host is recorded as.
+    user = str(database.get("postgres_user") or "")
+    admin_credential = str(database.get("postgres_password") or "")
+    alias = str(database.get("uuid") or "")
+    if not (user and admin_credential and alias):
         raise Abort(
-            "the database record carries no internal address, so its position on "
-            "the Docker network cannot be established without guessing"
+            "the database record carries neither an internal address nor the parts "
+            "to build one, so its position on the Docker network cannot be "
+            "established without guessing"
         )
-    return parse_internal_dsn(url)
+    return {"host": alias, "port": "5432", "user": user, "credential": admin_credential}
 
 
 def choose_target(arguments: argparse.Namespace):
