@@ -1004,17 +1004,53 @@ def report_settings_sources(client: Client, application_uuid: str) -> None:
         emit(f"        GET {path} -> HTTP {status}, owned keys reported: {found}")
 
 
+SAFE_DATABASE_FIELDS = (
+    "uuid",
+    "name",
+    "status",
+    "database_type",
+    "image",
+    "postgres_db",
+    "postgres_user",
+    "is_public",
+    "public_port",
+    "enable_ssl",
+    "ssl_mode",
+    "server_status",
+)
+
+
+def address_of(url: object) -> str:
+    """Return host:port/database from a DSN, dropping the credential.
+
+    A connection URL is not a secret in the parts that name where to connect; it
+    is a secret in the userinfo. Splitting it here means the address the gateway
+    needs can be read from a log while the credential in the same string cannot.
+    """
+
+    if not isinstance(url, str) or not url:
+        return "not reported"
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError:
+        return "unparseable"
+    host = parsed.hostname or "?"
+    port = parsed.port
+    database = (parsed.path or "").lstrip("/") or "?"
+    return f"{host}:{port if port is not None else '?'}/{database}"
+
+
 def report_databases(client: Client) -> None:
     """Print what databases this instance manages, by name and shape only.
 
     A database object carries the credential its own engine was created with, so
-    this prints key names and a small set of fields that are identities rather
-    than secrets. The reason to look at all is that the gateway's DSN has to name
-    a host the gateway's container can resolve, and guessing that address is the
-    one thing scripts/postgres_runtime_role.py refuses to do.
+    this prints key names, fields that are identities rather than secrets, and
+    the address half of each connection URL. The reason to look at all is that
+    the gateway's DSN has to name a host the gateway's container can resolve, and
+    guessing that address is the one thing scripts/postgres_runtime_role.py
+    refuses to do.
     """
 
-    identities = ("uuid", "name", "status", "type", "database_type", "image")
     databases = call(client, "GET", "/databases", allow_absent=True)
     if not isinstance(databases, list):
         emit("    databases: not reported by this instance")
@@ -1024,9 +1060,13 @@ def report_databases(client: Client) -> None:
         if not isinstance(item, dict):
             continue
         shown = " ".join(
-            f"{name}={item.get(name)}" for name in identities if item.get(name) is not None
+            f"{name}={item.get(name)}"
+            for name in SAFE_DATABASE_FIELDS
+            if item.get(name) is not None
         )
         emit(f"      - {shown}")
+        emit(f"        internal address: {address_of(item.get('internal_db_url'))}")
+        emit(f"        external address: {address_of(item.get('external_db_url'))}")
         emit(f"        keys: {sorted(item)}")
 
 
