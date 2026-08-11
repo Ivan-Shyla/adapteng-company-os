@@ -18,5 +18,12 @@ runbooks/backup-and-restore.md text eol=lf
 # guarantee is pinned for all of them rather than for the two that happened to
 # need it first. A file already stored as LF is unchanged by this.
 .github/workflows/*.yml text eol=lf
-scripts/postgres_runtime_role.py text eol=lf
-scripts/test_postgres_runtime_role.py text eol=lf
+
+# Pinned as a class rather than by name. Every entry above this line was added
+# after a specific file was authored on Windows and reached the index as CRLF,
+# which is a rule that only ever covers the files someone remembered to list.
+# The next script added would have repeated it, and did. A file already stored
+# as LF is unchanged by this.
+scripts/*.py text eol=lf
+scripts/*.sh text eol=lf
+scripts/*.sql text eol=lf
