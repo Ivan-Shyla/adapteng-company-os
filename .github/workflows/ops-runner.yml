@@ -1,0 +1,65 @@
+name: Operations runner
+
+# Stands up the dedicated deployment and operations runner, and answers the
+# question that decides whether it can be stood up at all.
+#
+# The production host does not accept SSH from GitHub-hosted runners, and the
+# Coolify API has no endpoint that runs a command on a server, so every
+# host-side workflow in this repository has never executed. Rather than open the
+# host to the published runner ranges, the runner is deployed as a container on
+# the host through Coolify. A container on the predefined Docker network reaches
+# the managed database at its internal address with no shell on the host, no
+# Docker socket and no root, which is strictly less authority than an installed
+# runner would hold.
+#
+# Registering a self-hosted runner needs administration rights on the
+# repository, which the automatic workflow credential is never granted. The
+# preflight operation determines whether an existing administrative credential
+# carries that right. It reads, and it mints one registration credential purely
+# to prove the authority is held; an unused one expires by itself within the
+# hour and is never printed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "preflight reads and proves the authority; it changes nothing"
+        required: true
+        default: preflight
+        type: choice
+        options:
+          - preflight
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ops-runner
+  cancel-in-progress: false
+
+jobs:
+  drive:
+    name: Operations runner ${{ inputs.operation }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      # ops_runner.py imports only the standard library, matching every other
+      # script in this repository, so there is no dependency install step.
+      - name: Determine whether an operations runner can be registered
+        env:
+          # Reused rather than newly issued. This credential already holds
+          # administration rights for the ruleset bootstrap, and registering a
+          # runner needs the same right, so proving the capability here avoids
+          # asking for a second long-lived administrative credential. The runner
+          # container never receives this value; it receives only a short-lived
+          # registration credential minted from it.
+          GITHUB_ADMIN_CREDENTIAL: ${{ secrets.RULESET_ADMIN_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          COOLIFY_API_CREDENTIAL: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_BASE_URL: ${{ vars.COOLIFY_URL }}
+          OPERATION: ${{ inputs.operation }}
+        run: python scripts/ops_runner.py

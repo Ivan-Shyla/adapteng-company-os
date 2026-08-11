@@ -63,4 +63,5 @@ jobs:
           scripts.test_rehearsal_effective_repository
           scripts.test_coolify_deploy
           scripts.test_postgres_runtime_role
+          scripts.test_ops_runner
           scripts.test_pre_pr_commands_match_ci
