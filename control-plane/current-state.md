@@ -955,7 +955,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with seven sub-shapes and thirteen instances.** WS-1 proposed the
+**The general rule, with seven sub-shapes and sixteen instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -983,7 +983,11 @@ the instrument's range fails to match the question:
   plausible non-empty list looks like a finished enumeration and so is *less*
   likely to be challenged than the silence is. **A second instance, mine, is
   recorded in §15:** the eleven-entry `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256` was
-  read from its head and described by its first four members.
+  read from its head and described by its first four members. **A third, also
+  mine and worse, is now recorded in §15 too:** the census of Python hosts that
+  could carry the invariant's constant enumerated two, and there is a third in
+  neither digest map — an undercount that raised the guard's apparent price to
+  the point of deferring it.
 - **Too wide — hits read as presence.** WS-1's repository-wide enumeration of
   "importers" returned sixteen sites of which **three** are imports; the other
   thirteen are string literals. WS-9's count of `raise` sites had the same defect:
@@ -997,6 +1001,16 @@ the instrument's range fails to match the question:
   to a class of exception. Neither party checked it because it was offered as the
   reason for an absence, and an absence invites no second look — the same
   incentive gap as the flattering-error entry below, in the opposite direction.
+  **A fourth instance, mine, and it is the pure form of the shape:** §15 said the
+  `allowed_signers` literal "exists in exactly one place in the repository". The
+  scoped fact — it appears nowhere in the verifier — was verified and is still
+  true; the sentence names no population and reads as repository-wide. It is
+  fourteen occurrences in ten files. Two things make it the reference case. It
+  was written *in the same document that had just adopted* the rule that a
+  quantifier claim needs a query returning the whole set, one round after
+  agreeing it. And it is simultaneously an instance of the flattering-error entry
+  below: uniqueness meant no second copy could disagree, which made the hazard
+  sound unrecoverable and so strengthened the argument it appeared in.
 - **Right range, wrong granularity — a member misclassified because the unit of
   analysis is smaller than the construct.** In that same enumeration, WS-1's
   line-oriented classifier called
@@ -1074,7 +1088,7 @@ world.
 because the remedy differs.** In every case above the instrument was consulted and
 its answer misread. In these the answer came *first* and the citation was
 recruited afterwards to support it — so the citation is **true, and its truth is
-independent of the conclusion it is offered for**. Five instances, all from this
+independent of the conclusion it is offered for**. Six instances, all from this
 programme:
 
 - WS-6 argued `allowed_signers` belongs outside the reset pair because it
@@ -1089,7 +1103,7 @@ programme:
 - Mine: §15's second caveat was illustrated with a hand-picked hypothetical while
   `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256` sat in the same document, real and
   stronger, already labelled a dead end.
-- Mine, and the worst of the four because it was load-bearing. Correcting WS-9's
+- Mine, and the worst of them because it was load-bearing. Correcting WS-9's
   audit predicate for F-8, I proposed *is the failure of this command observable
   anywhere downstream?* and supported it with "at `main` 254/379 and `f0a2d17` 388
   there is no downstream name". That sentence is false — all three sites print a
@@ -1111,11 +1125,22 @@ programme:
   WS-6 supplied it. Where the other instances cost a reader some wasted effort,
   a true-but-structural reason for a decision that is actually about purpose
   **points at the dangerous change and calls it merely inconvenient**.
+- Mine, and the one that shows the family is not confined to facts about code.
+  §15 concluded that the negative invariant should be taken in the same sitting as
+  owner-decision item 5 — correct — and supported it with a *cost*: the constant
+  must live in a `.py` file and "both plausible hosts" are digest-pinned, so it
+  needs a re-pin wherever it is put. Each named host really is pinned; the
+  quantifier is false, there is a third host in neither digest map, and the true
+  reason the conclusion holds is the opposite one — the classifier must live in
+  the verifier anyway, so the pins are spent by the encoding and the invariant's
+  marginal cost is zero. A recruited *cost* is more dangerous than a recruited
+  *fact*, because it is acted on by whoever schedules the work rather than by
+  whoever reads the file.
 
 **The tell is checkable and cheap, and it has a hole my own instance falls
 through.** Ask whether the citation would still be true if the conclusion were
-false. For the first three and the fifth it would; a supporting citation should
-*fail* when the claim fails, and one that cannot is decoration. It costs the
+false. For the first three, the fifth and the sixth it would; a supporting citation
+should *fail* when the claim fails, and one that cannot is decoration. It costs the
 implementer who reads "the anchor already blocks this" and skips writing the
 guard. The remedy for those is stating the conclusion and the evidence in that
 order, and checking the arrow between them points the way it is drawn. **The
@@ -1123,7 +1148,7 @@ fourth is not that.** "There is no
 downstream name" is not a true statement recruited for the wrong conclusion — it
 is simply false, and no question about the arrow between claim and evidence
 detects it, because the evidence was never checked at all. So the family splits:
-four cases of a real citation aimed wrongly, one of a citation that was asserted
+five cases of a real citation aimed wrongly, one of a citation that was asserted
 because the conclusion required it to exist. The second kind is cheaper to catch —
 read the lines — and easier to commit, because writing a sentence about what the
 code does feels indistinguishable from having looked. **The fifth case adds a
@@ -1132,7 +1157,16 @@ matters is not how wrong the reason is but what the wrong reason *recommends*.
 Three of them merely waste a reader's effort; the `live_ref_changed` one names a
 structural obstacle where the real objection is purpose, and so points the reader
 at the harmful repair. Rank these by the action the bad reason invites, not by the
-distance between the reason and the conclusion.
+distance between the reason and the conclusion. **A sixth case supplies the null
+value of that axis and it belongs on the same scale.** §15's cost for the negative
+invariant — "a digest re-pin wherever it is put" — was an undercount that
+overstated the price of a guard whose real marginal cost is zero. It recommends
+neither a good action nor a harmful one; it recommends *deferral*. That is the
+hardest entry on this axis to detect, because a harmful repair eventually produces
+a failure and an inert reason eventually produces a confused reader, whereas a
+guard that was never written produces nothing at all. Cost claims therefore need
+the same treatment as quantifier claims: enumerate the hosts, do not estimate
+them.
 
 **And a limit on this section, established by the section itself.** The
 `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256` error above was committed *after* the
@@ -1173,7 +1207,13 @@ own caution, because the intuitive guard against motivated error is to check
 hardest where a finding flatters you: **an error whose repair helps the arguer
 will not be caught by that guard.** Self-interest is not an error detector in
 either direction, and undercounts in your own favour are as invisible as
-overcounts are tempting.
+overcounts are tempting. **A third instance, mine, closes the pattern across both
+agents.** §15's claim that the `allowed_signers` literal occurs exactly once made
+the hazard unrecoverable — no second copy could disagree — and so strengthened
+the argument it sat in. Three instances now, two agents, and in every one the
+undercount was the direction that helped. That is not coincidence: an overcount
+weakens your own case and gets re-checked in the writing, so the errors that
+survive to publication are selected for flattering the argument.
 
 **And a second, from WS-6's own diagnosis of its tree-delta claim.** It observed
 that of the four claims in that note it verified three by reading source and
@@ -1602,6 +1642,14 @@ is covered by the prefix at 65. Two caveats it needs to carry.
    above — adding to the set is never bootstrap — so the invariant is a supplement
    to it, never a substitute.
 
+   **Correction, from WS-6, and it removes the "from memory" qualifier.** This was
+   written as a thought experiment about someone reconstructing the set unaided.
+   It is not hypothetical: `scripts/operations/authorize_approved_assets_phase.sh`
+   is **line 144 of `ROLLOUT_ONLY_PATHS`**, a real, pre-existing, protected
+   constant that an implementer would reach by copying rather than by
+   remembering. The uncaught direction is not a risk someone runs by being
+   careless; it is the default outcome of the most available shortcut.
+
 *A negative half is available for the two cases where the confusion is worst, and
 those two are mechanical.* WS-6's form, taken:
 
@@ -1611,13 +1659,34 @@ ANCHOR_MACHINERY ∩ (APPROVAL_PATHS ∪ {allowed_signers}) == ∅
 
 The positive assertion catches unprotected additions; this catches the receipt and
 the trust root; the semantic middle stays with the add-is-never-bootstrap rule.
-**The cost is more specific than "not free."** `allowed_signers` has no path
-constant, so the invariant must name it, and the constant has to live in a `.py`
-file — of which both plausible hosts, the verifier (digest 408) and its test
-(digest 423), are members of `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256`. So writing
-this invariant requires a digest re-pin wherever it is put. **It therefore shares
-its scarce resource with owner-decision item 5 and should be taken in the same
-sitting**, not costed separately.
+
+**The cost claim recorded here was wrong, and wrong in the direction that deters
+the guard.** It read: `allowed_signers` has no path constant, so the invariant must
+name it, the constant has to live in a `.py` file, and "both plausible hosts, the
+verifier (digest 408) and its test (digest 423)", are digest-pinned — therefore "a
+digest re-pin wherever it is put". The enumeration was short. WS-6 found a third
+Python host, `scripts/validation/validate_rollout_ci_policy.py`, which already
+holds the literal at 137 and is protected at 96; checked here against **both**
+digest maps, not just the one WS-6 cleared it against — `CLOSURE_PROCESS_…`
+(392–426) and `CLOSURE_SYS_PATH_…` (427–440) — and it is in neither. "Wherever it
+is put" is false.
+
+**But the conclusion inverts rather than merely survives.** `is_protected_path` is
+verifier behaviour (1107), so a bootstrap-versus-receipt classifier is too, and
+`ANCHOR_MACHINERY` has to live where it is consumed. The re-pin is therefore spent
+by *encoding the classifier at all*, and the negative conjunct adds nothing to it.
+One refinement to WS-6's version: it is **two** pins, not one — the verifier (408)
+and its test (423), because new verifier behaviour needs a test and the test is
+pinned as well. Both are spent by the encoding; the negative invariant's
+**marginal cost is zero**. The recommendation — take it in the same sitting as
+owner-decision item 5 — stands, on a different reason.
+
+Worth naming what the wrong reason did. It did not point at a harmful repair; it
+pointed at *nothing*. An overstated cost recommends deferral, and deferring a
+zero-cost guard produces no event, no failure and no reader who notices. That is
+the null case of the severity axis in §13: rank a wrong reason by the action it
+invites, and include inaction, which is the cheapest error to commit and the only
+one with no symptom.
 
 **Why the trust root is the severe case, verified.** Someone asked "what is the
 anchor's machinery?" will read the workflow's sparse-checkout at lines 32–37,
@@ -1635,35 +1704,119 @@ ambiguous: the anchor *reads* it, but it is what the procedure trusts, not part 
 the procedure. Classified as machinery, a **key swap** becomes a change that
 "cannot self-authorize, escalate" instead of one requiring a receipt.
 
-WS-6 noted there is no constant for it. Checked, and it is stronger than that:
-**the path literal `.github/trust/rollout-policy/allowed_signers` does not appear
-in the verifier at all.** Every occurrence of the name is
-`allowed_signers_path: Path` (2581, 2647, 3003), `args.allowed_signers` (3151,
-3188, 3208) or an error-code string. The literal exists in exactly one place in
-the repository — the sparse-checkout list an implementer would copy from. There is
-no second copy for a wrong one to disagree with.
+**Retracted: the uniqueness claim.** This section previously said the literal
+`.github/trust/rollout-policy/allowed_signers` "exists in exactly one place in the
+repository — the sparse-checkout list an implementer would copy from", and drew
+from it that there is "no second copy for a wrong one to disagree with". False.
+WS-6's census is exact, and re-run here across both path separators at
+`824b4238`: **14 occurrences in 10 files.**
+
+| File | Lines |
+| --- | --- |
+| `.gitattributes` | 4 |
+| `.github/workflows/validate.yml` | 89 |
+| `.github/workflows/secret-scan.yml` | 44 |
+| `.github/workflows/rollout-trust-anchor.yml` | 35, 63 |
+| `scripts/approval/create_rollout_trust_receipt.sh` | 23 |
+| `scripts/approval/create_rollout_trust_receipt.ps1` | 21 (backslashes) |
+| `scripts/validation/validate_repo.py` | 34 |
+| `scripts/validation/validate_rollout_ci_policy.py` | 137 |
+| `tests/test_rollout_trust_anchor.py` | 1920, 1939, 1969 |
+| `docs/runbooks/authorize-rollout-policy-change.md` | 36, 371 |
+
+The scoped half is still true and was re-verified: the literal appears **nowhere**
+in the verifier, which contains only `allowed_signers_path: Path`,
+`args.allowed_signers` and error-code strings. The defect is that a true statement
+about one file was written in a form that reads as a statement about the
+repository — the same quantifier failure recorded in §13, committed while writing
+up the round in which it was agreed. And the direction is the familiar one: the
+undercount made the hazard sound unrecoverable, so it flattered the argument and
+nothing prompted a re-check.
+
+**A correction to the correction, because the fourteen do not do the work either.**
+WS-6 concludes that "the cross-copy check you said would not fire has more places
+to fire from than almost anything else in the repo". That does not follow. The
+fourteen sit on six unrelated axes — a git attribute, two CLI arguments, a
+sparse-checkout, a required-file list, a routing exclusion, prose and test
+fixtures — and **not one of them classifies the path**. Drift between them would
+signal a rename, never a misclassification, which is the hazard this section is
+about. So the corrected fact is right and the inference from it is not: I claimed
+one copy and concluded no safety net; WS-6 counted fourteen and concluded a strong
+one; the copies are silent on the question in both cases.
+
+**What is genuinely load-bearing, and neither of us named it.** The occurrence at
+`validate_repo.py:34` is inside `REQUIRED_FILES`, consumed at 270–272 as
+`check(path.is_file(), …)`. The exact path is **existence-asserted in CI**. So the
+F-7 drift WS-6 originally priced — the invariant hard-codes the literal, the file
+is later renamed, the intersection goes vacuously empty and the guard silently
+stops guarding — cannot happen quietly: the rename fails `validate_repo.py`, which
+is itself protected (anchor 95). Hard-coding the literal is therefore materially
+safer than either of us costed it, and the "or introduce a constant" horn is not
+forced by drift. It remains preferable for legibility, and it is free anyway under
+the corrected cost above.
 
 `.gitattributes` is genuinely undecided rather than wrong. It governs LF
 normalization and therefore the digests, so it has a real claim; it is also
 repo-wide, and classifying it bootstrap would let a normalization change merge
-receiptless. That one wants the owner.
+receiptless. That one wants the owner. **One input from WS-6, verified and
+deliberately narrow.** The file is six lines and three of them are the trust
+material — `allowed_signers` 4, `approval.json` 5, `approval.sig` 6 — and
+signature verification is byte-exact, so on a CRLF checkout without those pins a
+receipt does not verify. But the anchor workflow is `runs-on: ubuntu-latest`
+(line 20), where `autocrlf` is off, so removing the pins would not move a single
+CI verdict. They are load-bearing for local reproduction, not for the gate's
+output. That is a checkable distinction and a weaker claim than "it is machinery",
+which is what the argument would have been without the check.
 
-**The general pattern, now with three data points: a wrong candidate set is
-dangerous exactly when it contains the verifier.** Every reader's spot-check is
-"is the anchor in it?", so that is the only property a wrong set needs in order to
-be adopted.
+**The general pattern, restated on five sets, and the earlier version of it was
+too weak.** This previously read: *a wrong candidate set is dangerous exactly when
+it contains the verifier*, on three data points. Two more sets exist. Scored at
+`824b4238` against the four machinery files and the trust root:
 
-| Candidate set | Contains verifier | Wrong how | Danger |
-| --- | --- | --- | --- |
-| workflow sparse-checkout, 32–37 | yes | 2 through, 3 missing | **high** |
-| `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256`, 392–426 | yes | 9 extra, 2 missing | **high** |
-| `CLOSURE_LOADER_ALLOWED_MODULES`, 378–391 | **no** | disjoint from the anchor | none |
+| Candidate set | Keyed on | n | Machinery | Trust root | Extra |
+| --- | --- | --- | --- | --- | --- |
+| workflow sparse-checkout, 32–37 | what the anchor **reads** | 4 | 1/4 | **in** | 2 |
+| `CLOSURE_PROCESS_…SHA256`, 392–426 | what it **loads** | 11 | 2/4 | out | 9 |
+| `CLOSURE_LOADER_ALLOWED_MODULES`, 378–391 | what may be **imported** | 10 | 0/4 | out | 10 |
+| `ROLLOUT_ONLY_PATHS`, 131–160 | what must not **trigger** | 27 | **4/4** | **in** | 22 |
+| `REQUIRED_FILES`, 25–55 | what must **exist** | 29 | 3/4 | **in** | 25 |
 
-The third is wrong in the largest possible way and is harmless for exactly that
-reason — nobody adopts a set that fails the first check. Both sets that pass the
-first check are wrong in *both* directions. That is three independent
-confirmations that the enumeration has to be written fresh, and it is a stronger
-argument than any of them alone.
+**The real pattern is not that these sets contain the verifier — it is why.** Each
+is keyed on a mechanism the verifier *participates in*: being read, being loaded,
+being importable, being routed, being present. None is keyed on *being part of the
+decision procedure*, which is the only thing `ANCHOR_MACHINERY` means. The verifier
+therefore appears in four of the five for four unrelated reasons, and the one
+spot-check every reader runs — "is the anchor in it?" — is **uninformative by
+construction**, not by carelessness. That is a stronger and more durable argument
+for writing the enumeration fresh than counting confirmations, because it predicts
+that any future set will have the same defect.
+
+Two consequences worth stating separately. **Three of the five contain the trust
+root**, so the single most severe misclassification is the majority behaviour of
+the available enumerations, not an outlier. And `ROLLOUT_ONLY_PATHS` is the only
+set that is *complete* on machinery (4/4, nothing missing) while also being wrong
+— the most attractive candidate is one of the wrong ones. WS-6 is right that a
+pure superset survives review where a two-directional error does not, because
+"is everything in here rollout-related?" answers yes for all 27. The mechanism is
+worse than a coincidence: `ROLLOUT_ONLY_PATHS` has exactly one consumer, line 509,
+`if routed_paths & ROLLOUT_ONLY_PATHS` → "rollout-only files must not trigger
+credential-aware Adapter Tests". Its criterion is rollout *scope*, and
+rollout-scoped strictly contains anchor-machinery by definition. It is a superset
+**permanently**: pruning it would break the routing rule, and every future
+rollout-scoped file enlarges it again. Two further reasons not to reuse it: it
+mixes a glob (`tests/fixtures/approved-assets-rollout/**`, 156) so it cannot be
+consumed as an exact-path frozenset without transformation, and the row filed here
+as harmless points straight at it — `CLOSURE_LOADER_ALLOWED_MODULES` line 388 is
+`scripts.validation.validate_rollout_ci_policy`, the module that holds it. The set
+that is safe because nobody would adopt it is a pointer to the set that is
+dangerous because everybody would.
+
+**This also promotes the negative invariant from speculative to demonstrated.**
+It was proposed as a guard against a mistake nobody had made.
+`ROLLOUT_ONLY_PATHS` contains `allowed_signers` at 137 and `REQUIRED_FILES`
+contains it at 34, so the invariant fires on two of the three most complete
+enumerations available — on the first attempt, before review, without anyone
+having to be careless.
 
 Recorded, not built. It is a protected-path change encoding an undecided policy,
 and it waits for both the ruling and the authority to ask for it.

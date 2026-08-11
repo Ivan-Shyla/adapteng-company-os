@@ -773,12 +773,21 @@ deployed gateway:
    at 773–775 and 783 touches `test_migrate_approved_assets.py`, which carries one
    digest; if it also touches the metadata helper, it carries two.
 
-   **One other change wants the same signature.** The negative invariant proposed
-   in `current-state.md` §15 —
+   **One other change wants the same signature, for a corrected reason.** The
+   negative invariant proposed in `current-state.md` §15 —
    `ANCHOR_MACHINERY ∩ (APPROVAL_PATHS ∪ {allowed_signers}) == ∅` — needs a path
-   constant for `allowed_signers`, which has none, and the only `.py` files that
-   could host it are the verifier and its test, both digest-pinned at 408 and 423.
-   So it consumes a re-pin too. If both are wanted, they are one sitting.
+   constant for `allowed_signers`, which has none. This item previously said "the
+   only `.py` files that could host it are the verifier and its test, both
+   digest-pinned at 408 and 423, so it consumes a re-pin too". That enumeration
+   was short: `scripts/validation/validate_rollout_ci_policy.py` already holds the
+   literal at 137, is protected at 96, and is in **neither** digest map — checked
+   against `CLOSURE_PROCESS_…` (392–426) and `CLOSURE_SYS_PATH_…` (427–440). The
+   conclusion is unchanged but the reason inverts: `is_protected_path` is verifier
+   behaviour (1107), so the classifier that consumes `ANCHOR_MACHINERY` has to
+   live in the verifier, and both pins — 408 and 423, since the new behaviour
+   needs a test and the test is pinned — are spent by *encoding the classifier at
+   all*. **The negative conjunct's marginal cost is zero.** If both are wanted
+   they are one sitting, and the invariant should not be deferred on cost.
 
    **The recipe, since a wrong one costs the signature.** `_reviewed_source_sha256`
    (anchor 1242) normalizes `\r\n` to `\n`, refuses a lone `\r`, and then at line
