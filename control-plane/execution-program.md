@@ -859,6 +859,36 @@ deployed gateway:
    attribute commit, so such a change would **not** invalidate any existing pin.
    If `.gitattributes` is wanted, it is a separate decision about future
    checkouts, not a remedy for this one.
+6. **Whether a base that moves mid-run should stay an authorization refusal.**
+   `verify_pull_request` at anchor 2653–2659 raises one
+   `TrustError("pull_request.live_ref_changed")` for two different events: the
+   *head* moving between the event and the API read, which is a TOCTOU signature
+   and defensibly authorization-class, and the *base* moving, which is somebody
+   merging to `main` in those seconds and has nothing to do with the pull
+   request's author. This is listed here rather than left in `current-state.md`
+   §12a because a fact filed away from the decision it bears on is not available
+   at decision time — the failure recorded as the second limit on §13. **It is not
+   a matter of taste:** the same file already argues the other way for the sibling
+   race at 975–982, whose comment says refusing it "would accuse its author of an
+   attempt nobody made, which is the confusion this verifier exists to avoid".
+   Base-moved is that situation exactly and gets the opposite class. Two further
+   points the ruling needs. First, the presentation is not merely mislabelled:
+   outcome `failure` renders "The exact current head is not externally authorized"
+   (2780), which is *affirmatively false* when the base moved, so the repair is a
+   different sentence and not only a renamed code. Second, and the part most
+   likely to be got wrong — **the ruling must say explicitly that
+   `operator.live_ref_changed` at 3087–3088 is excluded.** That site looks like a
+   sibling and is not: it sits between `verify_signature` (3079) and
+   `staging.replace(output)` (3089), so it is a signing-time freshness guard on a
+   receipt that binds `base_sha` (2966), and any movement must fail it. Its reader
+   is also different — the `create` handler prints the exact code to the operator
+   who just ran the command (3192–3201), so there is no author being accused and
+   none of the cost that motivates the change at the first site. A ruling that
+   omits this invites a later reader to harmonise the two and put a hole in the
+   signing path. Strength: mechanism read at source at `824b4238`; **no production
+   occurrence observed**, and not observable by check-run inspection, because the
+   check-run rendering maps outcomes to fixed strings (2771–2787) and never
+   carries the code. Latent, not live, and the file is under the hold.
 
 Everything else on the path to a deployed, healthy AI Gateway is either AUTO or
 AUTO + FAIL CLOSED under the [autonomy policy](autonomy-policy.md).
