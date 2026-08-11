@@ -39,7 +39,8 @@
     "note": "public_fqdn is null and must stay null: this service is reachable only from the private Docker network, exactly like adapteng-baserow-adapter. connect_to_docker_network attaches the container to the shared network so other resources can reach it by name without any public route."
   },
   "health_check": {
-    "enabled": true,
+    "enabled": false,
+    "container_gate": "absent",
     "path": "/health",
     "method": "GET",
     "scheme": "http",
@@ -47,7 +48,9 @@
     "interval_seconds": 15,
     "timeout_seconds": 10,
     "retries": 5,
-    "start_period_seconds": 30
+    "start_period_seconds": 30,
+    "note": "enabled false does not mean no health check is wanted. Coolify decides the container probe from this one flag. With enabled true it generates 'curl -s -X GET -f <url> > /dev/null || wget -q -O- <url> > /dev/null || exit 1' and runs it inside the container. This image is python:3.11-slim with system dependencies deliberately kept minimal, so it carries neither curl nor wget: the probe exited 1 every time. Verified on deployment n12qiqlkjcb74u0bakmhtwqz, which logged '/bin/sh: 1: curl: not found' and '/bin/sh: 1: wget: not found' on all five attempts and ended 'New container is not healthy, rolling back to the old container'. Every deployment of this service had failed this way. A custom command is not a way out: Coolify honours health_check_command only when health_check_type is 'cmd', and then filters it against ^[a-zA-Z0-9 \\-_./:=@,+]+$, which admits no quotes and no parentheses, so no python -c form can be expressed at all, and a rejected command falls back to the same curl probe with only a warning. The one setting under which Coolify honours the image's own HEALTHCHECK is this flag being false, because Application::parseHealthcheckFromDockerfile records a HEALTHCHECK only when isHealthcheckDisabled() is true. The remaining fields are kept, not deleted, because that same parser overwrites the stored interval, timeout, retries and start period from the HEALTHCHECK directives: these numbers and the image's directives have to agree or reconcile and deploy would overwrite each other on every run.",
+    "container_gate_note": "container_gate names what actually gates a rolling update, because 'enabled' does not. Three values are possible. 'coolify_http' is the generated curl/wget probe and requires enabled true. 'image' is a HEALTHCHECK instruction in the service image, requires enabled false, and is a real gate: Coolify logs 'Custom healthcheck found in Dockerfile' and waits for it. 'absent' means no probe runs at all: with enabled false and no HEALTHCHECK in the image, ApplicationDeploymentJob::health_check sets newVersionIsHealthy = true and returns without testing anything. It is 'absent' today, and that is a real and stated loss, not a formality: a container that boots and answers nobody will be promoted. It is recorded here rather than left implicit because this service has already been reported running:healthy for hours while detached from the network, and an unstated missing check is how that happened. Restoring it needs one additive line in Ivan-Shyla/adapteng-automation-platform, services/ai-gateway/Dockerfile, whose directives must carry exactly the four numbers above: HEALTHCHECK --interval=15s --timeout=10s --start-period=30s --retries=5 CMD [\"python\", \"-c\", \"import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8081/health', timeout=5).status == 200 else 1)\"]. That image already has python and needs no new package, so it costs nothing in supply-chain terms; adding curl would mean an unpinned apt install in an image whose base is digest-pinned and whose wheels are hash-locked."
   },
   "delivery": {
     "auto_deploy_on_push": false,

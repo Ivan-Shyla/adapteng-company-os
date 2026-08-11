@@ -94,6 +94,8 @@ SECTION_KEYS = {
     "network": {"internal_port", "public_fqdn", "connect_to_docker_network"},
     "health_check": {
         "enabled",
+        "container_gate",
+        "container_gate_note",
         "path",
         "method",
         "scheme",
@@ -107,6 +109,16 @@ SECTION_KEYS = {
 }
 SUPPORTED_SCHEMA_VERSION = 1
 SUPPORTED_SOURCE_KINDS = frozenset({"private_github_app", "public"})
+
+# What actually gates a rolling update. Coolify's health_check_enabled flag does
+# not answer this on its own, so the spec has to say which of the three it is.
+#   coolify_http  the generated curl/wget probe; requires health_check_enabled
+#   image         a HEALTHCHECK instruction in the image; requires it disabled,
+#                 because parseHealthcheckFromDockerfile only records one then
+#   absent        nothing runs; health_check() sets newVersionIsHealthy and
+#                 returns, so any container that starts is promoted
+CONTAINER_GATES = frozenset({"coolify_http", "image", "absent"})
+GATE_REQUIRING_ENABLED = "coolify_http"
 
 _REDACTIONS: list[str] = []
 
@@ -246,6 +258,35 @@ def load_spec(path: Path) -> dict:
         raise Abort(
             f"spec {path.name} declares a public FQDN. This tool only manages "
             "private-network services; publishing a route is an owner action.",
+            EXIT_MISCONFIGURED,
+        )
+
+    gate = spec["health_check"]["container_gate"]
+    if gate not in CONTAINER_GATES:
+        raise Abort(
+            f"spec {path.name} declares an unknown container_gate {gate!r}; "
+            f"expected one of {sorted(CONTAINER_GATES)}",
+            EXIT_MISCONFIGURED,
+        )
+    # Coolify ties the generated probe to health_check_enabled and ties the
+    # image's own HEALTHCHECK to that same flag being off, so exactly one of
+    # the two can be in force. Letting the spec claim otherwise would let a
+    # deployment report a gate it does not have, which is the failure this
+    # field exists to make impossible.
+    enabled = spec["health_check"]["enabled"]
+    if (gate == GATE_REQUIRING_ENABLED) != bool(enabled):
+        raise Abort(
+            f"spec {path.name} declares container_gate {gate!r} with "
+            f"health_check.enabled {enabled!r}. Coolify runs its generated probe "
+            f"only when enabled is true, and honours the image's own HEALTHCHECK "
+            f"only when it is false, so {GATE_REQUIRING_ENABLED!r} and enabled "
+            "must agree.",
+            EXIT_MISCONFIGURED,
+        )
+    if not str(spec["health_check"]["container_gate_note"]).strip():
+        raise Abort(
+            f"spec {path.name} leaves container_gate_note blank. A gate weaker "
+            "than a real probe has to say so in words.",
             EXIT_MISCONFIGURED,
         )
 
@@ -1403,6 +1444,30 @@ def read_environment_entries(client: Client, uuid: str) -> list:
     )
 
 
+def report_container_gate(spec: dict) -> None:
+    """Say plainly what gates a rolling update, especially when nothing does.
+
+    A deployment that reports ok has proved that Coolify finished, not that the
+    container works. When the gate is absent it has not even proved that the
+    process answers itself, because Coolify skips the probe and marks the new
+    version healthy on the way past. Printing that next to the result is the
+    difference between a known gap and a silent one.
+    """
+
+    gate = spec["health_check"]["container_gate"]
+    if gate == "absent":
+        emit(
+            "    GATE ABSENT no container probe runs: Coolify marks the new "
+            "version healthy without testing it, so a container that starts and "
+            "answers nobody is still promoted. Reachability is proved only by "
+            "scripts/gateway_readiness.py, after the fact, not before promotion."
+        )
+    elif gate == "image":
+        emit("    GATE image HEALTHCHECK; Coolify waits for the image's own probe")
+    else:
+        emit("    GATE coolify_http generated probe inside the container")
+
+
 def operate_reconcile(client: Client, spec: dict, supplied: dict[str, str] | None = None) -> int:
     supplied = supplied or {}
     target = spec["target"]
@@ -1517,11 +1582,13 @@ def operate_reconcile(client: Client, spec: dict, supplied: dict[str, str] | Non
         # value and cannot read it back, so the honest report is that it was
         # sent and where the confirmation has to come from.
         emit(f"    WRITTEN NOT VERIFIED {name}; confirm with {verified_by}")
+    report_container_gate(spec)
     emit("")
     emit(
         f"RESULT reconcile ok uuid={uuid} changed={'yes' if changed else 'no'} "
         f"pending_owner_env={len(absent)} unreported_settings={len(withheld)} "
-        f"written_blind={len(blind)}"
+        f"written_blind={len(blind)} "
+        f"health_gate={spec['health_check']['container_gate']}"
     )
     return EXIT_OK
 
@@ -1587,9 +1654,11 @@ def operate_deploy(
         emit(f"RESULT deploy failed deployment={deployment_uuid} state={state}")
         return EXIT_FAILED
     application_state = read_application(client, uuid).get("status")
+    report_container_gate(spec)
     emit(
         f"RESULT deploy ok deployment={deployment_uuid} state={state} "
-        f"application_state={application_state}"
+        f"application_state={application_state} "
+        f"health_gate={spec['health_check']['container_gate']}"
     )
     return EXIT_OK
 

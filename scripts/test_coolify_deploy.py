@@ -63,6 +63,8 @@ def minimal_spec() -> dict:
         "network": {"internal_port": 8081, "public_fqdn": None, "connect_to_docker_network": True},
         "health_check": {
             "enabled": True,
+            "container_gate": "coolify_http",
+            "container_gate_note": "generated probe",
             "path": "/health",
             "method": "GET",
             "scheme": "http",
@@ -467,6 +469,71 @@ class CommittedSpecTests(unittest.TestCase):
             self.assertEqual(set(entry) - {"note", "sensitive"}, {"key", "reason"})
             self.assertNotIn("value", entry)
 
+    def test_the_committed_spec_states_what_gates_a_rollout(self) -> None:
+        """Coolify's enabled flag does not answer this, so the spec must.
+
+        The generated probe runs only when enabled is true; the image's own
+        HEALTHCHECK is honoured only when it is false. Reading enabled alone
+        cannot distinguish a real gate from no gate at all.
+        """
+
+        health = self.spec["health_check"]
+        self.assertIn(health["container_gate"], driver.CONTAINER_GATES)
+        self.assertTrue(health["container_gate_note"].strip())
+
+    def test_the_curl_free_image_is_why_the_generated_probe_is_off(self) -> None:
+        """The image is python:3.11-slim with no curl and no wget.
+
+        Coolify's generated probe is a curl/wget shell command run inside the
+        container, so it exited 1 on every attempt and every deployment rolled
+        back. Turning enabled back on restores that, so it is pinned off here
+        together with the reason.
+        """
+
+        health = self.spec["health_check"]
+        self.assertFalse(health["enabled"])
+        self.assertNotEqual(health["container_gate"], "coolify_http")
+        self.assertIn("curl", health["note"])
+
+    def test_the_absent_gate_is_declared_rather_than_implied(self) -> None:
+        """A missing check has to be stated, because this service has already
+        been reported healthy while unreachable. The note must name what
+        restores the gate, so the follow-up is specified rather than remembered.
+        """
+
+        health = self.spec["health_check"]
+        if health["container_gate"] != "absent":
+            self.skipTest("gate is present; nothing to disclose")
+        note = health["container_gate_note"]
+        self.assertIn("HEALTHCHECK", note)
+        self.assertIn("services/ai-gateway/Dockerfile", note)
+
+    def test_the_image_gate_numbers_would_match_the_declared_ones(self) -> None:
+        """parseHealthcheckFromDockerfile overwrites the stored interval,
+        timeout, retries and start period from the HEALTHCHECK directives. If
+        the image and this spec disagreed, reconcile and deploy would overwrite
+        each other on every run, so the directives quoted in the note carry
+        exactly the numbers declared here.
+        """
+
+        health = self.spec["health_check"]
+        note = health["container_gate_note"]
+        if "HEALTHCHECK" not in note:
+            self.skipTest("no image directives quoted")
+        for directive, field in (
+            ("--interval=", "interval_seconds"),
+            ("--timeout=", "timeout_seconds"),
+            ("--start-period=", "start_period_seconds"),
+            ("--retries=", "retries"),
+        ):
+            quoted = re.search(rf"{re.escape(directive)}(\d+)", note)
+            self.assertIsNotNone(quoted, f"{directive} is not quoted in the note")
+            self.assertEqual(
+                int(quoted.group(1)),
+                health[field],
+                f"{directive} in the image would overwrite {field}",
+            )
+
     def test_the_provider_project_is_no_longer_an_owner_decision(self) -> None:
         """It is a published identifier, and app/config.py refuses to start without it.
 
@@ -553,6 +620,54 @@ class SpecValidationTests(unittest.TestCase):
         with self.assertRaises(driver.Abort) as raised:
             self.load(spec)
         self.assertIn("unknown keys", str(raised.exception))
+
+    def test_an_unknown_container_gate_is_refused(self) -> None:
+        """Isolated from the enabled/gate invariant on purpose.
+
+        With enabled true, any unknown value also trips the invariant, so the
+        test would pass even with the membership check deleted. Disabled plus an
+        unknown name satisfies the invariant and leaves only this guard standing.
+        """
+
+        spec = minimal_spec()
+        spec["health_check"]["enabled"] = False
+        spec["health_check"]["container_gate"] = "probably_fine"
+        with self.assertRaises(driver.Abort) as raised:
+            self.load(spec)
+        self.assertIn("unknown container_gate", str(raised.exception))
+
+    def test_claiming_the_generated_probe_while_disabled_is_refused(self) -> None:
+        """Coolify runs its generated probe only when health_check_enabled is
+        true. A spec that claims coolify_http with the flag off would advertise
+        a gate that never runs, which is exactly the confusion this field is for.
+        """
+
+        spec = minimal_spec()
+        spec["health_check"]["enabled"] = False
+        spec["health_check"]["container_gate"] = "coolify_http"
+        with self.assertRaises(driver.Abort) as raised:
+            self.load(spec)
+        self.assertIn("must agree", str(raised.exception))
+
+    def test_claiming_the_image_gate_while_enabled_is_refused(self) -> None:
+        """The mirror case, and the one that silently loses the image's probe:
+        parseHealthcheckFromDockerfile records a HEALTHCHECK only when the flag
+        is off, so with it on Coolify ignores the image and generates curl.
+        """
+
+        spec = minimal_spec()
+        spec["health_check"]["enabled"] = True
+        spec["health_check"]["container_gate"] = "image"
+        with self.assertRaises(driver.Abort) as raised:
+            self.load(spec)
+        self.assertIn("must agree", str(raised.exception))
+
+    def test_a_blank_gate_note_is_refused(self) -> None:
+        spec = minimal_spec()
+        spec["health_check"]["container_gate_note"] = "   "
+        with self.assertRaises(driver.Abort) as raised:
+            self.load(spec)
+        self.assertIn("container_gate_note", str(raised.exception))
 
     def test_a_public_route_is_refused(self) -> None:
         spec = minimal_spec()
@@ -986,6 +1101,53 @@ class InspectTests(unittest.TestCase):
         self.assertIn("storages: 1", report)
         self.assertIn("mount_path=/mnt/one", report)
         self.assertNotIn("withheld-body-value", report)
+
+
+class ContainerGateReportTests(unittest.TestCase):
+    """What gates a rollout has to appear in the report, not just in the spec.
+
+    A deploy that prints ok has proved Coolify finished. With no container probe
+    it has not proved the container works, and Coolify does not say so: it marks
+    the new version healthy on the way past. These tests exist because this
+    service was reported running:healthy for hours while detached, and a gap
+    nobody prints is a gap nobody sees.
+    """
+
+    def gate_report(self, gate: str) -> str:
+        spec = driver.load_spec(driver.spec_path(RESOURCE))
+        spec["health_check"]["container_gate"] = gate
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            driver.report_container_gate(spec)
+        return buffer.getvalue()
+
+    def test_an_absent_gate_says_a_started_container_is_promoted_untested(self) -> None:
+        report = self.gate_report("absent")
+        self.assertIn("GATE ABSENT", report)
+        self.assertIn("without testing", report)
+
+    def test_an_absent_gate_names_the_only_thing_that_does_prove_reachability(self) -> None:
+        """Naming the after-the-fact check is the difference between a known gap
+        and an unexamined one: the reader is told where the evidence comes from
+        and that it arrives after promotion rather than before it."""
+
+        report = self.gate_report("absent")
+        self.assertIn("gateway_readiness.py", report)
+
+    def test_a_real_gate_is_not_reported_as_a_warning(self) -> None:
+        for gate in ("image", "coolify_http"):
+            with self.subTest(gate=gate):
+                report = self.gate_report(gate)
+                self.assertNotIn("GATE ABSENT", report)
+                self.assertIn(gate, report)
+
+    def test_reconcile_states_the_gate_on_its_result_line(self) -> None:
+        instance = FakeInstance()
+        code, report = run_operation(driver.operate_reconcile, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        gate = driver.load_spec(driver.spec_path(RESOURCE))["health_check"]["container_gate"]
+        self.assertIn(f"health_gate={gate}", report)
+        self.assertIn("RESULT reconcile ok", report)
 
 
 class ReconcileTests(unittest.TestCase):
@@ -1630,6 +1792,22 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(code, driver.EXIT_OK)
         self.assertIn("RESULT deploy ok", report)
         self.assertIn("dep-1", report)
+
+    def test_a_successful_deploy_still_discloses_that_nothing_gated_it(self) -> None:
+        """The most dangerous line this tool prints is a green deploy.
+
+        Coolify finishing is not the container working, and with no probe it is
+        not even the process answering itself. A reader who sees only 'ok' will
+        assume a check passed, so the gate travels on the same line.
+        """
+
+        instance = FakeInstance(with_application=True)
+        code, report = self.deploy(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        gate = driver.load_spec(driver.spec_path(RESOURCE))["health_check"]["container_gate"]
+        self.assertIn(f"health_gate={gate}", report)
+        if gate == "absent":
+            self.assertIn("GATE ABSENT", report)
 
     def test_a_failed_deployment_fails_the_run(self) -> None:
         instance = FakeInstance(
