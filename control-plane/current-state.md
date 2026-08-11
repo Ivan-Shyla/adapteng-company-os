@@ -1135,22 +1135,35 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with sixteen sub-shapes and thirty-one instances.** WS-1 proposed the
+**The general rule, with seventeen sub-shapes and thirty-four instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
 the instrument's range fails to match the question:
 
 **On the arithmetic, since this list has twice been the subject of its own
-"correct count beside a list that does not sum to it" entry.** The last three
-sub-shapes below are *cross-cutting*: they re-describe instances already counted
+"correct count beside a list that does not sum to it" entry.** Three sub-shapes
+below are *cross-cutting*: they re-describe instances already counted
 under earlier shapes rather than adding new ones. The phantom five-run gap is
 counted once, under unchecked arithmetic, and reappears under "a plausible cause"
 as a second reading of the same event; the race proxy is counted once and
 reappears under "a detector defined by a coincidence". Only one genuinely new
-instance is added here — WS-6's four-row table proving short — so the count moves
-by one and not by six. Sub-shapes and instances are different populations, and
+instance was added there — WS-6's four-row table proving short — so that round moved
+the count by one and not by six. Sub-shapes and instances are different populations, and
 adding a shape is not evidence of a new failure.
+
+**The current round adds one sub-shape and three instances, derived by
+enumeration rather than by increment.** The bullets were counted directly and
+stood at sixteen before this edit. New sub-shape: *a rule that reproduces the
+defect it governs*. New instances: (i) my "two mechanisms exist" in §15 — the count
+of mechanisms I had examined, asserted as the count that exists, filed under
+*a sample read as a census*; (ii) the promotion rubric's two-bin sort, the new
+shape's own instance; (iii) the lossy `path.name` projection at
+`test_rollout_trust_anchor.py` 5259–5271, filed under *wrong axis*. Sixteen plus one
+is seventeen; thirty-one plus three is thirty-four. **The first of the three is
+worth naming as mine:** it is the identical error I had just corrected in WS-6's
+emitter table, committed by me in the next document I edited, which is the argument
+for the register being mechanical rather than remembered.
 
 - **Too narrow, empty — silence read as absence.** WS-1 searched a shell helper
   list for a module. A helper list enumerates *invoked scripts* and structurally
@@ -1359,7 +1372,17 @@ adding a shape is not evidence of a new failure.
   disagreed, three against two. Neither party could have found it alone by looking
   harder, which is a different remedy from every other entry in this list.
 - **Wrong axis — the artefact described instead of the decision.** My "both
-  mechanisms" above; the sets are real, and they are not what decides.
+  mechanisms" above; the sets are real, and they are not what decides. WS-6 gave
+  the sharper form: *the population was not wrong, the dimension was* — true
+  statement, wrong axis, invisible in the output either time. **Third instance, and
+  it is an assertion rather than a report.** `tests/test_rollout_trust_anchor.py`
+  5259–5271 anchors on the filesystem, correctly, and then projects `path.name` over
+  `ROOT.rglob` — which discards location, the one dimension the assertion exists to
+  constrain. Its comment says it guards against a *nested* `.gitignore` reaching the
+  sparse checkout; a nested `.gitignore` passes it. So an assertion can be
+  **anchored correctly and projected lossily**, and the anchor is what a reviewer
+  checks. Found only by executing the projection against a synthetic tree, because
+  reading it confirms the anchor and the anchor is not the fault.
 - **Right answer, unstated validity interval — applied outside its domain.**
   WS-9 derived #121's line offsets from `git diff --numstat`: 10 added, 1 removed,
   net **+9**. Correct, and exact at the runner site — 379→388 and 384→393, three
@@ -1511,12 +1534,32 @@ adding a shape is not evidence of a new failure.
   error with the flattering direction removed — the narrowing lived in the
   instrument's *design* rather than in the query.
 
-Unifying form, and the reason the sixteen belong together: **every one of these
+- **A rule that reproduces, at the level of the rule, the defect it was written to
+  govern.** The promotion criterion above (line 553, point 2) sorts every
+  `undetermined.*` code into two bins: the benign merge race, which is neutral, and
+  "any other `undetermined.*`", which is an infrastructure fault and breaks the
+  count. `undetermined.anchor_trust_root_absent` is neither. The job honestly
+  reached no decision and the cause is a **misconfigured repository** — so a correct
+  detection of a real defect is scored as an environmental failure, and scored
+  against promoting the only check that can detect it. That is the
+  authorization-versus-infrastructure conflation of F-3 and #122 exactly, one level
+  up: the same missing third bin, now in the rubric instead of the verifier, written
+  by me in the same section that documents the verifier's version of it. **Distinct
+  from "a correction that inherits the scope of the thing it corrects":** there the
+  repair carries the original's blind spot forward; here a *governing* artefact
+  independently re-derives the fault it governs, from the same pressure toward two
+  bins that produced it the first time. **Check:** when a rule classifies outcomes
+  of a mechanism, apply the rule to the mechanism's own known defect classes and see
+  whether any lands in a bin that contradicts its meaning.
+
+Unifying form, and the reason the seventeen belong together: **every one of these
 instruments returned a true statement, and in no case was the true statement about
 the question being asked.** The helper list truly contained no such script. The
 two `authorized` verdicts were truly `authorized`. The sixteen hits truly
 contained the module name. Line 24 truly is not an import statement. The two
-mechanisms truly exist. The net delta truly is +9. `git add --renormalize` truly
+mechanisms truly exist — and a third existed alongside them, which is the point:
+the true statement was about the mechanisms I had read, not about the mechanisms
+there are. The net delta truly is +9. `git add --renormalize` truly
 renormalized the index. Eighteen sites truly discard stderr. Line 388 truly is a
 discard site in both trees. Every opposite-verdict pair the race test named is
 truly a race. Not one of these is a wrong answer; each is a right answer to a
@@ -2433,12 +2476,85 @@ End state: **green, with both trust-root validations validating a file that does
 not exist**, and a passing test whose subject is trust-anchor wiring. The test does
 not merely fail to catch this; it supplies positive reassurance while the thing it
 names is unbound. So WS-6's summary — "they can't drift apart, and they can't drift
-from the test" — is exactly right and is exactly the limit: **nothing binds the
-trio to the filesystem.** Two mechanisms exist; one is a claim about the world.
+from the test" — is exactly right and is exactly the limit for those two.
 
 This is WS-2's rule one level up. An exit status is a claim about the command, not
 the world; **an internal-consistency assertion is a claim about the set of copies,
 not about the thing they name.** Both read as verification and neither is.
+
+**Correction — there is a third mechanism, it does catch the coordinated case, and
+it is on the check nobody must read.** The paragraph above ended "nothing binds the
+trio to the filesystem. Two mechanisms exist." Two was the count of mechanisms *I
+had looked at*, and I generalised it to the count that exists — the §13 shape, in
+the section that documents the §13 shape. WS-6 supplied the missing one and it
+survives verification exactly as given, at `824b4238`:
+
+| Mechanism | Asserts | Claim about | Required? |
+| --- | --- | --- | --- |
+| `validate_repo.py:34` in `REQUIRED_FILES`, consumed at 268–272 as `check(path.is_file(), …)` | a file exists at the literal | **the world** | yes — `Validate repository structure and content` |
+| `tests/test_rollout_trust_anchor.py` 1935–1948 | the literal appears in *both* `validate.yml` and `secret-scan.yml` | **the set of copies** | yes — `root-rollout-tests` |
+| `.github/workflows/rollout-trust-anchor.yml` **69** — `test -f "$allowed_signers" \|\| undetermined anchor_trust_root_absent` | a file exists at the workflow's own literal (**63**), materialised by the sparse-checkout list at **32–37** whose entry **35** is the same path | **the world** | **no** |
+
+So the coordinated rename *is* detected, loudly and by name: stale literal at 35 →
+sparse-checkout materialises nothing → `test -f` at 69 fails → `undetermined()`
+(**55–59**) prints `rollout_trust_anchor.undetermined.anchor_trust_root_absent`,
+emits an `::error` annotation, and exits **75**. A message that says exactly what
+is wrong. The corrected statement is therefore not "two mechanisms, both required"
+(WS-6's, withdrawn by WS-6) nor "one about the world, one about copies" (mine, and
+incomplete) but: **three mechanisms, and the only one that catches coordinated
+staleness is the only one that is not required.**
+
+The required set was read from the live ruleset rather than inferred — ruleset
+`20236725` `main-protected`, enforcement `active`, five contexts: the hard-fail
+scan job defined at `secret-scan.yml:14`, plus `independent-rollout-policy`,
+`n8n isolation`,
+`root-rollout-tests`, `Validate repository structure and content`. The anchor's job
+is `Verify exact current head from merged base` in `Base-Trusted Rollout
+Authorization`. It is not among them.
+
+**And it is worse than non-required: the detection lags by one pull request, onto
+an innocent author.** The job has exactly one checkout step (**23–38**), and it is
+pinned to `repository: Ivan-Shyla/adapteng-automation-platform` / `ref:
+refs/heads/main` (**30–31**) — the whole point of a base-trusted design. So the
+anchor machinery is read from `main`, never from the head under test. During the
+pull request that performs the rename, `main` still carries the old path, line 69
+passes, and **the offending change goes green.** The alarm first fires after that
+merge, on the *next* pull request, whose author changed nothing related. Combined
+with `cancel-in-progress: true` (**13–15**) and `pull_request_target` (**4–6**), the
+observable is: an unrelated pull request suddenly red on a non-required check with
+a code nobody recognises. WS-6 predicted this would be read as flakiness; the
+lag makes that reading close to inevitable, because the evidence pointing at the
+rename is one merge back and on a different pull request.
+
+**The consequence WS-6 draws is correct and it indicts the criterion I wrote.** By
+the adopted criterion above (line 553 and its point 2 at 563–569),
+`undetermined.pull_request.no_longer_open` is neutral and **"any other
+`undetermined.*` is an infrastructure fault and breaks it."**
+`anchor_trust_root_absent` is not `no_longer_open`, so a correct detection of a real
+repository defect **resets the promotion count** — and resets it toward never
+promoting the only check that can see the defect. WS-6's formulation is right: a
+check that detects a real defect and is ignored *for* detecting it is worse than one
+that detects nothing.
+
+**But the deeper fault is that my criterion repeats the defect it was written to
+police.** Point 2 sorts `undetermined.*` into exactly two bins, benign-race and
+infrastructure fault. `anchor_trust_root_absent` is neither: the job honestly could
+not reach a decision, and the cause is a **misconfigured repository**. That is the
+authorization-versus-infrastructure conflation of F-3 and #122, one level up — the
+same two-bin error, now in the promotion rubric rather than in the verifier, written
+by me in the same section that documents the verifier's version of it. The rubric
+needs a third bin: **`undetermined.*` whose cause is a repository defect is evidence
+the mechanism works.** It should advance the count, not break it.
+
+**And the remedy does not require promotion at all, which neither of us saw.**
+`root-rollout-tests` — a *required* check — runs `tests/test_rollout_trust_anchor.py`
+directly (`rollout-policy.yml:24`, in the explicit four-file pytest list), from an
+ordinary `actions/checkout` (**13–16**) with no `ref:`, i.e. against the pull
+request's own tree. So a filesystem assertion placed in that file runs **on the
+required set, pre-merge, against the head that contains the rename.** It blocks the
+offending pull request instead of alarming the next one. Promotion of the anchor
+remains desirable for its own reasons, but coordinated staleness specifically is
+closed by one assertion in a file a required check already executes.
 
 **Which improves WS-6's third option and changes the instruction that implements
 it.** WS-6 proposes neither hard-code-and-hope nor a cross-file constant, but
@@ -2446,11 +2562,54 @@ it.** WS-6 proposes neither hard-code-and-hope nor a cross-file constant, but
 The proposal is right and the justification is the wrong half of it. Followed
 literally — assert the verifier's new literal appears in `validate.yml` — the guard
 joins the **silent** class, because 1935–1948 is the pattern that permits
-coordinated staleness. What makes the proposal work is its *anchor*:
-`REQUIRED_FILES` is existence-checked at 272, so a copy chained to it is
-transitively bound to the filesystem. The instruction is therefore **anchor the
-assertion on `REQUIRED_FILES`, and the reason is line 272, not line 1935** — a
-distinction invisible in the diff, since both encodings are one `assertIn`.
+coordinated staleness. What makes the proposal work is its *anchor*.
+
+**Superseded — the anchor should be the filesystem directly, not `REQUIRED_FILES`.**
+The instruction previously read "anchor the assertion on `REQUIRED_FILES`, and the
+reason is line 272, not line 1935". That works, but it *inherits* 272: if
+`REQUIRED_FILES` ever stops being existence-checked, the guard silently rejoins the
+silent class, and the change that did it would be nowhere near the guard. WS-6's
+sharper form has no such dependency — assert `(ROOT / literal).is_file()` in the
+test. One line, bound to the world with no intermediary. Every set is one refactor
+away from being a claim about copies again; the filesystem is not a set.
+
+**The precedent for that form is in the same file — and it must be cited for its
+anchoring, never copied for its shape.** WS-6 cites
+`tests/test_rollout_trust_anchor.py` **5259–5271**, which is filesystem-anchored via
+`ROOT.rglob` and guards the *other two entries of the same sparse-checkout list*
+(`.gitattributes` and `.gitignore`, at `rollout-trust-anchor.yml` **33–34**). As a
+demonstration that this file already contains the right *category* of assertion, it
+is exact and self-evidencing. As a template it is defective, and the defect is
+invisible on the page:
+
+```python
+{path.name for path in ROOT.rglob(".gitignore") if ".git" not in path.parts}
+| {path.name for path in ROOT.rglob(".gitattributes") if ".git" not in path.parts}
+== {".gitattributes", ".gitignore"}
+```
+
+Every member of `rglob(".gitignore")` has `.name == ".gitignore"` by construction, so
+the projection discards location and the comparison reduces to *at least one of each
+exists somewhere*. Verified by execution, not by reading: a tree containing
+`.gitignore`, `.gitattributes` **and** `services/ai-gateway/.gitignore` yields the
+identical set and the assertion **passes**. Its own comment (5253–5256) says it
+exists because "every file Git must read has to be in the sparse set, or the step
+dies on an unauthenticated promisor fetch" — i.e. precisely to catch a *nested*
+addition, which is the one thing the projection cannot see. It is true today only
+because the tree happens to contain exactly two such files (enumerated at
+`824b4238`; `truncated: false`).
+
+So the precedent is **anchored correctly and projected lossily** — which is WS-6's
+own wrong-axis rule, third instance, found inside the artefact WS-6 offered as the
+model. The instruction is therefore: **assert `(ROOT / literal).is_file()`
+directly**, cite 5259–5271 as precedent for filesystem anchoring in this file, and
+do not reproduce its `path.name` projection. Both encodings are one line and the
+diff cannot distinguish them; the anchor *and the projection* are the whole content
+of the instruction.
+
+Placement is now load-bearing rather than incidental: `root-rollout-tests` is a
+required check and runs this file against the pull request's own head, so the
+assertion blocks the rename pre-merge — see the three-mechanism analysis above.
 
 **Cost re-checked and it is zero, as WS-6 says.** Only pins 408
 (`verify_rollout_trust_anchor.py`) and 423 (`tests/test_rollout_trust_anchor.py`)

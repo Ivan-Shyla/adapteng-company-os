@@ -828,22 +828,44 @@ deployed gateway:
    all*. **The negative conjunct's marginal cost is zero.** If both are wanted
    they are one sitting, and the invariant should not be deferred on cost.
 
-   **And the hard-coded literal needs one assertion beside it, anchored on a
-   specific set — this is the part that is easy to get wrong in a way no reviewer
+   **And the hard-coded literal needs one assertion beside it, anchored on the
+   filesystem — this is the part that is easy to get wrong in a way no reviewer
    sees.** A bare hard-coded path in the verifier is silent on a trust-root rename:
    the intersection goes empty because the literal names nothing, the invariant
    passes forever, and nothing fails to point at it. WS-6's remedy is right —
-   hard-code plus a consistency assertion, following the existing pattern at
-   `tests/test_rollout_trust_anchor.py` 1935–1948 — but the pattern must not be
-   copied literally. That test binds three copies of the path to *each other*, and
-   all three can go stale together while CI stays green (`current-state.md` §15).
-   An assertion built that way puts the new literal in the same silent class.
-   **Assert it against `REQUIRED_FILES` in `scripts/validation/validate_repo.py`,
-   whose entry at line 34 is existence-checked at 268–272 via
-   `check(path.is_file(), …)`.** That is the only enumeration of the five that is
-   bound to the filesystem, so chaining to it makes the new copy transitively
-   bound. Both encodings are a single `assertIn` and the diff cannot distinguish
-   them; the anchor set is the whole content of the instruction.
+   hard-code plus a consistency assertion — but the precedent it was first justified
+   by, `tests/test_rollout_trust_anchor.py` 1935–1948, must not be copied. That test
+   binds three copies of the path to *each other*, and all three can go stale
+   together (`current-state.md` §15). An assertion built that way puts the new
+   literal in the same silent class.
+
+   **Assert `(ROOT / literal).is_file()` directly in
+   `tests/test_rollout_trust_anchor.py`.** This supersedes the earlier instruction in
+   this item, which said to chain the assertion to `REQUIRED_FILES` in
+   `scripts/validation/validate_repo.py` because its entry at line 34 is
+   existence-checked at 268–272. That works, but it inherits 272: if `REQUIRED_FILES`
+   ever stops being existence-checked, the guard silently rejoins the silent class,
+   and the change responsible would be nowhere near the guard. The direct form has no
+   intermediary. Every set is one refactor away from being a claim about copies
+   again; the filesystem is not a set.
+
+   **Precedent, with a warning attached.** The same file already contains a
+   filesystem-anchored assertion at **5259–5271**, guarding the other two entries of
+   the same sparse-checkout list (`.gitattributes`, `.gitignore`). Cite it for the
+   *category* — it shows this file is the right home for such an assertion. Do **not**
+   copy its shape: it projects `path.name` over `ROOT.rglob`, which discards location,
+   so a nested `.gitignore` passes it unnoticed even though its own comment says it
+   exists to prevent exactly that. Verified by execution, not by reading.
+
+   **Placement is load-bearing.** `root-rollout-tests` is one of the five required
+   checks (live ruleset `20236725`), it runs this file explicitly
+   (`.github/workflows/rollout-policy.yml:24`), and it checks out the pull request's
+   own head. So the assertion fails **on the pull request that performs the rename**.
+   The only mechanism that currently catches a coordinated rename —
+   `rollout-trust-anchor.yml:69` — is not required *and* reads its anchor from
+   `refs/heads/main`, so it cannot fire until one merge later, on an unrelated
+   author's pull request. This assertion is what closes that gap; see `current-state.md`
+   §15 for the three-mechanism analysis.
 
    No third pin is incurred: the test already reads repository files as text at
    1941–1946 and already names `validate_repo.py` at 2025, 4048 and 4063, so the
