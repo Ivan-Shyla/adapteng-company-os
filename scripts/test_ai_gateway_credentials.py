@@ -13,6 +13,7 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
+import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -66,83 +67,57 @@ class FakeCoolify:
 
 
 class SecretDeliveryTests(unittest.TestCase):
-    """How the value reaches gh, which no test exercised until it failed live."""
+    """That the credential goes to exactly one store, and nowhere else.
+
+    Two stores was the original design and it failed twice in one afternoon, both
+    times after the value had already been generated: a gh flag the runner does
+    not support, then a 403 for a token scope this automation does not hold. The
+    invariant that replaced it is stronger than either fix, and cheaper to check:
+    minting shells out to nothing at all.
+    """
 
     def setUp(self) -> None:
-        self.real_run = binder.subprocess.run
-        self.addCleanup(setattr, binder.subprocess, "run", self.real_run)
-        self.calls: list[dict] = []
+        # Poisoned on the subprocess module itself rather than on an attribute of
+        # the module under test, so the guard holds however the code reaches it -
+        # including through the shared driver, and including an import added
+        # later. There is nothing to keep in sync.
+        self.real_run, self.real_popen = subprocess.run, subprocess.Popen
+        self.addCleanup(setattr, subprocess, "run", self.real_run)
+        self.addCleanup(setattr, subprocess, "Popen", self.real_popen)
 
-    def serve(self, returncode: int = 0, stderr: str = "") -> None:
-        class Completed:
-            def __init__(self) -> None:
-                self.returncode = returncode
-                self.stdout = ""
-                self.stderr = stderr
+        def refuse(command, *args, **kwargs):
+            raise AssertionError(f"minting must not run a subprocess: {command!r}")
 
-        def fake(command, input=None, capture_output=False, text=False, check=False):
-            self.calls.append({"command": list(command), "input": input})
-            return Completed()
+        subprocess.run = refuse
+        subprocess.Popen = refuse
 
-        binder.subprocess.run = fake
+    def test_minting_runs_no_subprocess_so_no_external_tool_can_deny_it(self) -> None:
+        """A second store is a second thing that can refuse after the value exists."""
 
-    def test_the_value_is_delivered_on_stdin_and_never_in_the_arguments(self) -> None:
-        """Arguments are readable by every other process on the machine."""
+        code, _ = run_operation(
+            binder.operate_mint_caller, FakeCoolify(), repository="o/r"
+        )
+        self.assertEqual(code, 0)
 
-        self.serve()
-        binder.store_repository_secret("o/r", "NAME", "a-generated-value")
-        call = self.calls[0]
-        self.assertEqual(call["input"], "a-generated-value")
-        self.assertNotIn("a-generated-value", " ".join(call["command"]))
+    def test_the_credential_is_written_exactly_once(self) -> None:
+        coolify = FakeCoolify()
+        run_operation(binder.operate_mint_caller, coolify, repository="o/r")
+        writes = [
+            body
+            for method, path, body in coolify.writes
+            if path.endswith("/envs") and isinstance(body, dict)
+        ]
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(writes[0]["key"], binder.CALLER_KEY)
 
-    def test_no_flag_names_the_input_at_all(self) -> None:
-        """gh reads stdin when no value is given, in every version.
+    def test_the_report_says_where_the_only_copy_lives(self) -> None:
+        """An operator who cannot find the value will otherwise mint a second one."""
 
-        --body-file - expressed the same intent and the runner's gh rejected it
-        outright, after the other store had already been written. A flag that is
-        not passed cannot be unsupported.
-        """
-
-        self.serve()
-        binder.store_repository_secret("o/r", "NAME", "value")
-        command = self.calls[0]["command"]
-        for flag in ("--body-file", "--body", "-b", "-f"):
-            self.assertNotIn(flag, command)
-
-    def test_a_refusal_aborts_and_reports_the_reason_not_the_value(self) -> None:
-        self.serve(returncode=1, stderr="HTTP 403: Resource not accessible")
-        with self.assertRaises(driver.Abort) as raised:
-            binder.store_repository_secret("o/r", "NAME", "a-generated-value")
-        self.assertIn("403", str(raised.exception))
-        self.assertNotIn("a-generated-value", str(raised.exception))
-
-
-class SecretDeliveryTests_Ordering(unittest.TestCase):
-    """Which store is written first, chosen for how a half-failure lands."""
-
-    def setUp(self) -> None:
-        self.real_store = binder.store_repository_secret
-        self.addCleanup(setattr, binder, "store_repository_secret", self.real_store)
-        self.order: list[str] = []
-
-    def test_the_caller_copy_is_stored_before_the_gateway_accepts_it(self) -> None:
-        """The reverse order failed live: Coolify accepted a credential nobody held.
-
-        That silently revokes every existing caller and reports success up to the
-        last line. Storing the caller's copy first makes the same half-failure
-        visible instead: the gateway keeps accepting what it accepted before.
-        """
-
-        binder.store_repository_secret = lambda repo, name, value: self.order.append("secret")
-
-        class Recording(FakeCoolify):
-            def __call__(inner, client, method, path, body=None, expect=(200,), allow_absent=False):
-                if method.upper() != "GET" and path.endswith("/envs"):
-                    self.order.append("coolify")
-                return FakeCoolify.__call__(inner, client, method, path, body, expect, allow_absent)
-
-        run_operation(binder.operate_mint_caller, Recording(), repository="o/r")
-        self.assertEqual(self.order[:2], ["secret", "coolify"])
+        _, report = run_operation(
+            binder.operate_mint_caller, FakeCoolify(), repository="o/r"
+        )
+        self.assertIn("Coolify", report)
+        self.assertIn(binder.CALLER_KEY, report)
 
 
 class LocateTests(unittest.TestCase):
@@ -299,33 +274,23 @@ class BindAdcTests(unittest.TestCase):
 
 
 class MintCallerTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.real_store = binder.store_repository_secret
-        self.addCleanup(setattr, binder, "store_repository_secret", self.real_store)
-        self.stored: list[tuple[str, str, str]] = []
-        binder.store_repository_secret = lambda repo, name, value: self.stored.append(
-            (repo, name, value)
-        )
+    def written_value(self, coolify: "FakeCoolify") -> str:
+        return [
+            body["value"]
+            for method, path, body in coolify.writes
+            if path.endswith("/envs") and isinstance(body, dict)
+        ][0]
 
     def test_the_generated_credential_never_reaches_the_report(self) -> None:
         coolify = FakeCoolify()
         _, report = run_operation(binder.operate_mint_caller, coolify, repository="o/r")
-        credential = self.stored[0][2]
-        self.assertNotIn(credential, report)
+        self.assertNotIn(self.written_value(coolify), report)
         self.assertIn("present length=", report)
-
-    def test_both_stores_receive_the_same_value(self) -> None:
-        """Two stores written from two generations would disagree silently."""
-
-        coolify = FakeCoolify()
-        run_operation(binder.operate_mint_caller, coolify, repository="o/r")
-        written = [body for _, path, body in coolify.writes if path.endswith("/envs")][0]
-        self.assertEqual(written["value"], self.stored[0][2])
 
     def test_the_credential_is_long_enough_that_guessing_is_not_a_strategy(self) -> None:
         coolify = FakeCoolify()
         run_operation(binder.operate_mint_caller, coolify, repository="o/r")
-        self.assertGreaterEqual(len(self.stored[0][2]), 40)
+        self.assertGreaterEqual(len(self.written_value(coolify)), 40)
 
     def test_a_value_the_instance_does_not_report_is_a_failure_not_a_success(self) -> None:
         """The gateway refusing every caller while the secret store says otherwise."""

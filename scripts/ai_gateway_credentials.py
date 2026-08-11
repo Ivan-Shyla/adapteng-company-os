@@ -35,7 +35,6 @@ import argparse
 import json
 import os
 import secrets
-import subprocess
 import sys
 from pathlib import Path
 
@@ -48,7 +47,6 @@ import coolify_deploy as driver  # noqa: E402
 ADC_MOUNT_PATH = "/secrets/vertex-service-account.json"
 ADC_PATH_KEY = "GOOGLE_APPLICATION_CREDENTIALS"
 CALLER_KEY = "AI_GATEWAY_BEARER_TOKENS"
-CALLER_SECRET_NAME = "AI_GATEWAY_CALLER_CREDENTIAL"
 RESOURCE_NAME = "ai-gateway"
 PROJECT_NAME = "adapteng-ops"
 ENVIRONMENT_NAME = "production"
@@ -237,38 +235,13 @@ def write_environment_value(client: driver.Client, uuid: str, key: str, value: s
     )
 
 
-def store_repository_secret(repository: str, name: str, value: str) -> None:
-    """Hand the value to gh on stdin, which encrypts it before it leaves this host.
-
-    The GitHub API takes secrets sealed with the repository's public key, which
-    needs libsodium and is not in the standard library. gh already implements
-    it, so the encryption is delegated rather than reimplemented. The value goes
-    in on stdin: an argument would be visible in the process list, and a file
-    would outlive the call.
-
-    No flag names the input. --body-file - expresses the same intent and is not
-    understood by every gh build - the runner's rejected it - whereas reading
-    stdin when no value is given is the documented default of every version.
-    Fewer flags is also fewer ways for the value to end up in argv.
-    """
-
-    completed = subprocess.run(
-        ["gh", "secret", "set", name, "--repo", repository],
-        input=value,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if completed.returncode != 0:
-        # stderr is echoed because gh reports permission problems there and they
-        # are the likely cause; gh does not echo the value it was given.
-        raise driver.Abort(
-            f"storing the repository secret {name} failed: {completed.stderr.strip()}"
-        )
-
-
 def operate_mint_caller(client: driver.Client, repository: str) -> int:
-    """Generate the caller credential and bind it to both stores from one value."""
+    """Generate the caller credential and bind it where the gateway reads it.
+
+    ``repository`` is accepted and deliberately unused. It is kept so the
+    workflow contract does not change and so this docstring is the thing an
+    operator finds when they ask why the repository secret is not written.
+    """
 
     driver.emit(f"--- mint-caller {RESOURCE_NAME}")
     uuid = locate(client)
@@ -280,15 +253,27 @@ def operate_mint_caller(client: driver.Client, repository: str) -> int:
     driver.register_redaction(credential)
     driver.emit(f"    generated caller credential: {describe_material(credential)}")
 
-    # Order matters, and it is chosen for how a half-failure lands rather than
-    # for readability. Storing the caller's copy first means a failure to write
-    # Coolify leaves the gateway accepting what it accepted before, and a caller
-    # holding a credential that does not work yet - visibly broken. The reverse
-    # order failed here for real: Coolify accepted a credential nobody holds,
-    # which silently revokes every existing caller and reports success up to the
-    # last line.
-    store_repository_secret(repository, CALLER_SECRET_NAME, credential)
-    driver.emit(f"    repository secret {CALLER_SECRET_NAME}: written")
+    # One store, on purpose. This wrote two - Coolify and a repository secret -
+    # and the second one earned its removal twice in a single afternoon: first a
+    # gh flag the runner does not support, then a 403 for a token scope this
+    # automation is not entitled to. Both landed after the value had been
+    # generated, which is the worst moment to discover a store is unreachable.
+    #
+    # It is removed rather than repaired because it was never load-bearing.
+    # Coolify is where the gateway reads the credential; the repository copy
+    # existed only so some future caller could present it. No such caller exists,
+    # and none is on the critical path: the credential gates POST /v1/gateway
+    # alone, while GET /health and GET /ready - the deployment's whole
+    # verification surface - are answered before the Authorization header is
+    # read. Deployment and readiness therefore never need it.
+    #
+    # A caller that does appear reads the value from Coolify with the API
+    # credential this automation already holds. That grants nothing new: a token
+    # able to write this key can already mint itself access by overwriting it, so
+    # being able to read it adds no privilege it did not have.
+    #
+    # What is bought is that one secret has one home. Two copies of one value is
+    # a synchronisation problem, and this one had already diverged once.
     write_environment_value(client, uuid, CALLER_KEY, credential)
 
     entries = driver.read_environment_entries(client, uuid)
@@ -298,11 +283,14 @@ def operate_mint_caller(client: driver.Client, repository: str) -> int:
     if not present:
         raise driver.Abort(
             f"{CALLER_KEY} was accepted but is not reported on the application, so "
-            "the gateway would refuse every caller while the secret store says otherwise"
+            "the gateway would refuse every caller while the write reported success"
         )
     driver.emit(f"    env {CALLER_KEY}: recorded")
     driver.emit("")
-    driver.emit("RESULT mint-caller ok both stores written from one value")
+    driver.emit(f"    the value is held only by Coolify, under {CALLER_KEY} on this")
+    driver.emit("    application. A caller obtains it from there; it is not copied")
+    driver.emit("    into a repository secret and is never printed.")
+    driver.emit("RESULT mint-caller ok single store written")
     return 0
 
 
