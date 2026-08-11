@@ -608,6 +608,68 @@ class DiscoveryTests(unittest.TestCase):
             self.discover()
         self.assertIn("403", str(raised.exception))
 
+    def build_target(self, argv: list[str], **environment_overrides):
+        environment = {k: v for k, v in os.environ.items() if k != "PGPASSWORD_ADMIN"}
+        environment["COOLIFY_URL"] = "https://c.example"
+        environment["COOLIFY_API_TOKEN"] = "a-credential"
+        environment.update(environment_overrides)
+        with mock.patch.dict(os.environ, environment, clear=True):
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                return driver.choose_target(driver.parse_arguments(argv))
+
+    def test_the_recorded_administrative_user_is_used_not_a_default(self) -> None:
+        """A default that cannot be told apart from a choice will win over the truth.
+
+        The live database records its administrative user as adapteng_ops. A
+        default of "postgres" is indistinguishable from someone asking for
+        postgres, so it replaced the recorded value and the server rejected the
+        login with a message that named only the password.
+        """
+
+        self.respond(200, [{
+            "name": "adapteng-ops-db",
+            "type": "standalone-postgresql",
+            "internal_db_url": f"postgres://adapteng_ops:{ROLE_CREDENTIAL}@db-uuid:5432/adapteng_ops",
+        }])
+        target = self.build_target(["recon"])
+        self.assertEqual(target.user, "adapteng_ops")
+
+    def test_an_explicitly_named_user_still_wins(self) -> None:
+        self.respond(200, [{
+            "name": "adapteng-ops-db",
+            "type": "standalone-postgresql",
+            "internal_db_url": f"postgres://adapteng_ops:{ROLE_CREDENTIAL}@db-uuid:5432/adapteng_ops",
+        }])
+        target = self.build_target(["recon", "--db-user", "someone_else"])
+        self.assertEqual(target.user, "someone_else")
+
+    def test_naming_a_host_overrides_the_address_and_not_the_login(self) -> None:
+        """An address someone knows should not cost them a credential they do not."""
+
+        self.respond(200, [{
+            "name": "adapteng-ops-db",
+            "type": "standalone-postgresql",
+            "internal_db_url": f"postgres://adapteng_ops:{ROLE_CREDENTIAL}@db-uuid:5432/adapteng_ops",
+        }])
+        target = self.build_target(["recon", "--db-host", "10.0.0.9"])
+        self.assertEqual(target.host, "10.0.0.9")
+        self.assertEqual(target.user, "adapteng_ops")
+        self.assertEqual(target.environment()["PGPASSWORD"], ROLE_CREDENTIAL)
+
+    def test_a_fully_specified_connection_asks_coolify_nothing(self) -> None:
+        """Discovery is a fallback, not a toll on every run."""
+
+        def refuse(*args, **kwargs):
+            raise AssertionError("discovery was called when nothing needed discovering")
+
+        driver.coolify_request = refuse
+        target = self.build_target(
+            ["recon", "--db-host", "10.0.0.9", "--db-user", "someone"],
+            PGPASSWORD_ADMIN="a-supplied-credential",
+        )
+        self.assertEqual(target.host, "10.0.0.9")
+
     def test_discovery_needs_no_database_credential_of_its_own(self) -> None:
         """The whole point: no new secret is created, stored or rotated for this."""
 

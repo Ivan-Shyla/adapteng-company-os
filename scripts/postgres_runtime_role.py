@@ -913,12 +913,19 @@ def choose_target(arguments: argparse.Namespace):
     port = arguments.db_port
     user = arguments.db_user
     admin_credential = os.environ.get("PGPASSWORD_ADMIN", "")
-    if not host:
+    # Anything not supplied is looked up. The distinction that matters here is
+    # between a value someone asked for and a value that was merely defaulted:
+    # a default user of "postgres" reads identically to an explicit choice, and
+    # would silently replace the login the database itself records. It did, and
+    # the server rejected the result with a message that said only that the
+    # password was wrong.
+    if not (host and user and admin_credential):
         discovered = discover_admin_connection(
             os.environ.get("COOLIFY_URL", ""), os.environ.get("COOLIFY_API_TOKEN", "")
         )
-        host = discovered["host"]
-        port = int(discovered["port"])
+        if not host:
+            host = discovered["host"]
+            port = int(discovered["port"])
         user = user or discovered["user"]
         admin_credential = admin_credential or discovered["credential"]
     return NetworkTarget(host, port, user, admin_credential, arguments.admin_sslmode)
@@ -931,7 +938,11 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--container", default=None)
     parser.add_argument("--db-host", default=os.environ.get("PG_ADMIN_HOST", ""))
     parser.add_argument("--db-port", type=int, default=int(os.environ.get("PG_ADMIN_PORT", "5432")))
-    parser.add_argument("--db-user", default=os.environ.get("PG_ADMIN_USER", "postgres"))
+    # Empty rather than "postgres": the administrative user is a property of the
+    # database, not of this script, and every managed database records its own.
+    # A non-empty default cannot be told apart from an explicit request, so it
+    # would win over the recorded value and connect as a user that may not exist.
+    parser.add_argument("--db-user", default=os.environ.get("PG_ADMIN_USER", ""))
     parser.add_argument("--application-uuid", default=os.environ.get("COOLIFY_APP_UUID", ""))
     parser.add_argument("--dsn-host", default=os.environ.get("PG_DSN_HOST", ""))
     parser.add_argument("--dsn-port", type=int, default=int(os.environ.get("PG_DSN_PORT", "5432")))
