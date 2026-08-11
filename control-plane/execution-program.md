@@ -828,6 +828,29 @@ deployed gateway:
    all*. **The negative conjunct's marginal cost is zero.** If both are wanted
    they are one sitting, and the invariant should not be deferred on cost.
 
+   **And the hard-coded literal needs one assertion beside it, anchored on a
+   specific set — this is the part that is easy to get wrong in a way no reviewer
+   sees.** A bare hard-coded path in the verifier is silent on a trust-root rename:
+   the intersection goes empty because the literal names nothing, the invariant
+   passes forever, and nothing fails to point at it. WS-6's remedy is right —
+   hard-code plus a consistency assertion, following the existing pattern at
+   `tests/test_rollout_trust_anchor.py` 1935–1948 — but the pattern must not be
+   copied literally. That test binds three copies of the path to *each other*, and
+   all three can go stale together while CI stays green (`current-state.md` §15).
+   An assertion built that way puts the new literal in the same silent class.
+   **Assert it against `REQUIRED_FILES` in `scripts/validation/validate_repo.py`,
+   whose entry at line 34 is existence-checked at 268–272 via
+   `check(path.is_file(), …)`.** That is the only enumeration of the five that is
+   bound to the filesystem, so chaining to it makes the new copy transitively
+   bound. Both encodings are a single `assertIn` and the diff cannot distinguish
+   them; the anchor set is the whole content of the instruction.
+
+   No third pin is incurred: the test already reads repository files as text at
+   1941–1946 and already names `validate_repo.py` at 2025, 4048 and 4063, so the
+   assertion needs no import, and `validate_repo.py`'s own pin at 431–432 is
+   unaffected by being read. Pins 408 and 423 remain the only two touched, and
+   both digests were re-derived from the blobs at `824b4238` and are current.
+
    **The recipe, since a wrong one costs the signature.** `_reviewed_source_sha256`
    (anchor 1242) normalizes `\r\n` to `\n`, refuses a lone `\r`, and then at line
    1257 returns a plain `sha256` of the normalized bytes **for every path except
