@@ -65,6 +65,86 @@ class FakeCoolify:
         return {}
 
 
+class SecretDeliveryTests(unittest.TestCase):
+    """How the value reaches gh, which no test exercised until it failed live."""
+
+    def setUp(self) -> None:
+        self.real_run = binder.subprocess.run
+        self.addCleanup(setattr, binder.subprocess, "run", self.real_run)
+        self.calls: list[dict] = []
+
+    def serve(self, returncode: int = 0, stderr: str = "") -> None:
+        class Completed:
+            def __init__(self) -> None:
+                self.returncode = returncode
+                self.stdout = ""
+                self.stderr = stderr
+
+        def fake(command, input=None, capture_output=False, text=False, check=False):
+            self.calls.append({"command": list(command), "input": input})
+            return Completed()
+
+        binder.subprocess.run = fake
+
+    def test_the_value_is_delivered_on_stdin_and_never_in_the_arguments(self) -> None:
+        """Arguments are readable by every other process on the machine."""
+
+        self.serve()
+        binder.store_repository_secret("o/r", "NAME", "a-generated-value")
+        call = self.calls[0]
+        self.assertEqual(call["input"], "a-generated-value")
+        self.assertNotIn("a-generated-value", " ".join(call["command"]))
+
+    def test_no_flag_names_the_input_at_all(self) -> None:
+        """gh reads stdin when no value is given, in every version.
+
+        --body-file - expressed the same intent and the runner's gh rejected it
+        outright, after the other store had already been written. A flag that is
+        not passed cannot be unsupported.
+        """
+
+        self.serve()
+        binder.store_repository_secret("o/r", "NAME", "value")
+        command = self.calls[0]["command"]
+        for flag in ("--body-file", "--body", "-b", "-f"):
+            self.assertNotIn(flag, command)
+
+    def test_a_refusal_aborts_and_reports_the_reason_not_the_value(self) -> None:
+        self.serve(returncode=1, stderr="HTTP 403: Resource not accessible")
+        with self.assertRaises(driver.Abort) as raised:
+            binder.store_repository_secret("o/r", "NAME", "a-generated-value")
+        self.assertIn("403", str(raised.exception))
+        self.assertNotIn("a-generated-value", str(raised.exception))
+
+
+class SecretDeliveryTests_Ordering(unittest.TestCase):
+    """Which store is written first, chosen for how a half-failure lands."""
+
+    def setUp(self) -> None:
+        self.real_store = binder.store_repository_secret
+        self.addCleanup(setattr, binder, "store_repository_secret", self.real_store)
+        self.order: list[str] = []
+
+    def test_the_caller_copy_is_stored_before_the_gateway_accepts_it(self) -> None:
+        """The reverse order failed live: Coolify accepted a credential nobody held.
+
+        That silently revokes every existing caller and reports success up to the
+        last line. Storing the caller's copy first makes the same half-failure
+        visible instead: the gateway keeps accepting what it accepted before.
+        """
+
+        binder.store_repository_secret = lambda repo, name, value: self.order.append("secret")
+
+        class Recording(FakeCoolify):
+            def __call__(inner, client, method, path, body=None, expect=(200,), allow_absent=False):
+                if method.upper() != "GET" and path.endswith("/envs"):
+                    self.order.append("coolify")
+                return FakeCoolify.__call__(inner, client, method, path, body, expect, allow_absent)
+
+        run_operation(binder.operate_mint_caller, Recording(), repository="o/r")
+        self.assertEqual(self.order[:2], ["secret", "coolify"])
+
+
 class LocateTests(unittest.TestCase):
     """Exercising the one function that speaks to the driver's real API surface.
 
