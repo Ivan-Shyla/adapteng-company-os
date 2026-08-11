@@ -849,22 +849,44 @@ deployed gateway:
    intermediary. Every set is one refactor away from being a claim about copies
    again; the filesystem is not a set.
 
-   **Precedent, with a warning attached.** The same file already contains a
-   filesystem-anchored assertion at **5259–5271**, guarding the other two entries of
-   the same sparse-checkout list (`.gitattributes`, `.gitignore`). Cite it for the
-   *category* — it shows this file is the right home for such an assertion. Do **not**
-   copy its shape: it projects `path.name` over `ROOT.rglob`, which discards location,
-   so a nested `.gitignore` passes it unnoticed even though its own comment says it
-   exists to prevent exactly that. Verified by execution, not by reading.
+   **The precedent previously cited here is withdrawn.** This item used to say that
+   the same file already contains a filesystem-anchored assertion at **5259–5271**
+   "guarding the other two entries of the same sparse-checkout list", to be cited for
+   the *category* but never copied for its shape. Measurement reverses all of it
+   except the shape warning. It does not guard those entries: executed against a tree
+   holding only `services/ai-gateway/.gitattributes` and `.gitignore`, with no root
+   copies, it **passes**. Its population is a *filesystem* walk while the claim is
+   about the *tracked* tree, and `.gitignore:115` ignores the directory `pytest`
+   writes a `.gitignore` into. And its object is wrong: with
+   `sparse-checkout-cone-mode: false` a pattern without a slash matches at any depth,
+   so nested dotfiles are already inside the sparse set and the hazard its comment
+   names cannot occur. **Cite it for nothing.** The direct form above needs no
+   precedent — one literal, no glob, no projection, no population.
+
+   **Add a second assertion, on the pattern form rather than on the tree.** What
+   actually prevents the unauthenticated-promisor failure (F-2) is that
+   `rollout-trust-anchor.yml` **33–34** are *bare basenames*. Rewriting them as
+   `/.gitattributes` and `/.gitignore` drops nested files out of the sparse set and
+   restores the failure, through an edit that reads as tidying — and every existing
+   assertion passes on it, because the only guard on pattern form is 5257–5258, an
+   `assertIn` substring check that `"/.gitattributes"` satisfies. Assert that the two
+   entries are exactly those basenames, with no leading slash. Verified in both
+   directions against real Git on a filtered credential-free clone.
 
    **Placement is load-bearing.** `root-rollout-tests` is one of the five required
    checks (live ruleset `20236725`), it runs this file explicitly
-   (`.github/workflows/rollout-policy.yml:24`), and it checks out the pull request's
-   own head. So the assertion fails **on the pull request that performs the rename**.
-   The only mechanism that currently catches a coordinated rename —
-   `rollout-trust-anchor.yml:69` — is not required *and* reads its anchor from
-   `refs/heads/main`, so it cannot fire until one merge later, on an unrelated
-   author's pull request. This assertion is what closes that gap; see `current-state.md`
+   (`.github/workflows/rollout-policy.yml:24`), and on a `pull_request` event its
+   checkout takes `refs/pull/N/merge` — the **merge commit**, since line 13–16 sets
+   `persist-credentials: false` and gives no `ref:`. The merge ref contains the
+   rename, so the assertion fails **on the pull request that performs the rename**.
+   (This previously read "checks out the pull request's own head". The conclusion is
+   unchanged, but the two refs diverge whenever the base has moved, so the precise
+   form is the one to reason from.) The only mechanism that currently catches a
+   coordinated rename — `rollout-trust-anchor.yml:69` — is not required *and* reads
+   its anchor from `refs/heads/main`, so it cannot fire until one merge later; and
+   because line 35 hard-codes the old path while the checkout stays pinned to `main`,
+   it then fails on **every** subsequent pull request until a protected workflow is
+   edited. This assertion is what closes that gap; see `current-state.md`
    §15 for the three-mechanism analysis.
 
    No third pin is incurred: the test already reads repository files as text at

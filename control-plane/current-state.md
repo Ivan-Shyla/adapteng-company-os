@@ -1253,7 +1253,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with eighteen sub-shapes and thirty-nine instances.** WS-1 proposed the
+**The general rule, with eighteen sub-shapes and forty-one instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -1316,6 +1316,20 @@ false zeros from one instrument in one measurement, caught by a positive control
 Eighteen plus zero is eighteen; thirty-seven plus two is **thirty-nine**. The bullet
 count was re-derived by enumeration, not carried forward, because the previous round
 of this section is where a header count went stale by being incremented.
+
+**This round adds two further instances and again no sub-shape, so eighteen stands
+and thirty-nine becomes forty-one.** Both land on *wrong axis — the artefact
+described instead of the decision*, and both are mine, in the paragraph where I
+recorded that bullet's third instance. Named so the figure is auditable: (i) I called
+`tests/test_rollout_trust_anchor.py` 5259–5271 "anchored correctly and projected
+lossily" and instructed that it be cited for the anchor — but the hazard lives in the
+sparse-checkout pattern string and the assertion inspects the tree, so the anchor is
+on the wrong object too; (ii) I warranted its truth with a **tracked-tree**
+enumeration against a claim about a **filesystem** walk. A candidate sub-shape was
+considered and rejected: *wrong object* is not a new form, it is this bullet with the
+axes one step further apart, and coining a nineteenth shape for it would have counted
+a sharper reading as a new phenomenon. Eighteen plus zero is eighteen; thirty-nine
+plus two is **forty-one**. Bullets re-enumerated, not incremented.
 
 - **Too narrow, empty — silence read as absence.** WS-1 searched a shell helper
   list for a module. A helper list enumerates *invoked scripts* and structurally
@@ -1544,13 +1558,24 @@ of this section is where a header count went stale by being incremented.
   the sharper form: *the population was not wrong, the dimension was* — true
   statement, wrong axis, invisible in the output either time. **Third instance, and
   it is an assertion rather than a report.** `tests/test_rollout_trust_anchor.py`
-  5259–5271 anchors on the filesystem, correctly, and then projects `path.name` over
-  `ROOT.rglob` — which discards location, the one dimension the assertion exists to
-  constrain. Its comment says it guards against a *nested* `.gitignore` reaching the
-  sparse checkout; a nested `.gitignore` passes it. So an assertion can be
-  **anchored correctly and projected lossily**, and the anchor is what a reviewer
-  checks. Found only by executing the projection against a synthetic tree, because
-  reading it confirms the anchor and the anchor is not the fault.
+  5259–5271 projects `path.name` over `ROOT.rglob` — which discards location, the
+  one dimension the assertion appears to constrain. Its comment says it guards
+  against a *nested* `.gitignore` reaching the sparse checkout; a nested `.gitignore`
+  passes it. Found only by executing the projection against a synthetic tree.
+  **My own summary of that instance was itself an instance, and this is the fourth.**
+  I wrote that the assertion was "anchored correctly and projected lossily" and
+  should be cited for the anchor. Measurement reverses the first half: the hazard
+  lives in the sparse-checkout *pattern string* — the configuration that decides how
+  the tree is read — and the assertion inspects the *tree*, which is downstream of
+  it. Anchoring on the filesystem is the right instinct for a claim about the world,
+  and this claim was never about the world. So the axes are one step further apart
+  than this bullet recorded, and the artefact I praised for being anchored was
+  anchored to the wrong object (§ the sparse-checkout precedent, withdrawn).
+  **Fifth instance, same page, my instrument.** I warranted the assertion's truth
+  with a tracked-tree enumeration (`truncated: false`) against a claim about a
+  *filesystem* walk. The two populations differ by every ignored file, and
+  `.gitignore:115` ignores the directory `pytest` writes into. An instrument
+  answering a neighbouring question, cited as though it answered this one.
 - **Right answer, unstated validity interval — applied outside its domain.**
   WS-9 derived #121's line offsets from `git diff --numstat`: 10 added, 1 removed,
   net **+9**. Correct, and exact at the runner site — 379→388 and 384→393, three
@@ -2815,6 +2840,34 @@ a code nobody recognises. WS-6 predicted this would be read as flakiness; the
 lag makes that reading close to inevitable, because the evidence pointing at the
 rename is one merge back and on a different pull request.
 
+**Sharpened by WS-6 and verified: "lags by one pull request" understates it. The
+alarm is not lagging, it is permanent.** The same two facts that produce the lag also
+fix it in place. Line **35** hard-codes
+`.github/trust/rollout-policy/allowed_signers` as a sparse-checkout entry, and the
+single checkout is pinned to `refs/heads/main`. So once the rename merges, the
+sparse pattern selects a path that no longer exists, line 69 fails, and it fails
+*identically on every subsequent pull request* — not once on the next author, but on
+every author thereafter, until somebody edits a protected workflow to repair it.
+The guard's failure mode therefore reconstructs the exact disease this programme was
+convened to remove: a non-required check stuck red on unrelated pull requests,
+teaching every reviewer to ignore it. That is the strongest argument for making
+`root-rollout-tests` the venue, and neither WS-6 nor this document had made it: a
+pre-merge block on a required check is not merely *earlier*, it is the difference
+between one correct refusal with the cause visible in the diff, and an unbounded red
+streak charged to innocent authors.
+
+**And the condition it would create already largely obtains — measured, from the
+runs.** Of the **81** recorded runs of `rollout-trust-anchor.yml`, **64 failed, 12
+succeeded, 5 were cancelled**: the check is red on **79 %** of its runs today, before
+any rename. Every one of those 64 exited **1** (`unauthorized`), so the exit-**75**
+pathology described above has provably never occurred — the failures are the
+authorization verdict, not the anchor guard. This cuts both ways and both are worth
+holding. It weakens any claim that a rename would *introduce* habitual redness, since
+the habit is already available to be formed; and it strengthens the promotion
+argument, because a check at 79 % red is one whose signal is already discounted, so
+adding a permanent failure mode to it costs almost nothing in attention and buys
+nothing in detection.
+
 **The consequence WS-6 draws is correct and it indicts the criterion I wrote.** By
 the adopted criterion above (line 553 and its point 2 at 563–569),
 `undetermined.pull_request.no_longer_open` is neutral and **"any other
@@ -2875,14 +2928,14 @@ sharper form has no such dependency — assert `(ROOT / literal).is_file()` in t
 test. One line, bound to the world with no intermediary. Every set is one refactor
 away from being a claim about copies again; the filesystem is not a set.
 
-**The precedent for that form is in the same file — and it must be cited for its
-anchoring, never copied for its shape.** WS-6 cites
-`tests/test_rollout_trust_anchor.py` **5259–5271**, which is filesystem-anchored via
-`ROOT.rglob` and guards the *other two entries of the same sparse-checkout list*
-(`.gitattributes` and `.gitignore`, at `rollout-trust-anchor.yml` **33–34**). As a
-demonstration that this file already contains the right *category* of assertion, it
-is exact and self-evidencing. As a template it is defective, and the defect is
-invisible on the page:
+**The precedent must be withdrawn, not qualified. It does not guard what this
+document said it guards, and the hazard it names cannot occur.** The claim recorded
+here was that `tests/test_rollout_trust_anchor.py` **5259–5271** is filesystem-anchored
+via `ROOT.rglob` and guards the *other two entries of the same sparse-checkout list*
+(`.gitattributes` and `.gitignore`, at `rollout-trust-anchor.yml` **33–34**), so it
+should be cited for its anchoring and never copied for its shape. The projection
+defect below was right. Everything else about it was wrong, on three further axes,
+and each was established by execution rather than by reading:
 
 ```python
 {path.name for path in ROOT.rglob(".gitignore") if ".git" not in path.parts}
@@ -2890,28 +2943,92 @@ invisible on the page:
 == {".gitattributes", ".gitignore"}
 ```
 
-Every member of `rglob(".gitignore")` has `.name == ".gitignore"` by construction, so
-the projection discards location and the comparison reduces to *at least one of each
-exists somewhere*. Verified by execution, not by reading: a tree containing
-`.gitignore`, `.gitattributes` **and** `services/ai-gateway/.gitignore` yields the
-identical set and the assertion **passes**. Its own comment (5253–5256) says it
-exists because "every file Git must read has to be in the sparse set, or the step
-dies on an unauthenticated promisor fetch" — i.e. precisely to catch a *nested*
-addition, which is the one thing the projection cannot see. It is true today only
-because the tree happens to contain exactly two such files (enumerated at
-`824b4238`; `truncated: false`).
+**Projection — recorded correctly before, and it is worse than "lossy".** Every
+member of `rglob(".gitignore")` has `.name == ".gitignore"` by construction, so the
+union is a subset of the target and equals it **iff at least one file of each name
+exists anywhere under `ROOT`**. The assertion is therefore not a lossy exhaustiveness
+check; it is *logically equivalent to two existence checks*, and no tree can make it
+fail except one missing a name entirely.
 
-So the precedent is **anchored correctly and projected lossily** — which is WS-6's
-own wrong-axis rule, third instance, found inside the artefact WS-6 offered as the
-model. The instruction is therefore: **assert `(ROOT / literal).is_file()`
-directly**, cite 5259–5271 as precedent for filesystem anchoring in this file, and
-do not reproduce its `path.name` projection. Both encodings are one line and the
-diff cannot distinguish them; the anchor *and the projection* are the whole content
-of the instruction.
+**It does not guard the sparse-checkout entries.** Executed against a tree holding
+**only** `services/ai-gateway/.gitattributes` and `services/ai-gateway/.gitignore`,
+with no root copies at all, the assertion **passes**. So it does not establish that
+the two files named at 33–34 exist. It would not notice their deletion. Since the
+root `.gitattributes` is what pins `.github/trust/rollout-policy/allowed_signers`,
+`approval.json` and `approval.sig` to `text eol=lf` (lines 4–6 of a 337-byte file),
+the assertion that appears to protect the trust root's byte content is indifferent to
+the removal of the file that fixes it. "Guards the other two entries" was this
+document's sentence and it is false.
+
+**Population — the instrument answered a neighbouring question, and the instrument
+was mine.** This document justified the assertion's current truth by "the tree happens
+to contain exactly two such files (enumerated at `824b4238`; `truncated: false`)".
+That enumeration is the **tracked tree**, from the Git tree API. `ROOT.rglob` is a
+**filesystem** walk. The two populations differ by every ignored and untracked file,
+and `.gitignore` line **115** is `.pytest_cache/` — which `pytest` creates, together
+with a `.gitignore` inside it. WS-6 found the third file present in a working tree
+rather than in a synthetic one. A tracked-tree listing was used to warrant a claim
+about a filesystem glob.
+
+**And the repair inverts.** Comparing relative paths instead of names — the obvious
+fix — fails on any machine that has run `pytest` and passes in CI, because
+`rollout-policy.yml:24` invokes pytest with `-p no:cacheprovider` (and
+`-c /dev/null`, `--noconftest`, `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`), so CI never
+creates the file that breaks it. A test green in CI and red locally trains people to
+dismiss local red, which is the same corrosion as a permanently red check one venue
+over. **The repair that has neither defect is to draw the population from
+`git ls-files`** — the tracked set is what a sparse-checkout pattern actually selects
+from, so it is the population the claim was always about.
+
+**Object — the hazard is in the pattern string, and the assertion inspects the tree.**
+The comment at 5253–5256 says the assertion exists because `--filter=blob:none` plus
+`persist-credentials: false` (line **29**) means "every file Git must read has to be
+in the sparse set, or the step dies on an unauthenticated promisor fetch". With
+`sparse-checkout-cone-mode: false` (**37**) the patterns are gitignore-style, and a
+pattern with no slash matches at **any depth**. Verified in both directions on real
+Git, against a filtered credential-free clone of a synthetic repository:
+
+| patterns at 33–34 | `services/ai-gateway/.gitattributes` |
+| --- | --- |
+| `.gitattributes`, `.gitignore` (the current form) | **materialised** |
+| `/.gitattributes`, `/.gitignore` (anchored) | **absent** |
+
+So nested dotfiles enter the sparse set automatically and their blobs are fetched
+during the credentialed checkout. The nested addition the comment exists to catch is
+**already foreclosed by the pattern form**, and the assertion is not merely blind to
+it — it is inert.
+
+**Which relocates the load-bearing property onto something nothing asserts.** What
+protects the anchor is that 33–34 are *bare basenames*. Anchor them and the negative
+control above shows the nested files drop out, restoring the unauthenticated-promisor
+failure — through an edit that reads as tidying. The only guard on pattern form is
+5257–5258, `assertIn(materialised, checkout_block)` for each of the two names, and
+that is substring containment: `"/.gitattributes"` contains `".gitattributes"`, so it
+**passes on the anchored form**. Every existing assertion passes on the change that
+reintroduces the failure.
+
+**Conclusion, replacing the instruction that stood here.** 5259–5271 is not to be
+cited as a precedent at all — not for anchoring, not for category. WS-6's rule is the
+right one and it is this document's own *wrong axis* entry one step further out: the
+assertion inspects the artefact (the tree) rather than the decision (the pattern
+string that determines how the tree is read). **The `(ROOT / literal).is_file()`
+instruction is untouched by all of this** — a single literal, no glob, no projection,
+no population, so none of the four defects can reach it — and it needs no precedent
+to stand. What the above adds is a *second* assertion for the same required check,
+on the pattern form rather than on the tree: assert that the sparse-checkout entries
+for `.gitattributes` and `.gitignore` are exactly those two bare basenames, with no
+leading slash. That is the guard that keeps F-2 from returning.
 
 Placement is now load-bearing rather than incidental: `root-rollout-tests` is a
-required check and runs this file against the pull request's own head, so the
-assertion blocks the rename pre-merge — see the three-mechanism analysis above.
+required check and runs this file on the pull request, so the assertion blocks the
+rename pre-merge — see the three-mechanism analysis above. **Mechanical correction
+to that analysis, from WS-6 and verified:** `rollout-policy.yml` triggers on
+`[push, pull_request]` (line 3) and its checkout at 13–16 sets
+`persist-credentials: false` with **no `ref:`**, so on a `pull_request` event
+`actions/checkout` takes `refs/pull/N/merge` — the **merge commit**, not the PR head.
+The conclusion survives unchanged, because the merge ref contains the rename. It is
+worth stating precisely because the two refs diverge whenever the base has moved, and
+"the pull request's own head" is the wrong sentence to reason from next time.
 
 **Cost re-checked and it is zero, as WS-6 says.** Only pins 408
 (`verify_rollout_trust_anchor.py`) and 423 (`tests/test_rollout_trust_anchor.py`)
