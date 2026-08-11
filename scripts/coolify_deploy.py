@@ -432,30 +432,70 @@ SETTING_KEYS = (
 
 
 def stored_settings(application: dict) -> dict:
-    """Return the settings this tool owns, from wherever the API reports them.
+    """Return the delivery flags the API reports, in whichever shape it uses.
 
-    Coolify does not report these consistently. Some responses nest them under a
-    settings relation; this instance omits that relation entirely and carries the
-    same flags as top-level fields on the application. Both are read, nested
-    first, because when both exist the relation is the authoritative one.
-
-    The abort is kept for the case where neither shape carries any of them.
-    Without the flags there is nothing to compare a write against, and an
-    unverifiable write is exactly what this tool must not report as success.
+    Coolify does not report these consistently. Some versions nest them under a
+    settings relation; this instance omits that relation and reports none of them
+    at all. This function only reads. Deciding whether an absence is tolerable is
+    settings_delta's job, because only the spec knows what was declared.
     """
 
     settings = application.get("settings")
     if isinstance(settings, dict) and settings:
         return settings
     owned = set(SETTING_KEYS)
-    inline = {key: value for key, value in application.items() if key in owned}
-    if inline:
-        return inline
-    raise Abort(
-        "the API reports none of the delivery flags for this application, "
-        "neither in a settings block nor as fields, so they cannot be verified; "
-        "refusing to report success"
-    )
+    return {key: value for key, value in application.items() if key in owned}
+
+
+def unreportable_settings(spec: dict) -> dict:
+    """Return the declared settings this API is acknowledged not to report.
+
+    Acknowledgement lives in the committed spec, so tolerating an unverifiable
+    setting is a reviewable decision with a recorded reason, not a silent skip.
+    A name that is not an owned setting is a typo and aborts, since a misspelt
+    acknowledgement would silently widen what the tool is willing to ignore.
+    """
+
+    declared = spec.get("settings_not_reported_by_api", {}).get("keys", {})
+    unknown = sorted(set(declared) - set(SETTING_KEYS))
+    if unknown:
+        raise Abort(
+            "the spec acknowledges settings this tool does not own: "
+            f"{unknown}; owned settings are {sorted(SETTING_KEYS)}"
+        )
+    for name, entry in declared.items():
+        for field in ("reason", "compensating_control"):
+            if not str(entry.get(field) or "").strip():
+                raise Abort(
+                    f"the spec acknowledges {name} as unreportable without a {field}; "
+                    "an unverifiable setting has to carry its justification"
+                )
+    return declared
+
+
+def settings_delta(spec: dict, application: dict) -> tuple[list, list[str]]:
+    """Return the settings that differ, and those the API will not report.
+
+    A declared setting the API does not report cannot be verified after a write,
+    and an unverifiable write must not be reported as success. So it is not
+    written at all: it is surfaced for the owner, exactly as an owner-held
+    environment key is. An unacknowledged absence still aborts.
+    """
+
+    desired = desired_settings(spec)
+    acknowledged = unreportable_settings(spec)
+    stored = stored_settings(application)
+    missing = set(desired) - set(stored)
+    unacknowledged = sorted(missing - set(acknowledged))
+    if unacknowledged:
+        raise Abort(
+            f"the API reports no value for {unacknowledged}, so a write to them "
+            "could not be verified. Either the response shape changed or these "
+            "have to be acknowledged in settings_not_reported_by_api with a "
+            "reason; refusing to report success"
+        )
+    reportable = {name: value for name, value in desired.items() if name in stored}
+    return difference(reportable, stored), sorted(missing)
 
 
 def settings_shape(application: dict) -> str:
@@ -467,7 +507,7 @@ def settings_shape(application: dict) -> str:
     present = sorted(key for key in application if key in set(SETTING_KEYS))
     if present:
         return f"top-level fields ({len(present)} of {len(SETTING_KEYS)})"
-    return "absent"
+    return "not reported by this API"
 
 
 def runtime_environment(entries: list) -> dict:
@@ -1011,7 +1051,7 @@ def report_delta(spec: dict, application: dict, entries: list) -> bool:
     """Print the declared-versus-stored delta. Returns True when nothing differs."""
 
     fields = difference(desired_application_fields(spec), application)
-    settings = difference(desired_settings(spec), stored_settings(application))
+    settings, unverifiable = settings_delta(spec, application)
     create, update, unchanged, absent = environment_plan(spec, entries)
 
     emit(f"    delivery flags read from: {settings_shape(application)}")
@@ -1019,6 +1059,8 @@ def report_delta(spec: dict, application: dict, entries: list) -> bool:
         emit(f"    field {name}: stored={have!r} declared={want!r}")
     for name, have, want in settings:
         emit(f"    setting {name}: stored={have!r} declared={want!r}")
+    for name in unverifiable:
+        emit(f"    setting {name}: PENDING-OWNER-UI, this API does not report it")
     # Environment values are never printed. A declared key can be looked up in the
     # spec file, and anything else on the resource is owner-held.
     for key, _ in create:
@@ -1218,7 +1260,9 @@ def operate_reconcile(client: Client, spec: dict, supplied: dict[str, str] | Non
 
     stored = read_application(client, uuid)
     field_changes = difference(desired_application_fields(spec), stored)
-    setting_changes = difference(desired_settings(spec), stored_settings(stored))
+    setting_changes, unverifiable = settings_delta(spec, stored)
+    for name in unverifiable:
+        emit(f"    setting {name}: PENDING-OWNER-UI, this API does not report it")
     if field_changes or setting_changes:
         body = {name: desired_application_fields(spec)[name] for name, _, _ in field_changes}
         body.update({name: desired_settings(spec)[name] for name, _, _ in setting_changes})
@@ -1257,7 +1301,7 @@ def operate_reconcile(client: Client, spec: dict, supplied: dict[str, str] | Non
     verified = read_application(client, uuid)
     verified_entries = read_environment_entries(client, uuid)
     residual_fields = difference(desired_application_fields(spec), verified)
-    residual_settings = difference(desired_settings(spec), stored_settings(verified))
+    residual_settings, still_unverifiable = settings_delta(spec, verified)
     residual_create, residual_update, _, absent = environment_plan(
         spec, verified_entries, supplied
     )
@@ -1285,11 +1329,18 @@ def operate_reconcile(client: Client, spec: dict, supplied: dict[str, str] | Non
         return EXIT_FAILED
 
     changed = bool(field_changes or setting_changes or create or update) or application is None
-    emit("    VERIFY OK stored state matches the declared spec")
+    if still_unverifiable:
+        emit(
+            "    VERIFY OK for everything this API reports; "
+            f"{len(still_unverifiable)} declared setting(s) are not reported and were not written: "
+            f"{still_unverifiable}"
+        )
+    else:
+        emit("    VERIFY OK stored state matches the declared spec")
     emit("")
     emit(
         f"RESULT reconcile ok uuid={uuid} changed={'yes' if changed else 'no'} "
-        f"pending_owner_env={len(absent)}"
+        f"pending_owner_env={len(absent)} unreported_settings={len(still_unverifiable)}"
     )
     return EXIT_OK
 

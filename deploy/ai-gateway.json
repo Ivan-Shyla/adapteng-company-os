@@ -55,6 +55,27 @@
     "force_https": false,
     "note": "Deployment is driven only by the deploy operation of this repository's workflow, so a push to the platform repository never releases by itself. force_https is off because there is no public route to redirect."
   },
+  "settings_not_reported_by_api": {
+    "note": "This Coolify instance does not report the four delivery flags on the application resource. Verified on 2026-08-11 against application e13v7c6zjof7dmcpywqbyas3: the list entry and the detail read each carry 93 keys with no settings relation and none of these names, and GET /applications/{uuid}/settings and /advanced both answer 404 while ?include=settings changes nothing. A write that cannot be re-read cannot be verified, so the driver does not write these at all; it reports them for the owner to set in the UI. Every entry here has to state why leaving it unset is safe.",
+    "keys": {
+      "is_auto_deploy_enabled": {
+        "reason": "Not reported and not accepted by the creation endpoint on this version.",
+        "compensating_control": "Releases are driven only by the deploy operation of .github/workflows/coolify-deploy.yml, which is workflow_dispatch only. An auto-deploy would redeploy the same declared branch of the same declared repository, so it cannot release unreviewed code from elsewhere."
+      },
+      "is_preview_deployments_enabled": {
+        "reason": "The creation endpoint answered HTTP 422 'This field is not allowed.' for this exact name, so the API neither accepts nor reports it.",
+        "compensating_control": "Preview deployments publish under a generated domain. fqdn is null, is verified as null on every reconcile, and a non-null fqdn fails the run, so a preview has no route to publish on."
+      },
+      "is_force_https_enabled": {
+        "reason": "Not reported on this version.",
+        "compensating_control": "Redirection only applies to a public route. The spec declares public_fqdn null and reconcile fails if an FQDN appears, so there is no HTTP route to redirect."
+      },
+      "connect_to_docker_network": {
+        "reason": "Not reported on this version.",
+        "compensating_control": "The application is placed on destination c3dnc3udkoenz9zhw148mbu0, the same destination as adapteng-baserow-adapter and n8n-selfhosted, which reach the shared network from there. Reachability is not assumed from this flag: it is proven separately by the Postgres connectivity check, which is deliberately not the /health check."
+      }
+    }
+  },
   "configuration": [
     {
       "key": "AI_GATEWAY_HTTP_HOST",

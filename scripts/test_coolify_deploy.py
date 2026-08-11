@@ -100,9 +100,11 @@ class FakeInstance:
         # stays 200 so the existing suites keep exercising the endpoint path, and
         # the tests that reproduce production set it to False explicitly.
         self.destinations_endpoint_present = True
-        # Production sends no settings relation and carries the delivery flags as
-        # top-level fields. Both shapes are exercised: see SettingsShapeTests.
-        self.settings_relation_present = True
+        # How this instance reports the delivery flags: "relation" nests them,
+        # "fields" carries them at top level, "none" reports them nowhere.
+        # Production is "none"; all three are exercised.
+        self.settings_response_shape = "relation"
+        self.call_bodies: list[tuple[str, str, dict]] = []
         # Mirrors production: two sources are offered, and only the installed App
         # can read a private repository. A fixture with one app would let a spec
         # that names none pass here and abort against the real instance.
@@ -159,6 +161,7 @@ class FakeInstance:
 
     def request(self, method, path, body=None, query=None):
         self.calls.append((method.upper(), path))
+        self.call_bodies.append((method.upper(), path, copy.deepcopy(body or {})))
         handler = getattr(self, f"_{method.lower()}", None)
         if handler is None:
             return 405, {"message": "method not allowed"}
@@ -190,9 +193,12 @@ class FakeInstance:
             if found is None:
                 return 404, {"message": "not found"}
             found = copy.deepcopy(found)
-            if not self.settings_relation_present:
-                # Production omits the relation and carries the flags inline.
-                found.update(found.pop("settings", {}))
+            relation = found.pop("settings", {})
+            if self.settings_response_shape == "fields":
+                found.update(relation)
+            elif self.settings_response_shape == "relation":
+                found["settings"] = relation
+            # "none" is the production shape: the flags are reported nowhere.
             return 200, found
         match = re.fullmatch(r"/deployments/applications/([^/]+)", path)
         if match:
@@ -552,10 +558,16 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(driver.difference({"base_directory": "/x"}, {}), [("base_directory", "", "/x")])
 
     def test_an_unreadable_settings_block_stops_the_run(self) -> None:
-        """An unverifiable write must never be reported as a converged one."""
+        """An unverifiable write must never be reported as a converged one.
 
-        with self.assertRaises(driver.Abort):
-            driver.stored_settings({"uuid": "app-1"})
+        The guard moved from the reader to settings_delta, because only the spec
+        knows whether an absence was foreseen. A spec that acknowledges nothing
+        still aborts, which is the default this asserts.
+        """
+
+        with self.assertRaises(driver.Abort) as raised:
+            driver.settings_delta(minimal_spec(), {"uuid": "app-1"})
+        self.assertIn("refusing to report success", str(raised.exception))
 
 
 class EnvironmentPlanTests(unittest.TestCase):
@@ -1061,7 +1073,7 @@ class SettingsShapeTests(unittest.TestCase):
 
     def test_a_creation_completes_with_flags_as_top_level_fields(self) -> None:
         instance = FakeInstance()
-        instance.settings_relation_present = False
+        instance.settings_response_shape = "fields"
         code, report = run_operation(driver.operate_reconcile, instance)
         self.assertEqual(code, driver.EXIT_OK)
         self.assertIn("VERIFY OK", report)
@@ -1070,7 +1082,7 @@ class SettingsShapeTests(unittest.TestCase):
 
     def test_drift_is_repaired_with_flags_as_top_level_fields(self) -> None:
         instance = FakeInstance(with_application=True)
-        instance.settings_relation_present = False
+        instance.settings_response_shape = "fields"
         instance.applications[0]["settings"]["is_auto_deploy_enabled"] = True
         code, report = run_operation(driver.operate_reconcile, instance)
         self.assertEqual(code, driver.EXIT_OK)
@@ -1079,7 +1091,7 @@ class SettingsShapeTests(unittest.TestCase):
 
     def test_inspect_reports_which_shape_it_read(self) -> None:
         instance = FakeInstance(with_application=True)
-        instance.settings_relation_present = False
+        instance.settings_response_shape = "fields"
         _, report = run_operation(driver.operate_inspect, instance)
         self.assertIn("top-level fields", report)
 
@@ -1091,7 +1103,7 @@ class SettingsShapeTests(unittest.TestCase):
         """
 
         instance = FakeInstance(with_application=True)
-        instance.settings_relation_present = False
+        instance.settings_response_shape = "fields"
         instance.applications[0]["settings"]["is_force_https_enabled"] = True
         _, report = run_operation(driver.operate_inspect, instance)
         self.assertIn("setting is_force_https_enabled", report)
@@ -1147,15 +1159,100 @@ class StoredSettingsTests(unittest.TestCase):
         application["settings"] = {}
         self.assertEqual(driver.stored_settings(application), self.desired)
 
-    def test_neither_shape_still_aborts(self) -> None:
-        with self.assertRaises(driver.Abort) as raised:
-            driver.stored_settings({"uuid": "app-1", "name": "ai-gateway"})
-        self.assertIn("refusing to report success", str(raised.exception))
+    def test_neither_shape_reports_nothing_rather_than_aborting(self) -> None:
+        """Reading is not judging. The absence is settings_delta's to rule on."""
+
+        self.assertEqual(driver.stored_settings({"uuid": "app-1", "name": "ai-gateway"}), {})
 
     def test_a_partial_field_set_is_reported_as_partial(self) -> None:
         shape = driver.settings_shape({"is_force_https_enabled": False})
         self.assertIn("top-level fields", shape)
         self.assertIn(f"1 of {len(driver.SETTING_KEYS)}", shape)
+
+
+class UnverifiableSettingsTests(unittest.TestCase):
+    """A setting the API will not report may be tolerated only if the spec says so.
+
+    Production reports none of the four. The guard that refused to proceed was
+    right in principle and unconditional in practice: it aborted a run that had
+    already created the application. Tolerance now has to be declared, with a
+    reason, in the committed spec.
+    """
+
+    def setUp(self) -> None:
+        driver.reset_redactions()
+        self.addCleanup(driver.reset_redactions)
+        self.spec = driver.load_spec(driver.spec_path(RESOURCE))
+        self.desired = driver.desired_settings(self.spec)
+
+    def test_the_committed_spec_acknowledges_every_flag_with_a_justification(self) -> None:
+        acknowledged = driver.unreportable_settings(self.spec)
+        self.assertEqual(set(acknowledged), set(driver.SETTING_KEYS))
+        for name, entry in acknowledged.items():
+            self.assertTrue(entry["reason"].strip(), name)
+            self.assertTrue(entry["compensating_control"].strip(), name)
+
+    def test_an_unacknowledged_absence_still_aborts(self) -> None:
+        """The fail-closed half of the guard, kept and pinned."""
+
+        spec = copy.deepcopy(self.spec)
+        del spec["settings_not_reported_by_api"]["keys"]["is_force_https_enabled"]
+        with self.assertRaises(driver.Abort) as raised:
+            driver.settings_delta(spec, {"uuid": "app-1"})
+        self.assertIn("is_force_https_enabled", str(raised.exception))
+        self.assertIn("refusing to report success", str(raised.exception))
+
+    def test_a_misspelt_acknowledgement_aborts(self) -> None:
+        """Otherwise a typo silently widens what the tool will ignore."""
+
+        spec = copy.deepcopy(self.spec)
+        spec["settings_not_reported_by_api"]["keys"]["is_force_https_enable"] = {
+            "reason": "x",
+            "compensating_control": "y",
+        }
+        with self.assertRaises(driver.Abort) as raised:
+            driver.unreportable_settings(spec)
+        self.assertIn("is_force_https_enable", str(raised.exception))
+
+    def test_an_acknowledgement_without_a_reason_aborts(self) -> None:
+        spec = copy.deepcopy(self.spec)
+        spec["settings_not_reported_by_api"]["keys"]["is_force_https_enabled"]["reason"] = "  "
+        with self.assertRaises(driver.Abort) as raised:
+            driver.unreportable_settings(spec)
+        self.assertIn("justification", str(raised.exception))
+
+    def test_a_reported_flag_is_still_compared(self) -> None:
+        """Acknowledgement tolerates absence, not disagreement."""
+
+        stored = {"is_force_https_enabled": not self.desired["is_force_https_enabled"]}
+        changes, unverifiable = driver.settings_delta(self.spec, stored)
+        self.assertEqual([name for name, _, _ in changes], ["is_force_https_enabled"])
+        self.assertNotIn("is_force_https_enabled", unverifiable)
+
+    def test_reconcile_completes_when_the_api_reports_none_of_them(self) -> None:
+        """The production shape, end to end, including the creation path."""
+
+        instance = FakeInstance()
+        instance.settings_response_shape = "none"
+        code, report = run_operation(driver.operate_reconcile, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("VERIFY OK", report)
+        self.assertIn("unreported_settings=4", report)
+        self.assertIn("PENDING-OWNER-UI", report)
+
+    def test_an_unreportable_setting_is_never_written(self) -> None:
+        """A write that cannot be re-read must not be attempted."""
+
+        instance = FakeInstance()
+        instance.settings_response_shape = "none"
+        run_operation(driver.operate_reconcile, instance)
+        written = [
+            body
+            for method, path, body in instance.call_bodies
+            if method == "PATCH" and re.fullmatch(r"/applications/[^/]+", path)
+        ]
+        for body in written:
+            self.assertEqual(set(body) & set(driver.SETTING_KEYS), set())
 
 
 class ApiMessageTests(unittest.TestCase):
