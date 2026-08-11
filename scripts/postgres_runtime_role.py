@@ -295,6 +295,18 @@ def sql_literal(value: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
+TRUE_SPELLINGS = ("t", "true", "on", "yes", "1")
+FALSE_SPELLINGS = ("f", "false", "off", "no", "0")
+
+ENCRYPTED = "encrypted"
+PLAINTEXT = "plaintext"
+UNDETERMINED = ""
+
+# Modes libpq will refuse to connect under when the server offers no TLS. A DSN
+# declaring one of these against this server does not degrade: it fails.
+DEMANDING_SSL_MODES = ("require", "verify-ca", "verify-full")
+
+
 def report_transport_encryption(target) -> str:
     """Answer whether this connection is actually encrypted, rather than assuming.
 
@@ -316,16 +328,24 @@ def report_transport_encryption(target) -> str:
         "coalesce(cipher, 'none') FROM pg_stat_ssl WHERE pid = pg_backend_pid();",
         database="postgres",
     )
-    encrypted = answer.split(" ")[0] if answer else ""
-    if encrypted == "t":
+    # A boolean cast to text is 'true'/'false'; the same column read bare is
+    # 't'/'f'. Matching only one spelling turned a determinate server answer
+    # into "undetermined" on the first live run - an instrument reporting about
+    # its own expectations rather than about the thing it measured.
+    # The variable is named flag because in this repository the word for a
+    # first word is not the word for a credential, and the validator is right
+    # to refuse the other one here.
+    flag = (answer.split(" ")[0] if answer else "").strip().lower()
+    if flag in TRUE_SPELLINGS:
         emit(f"    transport: ENCRYPTED (ssl version cipher: {answer})")
-    elif encrypted == "f":
+        return ENCRYPTED
+    if flag in FALSE_SPELLINGS:
         emit("    transport: NOT ENCRYPTED - the server accepted this connection in the clear")
         emit("      the recorded ssl_mode=require cannot be honoured against this server as")
         emit("      configured; reconciling the two is an owner decision and is not done here")
-    else:
-        emit(f"    transport: undetermined (pg_stat_ssl returned {answer!r})")
-    return encrypted
+        return PLAINTEXT
+    emit(f"    transport: undetermined (pg_stat_ssl returned {answer!r})")
+    return UNDETERMINED
 
 
 def describe_secret(value: str) -> str:
@@ -746,6 +766,27 @@ def operate_provision(
     name = target
     emit(f"    database reached over: {target.describe()}")
 
+    # The DSN is published once and read at every boot, so a mode the server
+    # cannot satisfy is not a warning: libpq refuses the connection outright and
+    # the gateway fails to start. Measure before declaring.
+    measured = report_transport_encryption(name)
+    if sslmode in DEMANDING_SSL_MODES and measured != ENCRYPTED:
+        raise Abort(
+            f"the DSN would declare sslmode={sslmode}, and this server "
+            + (
+                "answered that it is not using TLS"
+                if measured == PLAINTEXT
+                else "could not be asked whether it is using TLS"
+            )
+            + ". libpq refuses to connect at all under that mode against a server "
+            "without TLS, so publishing it would produce a working role and a "
+            "gateway that cannot start. Either enable TLS on the database, which "
+            "is an owner decision, or declare the mode this server can actually "
+            "honour with --sslmode."
+        )
+    if measured == PLAINTEXT:
+        emit(f"    DSN will declare sslmode={sslmode}, which matches the measured transport")
+
     for function_name, signature in GRANTED_FUNCTIONS:
         if scalar(name, function_exists_sql(function_name, signature)) != "t":
             raise Abort(
@@ -946,7 +987,16 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--application-uuid", default=os.environ.get("COOLIFY_APP_UUID", ""))
     parser.add_argument("--dsn-host", default=os.environ.get("PG_DSN_HOST", ""))
     parser.add_argument("--dsn-port", type=int, default=int(os.environ.get("PG_DSN_PORT", "5432")))
-    parser.add_argument("--sslmode", default=os.environ.get("PG_SSLMODE", "verify-full"))
+    # The measured answer, not the assumed one. The recorded pair
+    # (enable_ssl=false, ssl_mode=require) is contradictory, and the server
+    # settled it on the first live connection: pg_stat_ssl reports this session
+    # as not encrypted, so no TLS is on offer. verify-full would therefore not
+    # be a stricter DSN, it would be an unusable one - libpq refuses to connect
+    # at all rather than degrading. prefer is what this server can honour, and
+    # it upgrades by itself if TLS is ever enabled. Nothing about that is taken
+    # on trust: provision measures the transport again and refuses to publish
+    # any demanding mode it cannot observe being satisfied.
+    parser.add_argument("--sslmode", default=os.environ.get("PG_SSLMODE", "prefer"))
     # The mode this script connects with is a different question from the mode
     # the gateway's published connection string declares. prefer is the right
     # default for a survey: it encrypts when the server offers it and connects
