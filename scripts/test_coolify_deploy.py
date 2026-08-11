@@ -100,6 +100,9 @@ class FakeInstance:
         # stays 200 so the existing suites keep exercising the endpoint path, and
         # the tests that reproduce production set it to False explicitly.
         self.destinations_endpoint_present = True
+        # Production sends no settings relation and carries the delivery flags as
+        # top-level fields. Both shapes are exercised: see SettingsShapeTests.
+        self.settings_relation_present = True
         # Mirrors production: two sources are offered, and only the installed App
         # can read a private repository. A fixture with one app would let a spec
         # that names none pass here and abort against the real instance.
@@ -184,7 +187,13 @@ class FakeInstance:
         match = re.fullmatch(r"/applications/([^/]+)", path)
         if match:
             found = self.application(match.group(1))
-            return (200, copy.deepcopy(found)) if found else (404, {"message": "not found"})
+            if found is None:
+                return 404, {"message": "not found"}
+            found = copy.deepcopy(found)
+            if not self.settings_relation_present:
+                # Production omits the relation and carries the flags inline.
+                found.update(found.pop("settings", {}))
+            return 200, found
         match = re.fullmatch(r"/deployments/applications/([^/]+)", path)
         if match:
             return 200, [copy.deepcopy(item) for item in self.deployments.values()]
@@ -247,7 +256,16 @@ class FakeInstance:
             "environment_id": 7,
             "fqdn": None,
             "status": "exited",
-            "settings": {},
+            # A newly created application carries the platform's own defaults, not
+            # an empty relation. The exact values are a stand-in; what matters is
+            # that they differ from the declared ones, so convergence has real
+            # drift to repair rather than an empty dict to fill in.
+            "settings": {
+                "is_auto_deploy_enabled": True,
+                "is_preview_deployments_enabled": False,
+                "is_force_https_enabled": True,
+                "connect_to_docker_network": False,
+            },
         }
         for key, value in body.items():
             if key in settings_keys:
@@ -1027,6 +1045,117 @@ class ReconcileTests(unittest.TestCase):
         with self.assertRaises(driver.Abort) as raised:
             run_operation(driver.operate_reconcile, instance)
         self.assertIn("server", str(raised.exception))
+
+
+class SettingsShapeTests(unittest.TestCase):
+    """Reconcile must complete against an instance that sends no settings relation.
+
+    This is the production shape. The unit-level reader is covered above; this
+    covers the whole operation, because the abort it replaced fired after the
+    application had already been created.
+    """
+
+    def setUp(self) -> None:
+        driver.reset_redactions()
+        self.addCleanup(driver.reset_redactions)
+
+    def test_a_creation_completes_with_flags_as_top_level_fields(self) -> None:
+        instance = FakeInstance()
+        instance.settings_relation_present = False
+        code, report = run_operation(driver.operate_reconcile, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("VERIFY OK", report)
+        spec = driver.load_spec(driver.spec_path(RESOURCE))
+        self.assertEqual(instance.applications[0]["settings"], driver.desired_settings(spec))
+
+    def test_drift_is_repaired_with_flags_as_top_level_fields(self) -> None:
+        instance = FakeInstance(with_application=True)
+        instance.settings_relation_present = False
+        instance.applications[0]["settings"]["is_auto_deploy_enabled"] = True
+        code, report = run_operation(driver.operate_reconcile, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("change is_auto_deploy_enabled", report)
+        self.assertFalse(instance.applications[0]["settings"]["is_auto_deploy_enabled"])
+
+    def test_inspect_reports_which_shape_it_read(self) -> None:
+        instance = FakeInstance(with_application=True)
+        instance.settings_relation_present = False
+        _, report = run_operation(driver.operate_inspect, instance)
+        self.assertIn("top-level fields", report)
+
+    def test_inspect_compares_against_the_object_reconcile_verifies(self) -> None:
+        """Inspect must not report agreement for drift reconcile would repair.
+
+        The list entry and the detail read are different responses. Here the
+        detail read carries drift the list entry does not.
+        """
+
+        instance = FakeInstance(with_application=True)
+        instance.settings_relation_present = False
+        instance.applications[0]["settings"]["is_force_https_enabled"] = True
+        _, report = run_operation(driver.operate_inspect, instance)
+        self.assertIn("setting is_force_https_enabled", report)
+        self.assertIn("matches_spec=no", report)
+
+    def test_inspect_names_the_keys_without_printing_any_value(self) -> None:
+        """The shape dump must stay a shape dump: names only, never values."""
+
+        instance = FakeInstance(with_application=True)
+        instance.applications[0]["private_key_here"] = "supersecretvalue"
+        _, report = run_operation(driver.operate_inspect, instance)
+        self.assertIn("private_key_here", report)
+        self.assertNotIn("supersecretvalue", report)
+
+
+class StoredSettingsTests(unittest.TestCase):
+    """The delivery flags must be readable in whichever shape the API sends them.
+
+    Production returns no settings relation at all. Demanding one aborted a run
+    immediately after it had created the application, leaving a resource behind
+    with a failed report.
+    """
+
+    def setUp(self) -> None:
+        self.spec = driver.load_spec(driver.spec_path(RESOURCE))
+        self.desired = driver.desired_settings(self.spec)
+
+    def test_the_key_constant_matches_what_the_spec_produces(self) -> None:
+        """One list of owned names, so the two readers cannot drift apart."""
+
+        self.assertEqual(set(driver.SETTING_KEYS), set(self.desired))
+
+    def test_a_nested_block_is_read(self) -> None:
+        self.assertEqual(
+            driver.stored_settings({"settings": dict(self.desired)}), self.desired
+        )
+
+    def test_top_level_fields_are_read_when_no_block_is_sent(self) -> None:
+        self.assertEqual(driver.stored_settings(dict(self.desired)), self.desired)
+
+    def test_the_nested_block_wins_when_both_are_present(self) -> None:
+        """The relation is the authoritative copy where one exists."""
+
+        application = dict(self.desired)
+        application["is_force_https_enabled"] = True
+        application["settings"] = dict(self.desired)
+        self.assertEqual(driver.stored_settings(application), self.desired)
+
+    def test_an_empty_block_falls_through_to_the_fields(self) -> None:
+        """An eager-loaded but empty relation is absence, not an answer."""
+
+        application = dict(self.desired)
+        application["settings"] = {}
+        self.assertEqual(driver.stored_settings(application), self.desired)
+
+    def test_neither_shape_still_aborts(self) -> None:
+        with self.assertRaises(driver.Abort) as raised:
+            driver.stored_settings({"uuid": "app-1", "name": "ai-gateway"})
+        self.assertIn("refusing to report success", str(raised.exception))
+
+    def test_a_partial_field_set_is_reported_as_partial(self) -> None:
+        shape = driver.settings_shape({"is_force_https_enabled": False})
+        self.assertIn("top-level fields", shape)
+        self.assertIn(f"1 of {len(driver.SETTING_KEYS)}", shape)
 
 
 class ApiMessageTests(unittest.TestCase):

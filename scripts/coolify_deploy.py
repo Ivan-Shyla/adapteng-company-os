@@ -421,20 +421,53 @@ def desired_settings(spec: dict) -> dict:
     }
 
 
-def stored_settings(application: dict) -> dict:
-    """Return the settings block, refusing to proceed when it cannot be read.
+# The names desired_settings owns, as a constant, so that reading stored state
+# does not have to build a spec in order to know which keys belong to this tool.
+SETTING_KEYS = (
+    "is_auto_deploy_enabled",
+    "is_preview_deployments_enabled",
+    "is_force_https_enabled",
+    "connect_to_docker_network",
+)
 
-    Without this block the delivery flags cannot be verified after a write, and an
+
+def stored_settings(application: dict) -> dict:
+    """Return the settings this tool owns, from wherever the API reports them.
+
+    Coolify does not report these consistently. Some responses nest them under a
+    settings relation; this instance omits that relation entirely and carries the
+    same flags as top-level fields on the application. Both are read, nested
+    first, because when both exist the relation is the authoritative one.
+
+    The abort is kept for the case where neither shape carries any of them.
+    Without the flags there is nothing to compare a write against, and an
     unverifiable write is exactly what this tool must not report as success.
     """
 
     settings = application.get("settings")
-    if not isinstance(settings, dict):
-        raise Abort(
-            "the API returned no settings block for this application, so the "
-            "delivery flags cannot be verified; refusing to report success"
-        )
-    return settings
+    if isinstance(settings, dict) and settings:
+        return settings
+    owned = set(SETTING_KEYS)
+    inline = {key: value for key, value in application.items() if key in owned}
+    if inline:
+        return inline
+    raise Abort(
+        "the API reports none of the delivery flags for this application, "
+        "neither in a settings block nor as fields, so they cannot be verified; "
+        "refusing to report success"
+    )
+
+
+def settings_shape(application: dict) -> str:
+    """Name the shape the flags arrived in, for a report that must be diagnosable."""
+
+    settings = application.get("settings")
+    if isinstance(settings, dict) and settings:
+        return "settings block"
+    present = sorted(key for key in application if key in set(SETTING_KEYS))
+    if present:
+        return f"top-level fields ({len(present)} of {len(SETTING_KEYS)})"
+    return "absent"
 
 
 def runtime_environment(entries: list) -> dict:
@@ -903,6 +936,36 @@ def resolve_github_app(client: Client, declared: str | None) -> dict:
 # --------------------------------------------------------------------------- #
 
 
+def report_object_shape(client: Client, application: dict) -> dict:
+    """Print the key names the API reports for this application, and nothing else.
+
+    Only names. The object carries owner-held values, so printing it whole would
+    put secrets in a log. Names are enough to tell which shape a response uses.
+
+    Both the list entry and the detail read are reported, because they are
+    different responses. The detail read is returned, so that a caller compares
+    against the same object a write will be verified against.
+    """
+
+    owned = set(SETTING_KEYS)
+
+    def describe(label: str, obj: dict) -> None:
+        nested = obj.get("settings")
+        emit(f"      {label}: {len(obj)} keys, settings relation={type(nested).__name__}")
+        emit(f"        keys: {sorted(obj)}")
+        if isinstance(nested, dict):
+            emit(f"        settings keys: {sorted(nested)}")
+        emit(f"        owned keys at top level: {sorted(key for key in obj if key in owned)}")
+
+    describe("list entry", application)
+    detail = call(client, "GET", f"/applications/{application['uuid']}", allow_absent=True)
+    if not isinstance(detail, dict):
+        emit("      detail read: not available")
+        return application
+    describe("detail read", detail)
+    return detail
+
+
 def report_placement(spec: dict, project: dict | None, environment: dict | None) -> None:
     target = spec["target"]
     if project is None:
@@ -922,6 +985,7 @@ def report_delta(spec: dict, application: dict, entries: list) -> bool:
     settings = difference(desired_settings(spec), stored_settings(application))
     create, update, unchanged, absent = environment_plan(spec, entries)
 
+    emit(f"    delivery flags read from: {settings_shape(application)}")
     for name, have, want in fields:
         emit(f"    field {name}: stored={have!r} declared={want!r}")
     for name, have, want in settings:
@@ -1002,10 +1066,14 @@ def operate_inspect(client: Client, spec: dict) -> int:
         f"    application {target['resource_name']}: present "
         f"uuid={application.get('uuid')} status={application.get('status')}"
     )
+    # The delta is computed against the detail read, because that is the object
+    # reconcile verifies a write against. Comparing the list entry here would let
+    # inspect report agreement for a resource reconcile would still change.
+    detail = report_object_shape(client, application)
     entries = expect_list(
         call(client, "GET", f"/applications/{application['uuid']}/envs"), "environment entries"
     )
-    converged = report_delta(spec, application, entries)
+    converged = report_delta(spec, detail, entries)
     emit("")
     emit(
         "RESULT inspect ok application=present "
