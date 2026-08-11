@@ -96,6 +96,10 @@ class FakeInstance:
         self.environments = {"prj-1": [{"id": 7, "uuid": "env-1", "name": ENVIRONMENT}]}
         self.servers = [{"id": 1, "uuid": "srv-1", "name": "hetzner"}]
         self.destinations = {"srv-1": [{"id": 1, "uuid": "dst-1", "name": "coolify"}]}
+        # The production instance answers 404 for this endpoint. The default here
+        # stays 200 so the existing suites keep exercising the endpoint path, and
+        # the tests that reproduce production set it to False explicitly.
+        self.destinations_endpoint_present = True
         self.github_apps = [{"id": 1, "uuid": "gha-1", "name": "adapteng"}]
         self.applications: list[dict] = []
         self.environment_entries: dict[str, list[dict]] = {}
@@ -111,10 +115,11 @@ class FakeInstance:
     def add_application(self, **overrides) -> dict:
         spec = driver.load_spec(driver.spec_path(RESOURCE))
         record = dict(driver.desired_application_fields(spec))
+        uuid = "app-1" if not self.applications else f"app-{len(self.applications) + 1}"
         record.update(
             {
-                "id": 11,
-                "uuid": "app-1",
+                "id": 11 + len(self.applications),
+                "uuid": uuid,
                 "environment_id": 7,
                 "fqdn": None,
                 "status": "running:healthy",
@@ -123,7 +128,7 @@ class FakeInstance:
         )
         record.update(overrides)
         self.applications.append(record)
-        self.environment_entries["app-1"] = [
+        self.environment_entries[uuid] = [
             {"key": item["key"], "value": item["value"], "is_preview": False}
             for item in spec["configuration"]
         ] + [
@@ -164,6 +169,8 @@ class FakeInstance:
             return 200, copy.deepcopy(self.environments.get(match.group(1), []))
         match = re.fullmatch(r"/servers/([^/]+)/destinations", path)
         if match:
+            if not self.destinations_endpoint_present:
+                return 404, {"message": "Not found."}
             return 200, copy.deepcopy(self.destinations.get(match.group(1), []))
         match = re.fullmatch(r"/applications/([^/]+)/envs", path)
         if match:
@@ -957,6 +964,101 @@ class ReconcileTests(unittest.TestCase):
         with self.assertRaises(driver.Abort) as raised:
             run_operation(driver.operate_reconcile, instance)
         self.assertIn("server", str(raised.exception))
+
+
+class DestinationResolutionTests(unittest.TestCase):
+    """Placement must survive an instance that does not expose a destination list.
+
+    The production instance answers 404 for /servers/{uuid}/destinations. A
+    creation still needs somewhere to go, and the applications already running
+    in the target environment are the strongest evidence of where that is.
+    """
+
+    def setUp(self) -> None:
+        driver.reset_redactions()
+        self.addCleanup(driver.reset_redactions)
+
+    def absent_endpoint_instance(self) -> "FakeInstance":
+        instance = FakeInstance()
+        instance.destinations_endpoint_present = False
+        return instance
+
+    def test_the_destination_is_inherited_from_a_neighbour(self) -> None:
+        instance = self.absent_endpoint_instance()
+        instance.add_application(name="adapteng-baserow-adapter", destination_uuid="dst-live")
+        code, report = run_operation(driver.operate_reconcile, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("inherited dst-live", report)
+        created = [item for item in instance.applications if item["uuid"] == "app-created"]
+        self.assertEqual(len(created), 1)
+
+    def test_a_nested_destination_object_is_read(self) -> None:
+        """Some versions report the destination as an object, not a flat uuid."""
+
+        instance = self.absent_endpoint_instance()
+        instance.add_application(
+            name="adapteng-baserow-adapter", destination={"uuid": "dst-nested", "name": "coolify"}
+        )
+        _, report = run_operation(driver.operate_reconcile, instance)
+        self.assertIn("inherited dst-nested", report)
+
+    def test_neighbours_on_different_destinations_stop_the_run(self) -> None:
+        """Inheriting from a split environment would be a coin toss."""
+
+        instance = self.absent_endpoint_instance()
+        instance.add_application(name="one", destination_uuid="dst-a")
+        instance.add_application(name="two", destination_uuid="dst-b")
+        with self.assertRaises(driver.Abort) as raised:
+            run_operation(driver.operate_reconcile, instance)
+        self.assertIn("destinations", str(raised.exception))
+
+    def test_a_destination_list_on_the_server_object_is_used(self) -> None:
+        instance = self.absent_endpoint_instance()
+        instance.servers[0]["destinations"] = [{"uuid": "dst-inline", "name": "coolify"}]
+        code, _ = run_operation(driver.operate_reconcile, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+
+    def test_an_empty_environment_still_creates_without_a_destination(self) -> None:
+        """Coolify assigns the default destination when none is given."""
+
+        instance = self.absent_endpoint_instance()
+        code, _ = run_operation(driver.operate_reconcile, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertEqual(len(instance.applications), 1)
+
+    def test_a_declared_destination_with_no_list_to_match_stops_the_run(self) -> None:
+        """Silently ignoring a declared name would place the resource by guess."""
+
+        instance = self.absent_endpoint_instance()
+        instance.add_application(name="neighbour", destination_uuid="dst-live")
+        spec = driver.load_spec(driver.spec_path(RESOURCE))
+        spec["target"]["destination"] = "coolify"
+        with self.assertRaises(driver.Abort) as raised:
+            run_operation(driver.operate_reconcile, instance, spec=spec)
+        self.assertIn("coolify", str(raised.exception))
+
+    def test_the_endpoint_is_still_preferred_when_it_answers(self) -> None:
+        instance = FakeInstance()
+        instance.add_application(name="neighbour", destination_uuid="dst-neighbour")
+        code, report = run_operation(driver.operate_reconcile, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertNotIn("inherited", report)
+
+    def test_a_non_404_failure_is_not_routed_around(self) -> None:
+        """allow_absent excuses absence, never a broken instance."""
+
+        instance = FakeInstance()
+        original = instance.request
+
+        def failing(method, path, body=None, query=None):
+            if path.endswith("/destinations"):
+                return 500, {"message": "boom"}
+            return original(method, path, body, query)
+
+        instance.request = failing
+        with self.assertRaises(driver.Abort) as raised:
+            run_operation(driver.operate_reconcile, instance)
+        self.assertIn("500", str(raised.exception))
 
 
 class DeployTests(unittest.TestCase):

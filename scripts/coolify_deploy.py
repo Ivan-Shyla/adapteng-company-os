@@ -640,10 +640,19 @@ def call(
     body: dict | None = None,
     query: dict | None = None,
     expect: tuple[int, ...] = (200,),
+    allow_absent: bool = False,
 ) -> object:
-    """Perform one call and stop unless the status is one that was expected."""
+    """Perform one call and stop unless the status is one that was expected.
+
+    allow_absent turns a 404 into None instead of an abort, and only that. It is
+    for endpoints whose presence varies across Coolify versions, where absence
+    is a fact to route around rather than a failure. It is never used for a
+    write, and never to excuse an unexpected status other than 404.
+    """
 
     status, parsed = client.request(method, path, body=body, query=query)
+    if allow_absent and status == 404:
+        return None
     if status not in expect:
         raise Abort(
             f"{method.upper()} {path} returned HTTP {status} "
@@ -719,6 +728,49 @@ def find_application(applications: list, name: str) -> dict | None:
     return matches[0] if matches else None
 
 
+def destination_uuid_of(application: dict) -> str | None:
+    """Read the destination an existing application is already placed on.
+
+    Coolify exposes this under more than one name across versions, and on some
+    it is a nested object rather than a flat uuid. Every spelling is read here
+    so that a working neighbour, rather than a guess about the API surface, is
+    what tells this script where a new application belongs.
+    """
+
+    for key in ("destination_uuid", "destinationUuid"):
+        value = application.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    nested = application.get("destination")
+    if isinstance(nested, dict):
+        value = nested.get("uuid")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def report_placement_sources(client: Client, applications: list) -> None:
+    """Report where existing applications are placed, without changing anything.
+
+    A create call needs a server and a destination. Asking the API for the list
+    of destinations is not portable: this instance answers 404 for it. What is
+    portable is that the neighbours already running here carry the answer.
+    """
+
+    for item in sorted(applications, key=lambda entry: entry.get("name") or ""):
+        uuid = item.get("uuid")
+        if not isinstance(uuid, str):
+            continue
+        detail = call(client, "GET", f"/applications/{uuid}")
+        if not isinstance(detail, dict):
+            continue
+        emit(
+            f"      placement of {detail.get('name')}: "
+            f"server={detail.get('server_uuid') or detail.get('server_status') or 'unreported'} "
+            f"destination={destination_uuid_of(detail) or 'unreported'}"
+        )
+
+
 def resolve_server(client: Client, declared: str | None) -> dict:
     servers = expect_list(call(client, "GET", "/servers"), "servers")
     usable = [item for item in servers if isinstance(item, dict)]
@@ -729,18 +781,62 @@ def resolve_server(client: Client, declared: str | None) -> dict:
     return unique_match(usable, "server", "the only server on this instance")
 
 
-def resolve_destination(client: Client, server_uuid: str, declared: str | None) -> dict | None:
-    parsed = call(client, "GET", f"/servers/{server_uuid}/destinations")
-    destinations = [item for item in expect_list(parsed, "destinations") if isinstance(item, dict)]
+def resolve_destination(
+    client: Client,
+    server: dict,
+    declared: str | None,
+    neighbours: list | None = None,
+) -> dict | None:
+    """Find the destination to place the application on.
+
+    Three sources are tried in order of authority, and the first that answers
+    wins. The endpoint is tried first because it is the only one that can honour
+    a destination declared by name. When it is absent, as it is on this
+    instance, the server object often carries the same list inline. Failing
+    both, an application already running in the target environment is the
+    strongest evidence available: it is placed where a new sibling belongs, and
+    it is placed there by the same instance that will read this value back.
+    """
+
+    server_uuid = server.get("uuid")
+    destinations: list = []
+    parsed = call(client, "GET", f"/servers/{server_uuid}/destinations", allow_absent=True)
+    if parsed is not None:
+        destinations = [item for item in expect_list(parsed, "destinations") if isinstance(item, dict)]
+    if not destinations:
+        inline = server.get("destinations")
+        if isinstance(inline, list):
+            destinations = [item for item in inline if isinstance(item, dict)]
     if declared:
+        if not destinations:
+            raise Abort(
+                f"the spec names destination {declared!r}, but this instance does not report "
+                "any destination list to match it against"
+            )
         return unique_match(
             [item for item in destinations if item.get("name") == declared],
             "destination",
             declared,
         )
-    if not destinations:
-        return None
-    return unique_match(destinations, "destination", "the only destination on this server")
+    if destinations:
+        return unique_match(destinations, "destination", "the only destination on this server")
+
+    inherited = {
+        found
+        for item in neighbours or []
+        if isinstance(item, dict) and (found := destination_uuid_of(item))
+    }
+    if len(inherited) == 1:
+        uuid = inherited.pop()
+        emit(f"    destination: inherited {uuid} from an application already in this environment")
+        return {"uuid": uuid, "name": None}
+    if len(inherited) > 1:
+        raise Abort(
+            "the applications already in this environment are split across "
+            f"{len(inherited)} destinations, so there is no single one to inherit; "
+            "declare target.destination in the spec"
+        )
+    return None
 
 
 def resolve_github_app(client: Client, declared: str | None) -> dict:
@@ -843,6 +939,7 @@ def operate_inspect(client: Client, spec: dict) -> int:
     emit(f"    applications in this environment: {len(applications)}")
     for item in sorted(applications, key=lambda entry: entry.get("name") or ""):
         emit(f"      - {item.get('name')} uuid={item.get('uuid')} status={item.get('status')}")
+    report_placement_sources(client, applications)
 
     application = find_application(applications, target["resource_name"])
     if application is None:
@@ -911,13 +1008,18 @@ def ensure_placement(client: Client, spec: dict) -> tuple[dict, dict]:
 def create_application(client: Client, spec: dict, project: dict, environment: dict) -> str:
     target = spec["target"]
     server = resolve_server(client, target["server"])
-    destination = resolve_destination(client, server["uuid"], target["destination"])
+    destination = resolve_destination(
+        client, server, target["destination"], applications_in(client, environment)
+    )
     github_app = (
         resolve_github_app(client, spec["source"]["github_app"])
         if spec["source"]["kind"] == "private_github_app"
         else None
     )
-    emit(f"    placement: server={server.get('name')} destination={(destination or {}).get('name')}")
+    emit(
+        f"    placement: server={server.get('name')} "
+        f"destination={(destination or {}).get('name') or (destination or {}).get('uuid')}"
+    )
     if github_app is not None:
         emit(f"    source: GitHub app {github_app.get('name')}")
 
