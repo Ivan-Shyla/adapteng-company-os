@@ -55,7 +55,7 @@ TIMEOUT_VARIABLE = "DEPLOY_TIMEOUT_SECONDS"
 # in this process only for the length of one request.
 SUPPLY_PREFIX = "COOLIFY_SECRET_"
 
-OPERATIONS = ("inspect", "reconcile", "deploy", "status", "verify")
+OPERATIONS = ("inspect", "reconcile", "deploy", "status", "verify", "diagnose")
 FORBIDDEN_METHODS = frozenset({"DELETE"})
 
 # Coolify reports a deployment through these states. Anything outside the two
@@ -171,6 +171,98 @@ def redact(text: str) -> str:
     for value in _REDACTIONS:
         result = result.replace(value, "[redacted]")
     return BEARER_HEADER.sub("bearer [redacted]", result)
+
+
+# Container output is the one input this tool prints that it did not construct,
+# so the registered-value list cannot cover it: a traceback can carry a
+# credential this process never saw and therefore never registered. These
+# patterns mask by shape instead of by value, which is what makes them work on
+# an unknown secret.
+CREDENTIAL_SHAPES = (
+    # A DSN's password, between the first colon after the scheme and the @.
+    (re.compile(r"(?i)(://[^\s:/@]+:)[^\s@]+(@)"), r"\1[redacted]\2"),
+    # An auth header's value is a scheme followed by the credential, so masking
+    # one token would leave the credential in place. Everything after the label
+    # goes.
+    (
+        re.compile(r"(?im)^(.*?\b(?:authorization|auth)\s*[=:]\s*).+$"),
+        r"\1[redacted]",
+    ),
+    # key=value and key: value for the words that introduce a credential.
+    (
+        re.compile(
+            r"(?i)\b(pass|passwd|password|pgpassword|secret|token|api[_-]?key|"
+            r"access[_-]?key|private[_-]?key|credential)"
+            r"(\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|\S+)"
+        ),
+        r"\1\2[redacted]",
+    ),
+)
+
+# A run long and dense enough to be a key. Dots are inside the run because the
+# tokens that matter most here are dotted -- a JWT and a Google access token
+# both are -- and excluding them let exactly those through.
+DENSE_RUN = re.compile(r"[A-Za-z0-9+/=_.-]{24,}")
+HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+# Measured, not chosen. Among long runs that have mixed case and a digit, the
+# densest real name found was psycopg2.errors.InsufficientPrivilege at 0.51 and
+# the sparsest real credential was a JWT header at 0.69. Everything between is
+# empty, so the threshold sits in the gap rather than on either edge.
+KEYLIKE_DISTINCT_RATIO = 0.65
+
+
+def looks_like_a_key(candidate: str) -> bool:
+    """Decide whether a long run is a credential or just a long name.
+
+    Length is not the signal. ``psycopg2.errors.InsufficientPrivilege`` and
+    ``scripts/test_coolify_deploy.py`` are long, dotted and dense-looking, and
+    they are two of the things a failure log is actually read for. What
+    separates a key is that it does not reuse characters: a name is built from
+    words and repeats letters, while a random token mostly does not.
+    """
+
+    core = candidate.strip("._-")
+    if len(core) < 24:
+        return False
+    if all(character in HEX_DIGITS for character in core):
+        return True
+    if not (
+        any(character.isupper() for character in core)
+        and any(character.islower() for character in core)
+        and any(character.isdigit() for character in core)
+    ):
+        return False
+    return len(set(core)) / len(core) >= KEYLIKE_DISTINCT_RATIO
+
+
+def redact_foreign_text(text: str) -> tuple[str, int]:
+    """Mask credential-shaped spans in output this tool did not produce.
+
+    Returns the masked text and how many spans were masked, because a redactor
+    that quietly eats the error message is indistinguishable from one that
+    found nothing -- and the count is what tells the two apart without
+    disclosing what was removed.
+
+    Masking is by shape, so an unregistered secret is still caught. It is
+    deliberately eager: a hex digest is masked too. That is the correct trade
+    here. Losing an identifier costs a second query; printing a credential
+    cannot be undone.
+    """
+
+    result = redact(text)
+    masked = 0
+    for pattern, replacement in CREDENTIAL_SHAPES:
+        result, count = pattern.subn(replacement, result)
+        masked += count
+
+    def mask_dense(match: re.Match) -> str:
+        nonlocal masked
+        if not looks_like_a_key(match.group(0)):
+            return match.group(0)
+        masked += 1
+        return "[redacted]"
+
+    return DENSE_RUN.sub(mask_dense, result), masked
 
 
 def emit(text: str = "") -> None:
@@ -2188,6 +2280,124 @@ def operate_verify(client: Client, spec: dict, sleep=None) -> int:
     return EXIT_OK
 
 
+DIAGNOSE_LOG_LINES = 200
+
+
+def container_logs(client: Client, uuid: str) -> tuple[str | None, str]:
+    """Read the container's own account of itself, or say why it cannot be read.
+
+    The endpoint answers 400 "Application is not running." when no container is
+    up, which is a finding rather than an error: it is the same condition
+    Coolify's scheduler checks before it dispatches a task, so a 400 here
+    explains a probe that never ran without needing a second query.
+    """
+
+    status, body = client.request(
+        "GET",
+        f"/applications/{uuid}/logs",
+        query={"lines": str(DIAGNOSE_LOG_LINES), "show_timestamps": "true"},
+    )
+    if status == 400:
+        message = (body or {}).get("message") if isinstance(body, dict) else None
+        return None, str(message or "the API refused with 400")
+    if status >= 400:
+        return None, f"the API answered {status}"
+    logs = body.get("logs") if isinstance(body, dict) else None
+    if not isinstance(logs, str):
+        return None, "the reply carried no logs field"
+    return logs, ""
+
+
+def operate_diagnose(client: Client, spec: dict) -> int:
+    """Report what the instance says about this application, and change nothing.
+
+    This exists because the readiness probe produced no execution, and "no
+    execution" has several causes that are indistinguishable from outside: the
+    container is not running, the server is not functional, or the scheduler
+    did not dispatch. Coolify skips a task silently in the first two cases, so
+    the absence of an execution is not evidence for any one of them.
+
+    Every call here is a GET. Nothing is created, armed or written.
+    """
+
+    target = spec["target"]
+    emit(f"--- diagnose {spec['service']}")
+    project = find_project(client, target["project"])
+    environment = (
+        find_environment(client, project["uuid"], target["environment"])
+        if project
+        else None
+    )
+    if project is None or environment is None:
+        emit("    project or environment absent; nothing to diagnose")
+        emit("RESULT diagnose failed application=absent")
+        return EXIT_FAILED
+
+    application = find_application(
+        applications_in(client, environment), target["resource_name"]
+    )
+    if application is None:
+        emit(f"    application {target['resource_name']}: ABSENT")
+        emit("RESULT diagnose failed application=absent")
+        return EXIT_FAILED
+
+    uuid = str(application["uuid"])
+    state = str(application.get("status") or "")
+    emit(f"    application {target['resource_name']}: uuid={uuid} state={state!r}")
+    # This is the exact predicate Coolify applies before dispatching a task:
+    # str($task->application->status)->contains('running'). Reproducing it here
+    # turns a silent skip into a stated reason.
+    dispatchable = "running" in state
+    emit(
+        f"    scheduler would dispatch a task for it: {dispatchable} "
+        "(it requires the status to contain 'running')"
+    )
+
+    tasks = call(client, "GET", f"/applications/{uuid}/scheduled-tasks")
+    entries = [item for item in tasks if isinstance(item, dict)] if isinstance(tasks, list) else []
+    emit(f"    scheduled tasks: {len(entries)}")
+    for task in entries:
+        task_uuid = str(task.get("uuid") or "")
+        emit(
+            f"      {task.get('name')!r} uuid={task_uuid} "
+            f"enabled={task.get('enabled')} frequency={task.get('frequency')!r}"
+        )
+        executions = call(
+            client,
+            "GET",
+            f"/applications/{uuid}/scheduled-tasks/{task_uuid}/executions",
+        )
+        rows = [item for item in executions if isinstance(item, dict)] if isinstance(executions, list) else []
+        emit(f"        executions ever recorded: {len(rows)}")
+        for row in rows[-5:]:
+            body, masked = redact_foreign_text(str(row.get("message") or ""))
+            emit(
+                f"        id={row.get('id')} status={row.get('status')!r} "
+                f"at={row.get('created_at')!r} message={body[:300]!r}"
+                + (f" ({masked} spans masked)" if masked else "")
+            )
+
+    emit("    container logs:")
+    logs, refusal = container_logs(client, uuid)
+    if logs is None:
+        emit(f"      unavailable: {refusal}")
+        if "not running" in refusal.lower():
+            emit(
+                "      that is the whole answer to the missing execution: "
+                "Coolify skips a scheduled task whose application is not "
+                "running, and it skips it silently."
+            )
+    else:
+        cleaned, masked = redact_foreign_text(logs)
+        lines = [line for line in cleaned.splitlines() if line.strip()]
+        emit(f"      {len(lines)} non-empty lines, {masked} credential-shaped spans masked")
+        for line in lines[-60:]:
+            emit(f"      | {line[:300]}")
+
+    emit("RESULT diagnose ok")
+    return EXIT_OK
+
+
 def operate_status(client: Client, spec: dict) -> int:
     target = spec["target"]
     emit(f"--- status {spec['service']}")
@@ -2303,6 +2513,8 @@ def run(environ: dict) -> int:
         return operate_status(client, spec)
     if operation == "verify":
         return operate_verify(client, spec)
+    if operation == "diagnose":
+        return operate_diagnose(client, spec)
     return operate_deploy(
         client,
         spec,

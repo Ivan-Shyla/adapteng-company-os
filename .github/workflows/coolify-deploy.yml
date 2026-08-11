@@ -10,13 +10,18 @@ name: Coolify deploy
 # inspect and status only read. reconcile writes configuration and then re-reads
 # it to confirm what was stored. deploy releases the already-reconciled resource
 # and follows the deployment to a terminal state. verify asks the container
-# itself whether /ready answers, through a disabled Coolify scheduled task whose
-# schedule can never match; it writes only that task, and only to keep the probe
-# command correct. Nothing here removes anything: the script refuses the DELETE
-# method outright, which is also why the probe task is left in place.
+# itself whether /ready answers, by arming a Coolify scheduled task for as long
+# as it takes the scheduler to run it and then returning it to rest. diagnose
+# only reads, and reports what the instance says about the application when a
+# probe produces nothing: Coolify skips a scheduled task silently when the
+# application is not running, so an absent execution names no cause by itself.
+# Nothing here removes anything: the script refuses the DELETE method outright,
+# which is also why the probe task is left in place.
 #
-# verify presents no credential to the gateway and cannot cause a model call:
-# /ready answers before the Authorization header is read.
+# verify and diagnose present no credential to the gateway and cannot cause a
+# model call: /ready answers before the Authorization header is read. Container
+# output is masked by shape before it is printed, because it is the one thing
+# this workflow prints that it did not construct.
 #
 # The access value is passed through the environment and is never printed. The
 # base address comes from a repository variable, so neither is written into a
@@ -26,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: "inspect, status and verify read; reconcile writes config; deploy releases"
+        description: "inspect, status, verify and diagnose read; reconcile writes config; deploy releases"
         required: true
         default: inspect
         type: choice
@@ -36,6 +41,7 @@ on:
           - deploy
           - status
           - verify
+          - diagnose
       service:
         description: "Spec file under deploy/, named without its extension"
         required: true

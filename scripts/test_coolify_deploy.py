@@ -2127,7 +2127,7 @@ class EntryPointTests(unittest.TestCase):
 
         self.assertEqual(
             set(driver.OPERATIONS),
-            {"inspect", "reconcile", "deploy", "status", "verify"},
+            {"inspect", "reconcile", "deploy", "status", "verify", "diagnose"},
         )
         workflow = (
             Path(driver.ROOT) / ".github" / "workflows" / "coolify-deploy.yml"
@@ -2174,6 +2174,9 @@ class ReadinessInstance(FakeInstance):
         self.refuse_disarm_times = 0
         self.refuse_arm = False
         self.execution_polls = 0
+        # None models the 400 "Application is not running." the endpoint returns
+        # when no container is up -- the same condition the scheduler skips on.
+        self.logs: str | None = "listening on 8081\n"
 
     def armed_task(self) -> dict | None:
         """The task the scheduler would actually run.
@@ -2192,6 +2195,10 @@ class ReadinessInstance(FakeInstance):
         return None
 
     def _get(self, path, body, query):
+        if re.fullmatch(r"/applications/([^/]+)/logs", path):
+            if self.logs is None:
+                return 400, {"message": "Application is not running."}
+            return 200, {"logs": self.logs}
         match = re.fullmatch(r"/applications/([^/]+)/scheduled-tasks", path)
         if match:
             return 200, copy.deepcopy(self.tasks)
@@ -2739,6 +2746,213 @@ class VerifyTests(unittest.TestCase):
         self.assertIsNone(driver.read_marker(""))
         self.assertIsNone(driver.read_marker(None))
         self.assertIsNone(driver.read_marker({"status": 200}))
+
+
+class ForeignTextRedactionTests(unittest.TestCase):
+    """Container output is the one thing this tool prints that it did not build.
+
+    The registered-value list cannot protect it, because a traceback can carry
+    a credential this process never saw. These cases are the shapes that
+    actually occur in a database failure, plus the ones a shape-based masker is
+    most likely to get wrong.
+    """
+
+    def setUp(self) -> None:
+        driver.reset_redactions()
+
+    def tearDown(self) -> None:
+        driver.reset_redactions()
+
+    def test_a_password_inside_a_connection_string_is_masked(self) -> None:
+        text, masked = driver.redact_foreign_text(
+            "could not connect: postgresql://ai_gateway:hunter2swordfish@db:5432/x"
+        )
+        self.assertNotIn("hunter2swordfish", text)
+        self.assertIn("postgresql://ai_gateway:[redacted]@db:5432/x", text)
+        self.assertGreaterEqual(masked, 1)
+
+    def test_the_user_and_host_survive_so_the_error_stays_readable(self) -> None:
+        """Masking that removes the diagnosis defeats its own purpose."""
+
+        text, _ = driver.redact_foreign_text(
+            "FATAL: postgresql://ai_gateway:hunter2swordfish@db:5432/adapteng_ops"
+        )
+        self.assertIn("ai_gateway", text)
+        self.assertIn("db:5432", text)
+        self.assertIn("FATAL", text)
+
+    def test_labelled_credentials_are_masked_with_the_label_kept(self) -> None:
+        # Each case carries its own value and its own label. Sharing one value
+        # across the cases made three of the four assertions vacuous: the value
+        # was absent because it had never been in that line, not because it was
+        # masked.
+        for line, value, label in (
+            ("PGPASSWORD=examplealpha", "examplealpha", "PGPASSWORD"),
+            ("password: examplebravo", "examplebravo", "password"),
+            ('api_key="examplecharlie"', "examplecharlie", "api_key"),
+            ("Authorization: Basic exampledelta", "exampledelta", "Authorization"),
+        ):
+            with self.subTest(line=line):
+                text, masked = driver.redact_foreign_text(line)
+                self.assertNotIn(value, text)
+                self.assertIn(label, text)
+                self.assertIn("[redacted]", text)
+                self.assertGreaterEqual(masked, 1)
+
+    def test_a_long_dense_run_is_masked_even_unlabelled(self) -> None:
+        """The case that matters: a secret whose shape is all there is to go on.
+
+        A masker that only knows labels fails exactly when the log line was
+        written by something that did not label it.
+        """
+
+        text, masked = driver.redact_foreign_text(
+            "unexpected token ya29.a0AfB_byDx7KqR3nVpZ2mLwT8sQ4hJc6XbN1 rejected"
+        )
+        self.assertNotIn("ya29.a0AfB_byDx7KqR3nVpZ2mLwT8sQ4hJc6XbN1", text)
+        self.assertIn("unexpected token", text)
+        self.assertIn("rejected", text)
+        self.assertGreaterEqual(masked, 1)
+
+    def test_the_long_names_worth_reading_a_log_for_survive(self) -> None:
+        """The discriminator's whole job, stated as the cases that decide it.
+
+        Length is not the signal. An exception class and a file path are long,
+        dotted and dense-looking, and they are the two things a failure log is
+        actually read for. Masking them would leave a redactor that is safe and
+        useless.
+        """
+
+        for candidate in (
+            "sqlalchemy.exc.OperationalError",
+            "psycopg2.errors.InsufficientPrivilege",
+            "scripts/test_coolify_deploy.py",
+            "adapteng-readiness-probe-application",
+            "AI_GATEWAY_PG_DSN_HOST_VARIABLE_NAME",
+            "ConnectionRefusedError.errno.ECONNREFUSED",
+        ):
+            with self.subTest(candidate=candidate):
+                self.assertFalse(driver.looks_like_a_key(candidate))
+
+        for candidate in (
+            "ya29.a0AfB_byDx7KqR3nVpZ2mLwT8sQ4hJc6XbN1",
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+            "gAAAAABm3xQ7pLkR2vN8sT4wY6zC1bD5eF9hJ0mK",
+            "sk-proj-9Xk2Lm4Np7Qr1Tv5Wy8Zb3Cd6Fg0Hj",
+            "a3f5e9c1b2d4a6f8e0c2b4d6a8f0e2c4b6d8a0f2",
+        ):
+            with self.subTest(candidate=candidate):
+                self.assertTrue(driver.looks_like_a_key(candidate))
+
+    def test_ordinary_prose_is_left_alone(self) -> None:
+        """Over-masking is a real cost, not a free safety margin.
+
+        A redactor that eats the message is one that gets switched off.
+        """
+
+        message = (
+            "2026-08-11T21:30:00Z readiness check failed: connection refused "
+            "after 5 seconds, retrying"
+        )
+        text, masked = driver.redact_foreign_text(message)
+        self.assertEqual(text, message)
+        self.assertEqual(masked, 0)
+
+    def test_a_registered_value_is_masked_even_without_a_credential_shape(self) -> None:
+        driver.register_redaction("plainword")
+        text, _ = driver.redact_foreign_text("the value plainword appeared")
+        self.assertNotIn("plainword", text)
+
+    def test_the_count_reports_masking_so_an_eaten_message_is_visible(self) -> None:
+        """The count is what distinguishes "nothing sensitive" from "all of it"."""
+
+        _, none_masked = driver.redact_foreign_text("all clear")
+        _, some_masked = driver.redact_foreign_text(
+            "token=exampleecho password=examplefoxtrot"
+        )
+        self.assertEqual(none_masked, 0)
+        self.assertGreaterEqual(some_masked, 2)
+
+
+class DiagnoseTests(unittest.TestCase):
+    """diagnose reads and reports; it must never write.
+
+    It exists because "no execution was recorded" has several causes that look
+    identical from outside, and Coolify skips a task silently in two of them.
+    """
+
+    def setUp(self) -> None:
+        driver.reset_redactions()
+
+    def tearDown(self) -> None:
+        driver.reset_redactions()
+
+    def real_spec(self) -> dict:
+        return driver.load_spec(driver.spec_path(RESOURCE))
+
+    def run_diagnose(self, instance) -> tuple[int, str]:
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_diagnose(instance, self.real_spec())
+        return code, buffer.getvalue()
+
+    def test_it_writes_nothing(self) -> None:
+        instance = ReadinessInstance()
+        self.run_diagnose(instance)
+        self.assertEqual(
+            [(method, path) for method, path in instance.calls if method != "GET"], []
+        )
+
+    def test_a_stopped_container_is_named_as_the_reason_a_probe_never_ran(self) -> None:
+        """The finding, not an error: it is the same predicate the scheduler uses."""
+
+        instance = ReadinessInstance()
+        instance.logs = None
+        code, output = self.run_diagnose(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("Application is not running", output)
+        self.assertIn("Coolify skips a scheduled task", output)
+
+    def test_the_dispatch_predicate_is_reported_from_the_status(self) -> None:
+        instance = ReadinessInstance()
+        instance.applications[0]["status"] = "exited:unhealthy"
+        code, output = self.run_diagnose(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("scheduler would dispatch a task for it: False", output)
+
+    def test_container_logs_are_masked_before_they_are_printed(self) -> None:
+        instance = ReadinessInstance()
+        instance.logs = (
+            "starting\nOperationalError: postgresql://ai_gateway:hunter2swordfish@db:5432/x\n"
+        )
+        code, output = self.run_diagnose(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertNotIn("hunter2swordfish", output)
+        self.assertIn("OperationalError", output)
+        self.assertIn("spans masked", output)
+
+    def test_an_absent_application_is_reported_rather_than_crashed_on(self) -> None:
+        instance = FakeInstance(with_application=False)
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_diagnose(instance, self.real_spec())
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("RESULT diagnose failed application=absent", buffer.getvalue())
+
+    def test_execution_history_is_reported_including_none(self) -> None:
+        instance = ReadinessInstance()
+        instance.tasks.append(
+            {
+                "uuid": "task-old",
+                "name": driver.READINESS_TASK_NAME,
+                "command": driver.readiness_command(self.real_spec()),
+                "enabled": False,
+                "frequency": driver.READINESS_TASK_FREQUENCY,
+            }
+        )
+        code, output = self.run_diagnose(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("executions ever recorded: 0", output)
 
 
 if __name__ == "__main__":
