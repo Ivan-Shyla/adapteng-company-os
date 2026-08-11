@@ -1833,22 +1833,27 @@ READINESS_MARKER = "ADAPTENG_READY"
 # connection, so the path is fixed here rather than inherited.
 READINESS_PATH = "/ready"
 # Coolify runs this as: docker exec <container> sh -c '<command>'. It escapes
-# single quotes, so the command deliberately contains none: the URL and the
-# marker arrive as argv rather than as quoted literals inside the source. A
-# 503 is reported as 503 rather than as a traceback, because the point is to
-# learn the gateway's own verdict, not merely that something went wrong.
+# single quotes, so the command deliberately contains none; the outer single
+# quotes make the double quotes below literal to sh, which then applies them.
+# There is no $ or backtick either, so sh cannot expand anything.
+#
+# It is one line. The first version spanned several, and the API answered HTTP
+# 500 when asked to store it; a single line removes that whole question.
+#
+# Patching HTTPErrorProcessor is what makes a 503 a reported number instead of
+# a raised exception, which matters because 503 is the interesting answer here:
+# it is what /ready returns when it cannot reach the database. Verified against
+# a real server at 200, 401, 404 and 503.
+#
+# The URL and the marker arrive as argv rather than as literals inside the
+# source, which is what keeps the source free of quotes.
 READINESS_COMMAND = (
     'python -c "'
-    "import sys, urllib.request, urllib.error\n"
-    "def probe(target):\n"
-    "    try:\n"
-    "        return urllib.request.urlopen(target, timeout=5).status\n"
-    "    except urllib.error.HTTPError as exc:\n"
-    "        return exc.code\n"
-    "    except Exception as exc:\n"
-    "        return type(exc).__name__\n"
-    'print(sys.argv[2], probe(sys.argv[1]))" '
-    "http://127.0.0.1:{port}{path} " + READINESS_MARKER
+    "import urllib.request as R,sys;"
+    "R.HTTPErrorProcessor.http_response=lambda s,q,r:r;"
+    "R.HTTPErrorProcessor.https_response=lambda s,q,r:r;"
+    "print(sys.argv[2],R.urlopen(sys.argv[1],timeout=5).status)"
+    '" http://127.0.0.1:{port}{path} ' + READINESS_MARKER
 )
 READINESS_EXECUTION_ATTEMPTS = 20
 READINESS_EXECUTION_INTERVAL_SECONDS = 3

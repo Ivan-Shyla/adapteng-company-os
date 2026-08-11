@@ -2415,7 +2415,11 @@ class VerifyTests(unittest.TestCase):
         """Coolify wraps the command in sh -c '...' and escapes single quotes.
 
         A command containing none cannot be broken by that wrapping, so the
-        absence is a property worth asserting rather than a coincidence.
+        absence is a property worth asserting rather than a coincidence. The
+        same goes for $ and backtick, which sh would expand inside the double
+        quotes the command does use, and for the newline: the first version of
+        this command spanned several lines and the API answered HTTP 500 when
+        asked to store it.
         """
 
         spec = self.real_spec()
@@ -2423,7 +2427,63 @@ class VerifyTests(unittest.TestCase):
         command = driver.readiness_command(spec)
         self.assertIn("http://127.0.0.1:9099/ready", command)
         self.assertNotIn("'", command)
+        self.assertNotIn("$", command)
+        self.assertNotIn("`", command)
+        self.assertNotIn("\n", command)
         self.assertIn(driver.READINESS_MARKER, command)
+
+    def test_the_probe_reports_a_status_rather_than_raising_on_it(self) -> None:
+        """503 is the interesting answer, and urlopen raises on it by default.
+
+        /ready returns 503 when it cannot reach the database, which is the
+        condition this operation exists to detect. A probe that raised there
+        would report undetermined for the one case it was built to see. This
+        runs the exact command against a real server to check it does not.
+        """
+
+        import http.server
+        import subprocess
+        import sys as sys_module
+        import threading
+
+        answers = {}
+        for status in (200, 503, 404):
+            class Handler(http.server.BaseHTTPRequestHandler):
+                code = status
+
+                def do_GET(self):
+                    self.send_response(self.code)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+
+                def log_message(self, *_args):
+                    pass
+
+            server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                spec = self.real_spec()
+                spec["network"]["internal_port"] = server.server_port
+                command = driver.readiness_command(spec)
+                # Recover the argument vector the container would receive.
+                code_start = command.index('"') + 1
+                code_end = command.index('"', code_start)
+                argv = [
+                    sys_module.executable,
+                    "-c",
+                    command[code_start:code_end],
+                    *command[code_end + 1 :].split(),
+                ]
+                result = subprocess.run(
+                    argv, capture_output=True, text=True, timeout=30
+                )
+            finally:
+                server.shutdown()
+            answers[status] = result.stdout.strip()
+
+        for status, line in answers.items():
+            self.assertEqual(line, f"{driver.READINESS_MARKER} {status}")
+            self.assertEqual(driver.read_marker(line), str(status))
 
     def test_the_probe_targets_ready_even_when_the_gate_polls_health(self) -> None:
         """The probe must not inherit the container gate's path.
