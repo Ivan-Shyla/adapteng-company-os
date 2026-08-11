@@ -1033,12 +1033,80 @@ a different surface, and it is empty.** Eight calls go through the helper — 56
 71, 156, 161, **168**, 248, 376 — and seven carry `-I`. But the file also runs
 `python -c` at 177, 179 and 230 and `python -` (stdin) at 186 and 280, none of them
 isolated. Those have a different `sys.path[0]`: measured, `python -c` yields `''`
-and stdin yields the working directory as an absolute path — the **repository
-root**, not `scripts/validation/`. At `824b4238` the repository root contains
-**zero** `.py` files, so that surface has nothing on it, while 168's has 22 modules.
-The extra measurement therefore sharpens WS-1's singling-out of 168 instead of
-diluting it: of the ungoverned invocations, 168 is the only one whose exposed
-directory is populated.
+and stdin yields the working directory as an absolute path.
+
+**Correction, from WS-9, and it withdraws the inference that paragraph invited.**
+The two values differ and the *difference is cosmetic*, because `''` **is** the
+working directory at import time. A reader taking `''` for "no directory" concludes
+`-c` is the safer form. It is not. Executed on 3.11.9 in an empty directory holding
+a planted `json.py`:
+
+| invocation | `sys.path[0]` | shadowing `json.py` imported |
+| --- | --- | --- |
+| `python -c 'import json'` | `''` | **yes** |
+| `… \| python -` | the cwd, absolute | **yes** |
+| `python script.py` | the script's directory | yes |
+| `python -I -c 'import json'` | the stdlib zip | no |
+
+Three spellings, one exposure. Only `-I` changes the answer.
+
+**And the sentence that followed — "the working directory … the repository root" —
+asserted a bound the script never establishes.** WS-9 checked what actually pins
+the working directory and the answer is: nothing does, deliberately. There is no
+`cd`, no `BASH_SOURCE`, no `dirname`, no `REPO_ROOT` in the file; I widened the
+search to `pushd`, `realpath` and `$PWD` and all seven tokens return zero hits. The
+confinement is a **side effect of input validation**. Lines 119–130 are a
+seven-clause conjunction exiting `lifecycle.input_invalid`, and five of those
+clauses test caller-supplied positional parameters (`$2`–`$6`) which may be
+absolute. Exactly **two** test hard-coded relative paths — **124**
+(`scripts/validation/approved_assets_github_metadata.py`, set at line 10) and
+**125** (`…/collect_approved_assets_current_run.py`, line 11). Run from anywhere
+else, the script dies at 127. So the property holds, it is real, and **nothing was
+ever written to establish it** — which is why no one maintaining 119–130 could know
+a path-shadowing bound depends on those two clauses. WS-9's generalisation is worth
+taking: this document's overdetermination rule is not confined to claims about
+artefacts; it appears *in* artefacts, and an unaudited property in code has the
+same cause as an untested claim in prose — nothing downstream needed it to be true.
+
+It is also *approximate*. 124 and 125 admit any directory containing both helper
+paths — a repository-root-**shaped** tree, not the repository root. The conclusion
+survives, since such a tree is what the check is for, but "the repository root" was
+stronger than the evidence.
+
+**A second holder, which inverts the obvious remedy.** Lines **190** and **286** —
+inside the two stdin heredocs — read `from scripts.validation.bounded_json import
+…`, a package path resolvable only with the repository root on `sys.path`. That is
+a *functional* dependence on the working directory, not an incidental one, and it
+is possible only because those two sites are **not** isolated. So the uniform
+hardening — put `-I` on every interpreter in the file — **breaks the script at 190
+and 286**. The file has three tiers, not two:
+
+| sites | imports | `-I` addable |
+| --- | --- | --- |
+| 168 | helper, via path; 7 siblings already isolated | **yes** — the one-character fix |
+| 177, 179, 230 | stdlib only (`secrets`, `datetime`, `json`, `sys`) | **yes** |
+| 186, 280 | `scripts.validation.bounded_json` via cwd-rooted package path | **no** — requires restructuring |
+
+**And the canonical refactor opens a real window.** The textbook repair for
+relative paths in a shell script is to absolutise them. Do that to lines 10–11 and
+124/125 stop binding the working directory, while 190/286 still fail without it —
+so the script no longer exits at 127 but at 186. Execution order is 177 → 179 →
+186, so **two sites run in an unbounded working directory before the first
+cwd-rooted import fails**, and the first of them is
+`locator="$(python -c 'import secrets; print(secrets.token_hex(16))')"`. A planted
+`secrets.py` controls the dispatch locator. What that buys an attacker is **not
+traced** and should not be assumed; the point is structural — *the bound exists
+because the script depends on the working directory, so removing the dependence
+removes the bound*, and the sites it endangers are precisely the five currently
+considered safe. Same shape as the sparse-checkout anchoring, in a second
+independent artefact: an edit that reads as tidying reinstates the hazard.
+
+**What survives unchanged.** Of the ungoverned invocations, 168 is still the only
+one whose exposed directory is populated — but the two bounds are different in
+kind. 168's exposure is the *helper's* directory (22 modules), fixed by the
+relative path at line 10 and independent of the working directory; the other five
+expose cwd, bounded incidentally by 124–125. WS-9's singling-out of 168 stands, and
+so does the count.
 
 **WS-1's reclassification, verified verbatim, and it moves 168 out of hygiene.**
 The call at 168 is `assert-secret-absent … --name "$reviewed_evidence_name"`,

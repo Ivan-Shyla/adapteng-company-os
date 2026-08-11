@@ -1109,7 +1109,22 @@ deployed gateway:
    directory holds 22 modules. **Scope of the exposure today:** none of the 22 shares
    a name with any module the helper imports, so it is structural, not live; the
    file's other ungoverned interpreters (`python -c` at 177, 179, 230 and stdin at
-   186, 280) expose the working directory instead, which contains zero `.py` files.
+   186, 280) expose the working directory instead, which holds zero `.py` files.
+   **That last bound is real but unstated in the script, and it is not the whole
+   story** (§ the ungoverned-interpreter analysis in the friction audit). Nothing in
+   the file sets or resolves the working directory — seven tokens searched, zero
+   hits — so the confinement is a side effect of the input-validation conjunction at
+   119–130, specifically clauses **124 and 125**, the only two of seven that test
+   hard-coded relative paths. Two consequences for this item. First, the fix here is
+   **not** "add `-I` to every interpreter in the file": lines 190 and 286 import
+   `scripts.validation.bounded_json` through a cwd-rooted package path and would
+   break under `-I`. 168 and the three `python -c` sites can take it; the two stdin
+   heredocs cannot. Second, absolutising the helper paths at lines 10–11 — the
+   textbook repair for relative paths in a shell script — would unbind the working
+   directory for the two sites that execute before the first cwd-rooted import
+   fails, one of which mints the dispatch locator from `secrets.token_hex`. So the
+   scope of *this* item is 168 alone, and the file's cwd bound should be recorded
+   before anyone tidies it. Exploitability of that window is **not traced**.
    **Why it is an owner decision rather than AUTO:** the one-character fix is
    obvious, but the file is under #121's signature hold, and editing it would
    invalidate green checks on a PR awaiting signature while smuggling an unrelated

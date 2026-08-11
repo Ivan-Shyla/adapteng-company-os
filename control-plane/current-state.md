@@ -1303,7 +1303,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with nineteen sub-shapes and forty-four instances.** WS-1 proposed the
+**The general rule, with nineteen sub-shapes and forty-five instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -1360,6 +1360,26 @@ observation about the register itself: three of my own errors sat unchallenged
 through several rounds of my own re-reading, and the thing that moved them was
 another reader with the source open. The list documents instrument-question
 mismatches, and its own most reliable instrument turns out to be *someone else*.
+
+**One instance later, forty-five, and the header moved with it this time.** WS-9
+withdrew its own "the workflow that runs this script" — repo-wide there are six
+references to `authorize_approved_assets_phase` and none is an invocation, which
+independently confirms what this document had recorded — and in checking it found
+a claim of mine resting on an antecedent neither of us had tested. Filed under
+*unstated validity interval*, second instance. No new sub-shape: the population of
+shapes is unchanged at nineteen, and saying so is now a required step rather than
+an observation, because the last three rounds each moved one number and left the
+other.
+
+**WS-9's extension, which belongs to the unifying form rather than to any bullet.**
+Every shape below describes a *claim* whose instrument answered a neighbouring
+question. WS-9 found the same structure in an **artefact**: the shell script's
+working-directory bound is real, load-bearing, and established by nothing — it
+falls out of two clauses written to validate inputs. The cause is identical to the
+prose cases and it is this document's own overdetermination rule: **nothing
+downstream needed the property to be stated, so nothing tested whether it was.** A
+property no one wrote down is not thereby absent; it is merely unowned, and it
+breaks when someone improves the line that incidentally holds it.
 
 **The current round adds one sub-shape and two instances, again by enumeration.**
 The bullets were counted directly and stood at seventeen before this edit. New
@@ -1665,7 +1685,18 @@ plus two is **forty-one**. Bullets re-enumerated, not incremented.
   changed nothing about the select site. The remedy is not verification — it is
   asking what the instrument measures: `--numstat` answers *how many lines
   changed*, never *where line N went*, and the two coincide only below the last
-  hunk.
+  hunk. **Second instance, mine, and the domain was held by something I never
+  looked for.** Recording that the shell script's ungoverned `python -c` and stdin
+  sites expose "the working directory — the repository root", I verified that the
+  repository root holds zero `.py` files. True, and it is the *consequent*. The
+  antecedent — that the working directory **is** the repository root — I never
+  checked, and the script never states: it contains no `cd`, `BASH_SOURCE`,
+  `dirname`, `REPO_ROOT`, `pushd`, `realpath` or `$PWD`. The confinement is a side
+  effect of two clauses in an input-validation conjunction (124–125, the only two of
+  seven testing hard-coded relative paths). Verifying the consequent is what made
+  the claim feel checked, which is the trap: **the easy half of a conditional is
+  usually the half that is not load-bearing.** WS-9 found it by asking what pins the
+  working directory — a question the sentence presupposed had an answer.
 - **Success mistaken for effect — an action that reports success while changing
   something other than what its name promises.** The six above are all *read*
   instruments, misread. This one is a write, and the remedy is different in kind.
