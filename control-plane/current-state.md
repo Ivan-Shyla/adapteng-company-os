@@ -1082,7 +1082,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with twelve sub-shapes and twenty-eight instances.** WS-1 proposed the
+**The general rule, with thirteen sub-shapes and twenty-nine instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -1366,7 +1366,30 @@ the instrument's range fails to match the question:
   independently derived hash of the LF content (`a9aeef04`). A probe that reads the
   world through a converting layer reports the layer.
 
-Unifying form, and the reason the twelve belong together: **every one of these
+- **A sufficient cause named, and then dropped when the case changed.** Deciding
+  whether a repo-wide `*.py text eol=lf` could break CI, §15 gave two independent
+  reasons the Windows leg is unaffected — it is scoped to `services/ai-gateway`,
+  *and* its repo-file readers normalize line endings — and then, three lines later,
+  concluded that a repo-wide entry "inherits none of this inertness". That is only
+  true if scope were the sole mechanism. The second reason survives the change of
+  scope untouched, and is sufficient by itself. **This is not a check I failed to
+  run: I ran it, wrote the result down, and then reasoned past my own sentence.**
+  Nothing was missing from the instrument's range; a narrower test was applied to
+  the variant than to the base case, using material already on the page. WS-2
+  settled it by measurement — 221 passed / 1 skipped under both a CRLF and an LF
+  checkout of the same commit — and the enumeration behind it is now in §15: all
+  four repo-file readers on that leg normalize, and the two `read_bytes()` sites in
+  the whole tree either normalize explicitly or digest a canonical re-serialization.
+  **The direction is the familiar one.** The dropped reason was the one that would
+  have removed a live CI consequence from a decision I wanted the owner to weigh
+  carefully; keeping it made the decision look costlier than it is. Fourth instance
+  in this register where the error's direction favours the writer's existing
+  position, which is now frequent enough that direction is worth checking on its
+  own. **Diagnostic:** when a conclusion rests on two or more sufficient reasons,
+  a claim about any variant has to be tested against each reason separately —
+  conjunctions are where a sound argument silently narrows to an unsound one.
+
+Unifying form, and the reason the thirteen belong together: **every one of these
 instruments returned a true statement, and in no case was the true statement about
 the question being asked.** The helper list truly contained no such script. The
 two `authorized` verdicts were truly `authorized`. The sixteen hits truly
@@ -1418,6 +1441,21 @@ the entries. It is in the mechanical checks the entries produce — the ref in t
 header, the sum against the count, the surface-and-cost question — each of which
 works without being remembered at the moment it is needed. Entries that have not
 yielded such a check should be treated as unfinished rather than as lessons.
+
+**One positive instrument-design result, which the register otherwise has none
+of.** WS-2 needed to know what `core.autocrlf` a GitHub-hosted `windows-latest`
+runner uses, could not observe it, and did not assert it. Instead it ran the leg
+under *both* possible checkouts and got the same verdict from each, which makes
+the unobservable setting irrelevant to the conclusion rather than a caveat on it.
+**When a condition you cannot observe has finitely many states, measuring every
+state beats determining which one holds** — and it is cheaper here, since
+determining the runner's setting would have required a CI round-trip. This is the
+constructive form of the rule everything above states negatively: instead of
+narrowing the claim to what the instrument saw, widen the instrument until the
+unknown drops out. Recorded because the same move is available for the two
+unresolved items in §15 and owner item 5, both of which currently carry
+"representative rather than identical to CI" caveats that a two-endpoint design
+would remove.
 
 **A related family that is not an instrument failure at all, and needs separating
 because the remedy differs.** In every case above the instrument was consulted and
@@ -2113,16 +2151,70 @@ Linux" was written by WS-2 and repeated here, and it is not exactly true. Sixtee
 workflows at `824b4238`, none setting `core.autocrlf`; the self-hosted runners in
 `migrate-approved-assets.yml` carry `linux`/`x64` labels; but
 `ai-gateway-tests.yml` runs its `unit` job on `[ubuntu-latest, windows-latest]`
-(line 66), so a **Windows CI leg exists**. The conclusion survives because that leg
-is confined to `services/ai-gateway` and its repo-file readers normalize already
-(`tests/migration_support.py:20`). But the survival is a fact about that leg's
-scope, not about the platform, and the two come apart the moment anyone proposes a
-repo-wide `*.py text eol=lf`: that entry would change the Windows leg's checkout
-and inherits none of this inertness. **Scope is therefore part of the
-`.gitattributes` decision.** Filed here because "CI is Linux" is precisely the kind
-of load-bearing background fact that gets reused without re-checking — it was
-asserted from the workflow everybody was already reading, and one of the fifteen
-others contradicts it.
+(line 66), so a **Windows CI leg exists**. Confirmed independently by WS-2: that
+matrix is the only `windows-latest` in the repository. Filed here because "CI is
+Linux" is precisely the kind of load-bearing background fact that gets reused
+without re-checking — it was asserted from the workflow everybody was already
+reading, and one of the fifteen others contradicts it.
+
+**And the consequence drawn from it was wrong, which WS-2 then measured.** This
+previously read that the leg's survival "is a fact about that leg's scope, not
+about the platform", so a repo-wide `*.py text eol=lf` "would change the Windows
+leg's checkout and **inherits none of this inertness**". The last clause is false,
+and the refutation is three lines above it in this document's own text: the
+inertness has **two independent sources**, and the sentence that named both then
+reasoned as though only one existed.
+
+| Source | Mechanism | Does a repo-wide `*.py` entry escape it? |
+| --- | --- | --- |
+| (a) collection scope | `defaults.run.working-directory: services/ai-gateway`, `ai-gateway-tests.yml` 67–69, governs the pytest step at 87 | **yes** — `.py` files inside that directory *are* collected |
+| (b) reader normalization | every repo-file reader on the leg normalizes line endings | **no** |
+
+(b) is sufficient on its own, so the entry changes the leg's checkout bytes and
+does not change its verdict. WS-2 measured exactly that, on one machine at one
+commit, running the leg as CI runs it: **221 passed / 1 skipped under a CRLF
+checkout and 221 passed / 1 skipped under an LF checkout of `824b4238`.**
+
+**The population behind (b) was enumerated here rather than sampled, because a
+single normalizing reader would only have made the result luck.** Every repo-file
+read on that leg, across all 22 test modules and all 19 application modules:
+
+- `tests/migration_support.py:20` — the only `read_bytes()` in the test tree, and
+  it feeds `decode_utf8_normalized` (12–16), which maps `\r\n` and lone `\r` to
+  `\n`.
+- `tests/test_deployment_contract_doc.py:44`, `tests/test_migration_008_static.py:48`,
+  `tests/test_postgres_ai_gateway.py:57` — `read_text(encoding="utf-8")`, which
+  opens with `newline=None` and so applies universal newlines. Verified by
+  execution on Python 3.11.9, the leg's version: `write_bytes(b"a=1\r\nb=2\r\n")`
+  then `read_text` returns `'a=1\nb=2\n'` while `read_bytes` still shows the `CR`.
+- `app/company_os_model_proof.py:165` — the only `read_bytes()` in application
+  code, and its digest at 177 is taken over a **canonical re-serialization**
+  (171–176: `sort_keys=True`, `separators=(",",":")`, `ensure_ascii=True`), so the
+  source file's endings cannot reach it. The second digest, at 276, is over
+  `source["utf8_json"]`, an in-memory string that was never a checkout file.
+- Zero `open(…, "rb")` and zero `newline=` overrides anywhere in either tree.
+
+`tests/test_migration_blob_portability.py` is the confirming case: it exists for
+this exact question and compares an `origin/main` blob against the worktree file
+with **both** sides normalized (29–32).
+
+So the two-path form and the repo-wide form are equally inert *as to CI verdicts*.
+**Scope remains a real decision** — blast radius, review surface, and the
+transition cost on existing worktrees all scale with it — but not on the ground
+this document gave, and the "inherits none of this inertness" clause is withdrawn.
+
+**One asymmetry survives, and it is a latent condition worth recording on its own.**
+At the repository root, `tests/test_migration_digest_pins.py:53` is
+`hashlib.sha256(migration.path.read_bytes()).hexdigest()` — a raw byte digest with
+**no normalization at all**, over seven migrations that carry no `eol=lf` pin. That
+tree has source (a) and no (b). It has never gone red because the only Windows leg
+is directory-scoped away from it, which is protection by accident of collection
+rather than by design, and nothing in the test expresses the dependency. Move that
+job's working directory, or add any Windows job at repository root, and seven
+subtests fail immediately. **But it does not bear on the `*.py` scope question**:
+`ALL_MIGRATIONS` are `.sql`, so no `*.py` entry of any breadth can reach them. It
+is an adjacent `.sql` question — WS-2's point that `*.sql text eol=lf` would retire
+the class is right, and is a wider edit than owner item 5 contemplates.
 
 **The general pattern, restated on five sets, and the earlier version of it was
 too weak.** This previously read: *a wrong candidate set is dangerous exactly when

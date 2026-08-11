@@ -947,12 +947,40 @@ deployed gateway:
    self-hosted runners in `migrate-approved-assets.yml` are labelled `linux`/
    `x64`; but `ai-gateway-tests.yml` runs its `unit` job on a matrix of
    `[ubuntu-latest, windows-latest]` (line 66). So a Windows CI leg does exist.
-   It is confined to `services/ai-gateway`, whose repo-file readers normalize
-   already (`tests/migration_support.py:20`, `decode_utf8_normalized`), so a
-   **two-path** attribute naming only the item-5 files changes no CI verdict. A
-   repo-wide `*.py text eol=lf` would alter that leg's checkout and does not have
-   the same inertness argument. The scope of the entry is therefore part of the
-   decision, not a detail of it.
+
+   **Its CI verdict does not depend on the entry's scope, and the earlier claim
+   here that it does is withdrawn.** That leg is inert for two independent
+   reasons: it is scoped to `services/ai-gateway` by
+   `defaults.run.working-directory` (67–69), *and* every repo-file reader in it
+   normalizes line endings. A repo-wide entry escapes the first and not the
+   second, and the second is sufficient alone. Enumerated rather than sampled,
+   across all 22 test modules and all 19 application modules: one `read_bytes()`
+   in the test tree (`tests/migration_support.py:20`, feeding
+   `decode_utf8_normalized`); three `read_text(encoding="utf-8")` sites, which
+   apply universal newlines; one `read_bytes()` in application code
+   (`app/company_os_model_proof.py:165`) whose digest is taken over a canonical
+   JSON re-serialization (171–177) and so cannot see the file's endings; no
+   `open(…, "rb")` and no `newline=` override anywhere. WS-2 confirmed the result
+   by running the leg under both a CRLF and an LF checkout of `824b4238` —
+   **221 passed / 1 skipped from each**, which also removes the need to know what
+   `core.autocrlf` a hosted runner uses.
+
+   **So scope is still a real decision, but on different grounds:** blast radius,
+   review surface, and the transition cost on worktrees that already exist — not
+   on any CI verdict. Choose it on breadth of review, not on risk of breakage.
+
+   **One adjacent hazard this uncovered, which is `.sql` and not `.py`.** At the
+   repository root, `tests/test_migration_digest_pins.py:53` digests
+   `migration.path.read_bytes()` with no normalization, over the seven migrations
+   that carry no `eol=lf`. That tree has the scope protection and *not* the
+   normalization protection, and it has stayed green only because the sole Windows
+   leg is directory-scoped away from it — protection by accident of collection,
+   with nothing in the test expressing the dependency. Adding any Windows job at
+   repository root, or moving that job's working directory, turns seven subtests
+   red. It cannot be triggered by a `*.py` entry of any breadth, since
+   `ALL_MIGRATIONS` are `.sql`. A `*.sql text eol=lf` covering all nine would
+   retire the class and make the two pinned migrations consistent with the seven —
+   **wider than this item, and listed here only so the decision is not taken twice.**
 6. **Whether a base that moves mid-run should stay an authorization refusal.**
    `verify_pull_request` at anchor 2653–2659 raises one
    `TrustError("pull_request.live_ref_changed")` for two different events: the
