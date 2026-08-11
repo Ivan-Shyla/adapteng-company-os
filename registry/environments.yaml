@@ -118,7 +118,7 @@ created_not_yet_deployed:
     coolify_destination: c3dnc3udkoenz9zhw148mbu0   # the destination adapteng-baserow-adapter and n8n-selfhosted use
     source: GitHub App adapteng-coolify (the platform repository is private, so the public-repo source cannot read it)
     endpoint: internal only — no public URL; reached on the coolify network as the container alias
-    application_status: "running:unknown — running, with Coolify's own health verdict unknown because the container gate is still the command-based one; the container's readiness was proved directly instead, below"
+    application_status: "running:unknown — running, with Coolify's own health verdict unknown because no container gate runs at all. Not the command-based probe: enabled is false precisely so that probe cannot run, and if it were running this service would still be failing deployment on 'curl: not found' as it did on n12qiqlkjcb74u0bakmhtwqz. With enabled false and no HEALTHCHECK in the image, ApplicationDeploymentJob::health_check sets newVersionIsHealthy and returns without testing anything, so 'unknown' is the honest reading of a gate that is absent rather than failing. The container's readiness was proved directly instead, below. Platform PR #127 adds the image HEALTHCHECK that turns this into a real verdict; its four numbers were checked against deploy/ai-gateway.json and match exactly."
     state: created, configured, deployed and answering /ready
     creation_evidence:
       run: 31496735683
@@ -229,7 +229,7 @@ created_not_yet_deployed:
       # supplemented at deploy time, and that was previously written down nowhere.
       - must set AI_GATEWAY_HTTP_HOST=0.0.0.0 — the Dockerfile defaults to 127.0.0.1, which is unreachable from the container network, so the health check cannot pass
       - /health is liveness only — it returns ok without touching PostgreSQL, so a green health check does not prove database or budget accounting readiness; a separate readiness check is required
-    blocking: "nothing in this repository — the remaining work is the owner's GO for the first live model call, then proving the EU Vertex client, Drive adapters, orchestration and canonical approval composition against the running service"
+    blocking: "nothing in this repository blocks the service, which is running and answering /ready. Two things are outstanding and neither is here. The owner's GO for the first live model call, then proving the EU Vertex client, Drive adapters, orchestration and canonical approval composition against the running service. And, separately, Coolify's container health verdict stays 'unknown' until platform PR #127 merges: it carries the image HEALTHCHECK, its four numbers match this repository's spec exactly, and it is held not by review but by a flaky test double in that repository's root-rollout-tests job. Recorded because an unexplained 'unknown' is how a detached container was once reported healthy for hours."
     budget_binding: budgets.ai_runtime_cap_eur_month (fail-closed cap, not evidenced spend)
     model_binding: external_saas "Google Cloud (Vertex AI + Drive API)" — gemini-3.1-flash-lite, location eu
     deployment_evidence:
