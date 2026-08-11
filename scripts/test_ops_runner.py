@@ -10,6 +10,7 @@ thing standing between it and a public build log is this code.
 from __future__ import annotations
 
 import io
+import base64
 import json
 import os
 import pathlib
@@ -298,6 +299,44 @@ class DockerfileTests(unittest.TestCase):
 
         self.assertNotIn(MINTED, runner.DOCKERFILE)
         self.assertIn(f"${runner.REGISTRATION_KEY}", runner.DOCKERFILE)
+
+    def test_the_build_definition_is_sent_encoded_because_the_instance_demands_it(self) -> None:
+        """The published schema says plain text; the live instance refuses it.
+
+        This is pinned rather than left implicit because the failure is a 422
+        that costs a round trip to rediscover, and because the encoding must
+        survive anyone editing the Dockerfile constant.
+        """
+
+        encoded = runner.encode_dockerfile(runner.DOCKERFILE)
+        self.assertNotIn("FROM", encoded)
+        self.assertEqual(base64.b64decode(encoded, validate=True).decode("utf-8"), runner.DOCKERFILE)
+
+    def test_a_stored_definition_compares_equal_whichever_way_it_comes_back(self) -> None:
+        """Guessing the read-back form wrong would report drift that is not there.
+
+        Reconcile would then rewrite on every run and still never converge, so
+        both forms must normalise to the same content.
+        """
+
+        declared = runner.normalize_dockerfile(runner.DOCKERFILE)
+        self.assertEqual(runner.normalize_dockerfile(runner.encode_dockerfile(runner.DOCKERFILE)), declared)
+        self.assertEqual(runner.normalize_dockerfile(runner.DOCKERFILE), declared)
+
+    def test_a_genuinely_different_definition_is_still_detected_as_drift(self) -> None:
+        """Tolerating both encodings must not tolerate a different image."""
+
+        other = runner.encode_dockerfile("FROM scratch\nUSER root\n")
+        self.assertNotEqual(
+            runner.normalize_dockerfile(other), runner.normalize_dockerfile(runner.DOCKERFILE)
+        )
+
+    def test_plain_text_is_never_mistaken_for_an_encoding(self) -> None:
+        """A decode attempt that misfires would compare against garbage."""
+
+        self.assertEqual(runner.decode_dockerfile("FROM alpine"), "FROM alpine")
+        self.assertEqual(runner.decode_dockerfile(""), "")
+        self.assertEqual(runner.decode_dockerfile("bm90IGEgZG9ja2VyZmlsZQ=="), "bm90IGEgZG9ja2VyZmlsZQ==")
 
 
 class ReconcileTests(unittest.TestCase):

@@ -28,6 +28,8 @@ expires by itself within the hour.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
 import sys
@@ -283,6 +285,36 @@ def locate(client: driver.Client) -> tuple[dict, dict, dict | None]:
     return project, environment, driver.find_application(applications, RUNNER_RESOURCE_NAME)
 
 
+def encode_dockerfile(text: str) -> str:
+    """Encode the build definition the way this instance requires it.
+
+    The published schema documents dockerfile as a plain string, and this
+    instance refuses that with "The dockerfile should be base64 encoded." This
+    is the second field where the specification and the instance disagree, so
+    the encoding is applied here and the decoding is tolerated on the way back
+    rather than assumed.
+    """
+
+    return base64.b64encode(text.encode("utf-8")).decode("ascii")
+
+
+def decode_dockerfile(value: str) -> str:
+    """Return the build definition as text whichever way it was stored.
+
+    The instance is known to accept base64 and is not known to return it, and a
+    reconcile that guessed wrong would compare an encoding against its own
+    plaintext and report permanent drift. Decoding is attempted and accepted
+    only when the result is unambiguously a Dockerfile, so plain text can never
+    be mistaken for an encoding of something else.
+    """
+
+    try:
+        decoded = base64.b64decode(value, validate=True).decode("utf-8")
+    except (ValueError, binascii.Error):
+        return value
+    return decoded if decoded.lstrip().upper().startswith("FROM") else value
+
+
 def normalize_dockerfile(value: object) -> str:
     """Compare build definitions by content, ignoring how they were stored.
 
@@ -294,7 +326,7 @@ def normalize_dockerfile(value: object) -> str:
 
     if not isinstance(value, str):
         return ""
-    lines = value.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    lines = decode_dockerfile(value).replace("\r\n", "\n").replace("\r", "\n").split("\n")
     return "\n".join(line.rstrip() for line in lines).strip()
 
 
@@ -336,7 +368,7 @@ def creation_body(project: dict, environment: dict, server: dict, destination: d
         "name": RUNNER_RESOURCE_NAME,
         "description": "Dedicated deployment and operations runner. Private network only.",
         "build_pack": "dockerfile",
-        "dockerfile": DOCKERFILE,
+        "dockerfile": encode_dockerfile(DOCKERFILE),
         "ports_exposes": EXPOSED_PORT,
         # The runner serves nothing and must never be routed. A generated domain
         # would publish it, so it is refused here and the absence of an FQDN is
@@ -434,7 +466,7 @@ def operate_reconcile(client: driver.Client, repository: str) -> int:
                 client,
                 "PATCH",
                 f"/applications/{uuid}",
-                body={"dockerfile": DOCKERFILE},
+                body={"dockerfile": encode_dockerfile(DOCKERFILE)},
                 expect=(200, 201),
             )
 
