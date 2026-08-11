@@ -1687,6 +1687,116 @@ class DeployTests(unittest.TestCase):
                 self.assertEqual(driver.deployment_outcome(state), "failed")
 
 
+class PollingTests(unittest.TestCase):
+    """A deployment runs on the server whether or not we can ask about it.
+
+    This distinction was learned the expensive way: a single transport blip
+    mid-poll aborted a run whose deployment then completed successfully, and the
+    report said the deployment failed. The observer's problem was published as
+    the subject's.
+    """
+
+    class Answers:
+        """Stands in for the client, returning one scripted answer per call.
+
+        The call ceiling is deliberate. A poller that never gives up would
+        otherwise hang the suite rather than fail it, and a hang is a much worse
+        signal than a failure: it reports as a timed-out job with no named
+        assertion, in a suite where every other verdict is precise.
+        """
+
+        CEILING = 50
+
+        def __init__(self, script: list) -> None:
+            self.script = list(script)
+            self.calls = 0
+
+        def request(self, method: str, path: str, **_kwargs):
+            self.calls += 1
+            if self.calls > self.CEILING:
+                raise AssertionError(
+                    f"polling did not stop after {self.CEILING} calls; the budget "
+                    "is not bounding it"
+                )
+            answer = self.script[min(self.calls - 1, len(self.script) - 1)]
+            if isinstance(answer, Exception):
+                raise answer
+            return 200, {"status": answer}
+
+    def poll(self, script: list, timeout_seconds: int = 30):
+        """Poll with time advanced by the sleeps, so no test waits on a clock."""
+
+        elapsed = {"value": 0}
+
+        def sleep(seconds):
+            elapsed["value"] += seconds
+
+        return driver.poll_deployment(
+            self.Answers(script),
+            "deployment-uuid",
+            poll_seconds=10,
+            timeout_seconds=timeout_seconds,
+            sleep=sleep,
+            clock=lambda: elapsed["value"],
+        )
+
+    def test_a_transport_failure_mid_poll_does_not_fail_the_deployment(self) -> None:
+        unreachable = driver.Unreachable("the API at https://example is unreachable: URLError")
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            outcome, state = self.poll(["in_progress", unreachable, "finished"])
+        self.assertEqual(outcome, "succeeded")
+        self.assertEqual(state, "finished")
+        self.assertIn("not answered", buffer.getvalue())
+
+    def test_every_blind_tick_is_reported_rather_than_only_the_first(self) -> None:
+        """One line for a long blind stretch would read as a single blip."""
+
+        unreachable = driver.Unreachable("unreachable: URLError")
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            self.poll([unreachable, unreachable, unreachable, "finished"])
+        self.assertEqual(buffer.getvalue().count("not answered"), 3)
+
+    def test_patience_is_bounded_by_the_same_budget_and_not_extended(self) -> None:
+        unreachable = driver.Unreachable("unreachable: URLError")
+        with redirect_stdout(io.StringIO()):
+            with self.assertRaises(driver.Abort) as raised:
+                self.poll([unreachable], timeout_seconds=30)
+        self.assertIn("could not be read", str(raised.exception))
+
+    def test_an_unreadable_deployment_is_reported_unknown_rather_than_failed(self) -> None:
+        """The truthful verdict. 'Failed' would assert something never observed."""
+
+        unreachable = driver.Unreachable("unreachable: URLError")
+        with redirect_stdout(io.StringIO()):
+            with self.assertRaises(driver.Abort) as raised:
+                self.poll([unreachable], timeout_seconds=10)
+        message = str(raised.exception)
+        self.assertIn("unknown rather than failed", message)
+        self.assertIn("check the application state", message)
+
+    def test_only_transport_failures_are_tolerated_not_every_abort(self) -> None:
+        """Catching Abort here would also swallow a refused write or a bad body."""
+
+        with redirect_stdout(io.StringIO()):
+            with self.assertRaises(driver.Abort) as raised:
+                self.poll([driver.Abort("the API returned a body that is not JSON")])
+        self.assertIn("not JSON", str(raised.exception))
+
+    def test_a_transport_failure_outside_polling_still_stops_the_run(self) -> None:
+        """Unreachable stays an Abort, so nothing else changed behaviour."""
+
+        self.assertTrue(issubclass(driver.Unreachable, driver.Abort))
+        self.assertEqual(driver.Unreachable("x").code, driver.EXIT_FAILED)
+
+    def test_a_deployment_that_never_finishes_still_times_out(self) -> None:
+        with redirect_stdout(io.StringIO()):
+            with self.assertRaises(driver.Abort) as raised:
+                self.poll(["in_progress"], timeout_seconds=30)
+        self.assertIn("still in_progress", str(raised.exception))
+
+
 class StatusTests(unittest.TestCase):
     def setUp(self) -> None:
         driver.reset_redactions()
