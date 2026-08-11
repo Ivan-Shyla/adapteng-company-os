@@ -689,7 +689,18 @@ deployed gateway:
    interior, so the select-queued-run coordinates shift by +1 and +7 instead. Full
    table in F-8. The fix ports verbatim from #121's own construct — both sites
    are command substitutions capturing into a variable, so `2>&1` is wrong at
-   both for the same reason.
+   both for the same reason. **This item is now worth more than it was, and part
+   of it is free.** #121 is the only available source of the two verdicts the
+   trust anchor has never produced under its current verifier — see
+   `current-state.md` §12a: since #122 reset the evidence at 20:44:08Z there have
+   been zero `authorized` and zero `unauthorized` observations, only one
+   `not_applicable`. A **title or body edit on #121, with no push**, re-runs the
+   anchor against the current verifier and yields the first `unauthorized`
+   observation at no cost — verified that `rollout-trust-anchor.yml` is the only
+   workflow in the repository listing the `edited` trigger, which is not in the
+   default set, so no other check re-runs and no review is dismissed. Signing the
+   receipt then yields the first `authorized` one, which cannot arrive from
+   ordinary traffic at all. The receipt and the promotion evidence are one action.
 4. **One sentence settling whether an advisory authorization refusal may be
    merged past.** Two sessions answered this oppositely within four minutes —
    platform #122 merged, #121 was left open — from materially identical
