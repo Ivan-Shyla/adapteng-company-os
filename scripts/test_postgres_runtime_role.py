@@ -281,9 +281,15 @@ class PublishTests(unittest.TestCase):
 class FakePostgres:
     """Answers the queries the driver asks, and records the SQL it was given."""
 
-    def __init__(self, role_exists: bool = False, functions_present: bool = True) -> None:
+    def __init__(
+        self,
+        role_exists: bool = False,
+        functions_present: bool = True,
+        ssl_answer: str = "false none none\n",
+    ) -> None:
         self.role_exists = role_exists
         self.functions_present = functions_present
+        self.ssl_answer = ssl_answer
         self.statements: list[str] = []
         self.notices = (
             "NOTICE:  4a OK: INSERT denied\nNOTICE:  4b OK: SELECT denied\n"
@@ -292,6 +298,8 @@ class FakePostgres:
 
     def __call__(self, container, sql, database=driver.DATABASE, check=True):
         self.statements.append(sql)
+        if "pg_stat_ssl" in sql:
+            return 0, self.ssl_answer, ""
         if "to_regprocedure" in sql:
             return 0, "t\n" if self.functions_present else "f\n", ""
         if "pg_roles WHERE rolname" in sql:
@@ -328,7 +336,7 @@ class ProvisionTests(unittest.TestCase):
             "credential": "an-example-credential",
             "dsn_host": "db.internal",
             "dsn_port": 5432,
-            "sslmode": "verify-full",
+            "sslmode": "prefer",
         }
         arguments.update(overrides)
         buffer = io.StringIO()
@@ -336,8 +344,44 @@ class ProvisionTests(unittest.TestCase):
             code = driver.operate_provision(**arguments)
         return code, buffer.getvalue()
 
+    def test_a_dsn_the_server_cannot_honour_is_refused_before_anything_is_written(self) -> None:
+        """An unsatisfiable mode does not degrade - libpq refuses to connect at all.
+
+        Publishing it would leave a correct role and a gateway that cannot
+        start, which is the most expensive shape of failure here: everything
+        reports success except the thing that matters.
+        """
+
+        postgres = FakePostgres(ssl_answer="false none none\n")
+        with self.assertRaises(driver.Abort) as raised:
+            self.provision(postgres, FakeCoolify(), sslmode="verify-full")
+        self.assertIn("not using TLS", str(raised.exception))
+        joined = " ".join(postgres.statements).upper()
+        self.assertNotIn("CREATE ROLE", joined)
+        self.assertNotIn("GRANT ", joined)
+
+    def test_a_demanding_mode_is_refused_when_the_transport_cannot_be_measured(self) -> None:
+        """Undetermined is not permission to assume the stronger reading."""
+
+        with self.assertRaises(driver.Abort) as raised:
+            self.provision(FakePostgres(ssl_answer="\n"), FakeCoolify(), sslmode="require")
+        self.assertIn("could not be asked", str(raised.exception))
+
+    def test_a_demanding_mode_is_allowed_when_the_server_proves_it(self) -> None:
+        code, report = self.provision(
+            FakePostgres(ssl_answer="true TLSv1.3 AES\n"), FakeCoolify(), sslmode="verify-full"
+        )
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("ENCRYPTED", report)
+
+    def test_the_measured_transport_is_reported_next_to_the_declared_mode(self) -> None:
+        """A plaintext link is a fact the record must carry, not one it may omit."""
+
+        _, report = self.provision(FakePostgres(), FakeCoolify())
+        self.assertIn("NOT ENCRYPTED", report)
+        self.assertIn("sslmode=prefer", report)
+
     def test_the_password_never_reaches_the_output(self) -> None:
-        """The single property that cannot be recovered if it is ever wrong."""
 
         postgres = FakePostgres()
         code, report = self.provision(postgres, FakeCoolify())
@@ -366,7 +410,7 @@ class ProvisionTests(unittest.TestCase):
         with self.assertRaises(driver.Abort) as raised:
             driver.operate_provision(
                 driver.DockerTarget("db"), "app-1", "https://c.example", "t",
-                "db.internal", 5432, "verify-full",
+                "db.internal", 5432, "prefer",
             )
         self.assertIn("008a", str(raised.exception))
         self.assertFalse(any("CREATE ROLE" in s for s in postgres.statements))
@@ -459,14 +503,22 @@ class TransportTests(unittest.TestCase):
         """A survey that refuses to connect unencrypted cannot report that it is unencrypted.
 
         The published DSN's mode and this script's own connection mode are
-        separate facts, and conflating them makes the contradiction they exist
-        to settle undiscoverable.
+        separate facts. They now happen to coincide, because the server answered
+        that it offers no TLS, but they remain independently settable: the
+        survey's mode must never be derived from the DSN's, or the contradiction
+        it exists to settle becomes undiscoverable.
         """
 
         arguments = driver.parse_arguments(["recon"])
         self.assertEqual(arguments.admin_sslmode, "prefer")
-        self.assertEqual(arguments.sslmode, "verify-full")
-        self.assertNotEqual(arguments.admin_sslmode, arguments.sslmode)
+        self.assertNotIn(arguments.admin_sslmode, driver.DEMANDING_SSL_MODES)
+        overridden = driver.parse_arguments(["recon", "--sslmode", "verify-full"])
+        self.assertEqual(overridden.admin_sslmode, "prefer")
+
+    def test_the_published_mode_defaults_to_one_this_server_can_honour(self) -> None:
+        """Measured, not assumed: pg_stat_ssl reported this server as not encrypted."""
+
+        self.assertNotIn(driver.parse_arguments(["provision"]).sslmode, driver.DEMANDING_SSL_MODES)
 
     def test_the_declared_ssl_mode_reaches_the_connection(self) -> None:
         """The mode is the question being settled empirically, so it must not be hard-coded."""
@@ -497,15 +549,28 @@ class EncryptionProbeTests(unittest.TestCase):
 
     def test_an_encrypted_connection_is_reported_as_encrypted(self) -> None:
         state, report = self.probe("t TLSv1.3 TLS_AES_256_GCM_SHA384\n")
-        self.assertEqual(state, "t")
+        self.assertEqual(state, driver.ENCRYPTED)
         self.assertIn("ENCRYPTED", report)
         self.assertIn("TLSv1.3", report)
+
+    def test_both_spellings_of_the_server_answer_are_understood(self) -> None:
+        """A boolean cast to text is 'true'; the same column read bare is 't'.
+
+        Matching one spelling turned a determinate server answer into
+        "undetermined" on the first live run: the probe reported about its own
+        expectations rather than about the thing it measured.
+        """
+
+        self.assertEqual(self.probe("true TLSv1.3 AES\n")[0], driver.ENCRYPTED)
+        self.assertEqual(self.probe("t TLSv1.3 AES\n")[0], driver.ENCRYPTED)
+        self.assertEqual(self.probe("false none none\n")[0], driver.PLAINTEXT)
+        self.assertEqual(self.probe("f none none\n")[0], driver.PLAINTEXT)
 
     def test_an_unencrypted_connection_is_named_plainly_and_not_repaired(self) -> None:
         """Saying so is the deliverable; changing production transport is not."""
 
-        state, report = self.probe("f none none\n")
-        self.assertEqual(state, "f")
+        state, report = self.probe("false none none\n")
+        self.assertEqual(state, driver.PLAINTEXT)
         self.assertIn("NOT ENCRYPTED", report)
         self.assertIn("owner decision", report)
 
@@ -513,9 +578,13 @@ class EncryptionProbeTests(unittest.TestCase):
         """The failure this whole workstream exists to fix is a silent collapse to a wrong verdict."""
 
         state, report = self.probe("\n")
-        self.assertEqual(state, "")
+        self.assertEqual(state, driver.UNDETERMINED)
         self.assertIn("undetermined", report)
         self.assertNotIn("ENCRYPTED (", report)
+
+    def test_an_unexpected_answer_is_not_read_as_encrypted(self) -> None:
+        state, _ = self.probe("maybe none none\n")
+        self.assertEqual(state, driver.UNDETERMINED)
 
 
 class DiscoveryTests(unittest.TestCase):
