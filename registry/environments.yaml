@@ -71,7 +71,11 @@ operator_access:
       the readiness probe, which runs inside the application container through
       the Coolify scheduled-task API and needs no host access at all. Do not
       read this runner as a prerequisite for deploying or verifying the
-      gateway; it is a prerequisite for reaching the database directly.
+      gateway; it is a prerequisite for reaching the database directly. Its
+      reach is narrower than "on the coolify network" suggests: run 31531842811
+      reports placement=runner_off_application_network, so it resolves the
+      managed database and none of the running applications. That is why
+      readiness is asked from inside the container rather than from here.
 
 excluded_personal_projects:
   status: excluded-from-company-os
@@ -171,9 +175,14 @@ created_not_yet_deployed:
       is_public: false
       reachable_by: >-
         Not from the public internet and not from a GitHub-hosted runner. The
-        dedicated operations runner reaches it because that runner is itself a
-        container on this same private Docker network, which is the whole
-        reason it was deployed there rather than installed on the host.
+        dedicated operations runner reaches it, resolving it to 10.0.1.7, which
+        is the whole reason that runner was deployed as a container rather than
+        installed on the host. Note the limit measured in run 31531842811: the
+        runner shares this database's network but not the network the
+        applications are placed on, and resolves none of them - not even
+        itself. A database is placed by a different code path from an
+        application, so reaching this address says nothing about reaching the
+        gateway.
       enable_ssl: false
       ssl_mode_reported: require
       dsn_host_variable: AI_GATEWAY_PG_DSN_HOST

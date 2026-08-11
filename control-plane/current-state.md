@@ -124,16 +124,25 @@ Verified from `main` and CI, not from narrative.
 
   ~~Readiness could not be asked from outside — the application is internal-only
   on the coolify network and the database refuses every route a runner has.~~
-  **Half of that is wrong, and it was wrong when I wrote it on 2026-08-11.** A
-  GitHub-hosted runner genuinely has no route: the application is internal-only
-  and port 22 is shut to the published ranges. But the dedicated operations
-  runner is a container on that same coolify network, so it does have a route,
-  and it has been using one since 16:47Z that day — that is how the runtime role
-  was provisioned at all. "Every route a runner has" was an inherited belief,
-  carried into an edit whose subject was a document that went stale by not
-  measuring. The in-container probe remains the better evidence, because it is
-  the container's own answer rather than a neighbour's, but it is now a choice
-  rather than the only option.
+  **One clause of that is wrong, and my first attempt to fix it was wrong in the
+  other direction.** The database does not refuse every route a runner has: the
+  dedicated operations runner resolves it to `10.0.1.7` and has been using that
+  route since 16:47Z on 2026-08-11, which is how the runtime role was
+  provisioned at all. I then over-corrected, writing that the runner therefore
+  had a route to the application too. It does not. Run `31531842811` reports
+  `placement=runner_off_application_network`: the runner resolves none of the
+  three running applications — not even itself — while resolving the database.
+  Applications and databases are placed by different code paths, so the database
+  cannot stand in for a peer.
+
+  So the conclusion survives while both justifications failed: readiness really
+  could not be asked from outside, because the only runner with any route to
+  this deployment sits on the database's network and not the applications'. The
+  in-container probe was necessary, not merely preferable. Note also what the
+  200 proves on its own: `/ready` opens a database connection, so answering it
+  from inside the container is only possible if the container reaches the
+  managed database over the shared network. That, rather than the address probe,
+  is what establishes the gateway's attachment.
 
   `/ready` opens a database connection where `/health` does not (§5b), so this
   is also the database proof: the runtime DSN is in place and usable. It says
