@@ -1523,6 +1523,8 @@ def operate_deploy(
     )
     emit("")
     if outcome != "succeeded":
+        report_deployment_failure(client, spec, uuid, str(deployment_uuid))
+        emit("")
         emit(f"RESULT deploy failed deployment={deployment_uuid} state={state}")
         return EXIT_FAILED
     application_state = read_application(client, uuid).get("status")
@@ -1531,6 +1533,97 @@ def operate_deploy(
         f"application_state={application_state}"
     )
     return EXIT_OK
+
+
+def deployment_log_lines(record: dict) -> list[str]:
+    """Flatten whatever this instance puts in a deployment's ``logs`` field.
+
+    Coolify has shipped this as a JSON-encoded string of entries, as a real list
+    of entries, and as plain text. Rather than pick one and be wrong on the next
+    upgrade - this instance has already contradicted the published schema twice -
+    every shape it might be is accepted and anything unrecognised degrades to its
+    string form. A log reader that raises is worse than one that is untidy,
+    because it fires exactly when something has already gone wrong.
+    """
+
+    raw = record.get("logs")
+    if raw in (None, ""):
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return raw.splitlines()
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return str(raw).splitlines()
+    lines: list[str] = []
+    for entry in raw:
+        if isinstance(entry, dict):
+            text = entry.get("output")
+            text = str(text) if text is not None else json.dumps(entry, sort_keys=True)
+        else:
+            text = str(entry)
+        lines.extend(text.splitlines() or [""])
+    return lines
+
+
+def report_deployment_failure(
+    client: Client,
+    spec: dict,
+    application_uuid: str,
+    deployment_uuid: str,
+    tail: int = 60,
+) -> None:
+    """Print why a deployment failed, with the sensitive stored values masked first.
+
+    The failure state alone is not a diagnosis. Reporting only ``state=failed``
+    is the same defect this codebase keeps finding elsewhere: a specific cause
+    collapsed into a generic verdict, leaving the reader to guess. The build log
+    is the only place the cause exists, so it is fetched here rather than left in
+    a console someone has to open by hand.
+
+    A build log is untrusted text that may quote a connection string, so the
+    values stored on the application are registered for redaction before a line
+    is printed - otherwise the redaction table would hold only what this process
+    happened to write itself, and a deploy writes almost nothing.
+
+    Only the owner-held keys are masked, not every key. The values under
+    ``configuration`` are committed in this repository in clear text, so hiding
+    them protects nothing and costs the reader the one thing this function
+    exists to give them. Masking a model name or a hostname would turn the log
+    into the opaque verdict it is meant to replace.
+    """
+
+    sensitive_keys = {
+        entry["key"]
+        for entry in spec["externally_provided_configuration"]
+        if is_sensitive(entry)
+    }
+    for entry in read_environment_entries(client, application_uuid):
+        if isinstance(entry, dict) and entry.get("key") in sensitive_keys:
+            register_redaction(entry.get("value"))
+
+    try:
+        record = expect_object(
+            call(client, "GET", f"/deployments/{deployment_uuid}"), "deployment"
+        )
+    except Abort as exc:
+        emit(f"    could not read the deployment log: {exc}")
+        return
+
+    lines = [line for line in deployment_log_lines(record) if line.strip()]
+    if not lines:
+        emit("    the deployment reported no log lines")
+        return
+    shown = lines[-tail:]
+    if len(shown) != len(lines):
+        emit(f"    deployment log, last {len(shown)} of {len(lines)} lines:")
+    else:
+        emit(f"    deployment log, {len(lines)} lines:")
+    for line in shown:
+        emit(f"    | {line}")
 
 
 def poll_deployment(
