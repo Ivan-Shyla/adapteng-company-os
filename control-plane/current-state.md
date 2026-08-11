@@ -558,8 +558,9 @@ wording, each of which would otherwise miscount:
    authorized or unauthorized. There are three terminal outcomes, and
    `not_applicable` is the most common — it is what any pull request touching no
    protected path produces. Read strictly, "either class" would exclude
-   `d799b5bb`, the single run the count currently rests on, whose verdict is
-   `{"outcome":"not_applicable"}` (verified in the job log).
+   `d799b5bb`, the run the count rested on when this was written, whose verdict is
+   `{"outcome":"not_applicable"}` (verified in the job log). It has since been
+   joined by a second — see the 2026-08-11 update below.
 2. **`undetermined.pull_request.no_longer_open` is not a fault.** WS-6's message
    closes by calling any `undetermined.*` code a real defect — which restates the
    #117 claim that its own #123 retired. #122 *created* that code for the benign
@@ -567,7 +568,7 @@ wording, each of which would otherwise miscount:
    mechanism nor against it: the job legitimately could not reach a decision.
    Treat it as **neutral** — it does not advance the count and does not break it.
    Any other `undetermined.*` is an infrastructure fault and breaks it.
-3. **The count needs a version anchor, and that is why it stands at one.** All
+3. **The count needs a version anchor, and that is why it stood at one.** All
    four failing runs on the board — `f0a2d175` ×2 (#121) and `fd96060f` ×2
    (#122) — were created between 20:21:21Z and 20:43:43Z, before #122 merged at
    **20:44:08Z** (`merged_at`; corrected from the committer date 20:44:07Z by
@@ -730,6 +731,55 @@ Neither real decision has been observed even once. WS-6 imported its consolation
 across the boundary it had itself just drawn — the same move as counting #120's
 run, which is precisely what its own refinement was written to prevent. The gap
 is twice as wide as the note claimed.
+
+**Half of that gap closed on its own, one day later, and the closure was not
+deliberate — measured 2026-08-11.** The blockquote above is now wrong on its
+middle term. WS-6 opened platform **#124** (`fix(ci): report a broken trust root
+as undetermined, not unauthorized`, head `36119231`), which fired the anchor on
+`pull_request_target` three seconds later. Run `31466827525` emitted
+**`rollout_trust_anchor.unauthorized.approval.commit_delta_invalid`** at
+06:54:39Z, exit 1 — taken from the job log, not inferred from the exit code.
+Post-reset runs enumerated rather than assumed: exactly **two** postdate
+20:44:08Z, the `not_applicable` at 20:45:58Z and this one. So the census under
+the verifier now on `main` reads:
+
+> **zero `authorized`, one `unauthorized`, one `not_applicable`.**
+
+**And the mechanism corrects a stronger claim two paragraphs below.** The
+statement that the gap "cannot close by waiting" because ordinary traffic yields
+only `not_applicable`, so "any N will be reached with the let-work-through path
+still unexercised unless someone deliberately produces the input", is true of the
+`authorized` half and false of the `unauthorized` half. #124 touches
+`scripts/validation/verify_rollout_trust_anchor.py` and
+`tests/test_rollout_trust_anchor.py` — both protected rollout paths — and carries
+no receipt, which is exactly the input the passage says must be manufactured. It
+was not manufactured; it is what a workstream fixing the verifier necessarily
+produces. The asymmetry is the point: an `unauthorized` observation arrives from
+any pull request that edits the machinery, and the workstreams edit the machinery
+routinely, whereas an `authorized` one still requires a signature and remains
+unobtainable by waiting.
+
+**What this does to the promotion argument, in both directions.** It removes the
+need for any deliberate action to obtain the `unauthorized` half, so the
+`edited`-trigger manoeuvre recorded in `execution-program.md` item 6 should not
+be performed for that purpose — see the correction there. **And it advances the
+promotion count, which I first wrote up backwards.** My draft of this paragraph
+said a failing run "does not accumulate toward N". That is exactly the error the
+adopted criterion at line 553 was written to prevent: the criterion is *N
+consecutive runs that each reach a terminal verdict, of any class, with no
+infrastructure fault*, and line 551 says in terms that counting only greens would
+rebuild the thing that broke. `unauthorized` is a terminal verdict of a counting
+class. Both post-reset runs qualify and they are consecutive, so **the count is
+two, not one** — and the second is a real refusal rather than a `not_applicable`,
+which is the stronger of the two observations. I caught this by re-reading the
+criterion instead of recalling it, one paragraph after recording that the
+register's own remedy is to re-derive rather than remember.
+
+What it does **not** do is close the validation gap. The four-day outage was
+`approval.circular_or_stale`, so `_approval_material_introduced` on its
+authorizing branch is still validated only by unit tests. An observed refusal
+does not exercise the let-work-through path, and that is the path that was
+broken. `authorized` remains unobtainable by waiting.
 
 **Why that is not merely a thin count.** The four-day outage was
 `approval.circular_or_stale` on the subject tree — the failure that made it
