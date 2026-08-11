@@ -750,5 +750,36 @@ deployed gateway:
    `closure.dynamic_import`. With one signature available, the failure mode to
    plan against is a missed pin, not a broken dependant. See F-8.
 
+   **The inventory, verified at `824b4238`** — WS-1 established it, and it is
+   reproduced here because it is what the signature is spent against. Digest
+   entries span two lines: the path is the key, the hex is on the line below, and
+   the line to *edit* is the second one.
+
+   | File | Protected at | Digest key → value | Constant |
+   |---|---|---|---|
+   | `tests/test_migrate_approved_assets.py` | 112 | 417 → **418** `1f181579…` | `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256` |
+   | `scripts/validation/approved_assets_github_metadata.py` | 85 | 402 → **403** `6e3c4f85…` | `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256` |
+   | `scripts/validation/approved_assets_github_metadata.py` | 85 | 434 → **435** `6e3c4f85…` | `CLOSURE_SYS_PATH_ALLOWED_SOURCE_SHA256` |
+
+   **The metadata helper is pinned twice, in two different constants, to the same
+   digest** — byte-identical, verified. So a re-pin that updates 403 and misses
+   435 fails in exactly the way this item exists to plan against. The fixture edit
+   at 773–775 and 783 touches `test_migrate_approved_assets.py`, which carries one
+   digest; if it also touches the metadata helper, it carries two.
+
+   **The recipe, since a wrong one costs the signature.** `_reviewed_source_sha256`
+   (anchor 1242) normalizes `\r\n` to `\n`, refuses a lone `\r`, and then at line
+   1257 returns a plain `sha256` of the normalized bytes **for every path except
+   `verify_rollout_trust_anchor.py`**. The marker-substitution branch that WS-1
+   flagged as a possible complication applies only to the anchor's own self-entry,
+   so it does not reach either file here: `sha256sum` is the right function.
+   **The live hazard is the other one.** `.gitattributes` at `824b4238` pins only
+   six paths to `eol=lf` — two SQL migrations, `.secrets.baseline` and the three
+   trust-policy files — and **no `.py` file is among them**. On a CRLF working
+   tree, `sha256sum` of the file on disk will not equal what the verifier computes.
+   Normalize to LF before hashing, or hash the blob as git stores it. This
+   programme runs on Windows, so treat it as the default failure rather than an
+   edge case.
+
 Everything else on the path to a deployed, healthy AI Gateway is either AUTO or
 AUTO + FAIL CLOSED under the [autonomy policy](autonomy-policy.md).

@@ -842,7 +842,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with four sub-shapes and six instances.** WS-1 proposed the
+**The general rule, with five sub-shapes and eight instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -859,11 +859,25 @@ the instrument's range fails to match the question:
   false, not the data. This is the more durable of the two narrow shapes, because
   an empty result at least invites the question "is that right?", while a
   plausible non-empty list looks like a finished enumeration and so is *less*
-  likely to be challenged than the silence is.
+  likely to be challenged than the silence is. **A second instance, mine, is
+  recorded in §15:** the eleven-entry `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256` was
+  read from its head and described by its first four members.
 - **Too wide — hits read as presence.** WS-1's repository-wide enumeration of
   "importers" returned sixteen sites of which **three** are imports; the other
   thirteen are string literals. WS-9's count of `raise` sites had the same defect:
   every site is real, but the set is wider than "reachable".
+- **Right range, wrong granularity — a member misclassified because the unit of
+  analysis is smaller than the construct.** In that same enumeration, WS-1's
+  line-oriented classifier called
+  `tests/test_approved_assets_rollout_readiness.py:24` a string literal: line 23
+  is `from scripts.validation import (` and 24 is the continuation carrying the
+  module name, so the line holding the name is not itself an import statement.
+  Verified at source. This is not a range failure — the site was found — and it is
+  worth separating because the *same instrument on the same run* was
+  simultaneously too wide across the set and wrongly narrow at one member. **Note
+  how it surfaced:** not by re-inspection but because two independent counts
+  disagreed, three against two. Neither party could have found it alone by looking
+  harder, which is a different remedy from every other entry in this list.
 - **Wrong axis — the artefact described instead of the decision.** My "both
   mechanisms" above; the sets are real, and they are not what decides.
 
@@ -874,6 +888,19 @@ say what the instrument enumerates and compare it to what was asked. Three of th
 four sub-shapes produce *confident* wrong answers, and both narrow shapes produce
 a confident wrong answer that looks like diligence, which is why they are the
 dangerous members of the family.
+
+**And a limit on this section, established by the section itself.** The
+`CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256` error above was committed *after* the
+"sample read as a census" sub-shape was written down, in the same document, about
+the same file, two entries later. So the register does not work by being read —
+having named a failure mode confers no protection against it, because the failure
+occurs at the moment of *reading source*, not at the moment of recalling a rule.
+That matches what WS-6 said about F-3: what changed its behaviour was a claim
+cheap to check and expensive to have wrong, not a rule stated as a rule. **The
+operative form of every entry here is therefore an action, not a caution** — read
+to the closing brace; name what the instrument enumerates; check where the cost
+of being wrong lands. A reader who takes this section as a list of things to be
+careful about has taken the inert half.
 
 **One aggravating factor, from the §12a instance.** Correcting WS-6's census from
 two to seven made WS-6's own argument *stronger* — a well-attested pre-outage
@@ -1211,13 +1238,42 @@ replaces one entry with another, satisfies both halves, and a rule phrased over
 the diff's shape can be argued into the wrong branch. Phrase it over the
 **effect on membership**, not over the operation.
 
-**One dead end, checked so nobody re-walks it.** `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256`
-looks like an existing grouping that could serve, and cannot: it maps
-`scripts/migrations/_fixed_migration.py` and the three approved-assets collectors
-to source digests, and contains **none** of the anchor's own files. It exists for
-working-tree closure integrity, a different concept that merely overlaps. Reusing
-it would read as avoiding duplication while silently binding two unrelated
-security sets together, so that the next edit to either corrupts the other.
+**One dead end, and the correction to it is more useful than the dead end was.**
+`CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256` looks like an existing grouping that could
+serve as the anchor-machinery set. It cannot — but the reason recorded here
+earlier was wrong, and wrong in the direction that made it sound safe. That text
+said the constant "maps `scripts/migrations/_fixed_migration.py` and the three
+approved-assets collectors to source digests, and contains **none** of the
+anchor's own files". Read in full at 392–426 it has **eleven** entries, and two of
+them are the anchor's own files: `verify_rollout_trust_anchor.py` at 408 and
+`tests/test_rollout_trust_anchor.py` at 423.
+
+*How that happened, recorded because it is the shape named two entries earlier in
+§13.* The dict was read from its head — the first four entries are
+`_fixed_migration.py` and the collectors — and generalised to the whole. That is
+"too narrow, non-empty: a sample read as a census", committed against the same
+file, in the same document, immediately after adding the sub-shape on WS-6's
+behalf. Naming a failure mode does not confer immunity to it; the only thing that
+does is reading to the closing brace.
+
+*The conclusion survives and gets sharper.* A **disjoint** set would be obviously
+unsuitable and therefore harmless — nobody adopts it. This set **overlaps**, which
+is the trap: it contains the verifier and the verifier's test, so a spot-check of
+"is the anchor in here?" says yes twice; it **omits the workflow and the runbook**,
+which are exactly two of the four files #116 needed; and it carries **nine** paths
+that are not anchor machinery at all, including a service module and three
+unrelated test files.
+
+*And it makes the second caveat above a demonstrated failure rather than a
+hypothetical one.* All eleven members are in `PROTECTED_EXACT_PATHS` — lines 81,
+85, 87, 88, 92, 99, 102, 111, 112, 113 and 114, checked individually. So
+`all(is_protected_path(p) for p in CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256)`
+**passes**. Adopt this constant as `ANCHOR_MACHINERY` and the proposed invariant
+goes green while the bootstrap class silently widens to include, among others, a
+pull request touching only `services/adapteng-drive-adapter/app/approved_source.py`.
+The worked example offered above for that caveat was hand-picked; this one was
+already sitting in this document, labelled a dead end, which is a better argument
+than the invented example and was available the whole time.
 
 **Fourth: the receipt is invisible to `is_protected_path`, deliberately.** This is
 the strongest of the three arguments for the strict form, because of what it
