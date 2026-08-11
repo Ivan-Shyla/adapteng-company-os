@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import socket
 import sys
 import urllib.error
 import urllib.request
@@ -57,6 +58,11 @@ REQUEST_TIMEOUT_SECONDS = 20
 # are different findings with different owners.
 READINESS_ATTEMPTS = 6
 READINESS_INTERVAL_SECONDS = 10
+
+# A name already known to resolve from this runner, used only as a control. The
+# managed database is the natural one: the runtime role job reaches it by uuid,
+# so its resolvability here is established rather than assumed.
+REFERENCE_HOST_VARIABLE = "READINESS_REFERENCE_HOST"
 
 
 class ProbeResult:
@@ -181,19 +187,80 @@ def resolve_base(client: driver.Client, spec: dict) -> tuple[str, list[tuple[str
     return "", attempts
 
 
+def resolve(name: str) -> tuple[list[str], str]:
+    """Resolve a name to addresses without connecting to anything.
+
+    Kept separate from fetching because the two failures have different owners
+    and only one of them is about the gateway. A name that does not resolve says
+    the container is not on this network - nothing about whether the service
+    works. A name that resolves but refuses the connection says the opposite.
+    Resolution also works against things that speak no HTTP, which is what lets
+    a database be used as the reference point below.
+    """
+
+    try:
+        answers = socket.getaddrinfo(name, None, proto=socket.IPPROTO_TCP)
+    except OSError as error:
+        return [], f"{type(error).__name__}: {error}"
+    addresses = []
+    for entry in answers:
+        address = str(entry[4][0])
+        if address not in addresses:
+            addresses.append(address)
+    return addresses, ""
+
+
 def operate_address(client: driver.Client, spec: dict) -> int:
     driver.emit("--- address ai-gateway")
     application = locate_application(client, spec)
     port = int(spec["network"]["internal_port"])
     driver.emit(f"    container port: {port}")
     answered = 0
+    resolved = 0
     for name in candidate_addresses(application, spec):
-        result = fetch(f"http://{name}:{port}/health")
-        driver.emit(f"    {name}: {summarize(result)}")
-        if result.status == 200:
-            answered += 1
+        addresses, error = resolve(name)
+        if addresses:
+            resolved += 1
+            driver.emit(f"    {name}: resolves to {', '.join(addresses)}")
+            result = fetch(f"http://{name}:{port}/health")
+            driver.emit(f"        liveness: {summarize(result)}")
+            if result.status == 200:
+                answered += 1
+        else:
+            driver.emit(f"    {name}: does not resolve ({error})")
+
+    # A reference point turns "the gateway does not resolve" into "this runner
+    # resolves the database but not the gateway", which is a different finding
+    # with a different owner. Without it, a runner that had lost the network
+    # entirely would produce exactly the same report as a gateway that was never
+    # attached to it, and the two are fixed in different places.
+    reference = (os.environ.get(REFERENCE_HOST_VARIABLE) or "").strip()
+    if reference:
+        addresses, error = resolve(reference)
+        if addresses:
+            driver.emit(
+                f"    reference {reference}: resolves to {', '.join(addresses)}"
+            )
+            driver.emit(
+                "        This runner is on the shared network and can resolve "
+                "names on it, so an unresolvable gateway is the gateway's "
+                "attachment rather than this runner's placement."
+            )
+        else:
+            driver.emit(f"    reference {reference}: does not resolve ({error})")
+            driver.emit(
+                "        The reference is known to have been reachable from here, "
+                "so this runner has lost the shared network. That is the finding, "
+                "and the gateway's own state is unknown until it is fixed."
+            )
+    else:
+        driver.emit(
+            f"    reference: none given ({REFERENCE_HOST_VARIABLE} is empty), so a "
+            "failure to resolve cannot be attributed to either side"
+        )
+
     driver.emit("")
-    driver.emit(f"RESULT address ok answering={answered}")
+    driver.emit(f"RESULT address ok resolved={resolved} answering={answered}")
     return driver.EXIT_OK
 
 
@@ -212,6 +279,22 @@ def operate_probe(client: driver.Client, spec: dict, sleep=None) -> int:
             "this runner is not on the gateway's network or the container is not "
             "listening. Both are visible from the Coolify placement."
         )
+        reference = (os.environ.get(REFERENCE_HOST_VARIABLE) or "").strip()
+        if reference:
+            addresses, error = resolve(reference)
+            if addresses:
+                driver.emit(
+                    f"    the reference name {reference} does resolve from here, "
+                    "so this runner is on the shared network and the gateway is "
+                    "not attached to it. That is the gateway's placement, not "
+                    "this job's."
+                )
+            else:
+                driver.emit(
+                    f"    the reference name {reference} does not resolve either "
+                    f"({error}), so this runner has lost the shared network and "
+                    "the gateway's own state is unknown rather than bad."
+                )
         driver.emit("RESULT probe failed reachable=no")
         return driver.EXIT_FAILED
 

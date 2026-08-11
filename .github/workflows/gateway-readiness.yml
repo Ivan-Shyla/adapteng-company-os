@@ -81,6 +81,13 @@ jobs:
           OPERATION: ${{ inputs.operation }}
           COOLIFY_API_CREDENTIAL: ${{ secrets.COOLIFY_API_TOKEN }}
           COOLIFY_BASE_URL: ${{ vars.COOLIFY_URL }}
+          # A control, not a dependency. The managed database is reached by this
+          # uuid from this runner by the runtime-role job, so its resolvability
+          # here is established rather than assumed. It turns "the gateway does
+          # not resolve" into "this runner resolves the database but not the
+          # gateway", which is a different finding with a different owner. It is
+          # only ever resolved, never connected to.
+          READINESS_REFERENCE_HOST: ${{ vars.AI_GATEWAY_PG_DSN_HOST }}
         run: |
           set -euo pipefail
           # The Coolify credential is used only to look up where the container
