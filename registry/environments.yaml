@@ -83,9 +83,9 @@ created_not_yet_deployed:
     coolify_environment: production
     coolify_destination: c3dnc3udkoenz9zhw148mbu0   # the destination adapteng-baserow-adapter and n8n-selfhosted use
     source: GitHub App adapteng-coolify (the platform repository is private, so the public-repo source cannot read it)
-    endpoint: none — never deployed
-    application_status: "exited:unhealthy — the expected state for an application that has never been released"
-    state: created and configured by scripts/coolify_deploy.py reconcile; not deployed
+    endpoint: internal only — no public URL; reached on the coolify network as the container alias
+    application_status: "running:unknown — running, with Coolify's own health verdict unknown because the container gate is still the command-based one; the container's readiness was proved directly instead, below"
+    state: created, configured, deployed and answering /ready
     creation_evidence:
       run: 31496735683
       created: "2026-08-11T13:33Z"
@@ -101,8 +101,18 @@ created_not_yet_deployed:
       # Names only. These are set on the resource by the owner, or by a run that
       # supplies them from a secret; their values never appear in a log or a file.
       - AI_GATEWAY_BEARER_TOKENS
-      - AI_GATEWAY_DATABASE_URL      # blocked on the ai_gateway_runtime Postgres role
       - GOOGLE_APPLICATION_CREDENTIALS
+    owner_held_values_now_proven_in_place:
+      # AI_GATEWAY_DATABASE_URL moved here on evidence, not on assertion. /ready
+      # opens a database connection where /health does not (see
+      # known_deployment_requirements below, read from platform main), and /ready
+      # answered 200 from inside the container. A wrong or absent DSN cannot
+      # produce that answer.
+      #
+      # The other two are NOT proven by the same run and stay above: both
+      # endpoints answer before the Authorization header is read, and no model is
+      # called, so a 200 says nothing about either value.
+      - AI_GATEWAY_DATABASE_URL
     managed_database:
       # Read from the instance on 2026-08-11, not assumed. The address half of
       # internal_db_url is recorded; the credential half of that same string is
@@ -118,11 +128,24 @@ created_not_yet_deployed:
       enable_ssl: false
       ssl_mode_reported: require
       dsn_host_variable: AI_GATEWAY_PG_DSN_HOST
-      unresolved: >-
-        enable_ssl is false while ssl_mode reports require. A server with no TLS
-        configured refuses a client demanding it, so one of the two does not mean
-        what its name suggests. Settle it by connecting rather than by reading -
-        the recon operation does exactly that - before the DSN is written.
+      resolved: >-
+        Settled from the network contract, not from either document. recon
+        connected to production Postgres and read pg_stat_ssl, and the server
+        answered 'false none none': the connection is not encrypted and no TLS
+        is on offer. enable_ssl=false is the true one; ssl_mode=require is the
+        name that does not mean what it suggests.
+      resolved_by: PR #120 (b6423fe), 2026-08-11
+      acted_on: >-
+        Recording the answer was not enough. libpq does not degrade a DSN
+        declaring require or verify-full against a server without TLS, it
+        refuses to connect, so publishing a demanding mode would have produced a
+        correct role, a successful provision and a gateway that cannot start -
+        everything reporting success except the thing that matters. The
+        published mode is prefer, which this server can honour and which
+        upgrades by itself if TLS is ever enabled. provision re-measures the
+        transport on every run and refuses to publish any demanding mode it has
+        not observed being satisfied, including when the measurement is
+        unreadable - undetermined is not permission to assume.
     pending_owner_ui_settings:
       # This Coolify version reports these nowhere on the application resource, so
       # a write to them could not be verified and the driver does not attempt one.
@@ -148,12 +171,49 @@ created_not_yet_deployed:
       # supplemented at deploy time, and that was previously written down nowhere.
       - must set AI_GATEWAY_HTTP_HOST=0.0.0.0 — the Dockerfile defaults to 127.0.0.1, which is unreachable from the container network, so the health check cannot pass
       - /health is liveness only — it returns ok without touching PostgreSQL, so a green health check does not prove database or budget accounting readiness; a separate readiness check is required
-    blocking: "the three owner-held values above, then deployment, then proving the EU Vertex client, Drive adapters, orchestration and canonical approval composition against the running service"
+    blocking: "AI_GATEWAY_BEARER_TOKENS and GOOGLE_APPLICATION_CREDENTIALS, then proving the EU Vertex client, Drive adapters, orchestration and canonical approval composition against the running service"
     budget_binding: budgets.ai_runtime_cap_eur_month (fail-closed cap, not evidenced spend)
     model_binding: external_saas "Google Cloud (Vertex AI + Drive API)" — gemini-3.1-flash-lite, location eu
-    deployment_evidence: NONE — the application has never been deployed. A recorded deploy plus a no-business-data smoke result against the running service would settle it.
+    deployment_evidence:
+      deployed: true
+      readiness: "/ready answered 200 from inside the container"
+      how: >-
+        Not asked from outside, because nothing outside can reach it: the
+        application is internal-only on the coolify network and the database
+        refuses every route a runner has. The probe runs as a Coolify scheduled
+        task inside the container itself, and its recorded execution message is
+        the answer. The task is armed for the run and returned to rest
+        afterwards - disabled, and scheduled for a leap day.
+      proof_runs:
+        - run: 31542579590
+          operation: verify
+          completed: "2026-08-11T22:29Z"
+          result: "verify ok ready=yes answer=200"
+          execution: "2026-08-11T22:29:01Z status=success message=ADAPTENG_READY 200"
+        - run: 31540027132
+          operation: diagnose
+          completed: "2026-08-11T21:54Z"
+          result: >-
+            four executions recorded, every one status=success with
+            ADAPTENG_READY 200, corroborated independently by four
+            "GET /ready HTTP/1.1" 200 lines in the container's own access log
+      what_it_does_and_does_not_prove: >-
+        /ready opens a database connection where /health does not, so a 200 is
+        the database proof and the runtime DSN is in place and usable. It is not
+        proof of the two remaining owner-held values and not proof of model
+        access: both endpoints answer before the Authorization header is read,
+        and no model is called. Vertex inference calls remain 0.
+      earlier_claim_was_wrong: >-
+        This field read "NONE - the application has never been deployed" while
+        four successful readiness executions were already recorded against it.
+        The mistake was in the instrument, not the deployment: verify ranked
+        executions by an id that this Coolify instance always returns as null,
+        so no row ever counted as new and the tool reported
+        ready=undetermined reason=no_execution. Fixed and pinned by a
+        regression test in PR #132.
     declared: 2026-08-10
     created: 2026-08-11
+    deployed: 2026-08-11
 
 declared_not_yet_created:
   # Production resources that are designed and named here but DO NOT EXIST yet.
