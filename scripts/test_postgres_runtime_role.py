@@ -562,7 +562,40 @@ class DiscoveryTests(unittest.TestCase):
         self.respond(200, [{"name": "a", "type": "standalone-postgresql", "internal_db_url": ""}])
         with self.assertRaises(driver.Abort) as raised:
             self.discover()
-        self.assertIn("internal address", str(raised.exception))
+        self.assertIn("neither an internal address nor the parts", str(raised.exception))
+
+    def test_the_parts_are_used_when_the_assembled_address_is_absent(self) -> None:
+        """Not every version reports the assembled URL; the parts are enough."""
+
+        self.respond(200, [{
+            "name": "a",
+            "type": "standalone-postgresql",
+            "uuid": "pgdgbwzsuuxhw55g8v5opjgn",
+            "postgres_user": "postgres",
+            "postgres_password": ROLE_CREDENTIAL,
+        }])
+        found, report = self.discover()
+        self.assertEqual(found["host"], "pgdgbwzsuuxhw55g8v5opjgn")
+        self.assertEqual(found["credential"], ROLE_CREDENTIAL)
+        self.assertNotIn(ROLE_CREDENTIAL, report)
+
+    def test_a_record_is_recognised_by_more_than_one_spelling(self) -> None:
+        """A filter on one field reports an empty instance when the field is named differently."""
+
+        self.assertTrue(driver.looks_like_postgres({"type": "standalone-postgresql"}))
+        self.assertTrue(driver.looks_like_postgres({"image": "postgres:16-alpine"}))
+        self.assertTrue(driver.looks_like_postgres({"database_type": "PostgreSQL"}))
+        self.assertTrue(driver.looks_like_postgres({"postgres_user": "postgres"}))
+        self.assertFalse(driver.looks_like_postgres({"type": "standalone-redis"}))
+
+    def test_an_empty_result_reports_what_was_actually_there(self) -> None:
+        """A wrong filter and an empty instance read identically unless it says."""
+
+        self.respond(200, [{"name": "cache", "type": "standalone-redis"}])
+        with self.assertRaises(driver.Abort) as raised:
+            self.discover()
+        self.assertIn("cache", str(raised.exception))
+        self.assertIn("standalone-redis", str(raised.exception))
 
     def test_a_non_postgres_instance_is_not_mistaken_for_one(self) -> None:
         self.respond(200, [{"name": "cache", "type": "standalone-redis", "internal_db_url": "redis://r:6379"}])
