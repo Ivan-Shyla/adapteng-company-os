@@ -1004,6 +1004,32 @@ def report_settings_sources(client: Client, application_uuid: str) -> None:
         emit(f"        GET {path} -> HTTP {status}, owned keys reported: {found}")
 
 
+def report_databases(client: Client) -> None:
+    """Print what databases this instance manages, by name and shape only.
+
+    A database object carries the credential its own engine was created with, so
+    this prints key names and a small set of fields that are identities rather
+    than secrets. The reason to look at all is that the gateway's DSN has to name
+    a host the gateway's container can resolve, and guessing that address is the
+    one thing scripts/postgres_runtime_role.py refuses to do.
+    """
+
+    identities = ("uuid", "name", "status", "type", "database_type", "image")
+    databases = call(client, "GET", "/databases", allow_absent=True)
+    if not isinstance(databases, list):
+        emit("    databases: not reported by this instance")
+        return
+    emit(f"    databases: {len(databases)}")
+    for item in databases:
+        if not isinstance(item, dict):
+            continue
+        shown = " ".join(
+            f"{name}={item.get(name)}" for name in identities if item.get(name) is not None
+        )
+        emit(f"      - {shown}")
+        emit(f"        keys: {sorted(item)}")
+
+
 def report_object_shape(client: Client, application: dict) -> dict:
     """Print the key names the API reports for this application, and nothing else.
 
@@ -1125,6 +1151,7 @@ def operate_inspect(client: Client, spec: dict) -> int:
         emit(f"      - {item.get('name')} uuid={item.get('uuid')} status={item.get('status')}")
     report_placement_sources(client, applications)
     report_github_apps(client)
+    report_databases(client)
 
     application = find_application(applications, target["resource_name"])
     if application is None:

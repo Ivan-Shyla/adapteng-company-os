@@ -98,6 +98,30 @@ jobs:
           } > ~/.ssh/config
           chmod 600 ~/.ssh/config
 
+      - name: Prove the host is reachable before blaming the credential
+        run: |
+          set -euo pipefail
+          # An ssh failure reports "connection timed out" whether the address is
+          # wrong, the daemon is down, or the packets are dropped by a firewall
+          # that does not permit this source. Those have different owners, so the
+          # cause is established here rather than inferred from a later failure.
+          host='${{ vars.PROD_SSH_HOST }}'
+          port='${{ vars.PROD_SSH_PORT || '22' }}'
+          echo "runner egress address: $(curl -fsS --max-time 20 https://api.ipify.org || echo unavailable)"
+          if timeout 20 bash -c "cat < /dev/null > /dev/tcp/${host}/${port}" 2>/dev/null; then
+            echo "tcp ${host}:${port} reachable from this runner"
+          else
+            echo "::error::No TCP route from this runner to ${host}:${port}."
+            echo "The Coolify API on the same host answers over 443 from runners, and"
+            echo "port ${port} answers from an operator workstation, so the daemon is up"
+            echo "and the address is right: this source is not permitted. Reaching it"
+            echo "needs a decision the owner holds - a self-hosted runner on the host,"
+            echo "an allowance for GitHub's published runner ranges, or running this"
+            echo "operation from a workstation that is already permitted. Nothing was"
+            echo "sent to the host and nothing was changed."
+            exit 1
+          fi
+
       - name: Copy the script to the host
         run: |
           set -euo pipefail

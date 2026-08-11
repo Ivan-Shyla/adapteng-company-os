@@ -113,6 +113,22 @@ class FakeInstance:
             {"id": 2, "uuid": "gha-2", "name": "Public GitHub"},
         ]
         self.applications: list[dict] = []
+        # A database object carries the credential its engine was created with.
+        # The fixture holds one so a test can assert the report never prints it;
+        # a fixture without a credential-bearing field could not tell the
+        # difference between a report that redacts and one that has nothing to
+        # redact.
+        self.databases: list[dict] = [
+            {
+                "uuid": "db-1",
+                "name": "adapteng-postgres",
+                "status": "running:healthy",
+                "database_type": "standalone-postgresql",
+                "image": "postgres:16-alpine",
+                "internal_db_url": "postgresql://postgres:s3cr3t-not-for-a-log@adapteng-postgres:5432/postgres",
+                "postgres_password": "s3cr3t-not-for-a-log",
+            }
+        ]
         self.environment_entries: dict[str, list[dict]] = {}
         self.deployment_states = list(deployment_states or ["queued", "in_progress", "finished"])
         self.deployments: dict[str, dict] = {}
@@ -174,6 +190,8 @@ class FakeInstance:
             return 200, copy.deepcopy(self.servers)
         if path == "/github-apps":
             return 200, copy.deepcopy(self.github_apps)
+        if path == "/databases":
+            return 200, copy.deepcopy(self.databases)
         if path == "/applications":
             return 200, copy.deepcopy(self.applications)
         match = re.fullmatch(r"/projects/([^/]+)/environments", path)
@@ -827,6 +845,31 @@ class InspectTests(unittest.TestCase):
         instance.applications.append(twin)
         with self.assertRaises(driver.Abort):
             run_operation(driver.operate_inspect, instance)
+
+    def test_the_database_report_names_the_host_without_printing_a_credential(self) -> None:
+        """The DSN host has to come from somewhere; a log is not where a password goes.
+
+        The fixture's database carries a credential in two fields, one of them a
+        URL. Both must be absent from the report while the identity that makes
+        the report worth running - the name a container would resolve - is
+        present.
+        """
+
+        instance = FakeInstance(with_application=True)
+        code, report = run_operation(driver.operate_inspect, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("adapteng-postgres", report)
+        self.assertIn("standalone-postgresql", report)
+        self.assertIn("internal_db_url", report)
+        self.assertNotIn("s3cr3t-not-for-a-log", report)
+        self.assertEqual(instance.writes(), [])
+
+    def test_an_instance_reporting_no_databases_is_not_an_error(self) -> None:
+        instance = FakeInstance(with_application=True)
+        instance.databases = []
+        code, report = run_operation(driver.operate_inspect, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("databases: 0", report)
 
 
 class ReconcileTests(unittest.TestCase):
