@@ -955,7 +955,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with seven sub-shapes and sixteen instances.** WS-1 proposed the
+**The general rule, with seven sub-shapes and nineteen instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -987,7 +987,16 @@ the instrument's range fails to match the question:
   mine and worse, is now recorded in §15 too:** the census of Python hosts that
   could carry the invariant's constant enumerated two, and there is a third in
   neither digest map — an undercount that raised the guard's apparent price to
-  the point of deferring it.
+  the point of deferring it. **A fourth is the sharpest of the four, because
+  nothing was read too quickly:** the four-row `.gitattributes` experiment ran on
+  a worktree that already existed, so the only observations it could physically
+  produce were transitions between states of that worktree. The population where
+  the attribute works — a materialization that has not happened yet — was excluded
+  by the *design* of the instrument, not by a careless reading of its output. That
+  is the version of this shape that the standard remedy does not reach: "is that
+  the whole set?" is answerable by looking harder at a query, and unanswerable by
+  looking harder at an experiment that cannot emit the missing rows. It needed a
+  different instrument, a clone into an empty directory, and WS-2 supplied it.
 - **Too wide — hits read as presence.** WS-1's repository-wide enumeration of
   "importers" returned sixteen sites of which **three** are imports; the other
   thirteen are string literals. WS-9's count of `raise` sites had the same defect:
@@ -1010,7 +1019,14 @@ the instrument's range fails to match the question:
   quantifier claim needs a query returning the whole set, one round after
   agreeing it. And it is simultaneously an instance of the flattering-error entry
   below: uniqueness meant no second copy could disagree, which made the hazard
-  sound unrecoverable and so strengthened the argument it appeared in.
+  sound unrecoverable and so strengthened the argument it appeared in. **A fifth,
+  also mine and also joint with a workstream, is the cheapest of them to have
+  avoided:** "CI runs on Linux, so `autocrlf` is off" was written by WS-2 and
+  repeated here to price the `.gitattributes` question. Sixteen workflows exist at
+  `824b4238` and `ai-gateway-tests.yml` runs a `windows-latest` matrix leg (66).
+  The conclusion survives on that leg's scope, but the statement was generalised
+  from the one workflow the whole discussion was already reading — the population
+  was never enumerated because a sample was already open on the desk.
 - **Right range, wrong granularity — a member misclassified because the unit of
   analysis is smaller than the construct.** In that same enumeration, WS-1's
   line-oriented classifier called
@@ -1048,8 +1064,8 @@ the instrument's range fails to match the question:
   then `git add --renormalize .`, then `git checkout -- .` all reported success
   and all left the file byte-identical, still CRLF. `--renormalize` renormalizes
   the *index*; `checkout -- .` restores files it considers modified, and the file
-  is not modified relative to the index. Only deleting the file and checking it
-  out again converted it. The command whose name most exactly describes the
+  is not modified relative to the index. Only a command that forces
+  re-materialization converted it. The command whose name most exactly describes the
   intended effect is the one that does not produce it. **A second instance is my
   own, one command earlier in the same session:** the first run of that experiment
   wrote the sample file directly and never had git materialize it, so the CRLF
@@ -1059,7 +1075,41 @@ the instrument's range fails to match the question:
   measured. **The remedy does not generalise from the rest of this list.** For a
   read you ask what the output is true of; for a write, "it succeeded" is never
   evidence, and the only check is to measure the artefact you wanted changed —
-  here, count the `CR` bytes.
+  here, count the `CR` bytes. **WS-2 read the same experiment the other way and
+  the reading is better:** of those four commands, three quietly did nothing and
+  one worked, and *none of the four printed anything that distinguished them*. So
+  the generalisation is not confined to writes — **an exit status is a claim about
+  the command; the check has to be a claim about the world.**
+
+  **And the conclusion drawn from that experiment was wrong, which is a separate
+  failure from the one it illustrates.** The four rows were reported accurately and
+  used to conclude that `.gitattributes` "is not effective". WS-2 supplied a fifth
+  row — `git rm --cached -r .` then `git reset --hard` converts the file, clean
+  tree, blob unchanged — and, more importantly, a sixth measurement the table had
+  no row for: **a fresh clone with the attribute already committed checks the file
+  out at `CR=0`.** Both reproduced here. The attribute is effective immediately for
+  every future materialization; what it cannot do is retroactively rewrite a
+  worktree that already exists. §15 and owner-decision item 5 are corrected.
+
+  The reason this belongs in the register is *why* the table could not have found
+  it. The experiment mutated a worktree that already existed, so every row it could
+  produce was a transition between states of that worktree. The population where
+  the remedy works — a materialization that has not happened yet — was outside what
+  the instrument could observe, not something missed within it. **That is the
+  sample-as-census shape with the sampling done by the experimental design rather
+  than by the reader**, and no amount of adding rows reaches it; it needs a
+  different instrument, a clone into an empty directory. The same reading applies to
+  the two earlier misses: WS-2's `git status --porcelain` probe and my own
+  never-materialized setup both read clean because the condition they were meant to
+  observe had never been created.
+
+  **A third instrument artefact, mine, committed while writing this correction up.**
+  Re-running the experiment I printed a "stored blob CR count" of 3 for a blob that
+  is pure LF — `git cat-file blob | Out-String` routes bytes through PowerShell's
+  text pipeline, which inserts CRLF. Verified properly two ways: the blob is 18
+  bytes with zero CRLF pairs when redirected binary-safe, and its SHA-1 equals the
+  independently derived hash of the LF content (`a9aeef04`). A probe that reads the
+  world through a converting layer reports the layer.
 
 Unifying form, and the reason the seven belong together: **every one of these
 instruments returned a true statement, and in no case was the true statement about
@@ -1197,7 +1247,12 @@ observation, when the thing genuinely does look like housekeeping. The only
 mechanism that surfaced it was an unrelated question — "is `sha256sum` the right
 function?" — reaching the same evidence from the decision side. Which argues for
 indexing this register by *decision affected* rather than by symptom, and against
-any confidence that a fact once written down is a fact available.
+any confidence that a fact once written down is a fact available. **WS-2 endorsed
+this over the weaker reading and gave the better reason:** the rule-doesn't-fire
+limit still leaves something for the reader to get right at recall time, whereas
+here there was nothing — the note was accurate, the retrieval query would have had
+to be phrased in terms of the very knowledge the note existed to supply. An index
+by symptom is only searchable by someone who already has the diagnosis.
 
 **One aggravating factor, from the §12a instance.** Correcting WS-6's census from
 two to seven made WS-6's own argument *stronger* — a well-attested pre-outage
@@ -1767,6 +1822,22 @@ receipt does not verify. But the anchor workflow is `runs-on: ubuntu-latest`
 CI verdict. They are load-bearing for local reproduction, not for the gate's
 output. That is a checkable distinction and a weaker claim than "it is machinery",
 which is what the argument would have been without the check.
+
+**A correction to the supporting sentence, not the conclusion.** "CI runs on
+Linux" was written by WS-2 and repeated here, and it is not exactly true. Sixteen
+workflows at `824b4238`, none setting `core.autocrlf`; the self-hosted runners in
+`migrate-approved-assets.yml` carry `linux`/`x64` labels; but
+`ai-gateway-tests.yml` runs its `unit` job on `[ubuntu-latest, windows-latest]`
+(line 66), so a **Windows CI leg exists**. The conclusion survives because that leg
+is confined to `services/ai-gateway` and its repo-file readers normalize already
+(`tests/migration_support.py:20`). But the survival is a fact about that leg's
+scope, not about the platform, and the two come apart the moment anyone proposes a
+repo-wide `*.py text eol=lf`: that entry would change the Windows leg's checkout
+and inherits none of this inertness. **Scope is therefore part of the
+`.gitattributes` decision.** Filed here because "CI is Linux" is precisely the kind
+of load-bearing background fact that gets reused without re-checking — it was
+asserted from the workflow everybody was already reading, and one of the fifteen
+others contradicts it.
 
 **The general pattern, restated on five sets, and the earlier version of it was
 too weak.** This previously read: *a wrong candidate set is dangerous exactly when

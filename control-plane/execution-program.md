@@ -845,29 +845,52 @@ deployed gateway:
    that normalizes is CRLF-safe and a checker that does not is CRLF-fragile, and
    the person computing a digest by hand is in the second category.
 
-   **Do not reach for `.gitattributes` as the durable fix here — it is neither
-   free nor effective in this sitting.** It is not free because `.gitattributes`
-   is itself protected, at anchor line 69, so adding `*.py eol=lf` needs the same
-   authority as the re-pin. It is not effective because the attribute governs
-   *checkout*, and the files are already checked out. Measured on a scratch
-   repository with `core.autocrlf=true`, a CRLF file stayed byte-identical through
-   all three natural remedies:
+   **`.gitattributes` is not free, and the earlier verdict that it is not
+   effective was wrong.** It is not free because `.gitattributes` is itself
+   protected, at anchor line 69, so adding an `eol=lf` entry needs the same
+   authority as the re-pin. The rest of this paragraph previously said it was also
+   ineffective, on the grounds that the attribute governs *checkout* and the files
+   are already checked out. That measured one population and described all of
+   them. Corrected and re-measured on a scratch repository at
+   `core.autocrlf=true`:
 
-   | Step | `CR` count on disk |
-   |---|---|
-   | fresh checkout, no attributes | 3 |
-   | after committing `*.py text eol=lf` | 3 |
-   | after `git add --renormalize .` | 3 |
-   | after `git checkout -- .` | 3 |
-   | after **deleting the file** and checking it out again | **0** |
+   | Step | `sample.py` `CR` | `notes.txt` `CR` (no attribute) |
+   |---|---|---|
+   | fresh materialization, no attributes | 3 | 2 |
+   | after committing `*.py text eol=lf` | 3 | 2 |
+   | after `git add --renormalize .` | 3 | 2 |
+   | after `git checkout -- .` | 3 | 2 |
+   | after `git rm --cached -r .` ; `git reset --hard` | **0** | 2 |
+   | **fresh clone, attribute already committed** | **0** | 2 |
 
-   Only the last step converts it, and it is the one nobody thinks to run. So
-   adding the attribute in the same sitting would leave the bytes CRLF while
-   making the file *look* protected — worse than not adding it. One genuinely
-   useful fact from the same experiment: the stored blob is unchanged by the
-   attribute commit, so such a change would **not** invalidate any existing pin.
-   If `.gitattributes` is wanted, it is a separate decision about future
-   checkouts, not a remedy for this one.
+   Working tree clean at every row and the blob unchanged throughout
+   (`a9aeef04`), so no pin is invalidated. Two things follow that the four-row
+   version got wrong. **The attribute works immediately for every future
+   materialization** — the last row is a new clone, not a repair — so the commit
+   is effective the moment it lands. And **the stale worktree has a one-sitting
+   local fix** that touches no blob and needs no authority. It is also surgical:
+   `notes.txt`, which carries no attribute, keeps its `autocrlf` behaviour. WS-2's
+   caveat is worth keeping: `git reset --hard` discards uncommitted work, so if it
+   is ever used during a signing sitting it belongs *before* the edit.
+
+   **Why the original table could not have found this, which is the part worth
+   carrying.** The experiment mutated a worktree that already existed, so every
+   row it could produce was a *transition*. The population where the remedy works
+   — a materialization that has not happened yet — was outside what the instrument
+   could observe, not something overlooked within it. Seeing it needs a different
+   instrument (clone into an empty directory), never a further step.
+
+   **One scoping fact for this decision, since "CI is Linux" is not exactly
+   true.** Sixteen workflows at `824b4238`, none setting `core.autocrlf`; the
+   self-hosted runners in `migrate-approved-assets.yml` are labelled `linux`/
+   `x64`; but `ai-gateway-tests.yml` runs its `unit` job on a matrix of
+   `[ubuntu-latest, windows-latest]` (line 66). So a Windows CI leg does exist.
+   It is confined to `services/ai-gateway`, whose repo-file readers normalize
+   already (`tests/migration_support.py:20`, `decode_utf8_normalized`), so a
+   **two-path** attribute naming only the item-5 files changes no CI verdict. A
+   repo-wide `*.py text eol=lf` would alter that leg's checkout and does not have
+   the same inertness argument. The scope of the entry is therefore part of the
+   decision, not a detail of it.
 6. **Whether a base that moves mid-run should stay an authorization refusal.**
    `verify_pull_request` at anchor 2653–2659 raises one
    `TrustError("pull_request.live_ref_changed")` for two different events: the
