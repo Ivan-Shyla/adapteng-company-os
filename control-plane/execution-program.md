@@ -669,9 +669,43 @@ deployed gateway:
    last. The trust anchor refuses it correctly, because it touches the protected
    rollout boundary, and no agent should merge past that refusal. Procedure is in
    the platform's `docs/runbooks/authorize-rollout-policy-change.md`. **Worth
-   extending before signing:** #121 repairs one of the two stderr-discard sites.
-   Line 379, the runner check, still routes its error to `/dev/null`, and seven
-   of the helper's failure codes report through it. Covering both in one receipt
+   extending before signing, and the case for that is now much stronger than
+   "one more site".** This item previously said #121 repairs one of **two**
+   stderr-discard sites. That was scoped to the metadata helper's invocations.
+   Scored across the whole file — all eighteen lines carrying a `2>` redirect at
+   `824b4238`, enumerated from the blob — the sites that discard the only account
+   of a failure number **seven**: 254 and 379 (the two already named), plus 353,
+   359, 367, 388 and 151. #121 closes one. Full enumeration and the scoring in
+   F-8.
+
+   **The reason this changes the decision rather than just the number is that
+   almost all of it is nearly free.** Three cost classes, and only the first needs
+   #121's construct:
+
+   | Class | Sites | Fix |
+   | --- | --- | --- |
+   | stdout captured into a variable | 379 | temp-file technique, ports verbatim from #121 |
+   | both streams discarded, no capture | 353, 359, 367, 388 | delete `2>&1`; stderr then flows through |
+   | no handler at all | 151 | needs a `\|\| { printf …; exit 1; }`, not a redirect change |
+
+   The middle class is four of the seven and is a one-token deletion each with no
+   contamination risk, because nothing captures those streams. **One caveat on it:**
+   353 and 359 are `gh secret set`, the only two sites whose input is secret
+   material. The value is encrypted client-side so their stderr almost certainly
+   cannot echo it, but that has not been checked by anyone and the cost
+   classification above is keyed on capture mechanics, which cannot ask the
+   question. One deliberate look before letting those two through.
+
+   **151 is the one to look at first even though it is listed last.**
+   `gh auth status >/dev/null 2>&1` has no `|| { … }`, and `set -Eeuo pipefail`
+   at line 2 is in force there (151 falls outside every `set +e` window), so a
+   failure exits the script through `set -e` **printing no `lifecycle.*` token at
+   all**. It is the only failure in the file that is not named. Every other site
+   in this finding degrades an operator from "what and why" to "what"; this one
+   gives neither, and it is upstream of everything else, so it is the failure most
+   likely to be met first and the one that says least.
+
+   Covering the set in one receipt
    avoids needing a second signature later for an identical one-line change. See
    F-8. **Context is already on the pull request:** WS-6 posted the verdict's
    meaning and then corrected its own comment to disclose the §15 hold and the
@@ -685,7 +719,12 @@ deployed gateway:
    `388`/`393` on `f0a2d17`, because #121 inserts nine lines above them. A
    number-only citation here is wrong today and becomes right the moment the
    receipt is signed, with no edit to the citation, which is worse than a stable
-   error. Do not carry the +9 to other sites in the file: the insertion is
+   error. **And "388" is now an outright collision, not merely unstable:** on
+   `main` it is a real discard site — `"$runner_start" … >/dev/null 2>&1`, one of
+   the seven — while on `f0a2d17` it is the verify-staged-runner capture. Two
+   correct records, one integer, two different sites; the failure mode is that
+   they read as contradicting each other. Do not carry the +9 to other sites in
+   the file: the insertion is
    interior, so the select-queued-run coordinates shift by +1 and +7 instead. Full
    table in F-8. The fix ports verbatim from #121's own construct — both sites
    are command substitutions capturing into a variable, so `2>&1` is wrong at

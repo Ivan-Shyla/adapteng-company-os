@@ -705,6 +705,15 @@ labels, while the *blindness* is exactly two sites — #121 closes one and 379 i
 the other. That is a tighter scope than "both discard sites carry both defects",
 and it is checkable.
 
+**Superseded on scope, not on substance — see the whole-file scoring below.** Every
+sentence above is about the eight *metadata-helper* invocations, which was the
+population under discussion at the time. Scored across all eighteen
+stderr-discarding sites in the file, the blindness is **seven** sites, not two:
+the two helper sites named here plus 353, 359, 367, 388 and 151. The narrow
+statement is true of its population and reads as a statement about the file, which
+is the failure this document has now recorded five times; it is left standing with
+this pointer rather than rewritten, because the sentence is the evidence.
+
 **The definitive coordinates, stated so no convention is implicit.** Two numbers
 have been used for the "first" number of each site — the `python -I` invocation
 and the `2>/dev/null` line — and citing one against the other's convention makes
@@ -808,6 +817,106 @@ what matters is not whether a stream is discarded, nor whether the failure is
 announced, but whether anything downstream can still say *why*. Stated as "count
 the redirects" the rule is cheap and wrong; stated as "find the failures whose
 cause nothing downstream can recover" it is the rule #121 implements.
+
+### Scoring the predicate across the whole file — the scope is seven sites, not two
+
+Everything above scored the predicate against the four sites already in the
+discussion. WS-6 then scored it against **every** stderr-discarding site in
+`scripts/operations/authorize_approved_assets_phase.sh`, which is the right move
+and moves the number a long way. Re-enumerated here from the blob rather than from
+the report: `824b4238` blob `251e8218`, 12417 bytes, 409 lines, pure LF, sha256
+`4c66e778`. **Eighteen sites discard stderr** — every line carrying a `2>`
+redirect. WS-6's six-way scoring is reproduced exactly; two corrections follow.
+
+| Verdict | Sites | Why |
+| --- | --- | --- |
+| **Destroys the only account** | 254, 353, 359, 367, 379, 388, **151** | labels the *what*, discards the *why* |
+| Cleanup trap | 48, 53, 59, 64, 68, 72, 76, 78 | defensible as a redirect; see the collapse below |
+| Self-evident | 108, 238 | the label alone identifies the failure |
+| Excluded by "only" | 396 | `gh run watch`; the run's own logs are another account |
+
+Three sites — 157, 164, 171 — carry `>/dev/null` **without** `2>&1` and so are not
+in the population at all; their `MetadataError` survives on stderr. They are the
+control group that shows the predicate is discriminating rather than matching
+every redirect, and the same role is played by 396 from the other direction: it
+discards both streams and is still not a defect, because the account survives
+somewhere else. A rule that excludes nothing would be worthless here, and this one
+excludes on two independent grounds.
+
+**Correction one: 151 belongs with the six, making seven, and it is the worst site
+in the file.** `gh auth status >/dev/null 2>&1` at 151 has **no `|| { … }`
+handler**. `set -Eeuo pipefail` is set at line 2, and 151 falls outside every
+`set +e` window (45–82, 246–257, 365–369, 374–382, 387–390, 395–398), so a failure
+there terminates the script through `set -e`. Both streams are discarded and no
+`lifecycle.*` token is printed. Every other failure in this file prints a name;
+this one prints nothing, so the operator sees a bare non-zero exit and can locate
+it only by the *absence* of a token. WS-6 filed it as self-evident on the strength
+of its neighbours 108 and 238 — but both of those print a label (`lifecycle.tool_missing`
+at 109, `lifecycle.dispatch_failed` at 239) and 151 does not. The group label is
+true of two of its three members, and the one it is false of is the site where the
+predicate bites hardest.
+
+**Correction two: the cleanup group's redirect is defensible and its aggregation
+is not.** All eight sites feed one variable — `[ "$?" -eq 0 ] || cleanup_failed=1`
+after each — and `cleanup_resources` returns that single boolean at line 83. So
+the *fact* of a cleanup failure is preserved and propagated, which is why the
+redirect is defensible: suppressing cleanup noise keeps it from masking the real
+error. What is destroyed is *which* cleanup failed. A residual authorization secret
+(48, 59), a residual reviewed-evidence secret (53, 64), a **still-registered
+self-hosted runner** (68, 72) and a leftover temp directory (76, 78) are
+indistinguishable in the output. The first three are security-relevant residue and
+the last is housekeeping, and they arrive as the same bit. This is the same shape
+already recorded twice elsewhere — the `TrustError` outcome collapse in
+`current-state.md` §12a, and the lifecycle labels here — a code carrying neither
+value. It is a separate finding from the discard and should not be folded into it:
+un-discarding the eight streams would not fix it, and naming the resource in
+`cleanup_failed` would fix it without touching a redirect.
+
+**Two remediation classes, and the axis that is missing from them.** WS-6's split
+is correct and useful: 254 and 379 capture stdout into a variable
+(`selection_…="$( … )"`, `runner_id="$( … )"`), so `2>&1` would contaminate the
+captured value and the #121 temp-file technique is required; 353, 359, 367 and 388
+discard both streams with no capture, so the fix is simply dropping `2>&1` and
+letting stderr through. Four of the six are therefore cheap. **But the capture axis
+is not the axis that decides whether the change is safe.** 353 and 359 are
+`gh secret set` — the only two sites in the file whose *input* is secret material.
+Whether that command's stderr can echo anything derived from the value is a
+question the capture axis cannot ask, and neither WS-6 nor this document has
+checked it. It is very likely fine, since the value is encrypted client-side before
+transmission; the point is that "cheap" was concluded from a classification that
+does not range over the risk, so those two need one deliberate check that the other
+four do not.
+
+**A rule the frame collision forces, and it is not optional.** WS-6 flagged that
+its earlier `f0a2d17 388` and this document's `main 388` are **different sites**:
+at `f0a2d175` line 388 is `--expected-name … 2>/dev/null` (verify-staged-runner,
+which on `main` is 379), and at `824b4238` line 388 is
+`"$runner_start" … >/dev/null 2>&1`. Both records are correct. #121's +9 shift is
+exactly what makes them land on the same integer. Verified in both files. So:
+**a line number in this finding is meaningless without its ref, and every table
+must carry the ref in its header** — not as tidiness but because the shift is large
+enough to produce a collision and small enough that the two readings look like a
+contradiction rather than a mismatch.
+
+**Counts, which are the same in both trees and should not be read as "no change".**
+`824b4238` has 18 stderr-discard sites; `f0a2d175` also has 18 — #121 converts 254
+from a discard into a capture (`2>"$selection_error_file"` at 255) and introduces
+one new benign discard (`head` at 264, already ruled non-defective). The raw count
+is therefore flat while the defect count goes **7 → 6**. Anyone auditing this by
+counting redirects would conclude #121 changed nothing.
+
+**One unrelated observation from the same enumeration, recorded because it will not
+be found by anyone looking for discards.** Line 168 is
+`python "$metadata_helper" assert-secret-absent` — the **only** invocation of a
+script in this file that omits `-I`. The other seven `$metadata_helper` calls
+(56, 61, 71, 156, 161, 248, 376) and both other script calls (274, 347) all use
+`python -I`. Isolated mode suppresses `PYTHONPATH` and the user site-packages
+directory, so 168 is the single call in a repo-admin-credentialed script where
+import resolution is environment-influenced. It sits between two identical
+siblings that both have the flag, which is what makes it look like an omission
+rather than a decision. Unchanged by #121 (still line 168 at `f0a2d175`). Not
+acted on — the file is protected and under the hold — and it is not part of F-8;
+it is recorded here only because this enumeration is the thing that surfaced it.
 
 **Why `2>&1` is the wrong fix at both, structurally.** Each is a command
 substitution assigning to a variable the script then depends on — `run_id="$("`
