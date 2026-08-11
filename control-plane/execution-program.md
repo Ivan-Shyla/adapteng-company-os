@@ -754,16 +754,44 @@ deployed gateway:
    runs postdate the 20:44:08Z reset — the `success` at 20:45:58Z that the
    paragraph above calls `not_applicable`, and this one.
 
-   **What survives, and what the owner should now do.** The `authorized` half is
+   **What survives, and what the owner should now do.** ~~The `authorized` half is
    untouched: it still cannot arrive from ordinary traffic, because it requires a
-   signed receipt, and #121 remains its only source. So the sentence "the receipt
-   and the promotion evidence are one action" is no longer accurate — half the
-   evidence arrived on its own — and **the title-or-body edit on #121 should not
-   be performed for the purpose of harvesting an `unauthorized` observation,
-   because that observation already exists.** Sign the receipt when the hold
+   signed receipt, and #121 remains its only source.~~ **Corrected 2026-08-11 — see
+   `current-state.md` §12b.** Two claims were bundled there and only one is true.
+   *`authorized` requires a signing action* is exactly right and is now measured:
+   the receipt files have exactly four commits on `main` in the repository's whole
+   history — #93, #94, #98, #104 — and every one of the seven historical
+   `authorized` verdicts was produced by a pull request carrying `approval.json`
+   and `approval.sig` edits in its own diff. No `authorized` verdict has ever been
+   produced without one. *It cannot arrive from ordinary traffic* is false, and
+   **#121 is not its only source** — it is only the only *open* source. Three of the
+   four authorizing pull requests were ordinary feature work — a backup-retention
+   binding, a model proof, a Vertex fallback fix — that signed as one step among
+   several, **four times in twenty-six hours**. Signing was routine practice, not a
+   ceremony, and then it stopped: #104 is the last pull request ever to carry a
+   receipt, and the first receipt-free run afterwards failed immediately. So the
+   instruction to the owner changes in kind. It is not *manufacture a rare input*;
+   it is **resume a practice that was ordinary for a day and has lapsed** — any
+   protected-path pull request that carries a signed receipt yields `authorized`,
+   and #121 qualifies only because it happens to be open.
+
+   The rest of the original paragraph stands: the sentence "the receipt and the
+   promotion evidence are one action" is no longer accurate — half the evidence
+   arrived on its own — and **the title-or-body edit on #121 should not be
+   performed for the purpose of harvesting an `unauthorized` observation, because
+   that observation already exists.** Sign the receipt when the hold
    lifts; that yields `authorized` and completes the pair. The `edited`-trigger
    finding stays on the record as the correct instrument if a further
    `unauthorized` observation is ever wanted deliberately.
+
+   **And the reason this matters beyond the wording.** The paragraph above treated
+   a lapsed habit as a property of the input distribution. That is the more
+   expensive error of the two, because "the input is rare" prices the remedy as a
+   key ceremony requiring the owner, while "the practice stopped" prices it as
+   restarting something a workstream already did four times unaided. The 79 %
+   red figure in `current-state.md` §14 has the same origin: it does not measure a
+   broken check so much as the twenty-six-hour window in which **every** anchor run
+   was on a branch carrying its own receipt, followed by traffic that carried none.
 
    **Why this is worth recording beyond the instruction it repairs.** The claim
    was true when written and was falsified by an event no one had to take —

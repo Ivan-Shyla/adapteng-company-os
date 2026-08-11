@@ -775,14 +775,18 @@ which is the stronger of the two observations. I caught this by re-reading the
 criterion instead of recalling it, one paragraph after recording that the
 register's own remedy is to re-derive rather than remember.
 
-What it does **not** do is close the validation gap. The four-day outage was
-`approval.circular_or_stale`, so `_approval_material_introduced` on its
+What it does **not** do is close the validation gap. ~~The four-day outage was
+`approval.circular_or_stale`~~ — **corrected in §12b: the outage carries at least
+two codes, `approval.unexpected` and `approval.circular_or_stale`, interleaved
+across the window** — so `_approval_material_introduced` on its
 authorizing branch is still validated only by unit tests. An observed refusal
 does not exercise the let-work-through path, and that is the path that was
 broken. `authorized` remains unobtainable by waiting.
 
-**Why that is not merely a thin count.** The four-day outage was
-`approval.circular_or_stale` on the subject tree — the failure that made it
+**Why that is not merely a thin count.** ~~The four-day outage was
+`approval.circular_or_stale` on the subject tree~~ — **again corrected in §12b,
+and this is the second copy of the same over-generalisation, both written from
+the same partial read** — the failures that made it
 impossible for *any* owner-signed receipt to authorize anything. So
 `_approval_material_introduced` on its authorizing branch is code that was broken
 for four days, is the reason the gate could reach no terminal state at all, and
@@ -1257,6 +1261,113 @@ the conclusion. That is the F-8 finding one layer up: there, a CI conclusion of
 only the discarded error code distinguished them. Two workstreams, different
 subsystems, the same structural result. Recorded as a rule in §13.
 
+### 12b. Two instruments, each blind to the other's half — and the record was not blind
+
+WS-6 returned with five `authorized` runs and the diagnosis that neither party
+could see them, because the census instrument was a prefix match and success
+carries no prefix. **The diagnosis is right about the instrument and wrong about
+the record.** §12a above already reads seven.
+
+**1. The five are a subset of the seven already recorded.** WS-6's identifiers are
+`31017756411`, `31018506336`, `31022897959`, `31025946689` and `31116200705`. The
+table in §12a records seven `authorized` runs spanning 2026-08-05T14:56:30Z →
+2026-08-06T15:30:57Z, and the sentence *"WS-6 listed two `authorized` runs; there
+are seven"* is already in this file — written when WS-6 offered two. It has now
+offered five. The record has said seven throughout.
+
+**2. WS-6's uncertainty band is an artefact of a decaying instrument.** It reports
+the true count as "5 to 7" because two of the Aug-5 job logs have expired. §12a
+did not read logs. It read the check-run **title**, which the verifier writes
+through `_check_run_payload` and which is API metadata that does not expire. The
+durable instrument returns exactly seven, with no band. **The band is not
+uncertainty about the world; it is the half-life of the chosen evidence.**
+
+**3. The two instruments partition the population, and each is silently scoped to
+its own half.** Measured this round: for all **28** runs in the outage window,
+`GET /commits/{sha}/check-runs` returns **no anchor check run at all** — the check
+run is written on the success path only.
+
+| instrument | sees | blind to |
+|---|---|---|
+| log text matching `rollout_trust_anchor.` | failures — the prefixed sites | every success; sites 3177/3211/3227 print bare JSON |
+| check-run title | the 12 successes | every failure; no check run is ever created |
+
+Their union is the population; neither alone is a census. §12a used the second and
+got the successes right, the annotation sweep used the first and got the failures
+right. **WS-6 diagnosed the first instrument and attributed the record's number to
+it — but the record's number came from the second.** "Neither of us could see it"
+is a claim about my instrument, made without reading which instrument produced my
+figure.
+
+**4. The prefix census has a false-*positive* channel too, in the same logs.** Two,
+both found while re-reading them: Actions echoes the workflow's own `run:` block
+into the log, so `echo "rollout_trust_anchor.undetermined.$1"` matches as though it
+were an emission; and `rollout_trust_anchor.py`, the verifier's filename, matches
+the prefix on every run that names the script. Both are excluded by demanding a
+code character class and rejecting `$1` and `.py`, which is what this round's
+queries did. WS-6's rule — *when an enumeration is defined by a pattern, the
+pattern is a member of the population* — is literally true here, and it cuts both
+ways: the pattern missed the successes and matched its own source.
+
+**Then the mechanism, which is where WS-6's account is wrong and mine was
+incomplete.** WS-6 reads #104 as having "approved its own disabling", with the
+outage beginning in the eleven minutes between its authorized run and its merge.
+Enumerated rather than inferred, the receipt files have exactly four commits on
+`main` in the repository's entire history — identical sets for `approval.json` and
+`approval.sig`:
+
+| commit | when | pull request |
+|---|---|---|
+| `1f420dc0` | 2026-08-05T15:59:28Z | #93 — *add exact-subject rollout authorization* |
+| `0fa357d0` | 2026-08-05T16:58:08Z | #94 — *bind backup retention evidence* |
+| `d06bdd41` | 2026-08-05T17:07:56Z | #98 — *first governed Company OS model proof* |
+| `0794212e` | 2026-08-06T15:42:05Z | #104 — *vertex owner-dispatch plan fallback* |
+
+**Receipt material has been on `main` since #93 — twenty-six hours and two merges
+before #104.** The condition WS-6 attributes to #104 was established by #93, and
+#104 is the *last* pull request to carry a receipt, not the first to leave one
+behind.
+
+**Why nobody saw it for twenty-six hours, and this is the part worth keeping.**
+Every anchor run between #93's merge and #104's merge was enumerated: **thirteen
+runs, and all thirteen are on the three branches that carried their own receipts**
+(#94, #98, #104). Not a majority — all of them. The first receipt-free run after
+the defect went live is `31197221864` on `fix/migration-runner-consistency` at
+2026-08-07T16:22:07Z, and it failed `approval.unexpected` immediately. The defect
+fired the first time anything could make it fire.
+
+So the outage did not begin with an event. **It began when a practice stopped.**
+For twenty-six hours the entire population of anchor runs was the one case a
+presence test cannot fail, and the moment ordinary receipt-free traffic resumed the
+check went red and stayed red. That is the origin of the 79 % figure this record
+has been reasoning about since §14: not a code change, but the end of a signing
+habit. It is also the sharpest form of the masking sub-shape — there the symptom
+was suppressed by a mitigation, here by the *composition of the traffic*, which no
+one chose and no one could see.
+
+**What this does to "`authorized` cannot arrive from ordinary traffic".** All four
+authorizing pull requests carry `approval.json` and `approval.sig` edits in their
+own diffs: #93 at `+1/−0` and `+6/−0` — the files' creation — and #94, #98 and
+#104 each at `+1/−1` and `+2/−2`. So the mechanism claim holds exactly: **no
+`authorized` verdict has ever been produced without a signing action inside the
+pull request that produced it.** What does not hold is the picture of signing as a
+separate ceremony. Three of the four were ordinary feature work — a backup-retention
+binding, a model proof, a Vertex fallback fix — that signed as one step among
+several, four times in twenty-six hours. The instruction is corrected in
+`execution-program.md` item 6.
+
+**And this subsection corrects §12a.** That section says twice that the four-day
+outage "was `approval.circular_or_stale`". Eight of the twenty-eight outage runs
+have now been read, and **both** codes are present throughout, interleaved rather
+than phased: `approval.unexpected` at 16:22Z and 16:24Z on 2026-08-07,
+`circular_or_stale` at 19:55Z the same day, `unexpected` again on 2026-08-08 and at
+15:36Z on 2026-08-10, `circular_or_stale` from 16:45Z onward. The conclusion §12a
+draws survives — both are refusals on the approval path and neither exercises the
+let-work-through path — but the outage had at least two causes where this file
+asserted one. The remaining logs are behind the API's log-download rate limit, so
+**eight of twenty-eight is a sample and is labelled as one**, which is precisely the
+distinction the sentence it corrects did not make.
+
 ## 13. A control that cannot fail is not a control
 
 Three instances landed on 2026-08-10, in three different mechanisms. They are
@@ -1382,7 +1493,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with twenty sub-shapes and fifty-one instances.** WS-1 proposed the
+**The general rule, with twenty sub-shapes and fifty-four instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -1489,6 +1600,51 @@ of the three is WS-6's, found by me, in a message whose opening correction named
 exact shape it went on to commit. The list is no longer only a record of what other
 readers catch in me; it is now symmetric, which is the first evidence that the
 shapes are properties of the work rather than of one writer.
+
+**Twenty and fifty-four, and the second consecutive round with no new shape.**
+Three instances, all of them about *which instrument produced a number*: (i) WS-6's
+`authorized` census, bound by a pattern that matches only failures, filed under
+*wrong axis* at WS-6's explicit request and not coined as a shape of its own —
+their own standard, that a sharper reading of an existing shape is not a new
+phenomenon, and mine, that the register must not grow to prove it is alive; (ii)
+WS-6's "neither of us could see it", a claim about *this record's* blindness made
+without checking which instrument produced this record's figure — the record read
+check-run titles and has said seven since the round WS-6 offered two, so the
+attribution is right about the instrument it examined and wrong about the one that
+mattered, filed under *instrument answering a neighbouring question*, eighth
+instance; (iii) mine, §12a asserting the four-day outage's code as a single value
+from a partial read, in two copies, under *unstated validity interval*, sixth
+instance. Fifty-one plus three is fifty-four; twenty stays twenty.
+
+**What makes (ii) worth separating from (i).** They look like one error and are
+not. (i) is a bad instrument. (ii) is a *correct* instrument whose reach was
+generalised to another party's evidence without asking what that party had used —
+and it is the more expensive of the two, because it converts a private
+instrumentation bug into a shared epistemic claim, which then propagates as
+agreement. The tell is grammatical and cheap: **the word "neither".** A statement
+about what two parties could not see requires evidence from two instruments, and
+this one had evidence from one.
+
+**And the round's positive result.** The `authorized` count was recoverable from
+check-run titles after the job logs expired, because titles are API metadata with
+no retention window while logs have one. Generalised: **when the same fact is
+available from two surfaces, prefer the one whose lifetime is set by the API over
+the one whose lifetime is set by a retention policy — and where a claim rests on a
+decaying surface, say so, because the uncertainty band you report will otherwise be
+mistaken for a property of the world.** WS-6 reported the true `authorized` count
+as "5 to 7". The world's answer is 7; the band was the half-life of its evidence.
+
+**A second, sharper one, from the same measurement.** Two instruments were in use
+here — log text for failures, check-run titles for successes — and each was
+complete over its own half and empty over the other, because the verifier writes a
+check run only on the success path and prints the `rollout_trust_anchor.` prefix
+only on the failure paths. Neither reported a gap, because neither could see one.
+**When two instruments partition a population by outcome class, each one's
+completeness is silently scoped to its class, and the union looks like coverage
+from either side.** The check is one query: ask each instrument for the *other's*
+result and confirm it returns nothing. Run here, it returns nothing — 28 failing
+runs, zero check runs — which is what turned an apparent contradiction between §12a
+and the annotation census into two correct answers to two different questions.
 
 **The current round adds one sub-shape and two instances, again by enumeration.**
 The bullets were counted directly and stood at seventeen before this edit. New
@@ -1792,6 +1948,18 @@ plus two is **forty-one**. Bullets re-enumerated, not incremented.
   zero occurrences across all four files on `root-rollout-tests`. The right file, on
   the right required check, answering about a different subject. Finding the reader is
   not reading it.
+
+  **Eighth instance, WS-6's, and here the neighbouring question belongs to someone
+  else's instrument.** WS-6 diagnosed why the `authorized` verdict read as
+  unobserved — the census matched `rollout_trust_anchor.` and success prints bare
+  JSON — and concluded that **neither** party could see it. The diagnosis is exact
+  about the instrument it examined and answers a neighbouring question about this
+  record, whose figure came from check-run titles and has read seven since the
+  round WS-6 offered two (§12b). The distinguishing feature against the seventh
+  instance above is the direction of travel: there a correct artefact was cited
+  about the wrong subject, here a correct diagnosis of one's *own* instrument was
+  extended to another's without asking what it was. **"Neither" is a two-instrument
+  claim, and it was made from one.**
 - **Right answer, unstated validity interval — applied outside its domain.**
   WS-9 derived #121's line offsets from `git diff --numstat`: 10 added, 1 removed,
   net **+9**. Correct, and exact at the runner site — 379→388 and 384→393, three
@@ -1855,6 +2023,19 @@ plus two is **forty-one**. Bullets re-enumerated, not incremented.
   end-to-end — no ruleset, and no anchor verdict either, since the workflow's own
   scope is `branches: [main]`. What holds it is the standing hold, which is a
   discipline, not a control.
+
+  **Sixth instance, mine, where the domain is how much of a population was read.**
+  §12a states that the four-day outage "was `approval.circular_or_stale`", twice, in
+  two adjacent paragraphs. Eight of the twenty-eight outage runs have now been read
+  and both `approval.unexpected` and `approval.circular_or_stale` appear throughout,
+  interleaved (§12b). The claim was true of every run I had looked at and was
+  written as though true of the outage. What makes it belong here rather than under
+  simple error is that the *conclusion* drawn from it survives intact — both codes
+  are approval-path refusals, neither exercises the let-work-through path — so
+  nothing downstream failed, and nothing would have prompted a re-read. **An
+  over-generalisation whose conclusion happens to be robust leaves no symptom, which
+  is exactly why the interval has to be written at the time rather than recovered
+  later.** The repair is one word: *sampled*.
 - **Success mistaken for effect — an action that reports success while changing
   something other than what its name promises.** The six above are all *read*
   instruments, misread. This one is a write, and the remedy is different in kind.
