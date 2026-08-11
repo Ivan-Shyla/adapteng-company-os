@@ -800,6 +800,23 @@ what defeated the search:** the collapse documented in F-8 is the instrument WS-
 had to use to investigate a defect in the same file, so the finding's own subject
 suppressed its evidence.
 
+**A third instance of the collapse, found while enumerating F-8's discard sites,
+and it is the cleanest of the three because nothing else is wrong with it.**
+`cleanup_resources` in `authorize_approved_assets_phase.sh` (43–84 at `824b4238`)
+runs eight guarded operations, each followed by `[ "$?" -eq 0 ] || cleanup_failed=1`,
+and returns that one boolean at line 83. The *fact* of a cleanup failure survives
+and propagates correctly. What is destroyed is which of the eight failed — a
+residual authorization secret (48, 59), a residual reviewed-evidence secret
+(53, 64), a **still-registered self-hosted runner** (68, 72) and a leftover temp
+directory (76, 78) all arrive as the same bit, though the first three are security
+residue and the last is housekeeping. The three instances now span an exception
+class, a set of lifecycle labels and a shell status variable, which is enough to
+state the shape independently of any of them: **wherever N distinguishable causes
+are reduced to one carrier, the reduction is invisible at the site that performs
+it and only shows up at the site that reads it.** It is also worth separating from
+the discard it was found beside: un-discarding the eight streams would not fix it,
+and naming the resource would fix it without touching a redirect.
+
 **A corroboration that fell out of the same query.** The last `authorized`
 verdict in the repository's history was written at 2026-08-06T15:41:39Z — the
 check-run `completed_at` on head `a74b6c67`, which is #104's own head. #104 merged
@@ -955,7 +972,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with seven sub-shapes and nineteen instances.** WS-1 proposed the
+**The general rule, with nine sub-shapes and twenty-two instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -1026,7 +1043,46 @@ the instrument's range fails to match the question:
   `824b4238` and `ai-gateway-tests.yml` runs a `windows-latest` matrix leg (66).
   The conclusion survives on that leg's scope, but the statement was generalised
   from the one workflow the whole discussion was already reading — the population
-  was never enumerated because a sample was already open on the desk.
+  was never enumerated because a sample was already open on the desk. **A sixth
+  moves the shape up one level, from a claim to a group label.** Scoring the
+  stderr-discard predicate across `authorize_approved_assets_phase.sh`, WS-6 sorted
+  eighteen sites into groups and put 108, 151 and 238 under "self-evident". It is
+  true of 108 and 238, which print `lifecycle.tool_missing` and
+  `lifecycle.dispatch_failed`. It is false of 151, which has no `||` handler at
+  all, sits under `set -e`, and so exits printing *nothing*. The label was
+  evidently formed from the members that fit and then applied to the group, and the
+  member it does not fit is the one the predicate convicts hardest. **A group name
+  is a quantified claim over its members and inherits every failure mode above** —
+  this one is too-wide with the population being the group rather than a query
+  result, which is worth separating because a wrong group name is invisible to the
+  check that catches a wrong sentence: nothing in the list is misstated.
+- **A correct count beside a list that does not sum to it.** The same enumeration
+  was headed "18 sites" and followed by four groups totalling twenty. Both are
+  right: three of the twenty carry `>/dev/null` without `2>&1`, so they do not
+  discard stderr and are not in the population the eighteen counts — they are the
+  control group, and their presence is what shows the predicate discriminates.
+  **The near-miss is mine and it is the one worth recording.** Reading the header
+  against the list, an arithmetic contradiction was drafted as a correction and
+  would have gone out had the eighteen not been re-derived from the blob first —
+  where the count came back exactly 18 and the resolution was immediate. The error
+  would have been mine in full: a true observation about the presentation asserted
+  as a defect in the finding. It is also the same shape as the frame collision
+  below, one level up: a number that is correct for a population the neighbouring
+  text does not identify.
+- **A number that is correct in two frames and means two different things — the
+  collision.** WS-6's earlier record cites `f0a2d17 388` and this document cites
+  `main 388`. Both are accurate and they are **different sites**: at `f0a2d175`,
+  388 is `--expected-name … 2>/dev/null`, the verify-staged-runner capture, which
+  on `main` is 379; at `824b4238`, 388 is `"$runner_start" … >/dev/null 2>&1`.
+  #121's +9 shift is precisely what puts two records on one integer. Verified in
+  both files. This is not the granularity failure below — the coordinate is exact
+  and the reading is right — it is a *frame* failure, and it has a property none of
+  the others have: **it presents as a flat contradiction between two correct
+  records**, so the natural response is to re-check the readings, which confirms
+  both and resolves nothing. The remedy is mechanical and cheap: **a line number is
+  meaningless without its ref, and a table of them must carry the ref in its
+  header.** The reason to enforce it here rather than treat it as tidiness is that
+  the shift is large enough to collide and small enough to look like a mistake.
 - **Right range, wrong granularity — a member misclassified because the unit of
   analysis is smaller than the construct.** In that same enumeration, WS-1's
   line-oriented classifier called
@@ -1111,14 +1167,19 @@ the instrument's range fails to match the question:
   independently derived hash of the LF content (`a9aeef04`). A probe that reads the
   world through a converting layer reports the layer.
 
-Unifying form, and the reason the seven belong together: **every one of these
+Unifying form, and the reason the nine belong together: **every one of these
 instruments returned a true statement, and in no case was the true statement about
 the question being asked.** The helper list truly contained no such script. The
 two `authorized` verdicts were truly `authorized`. The sixteen hits truly
 contained the module name. Line 24 truly is not an import statement. The two
 mechanisms truly exist. The net delta truly is +9. `git add --renormalize` truly
-renormalized the index. Not one of these is a wrong answer; each is a right answer
-to a question nobody asked.
+renormalized the index. Eighteen sites truly discard stderr. Line 388 truly is a
+discard site in both trees. Not one of these is a wrong answer; each is a right
+answer to a question nobody asked. **The last two extend the form past outputs.** A
+group name and a line number are not instrument readings at all — they are labels
+placed on findings afterwards — and they fail identically, which suggests the rule
+is not about instruments but about anything that carries a claim while omitting the
+population or frame it is true of.
 
 That is why "check it more carefully" is the wrong remedy and why it failed
 visibly in the sixth instance, where more checking *increased* confidence,
