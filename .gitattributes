@@ -13,3 +13,10 @@ scripts/test_postgres_restore_rehearsal.py text eol=lf
 scripts/test_postgres_restore_scheduler_surface.py text eol=lf
 runbooks/backup-and-restore.md text eol=lf
 .gitattributes text eol=lf
+
+# The rehearsal-contour test asserts every tracked workflow is LF-only, so the
+# guarantee is pinned for all of them rather than for the two that happened to
+# need it first. A file already stored as LF is unchanged by this.
+.github/workflows/*.yml text eol=lf
+scripts/postgres_runtime_role.py text eol=lf
+scripts/test_postgres_runtime_role.py text eol=lf

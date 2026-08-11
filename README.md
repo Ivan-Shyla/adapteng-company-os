@@ -76,7 +76,7 @@ runtime-дампов и копий реализации из других реп
 
 ```bash
 python scripts/validate_sensitive_references.py
-python -m unittest scripts.test_validate_sensitive_references scripts.test_postgres_restore_rehearsal scripts.test_rehearsal_contour scripts.test_rehearsal_effective_repository scripts.test_coolify_deploy scripts.test_pre_pr_commands_match_ci
+python -m unittest scripts.test_validate_sensitive_references scripts.test_postgres_restore_rehearsal scripts.test_rehearsal_contour scripts.test_rehearsal_effective_repository scripts.test_coolify_deploy scripts.test_postgres_runtime_role scripts.test_pre_pr_commands_match_ci
 python -m unittest scripts.test_postgres_restore_scheduler_surface  # только POSIX
 ```
 

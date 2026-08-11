@@ -62,4 +62,16 @@ jobs:
           COOLIFY_BASE_URL: ${{ vars.COOLIFY_URL }}
           OPERATION: ${{ inputs.operation }}
           SERVICE: ${{ inputs.service }}
+          # Owner-held values are bound by reference: the name is declared in the
+          # committed spec and the value arrives here from a store outside this
+          # repository. A variable naming a key the spec does not declare is
+          # refused, so a dispatch cannot introduce unreviewed configuration.
+          # An empty value is treated as not supplied and leaves the stored value
+          # untouched, which is what makes a partially configured resource safe
+          # to reconcile.
+          COOLIFY_SECRET_AI_GATEWAY_FX_USD_EUR: ${{ vars.AI_GATEWAY_FX_USD_EUR }}
+          COOLIFY_SECRET_AI_GATEWAY_FX_AS_OF: ${{ vars.AI_GATEWAY_FX_AS_OF }}
+          COOLIFY_SECRET_AI_GATEWAY_FX_SOURCE: ${{ vars.AI_GATEWAY_FX_SOURCE }}
+          COOLIFY_SECRET_GOOGLE_APPLICATION_CREDENTIALS: ${{ vars.AI_GATEWAY_ADC_PATH }}
+          COOLIFY_SECRET_AI_GATEWAY_BEARER_TOKENS: ${{ secrets.AI_GATEWAY_BEARER_TOKENS }}
         run: python scripts/coolify_deploy.py

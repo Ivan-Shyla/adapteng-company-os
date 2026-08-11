@@ -48,6 +48,13 @@ SERVICE_VARIABLE = "SERVICE"
 POLL_VARIABLE = "DEPLOY_POLL_SECONDS"
 TIMEOUT_VARIABLE = "DEPLOY_TIMEOUT_SECONDS"
 
+# An owner-held value may be handed to this run through the environment under
+# this prefix, so a credential can be moved from one store to another without
+# ever being written to a file in this repository. The value is bound by
+# reference: the spec still names the key and nothing else, and the value exists
+# in this process only for the length of one request.
+SUPPLY_PREFIX = "COOLIFY_SECRET_"
+
 OPERATIONS = ("inspect", "reconcile", "deploy", "status")
 FORBIDDEN_METHODS = frozenset({"DELETE"})
 
@@ -261,13 +268,65 @@ def check_configuration_entry(path: Path, entry: object, section: str, field: st
                 f"spec {path.name} section {section} has an entry without a usable {name}",
                 EXIT_MISCONFIGURED,
             )
-    unexpected = set(entry) - {"key", field, "note"}
+    allowed = {"key", field, "note"}
+    if section == "externally_provided_configuration":
+        allowed.add("sensitive")
+        if "sensitive" in entry and not isinstance(entry["sensitive"], bool):
+            raise Abort(
+                f"spec {path.name} section {section} entry {entry['key']} "
+                "declares a non-boolean sensitive flag",
+                EXIT_MISCONFIGURED,
+            )
+    unexpected = set(entry) - allowed
     if unexpected:
         raise Abort(
             f"spec {path.name} section {section} entry {entry['key']} "
             f"has unknown keys {sorted(unexpected)}",
             EXIT_MISCONFIGURED,
         )
+
+
+def is_sensitive(entry: dict) -> bool:
+    """Return whether an owner-held value must be kept out of the run log.
+
+    The default is ``True``. An owner-held value is assumed to carry
+    authentication material unless the spec says otherwise in reviewed text, so
+    forgetting the flag hides a value rather than exposing one.
+    """
+
+    return bool(entry.get("sensitive", True))
+
+
+def supplied_values(spec: dict, environ: dict) -> dict[str, str]:
+    """Return the owner-held values handed to this run through the environment.
+
+    Only a key the spec already declares under
+    ``externally_provided_configuration`` can be supplied. A variable naming any
+    other key is refused rather than ignored: the spec is the reviewed list of
+    what this resource may be given, and silently accepting an extra key would
+    let a dispatch introduce configuration that no one reviewed.
+    """
+
+    declared = {entry["key"]: entry for entry in spec["externally_provided_configuration"]}
+    supplied: dict[str, str] = {}
+    for name, raw in sorted(environ.items()):
+        if not name.startswith(SUPPLY_PREFIX):
+            continue
+        key = name[len(SUPPLY_PREFIX) :]
+        value = (raw or "").strip()
+        if not value:
+            continue
+        entry = declared.get(key)
+        if entry is None:
+            raise Abort(
+                f"{name} supplies {key}, which spec {spec['service']}.json does not "
+                "declare under externally_provided_configuration",
+                EXIT_MISCONFIGURED,
+            )
+        if is_sensitive(entry):
+            register_redaction(value)
+        supplied[key] = value
+    return supplied
 
 
 # --------------------------------------------------------------------------- #
@@ -362,20 +421,93 @@ def desired_settings(spec: dict) -> dict:
     }
 
 
-def stored_settings(application: dict) -> dict:
-    """Return the settings block, refusing to proceed when it cannot be read.
+# The names desired_settings owns, as a constant, so that reading stored state
+# does not have to build a spec in order to know which keys belong to this tool.
+SETTING_KEYS = (
+    "is_auto_deploy_enabled",
+    "is_preview_deployments_enabled",
+    "is_force_https_enabled",
+    "connect_to_docker_network",
+)
 
-    Without this block the delivery flags cannot be verified after a write, and an
-    unverifiable write is exactly what this tool must not report as success.
+
+def stored_settings(application: dict) -> dict:
+    """Return the delivery flags the API reports, in whichever shape it uses.
+
+    Coolify does not report these consistently. Some versions nest them under a
+    settings relation; this instance omits that relation and reports none of them
+    at all. This function only reads. Deciding whether an absence is tolerable is
+    settings_delta's job, because only the spec knows what was declared.
     """
 
     settings = application.get("settings")
-    if not isinstance(settings, dict):
+    if isinstance(settings, dict) and settings:
+        return settings
+    owned = set(SETTING_KEYS)
+    return {key: value for key, value in application.items() if key in owned}
+
+
+def unreportable_settings(spec: dict) -> dict:
+    """Return the declared settings this API is acknowledged not to report.
+
+    Acknowledgement lives in the committed spec, so tolerating an unverifiable
+    setting is a reviewable decision with a recorded reason, not a silent skip.
+    A name that is not an owned setting is a typo and aborts, since a misspelt
+    acknowledgement would silently widen what the tool is willing to ignore.
+    """
+
+    declared = spec.get("settings_not_reported_by_api", {}).get("keys", {})
+    unknown = sorted(set(declared) - set(SETTING_KEYS))
+    if unknown:
         raise Abort(
-            "the API returned no settings block for this application, so the "
-            "delivery flags cannot be verified; refusing to report success"
+            "the spec acknowledges settings this tool does not own: "
+            f"{unknown}; owned settings are {sorted(SETTING_KEYS)}"
         )
-    return settings
+    for name, entry in declared.items():
+        for field in ("reason", "compensating_control"):
+            if not str(entry.get(field) or "").strip():
+                raise Abort(
+                    f"the spec acknowledges {name} as unreportable without a {field}; "
+                    "an unverifiable setting has to carry its justification"
+                )
+    return declared
+
+
+def settings_delta(spec: dict, application: dict) -> tuple[list, list[str]]:
+    """Return the settings that differ, and those the API will not report.
+
+    A declared setting the API does not report cannot be verified after a write,
+    and an unverifiable write must not be reported as success. So it is not
+    written at all: it is surfaced for the owner, exactly as an owner-held
+    environment key is. An unacknowledged absence still aborts.
+    """
+
+    desired = desired_settings(spec)
+    acknowledged = unreportable_settings(spec)
+    stored = stored_settings(application)
+    missing = set(desired) - set(stored)
+    unacknowledged = sorted(missing - set(acknowledged))
+    if unacknowledged:
+        raise Abort(
+            f"the API reports no value for {unacknowledged}, so a write to them "
+            "could not be verified. Either the response shape changed or these "
+            "have to be acknowledged in settings_not_reported_by_api with a "
+            "reason; refusing to report success"
+        )
+    reportable = {name: value for name, value in desired.items() if name in stored}
+    return difference(reportable, stored), sorted(missing)
+
+
+def settings_shape(application: dict) -> str:
+    """Name the shape the flags arrived in, for a report that must be diagnosable."""
+
+    settings = application.get("settings")
+    if isinstance(settings, dict) and settings:
+        return "settings block"
+    present = sorted(key for key in application if key in set(SETTING_KEYS))
+    if present:
+        return f"top-level fields ({len(present)} of {len(SETTING_KEYS)})"
+    return "not reported by this API"
 
 
 def runtime_environment(entries: list) -> dict:
@@ -401,13 +533,19 @@ def runtime_environment(entries: list) -> dict:
     return indexed
 
 
-def environment_plan(spec: dict, entries: list) -> tuple[list, list, list, list]:
+def environment_plan(
+    spec: dict, entries: list, supplied: dict[str, str] | None = None
+) -> tuple[list, list, list, list]:
     """Return ``(create, update, unchanged, absent_external)`` for the environment.
 
-    Only the keys declared inline are written. Owner-held values are checked for
-    presence by name and never read, written or printed.
+    Keys declared inline are always written. An owner-held key is written only
+    when this run was handed its value; otherwise it is checked for presence by
+    name and never read, written or printed. That asymmetry is deliberate: a
+    value this repository does not hold cannot be pushed over a fresher one set
+    elsewhere, because nothing here knows what to push.
     """
 
+    supplied = supplied or {}
     indexed = runtime_environment(entries)
     create: list[tuple[str, str]] = []
     update: list[tuple[str, str]] = []
@@ -420,11 +558,20 @@ def environment_plan(spec: dict, entries: list) -> tuple[list, list, list, list]
             update.append((key, value))
         else:
             unchanged.append(key)
-    absent = [
-        item["key"]
-        for item in spec["externally_provided_configuration"]
-        if item["key"] not in indexed
-    ]
+    absent: list[str] = []
+    for item in spec["externally_provided_configuration"]:
+        key = item["key"]
+        value = supplied.get(key)
+        if value is None:
+            if key not in indexed:
+                absent.append(key)
+            continue
+        if key not in indexed:
+            create.append((key, value))
+        elif normalize(key, indexed[key].get("value")) != normalize(key, value):
+            update.append((key, value))
+        else:
+            unchanged.append(key)
     return create, update, unchanged, absent
 
 
@@ -438,10 +585,22 @@ def creation_payload(
     destination_uuid: str | None,
     github_app_uuid: str | None,
 ) -> dict:
-    """Return the body that creates the application in its declared placement."""
+    """Return the body that creates the application in its declared placement.
+
+    Settings are deliberately not sent here. The creation endpoint rejects
+    is_preview_deployments_enabled outright ("This field is not allowed."), and
+    which of the others it tolerates is undocumented and would be discovered one
+    422 at a time. Reconcile re-reads the application immediately after creating
+    it and converges every setting through the same path that repairs drift on
+    an existing resource, so nothing is lost by leaving them out -- and that path
+    verifies what was stored, which the creation call does not.
+
+    Nothing is exposed in the interval: instant_deploy is false, so a created
+    application is not running, and autogenerate_domain is false with no fqdn
+    declared, so no public route exists at any point.
+    """
 
     payload = dict(desired_application_fields(spec))
-    payload.update(desired_settings(spec))
     payload.update(
         {
             "project_uuid": project_uuid,
@@ -566,10 +725,19 @@ def call(
     body: dict | None = None,
     query: dict | None = None,
     expect: tuple[int, ...] = (200,),
+    allow_absent: bool = False,
 ) -> object:
-    """Perform one call and stop unless the status is one that was expected."""
+    """Perform one call and stop unless the status is one that was expected.
+
+    allow_absent turns a 404 into None instead of an abort, and only that. It is
+    for endpoints whose presence varies across Coolify versions, where absence
+    is a fact to route around rather than a failure. It is never used for a
+    write, and never to excuse an unexpected status other than 404.
+    """
 
     status, parsed = client.request(method, path, body=body, query=query)
+    if allow_absent and status == 404:
+        return None
     if status not in expect:
         raise Abort(
             f"{method.upper()} {path} returned HTTP {status} "
@@ -579,10 +747,24 @@ def call(
 
 
 def api_message(parsed: object) -> str:
+    """Render an API error body, keeping the part that says what was wrong.
+
+    A validation failure arrives as a generic message plus a field-level errors
+    object. Returning the first key found meant the generic message shadowed the
+    specific one, so a 422 reported "Validation failed." and nothing else --
+    true, unactionable, and indistinguishable from every other 422. Both are
+    kept here, because the reason a call was rejected is the whole diagnostic
+    value of the response.
+    """
+
     if isinstance(parsed, dict):
-        for key in ("message", "error", "errors"):
-            if key in parsed:
-                return redact(json.dumps(parsed[key])[:300])
+        parts = [
+            redact(json.dumps(parsed[key])[:300])
+            for key in ("message", "error", "errors")
+            if key in parsed
+        ]
+        if parts:
+            return " ".join(parts)
         return redact(json.dumps(parsed)[:300])
     if parsed is None:
         return "no body"
@@ -645,6 +827,72 @@ def find_application(applications: list, name: str) -> dict | None:
     return matches[0] if matches else None
 
 
+def destination_uuid_of(application: dict) -> str | None:
+    """Read the destination an existing application is already placed on.
+
+    Coolify exposes this under more than one name across versions, and on some
+    it is a nested object rather than a flat uuid. Every spelling is read here
+    so that a working neighbour, rather than a guess about the API surface, is
+    what tells this script where a new application belongs.
+    """
+
+    for key in ("destination_uuid", "destinationUuid"):
+        value = application.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    nested = application.get("destination")
+    if isinstance(nested, dict):
+        value = nested.get("uuid")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def report_placement_sources(client: Client, applications: list) -> None:
+    """Report where existing applications are placed, without changing anything.
+
+    A create call needs a server and a destination. Asking the API for the list
+    of destinations is not portable: this instance answers 404 for it. What is
+    portable is that the neighbours already running here carry the answer.
+    """
+
+    for item in sorted(applications, key=lambda entry: entry.get("name") or ""):
+        uuid = item.get("uuid")
+        if not isinstance(uuid, str):
+            continue
+        detail = call(client, "GET", f"/applications/{uuid}")
+        if not isinstance(detail, dict):
+            continue
+        server = detail.get("server_uuid")
+        emit(
+            f"      placement of {detail.get('name')}: "
+            f"server={server if isinstance(server, str) else 'unreported'} "
+            f"destination={destination_uuid_of(detail) or 'unreported'}"
+        )
+
+
+def report_github_apps(client: Client) -> None:
+    """List the GitHub apps this instance can read private repositories through.
+
+    The spec may leave source.github_app null when exactly one exists. When more
+    than one does, the choice is a decision, not a lookup, so it belongs in the
+    committed spec. Printing the candidates here is what makes that decision
+    reviewable instead of a console discovery.
+    """
+
+    parsed = call(client, "GET", "/github-apps", allow_absent=True)
+    if parsed is None:
+        emit("    github apps: this instance does not report any")
+        return
+    apps = [item for item in expect_list(parsed, "GitHub apps") if isinstance(item, dict)]
+    emit(f"    github apps available: {len(apps)}")
+    for item in sorted(apps, key=lambda entry: entry.get("name") or ""):
+        emit(
+            f"      - {item.get('name')} uuid={item.get('uuid')} "
+            f"organization={item.get('organization') or 'none'}"
+        )
+
+
 def resolve_server(client: Client, declared: str | None) -> dict:
     servers = expect_list(call(client, "GET", "/servers"), "servers")
     usable = [item for item in servers if isinstance(item, dict)]
@@ -655,18 +903,62 @@ def resolve_server(client: Client, declared: str | None) -> dict:
     return unique_match(usable, "server", "the only server on this instance")
 
 
-def resolve_destination(client: Client, server_uuid: str, declared: str | None) -> dict | None:
-    parsed = call(client, "GET", f"/servers/{server_uuid}/destinations")
-    destinations = [item for item in expect_list(parsed, "destinations") if isinstance(item, dict)]
+def resolve_destination(
+    client: Client,
+    server: dict,
+    declared: str | None,
+    neighbours: list | None = None,
+) -> dict | None:
+    """Find the destination to place the application on.
+
+    Three sources are tried in order of authority, and the first that answers
+    wins. The endpoint is tried first because it is the only one that can honour
+    a destination declared by name. When it is absent, as it is on this
+    instance, the server object often carries the same list inline. Failing
+    both, an application already running in the target environment is the
+    strongest evidence available: it is placed where a new sibling belongs, and
+    it is placed there by the same instance that will read this value back.
+    """
+
+    server_uuid = server.get("uuid")
+    destinations: list = []
+    parsed = call(client, "GET", f"/servers/{server_uuid}/destinations", allow_absent=True)
+    if parsed is not None:
+        destinations = [item for item in expect_list(parsed, "destinations") if isinstance(item, dict)]
+    if not destinations:
+        inline = server.get("destinations")
+        if isinstance(inline, list):
+            destinations = [item for item in inline if isinstance(item, dict)]
     if declared:
+        if not destinations:
+            raise Abort(
+                f"the spec names destination {declared!r}, but this instance does not report "
+                "any destination list to match it against"
+            )
         return unique_match(
             [item for item in destinations if item.get("name") == declared],
             "destination",
             declared,
         )
-    if not destinations:
-        return None
-    return unique_match(destinations, "destination", "the only destination on this server")
+    if destinations:
+        return unique_match(destinations, "destination", "the only destination on this server")
+
+    inherited = {
+        found
+        for item in neighbours or []
+        if isinstance(item, dict) and (found := destination_uuid_of(item))
+    }
+    if len(inherited) == 1:
+        uuid = inherited.pop()
+        emit(f"    destination: inherited {uuid} from an application already in this environment")
+        return {"uuid": uuid, "name": None}
+    if len(inherited) > 1:
+        raise Abort(
+            "the applications already in this environment are split across "
+            f"{len(inherited)} destinations, so there is no single one to inherit; "
+            "declare target.destination in the spec"
+        )
+    return None
 
 
 def resolve_github_app(client: Client, declared: str | None) -> dict:
@@ -682,6 +974,65 @@ def resolve_github_app(client: Client, declared: str | None) -> dict:
 # --------------------------------------------------------------------------- #
 # Reporting helpers
 # --------------------------------------------------------------------------- #
+
+
+def report_settings_sources(client: Client, application_uuid: str) -> None:
+    """Probe, read-only, for any route that reports the delivery flags.
+
+    The application resource on this instance carries none of them. Before
+    treating that as unverifiable, the other places they could plausibly live are
+    checked, so the conclusion rests on an enumeration rather than on one read.
+
+    Status codes and key names only. Every request is a GET.
+    """
+
+    owned = set(SETTING_KEYS)
+    candidates = (
+        f"/applications/{application_uuid}/settings",
+        f"/applications/{application_uuid}?include=settings",
+        f"/applications/{application_uuid}/advanced",
+    )
+    emit("      settings source probe (read-only):")
+    for path in candidates:
+        status, parsed = client.request("GET", path)
+        found: list[str] = []
+        if isinstance(parsed, dict):
+            found = sorted(key for key in parsed if key in owned)
+            nested = parsed.get("settings")
+            if isinstance(nested, dict):
+                found = sorted(set(found) | (owned & set(nested)))
+        emit(f"        GET {path} -> HTTP {status}, owned keys reported: {found}")
+
+
+def report_object_shape(client: Client, application: dict) -> dict:
+    """Print the key names the API reports for this application, and nothing else.
+
+    Only names. The object carries owner-held values, so printing it whole would
+    put secrets in a log. Names are enough to tell which shape a response uses.
+
+    Both the list entry and the detail read are reported, because they are
+    different responses. The detail read is returned, so that a caller compares
+    against the same object a write will be verified against.
+    """
+
+    owned = set(SETTING_KEYS)
+
+    def describe(label: str, obj: dict) -> None:
+        nested = obj.get("settings")
+        emit(f"      {label}: {len(obj)} keys, settings relation={type(nested).__name__}")
+        emit(f"        keys: {sorted(obj)}")
+        if isinstance(nested, dict):
+            emit(f"        settings keys: {sorted(nested)}")
+        emit(f"        owned keys at top level: {sorted(key for key in obj if key in owned)}")
+
+    describe("list entry", application)
+    detail = call(client, "GET", f"/applications/{application['uuid']}", allow_absent=True)
+    if not isinstance(detail, dict):
+        emit("      detail read: not available")
+        return application
+    describe("detail read", detail)
+    report_settings_sources(client, application["uuid"])
+    return detail
 
 
 def report_placement(spec: dict, project: dict | None, environment: dict | None) -> None:
@@ -700,13 +1051,16 @@ def report_delta(spec: dict, application: dict, entries: list) -> bool:
     """Print the declared-versus-stored delta. Returns True when nothing differs."""
 
     fields = difference(desired_application_fields(spec), application)
-    settings = difference(desired_settings(spec), stored_settings(application))
+    settings, unverifiable = settings_delta(spec, application)
     create, update, unchanged, absent = environment_plan(spec, entries)
 
+    emit(f"    delivery flags read from: {settings_shape(application)}")
     for name, have, want in fields:
         emit(f"    field {name}: stored={have!r} declared={want!r}")
     for name, have, want in settings:
         emit(f"    setting {name}: stored={have!r} declared={want!r}")
+    for name in unverifiable:
+        emit(f"    setting {name}: PENDING-OWNER-UI, this API does not report it")
     # Environment values are never printed. A declared key can be looked up in the
     # spec file, and anything else on the resource is owner-held.
     for key, _ in create:
@@ -769,6 +1123,8 @@ def operate_inspect(client: Client, spec: dict) -> int:
     emit(f"    applications in this environment: {len(applications)}")
     for item in sorted(applications, key=lambda entry: entry.get("name") or ""):
         emit(f"      - {item.get('name')} uuid={item.get('uuid')} status={item.get('status')}")
+    report_placement_sources(client, applications)
+    report_github_apps(client)
 
     application = find_application(applications, target["resource_name"])
     if application is None:
@@ -781,10 +1137,14 @@ def operate_inspect(client: Client, spec: dict) -> int:
         f"    application {target['resource_name']}: present "
         f"uuid={application.get('uuid')} status={application.get('status')}"
     )
+    # The delta is computed against the detail read, because that is the object
+    # reconcile verifies a write against. Comparing the list entry here would let
+    # inspect report agreement for a resource reconcile would still change.
+    detail = report_object_shape(client, application)
     entries = expect_list(
         call(client, "GET", f"/applications/{application['uuid']}/envs"), "environment entries"
     )
-    converged = report_delta(spec, application, entries)
+    converged = report_delta(spec, detail, entries)
     emit("")
     emit(
         "RESULT inspect ok application=present "
@@ -837,13 +1197,18 @@ def ensure_placement(client: Client, spec: dict) -> tuple[dict, dict]:
 def create_application(client: Client, spec: dict, project: dict, environment: dict) -> str:
     target = spec["target"]
     server = resolve_server(client, target["server"])
-    destination = resolve_destination(client, server["uuid"], target["destination"])
+    destination = resolve_destination(
+        client, server, target["destination"], applications_in(client, environment)
+    )
     github_app = (
         resolve_github_app(client, spec["source"]["github_app"])
         if spec["source"]["kind"] == "private_github_app"
         else None
     )
-    emit(f"    placement: server={server.get('name')} destination={(destination or {}).get('name')}")
+    emit(
+        f"    placement: server={server.get('name')} "
+        f"destination={(destination or {}).get('name') or (destination or {}).get('uuid')}"
+    )
     if github_app is not None:
         emit(f"    source: GitHub app {github_app.get('name')}")
 
@@ -877,9 +1242,12 @@ def read_environment_entries(client: Client, uuid: str) -> list:
     )
 
 
-def operate_reconcile(client: Client, spec: dict) -> int:
+def operate_reconcile(client: Client, spec: dict, supplied: dict[str, str] | None = None) -> int:
+    supplied = supplied or {}
     target = spec["target"]
     emit(f"--- reconcile {spec['service']}")
+    if supplied:
+        emit(f"    supplied owner-held keys: {sorted(supplied)}")
     project, environment = ensure_placement(client, spec)
     applications = applications_in(client, environment)
     application = find_application(applications, target["resource_name"])
@@ -892,7 +1260,9 @@ def operate_reconcile(client: Client, spec: dict) -> int:
 
     stored = read_application(client, uuid)
     field_changes = difference(desired_application_fields(spec), stored)
-    setting_changes = difference(desired_settings(spec), stored_settings(stored))
+    setting_changes, unverifiable = settings_delta(spec, stored)
+    for name in unverifiable:
+        emit(f"    setting {name}: PENDING-OWNER-UI, this API does not report it")
     if field_changes or setting_changes:
         body = {name: desired_application_fields(spec)[name] for name, _, _ in field_changes}
         body.update({name: desired_settings(spec)[name] for name, _, _ in setting_changes})
@@ -903,7 +1273,7 @@ def operate_reconcile(client: Client, spec: dict) -> int:
         emit("    application fields and settings already match the spec")
 
     entries = read_environment_entries(client, uuid)
-    create, update, unchanged, absent = environment_plan(spec, entries)
+    create, update, unchanged, absent = environment_plan(spec, entries, supplied)
     for key, value in create:
         emit(f"    change env {key}: created")
         call(
@@ -931,8 +1301,10 @@ def operate_reconcile(client: Client, spec: dict) -> int:
     verified = read_application(client, uuid)
     verified_entries = read_environment_entries(client, uuid)
     residual_fields = difference(desired_application_fields(spec), verified)
-    residual_settings = difference(desired_settings(spec), stored_settings(verified))
-    residual_create, residual_update, _, absent = environment_plan(spec, verified_entries)
+    residual_settings, still_unverifiable = settings_delta(spec, verified)
+    residual_create, residual_update, _, absent = environment_plan(
+        spec, verified_entries, supplied
+    )
     fqdn = (verified.get("fqdn") or "").strip()
 
     problems: list[str] = []
@@ -957,11 +1329,18 @@ def operate_reconcile(client: Client, spec: dict) -> int:
         return EXIT_FAILED
 
     changed = bool(field_changes or setting_changes or create or update) or application is None
-    emit("    VERIFY OK stored state matches the declared spec")
+    if still_unverifiable:
+        emit(
+            "    VERIFY OK for everything this API reports; "
+            f"{len(still_unverifiable)} declared setting(s) are not reported and were not written: "
+            f"{still_unverifiable}"
+        )
+    else:
+        emit("    VERIFY OK stored state matches the declared spec")
     emit("")
     emit(
         f"RESULT reconcile ok uuid={uuid} changed={'yes' if changed else 'no'} "
-        f"pending_owner_env={len(absent)}"
+        f"pending_owner_env={len(absent)} unreported_settings={len(still_unverifiable)}"
     )
     return EXIT_OK
 
@@ -1161,13 +1540,20 @@ def run(environ: dict) -> int:
         )
     register_redaction(credential)
 
+    # Gathered for every operation so that a supplied value is masked in the log
+    # even when this run will not write it. Only reconcile applies them: deploy
+    # deliberately re-reads the stored state instead, so its readiness check
+    # answers whether the resource is configured, not whether this run was
+    # handed the values.
+    supplied = supplied_values(spec, environ)
+
     client = Client(base_url, credential)
     emit(f"operation={operation} service={spec['service']} api={base_url}")
 
     if operation == "inspect":
         return operate_inspect(client, spec)
     if operation == "reconcile":
-        return operate_reconcile(client, spec)
+        return operate_reconcile(client, spec, supplied)
     if operation == "status":
         return operate_status(client, spec)
     return operate_deploy(

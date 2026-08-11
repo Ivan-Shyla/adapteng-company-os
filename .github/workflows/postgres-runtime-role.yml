@@ -1,0 +1,147 @@
+name: Postgres runtime role
+
+# Provisions the least-privilege Postgres role the AI Gateway connects as.
+#
+# The work happens on the production host, not on this runner, and that is a
+# constraint rather than a style choice: canonical production Postgres accepts
+# connections only from the host, and the runtime password must not exist
+# anywhere a runner can read it. This job copies a script to the host, runs it
+# there, and reads back only the non-secret report it prints. The password is
+# generated on the host, used there, and posted from there to the Coolify API,
+# which is also local to that host.
+#
+# recon reads and writes nothing. provision creates or rotates the role, applies
+# the grants from the platform runbook, runs that runbook's own verifications,
+# and publishes the DSN. Run recon first and read it: provision refuses to
+# proceed unless the objects it grants on already exist with the exact shapes
+# migration 008a defines.
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "recon reads only; provision creates the role and publishes the DSN"
+        required: true
+        default: recon
+        type: choice
+        options:
+          - recon
+          - provision
+      container:
+        description: "Postgres container name. Leave empty to discover it by image."
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+# One run at a time. Two overlapping provisions would each rotate a password the
+# other is about to publish, and the loser would publish a DSN that cannot log in.
+concurrency:
+  group: postgres-runtime-role
+  cancel-in-progress: false
+
+jobs:
+  drive:
+    name: Postgres role ${{ inputs.operation }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Refuse to start without the access this needs
+        env:
+          SSH_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+          SSH_HOST: ${{ vars.PROD_SSH_HOST }}
+          SSH_USER: ${{ vars.PROD_SSH_USER }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for name in SSH_KEY SSH_KNOWN_HOSTS SSH_HOST SSH_USER; do
+            if [ -z "${!name:-}" ]; then
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing required configuration:$missing"
+            exit 1
+          fi
+          echo "all required configuration is present"
+
+      - name: Authorise this runner against the recorded host key
+        env:
+          SSH_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -m 700 -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_prod
+          chmod 600 ~/.ssh/id_prod
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          # StrictHostKeyChecking stays on and the known_hosts file is the only
+          # authority, so a substituted host fails the connection instead of
+          # being trusted on first use.
+          {
+            echo "Host production"
+            echo "  HostName ${{ vars.PROD_SSH_HOST }}"
+            echo "  User ${{ vars.PROD_SSH_USER }}"
+            echo "  Port ${{ vars.PROD_SSH_PORT || '22' }}"
+            echo "  IdentityFile ~/.ssh/id_prod"
+            echo "  IdentitiesOnly yes"
+            echo "  StrictHostKeyChecking yes"
+            echo "  UserKnownHostsFile ~/.ssh/known_hosts"
+            echo "  BatchMode yes"
+            echo "  ConnectTimeout 20"
+          } > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+      - name: Copy the script to the host
+        run: |
+          set -euo pipefail
+          # The script is sent on stdin rather than left on the host, and the
+          # destination is created empty first so a previous run's file can never
+          # be executed by this one.
+          ssh production 'umask 077; rm -f /tmp/postgres_runtime_role.py; cat > /tmp/postgres_runtime_role.py'  < scripts/postgres_runtime_role.py
+          ssh production 'python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" /tmp/postgres_runtime_role.py'
+          echo "script copied and parses on the host"
+
+      - name: Run the operation on the host
+        env:
+          OPERATION: ${{ inputs.operation }}
+          CONTAINER: ${{ inputs.container }}
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_URL: ${{ vars.COOLIFY_URL }}
+          COOLIFY_APP_UUID: ${{ vars.AI_GATEWAY_COOLIFY_APP_UUID }}
+          PG_DSN_HOST: ${{ vars.AI_GATEWAY_PG_DSN_HOST }}
+        run: |
+          set -euo pipefail
+          # The environment is handed over in a file on stdin, not on the command
+          # line, so the token never appears in the host's process list. The
+          # remote shell removes it before this step can return.
+          if [ "$OPERATION" = "provision" ]; then
+            printf 'COOLIFY_API_TOKEN=%s\nCOOLIFY_URL=%s\nCOOLIFY_APP_UUID=%s\nPG_DSN_HOST=%s\n' \
+              "$COOLIFY_API_TOKEN" "$COOLIFY_URL" "$COOLIFY_APP_UUID" "$PG_DSN_HOST" \
+              | ssh production 'umask 077; cat > /tmp/postgres_runtime_role.env'
+          fi
+          container_argument=""
+          if [ -n "${CONTAINER:-}" ]; then
+            container_argument="--container $CONTAINER"
+          fi
+          set +e
+          ssh production "set -a; [ -f /tmp/postgres_runtime_role.env ] && . /tmp/postgres_runtime_role.env; set +a; python3 /tmp/postgres_runtime_role.py $OPERATION $container_argument; status=\$?; rm -f /tmp/postgres_runtime_role.env /tmp/postgres_runtime_role.py; exit \$status"
+          status=$?
+          set -e
+          exit $status
+
+      - name: Leave nothing behind on the host
+        if: always()
+        run: |
+          set -euo pipefail
+          # The previous step removes both files on its own path out, including
+          # when the script fails. This runs anyway, because a connection that
+          # dropped mid-step would not have reached that cleanup.
+          ssh production 'rm -f /tmp/postgres_runtime_role.env /tmp/postgres_runtime_role.py' || true
+          ssh production 'ls /tmp/postgres_runtime_role.env /tmp/postgres_runtime_role.py 2>/dev/null && echo "::error::files remain on the host" && exit 1 || echo "host is clean"'

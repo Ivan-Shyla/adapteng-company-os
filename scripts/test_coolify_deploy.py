@@ -96,7 +96,22 @@ class FakeInstance:
         self.environments = {"prj-1": [{"id": 7, "uuid": "env-1", "name": ENVIRONMENT}]}
         self.servers = [{"id": 1, "uuid": "srv-1", "name": "hetzner"}]
         self.destinations = {"srv-1": [{"id": 1, "uuid": "dst-1", "name": "coolify"}]}
-        self.github_apps = [{"id": 1, "uuid": "gha-1", "name": "adapteng"}]
+        # The production instance answers 404 for this endpoint. The default here
+        # stays 200 so the existing suites keep exercising the endpoint path, and
+        # the tests that reproduce production set it to False explicitly.
+        self.destinations_endpoint_present = True
+        # How this instance reports the delivery flags: "relation" nests them,
+        # "fields" carries them at top level, "none" reports them nowhere.
+        # Production is "none"; all three are exercised.
+        self.settings_response_shape = "relation"
+        self.call_bodies: list[tuple[str, str, dict]] = []
+        # Mirrors production: two sources are offered, and only the installed App
+        # can read a private repository. A fixture with one app would let a spec
+        # that names none pass here and abort against the real instance.
+        self.github_apps = [
+            {"id": 1, "uuid": "gha-1", "name": "adapteng-coolify"},
+            {"id": 2, "uuid": "gha-2", "name": "Public GitHub"},
+        ]
         self.applications: list[dict] = []
         self.environment_entries: dict[str, list[dict]] = {}
         self.deployment_states = list(deployment_states or ["queued", "in_progress", "finished"])
@@ -111,10 +126,11 @@ class FakeInstance:
     def add_application(self, **overrides) -> dict:
         spec = driver.load_spec(driver.spec_path(RESOURCE))
         record = dict(driver.desired_application_fields(spec))
+        uuid = "app-1" if not self.applications else f"app-{len(self.applications) + 1}"
         record.update(
             {
-                "id": 11,
-                "uuid": "app-1",
+                "id": 11 + len(self.applications),
+                "uuid": uuid,
                 "environment_id": 7,
                 "fqdn": None,
                 "status": "running:healthy",
@@ -123,7 +139,7 @@ class FakeInstance:
         )
         record.update(overrides)
         self.applications.append(record)
-        self.environment_entries["app-1"] = [
+        self.environment_entries[uuid] = [
             {"key": item["key"], "value": item["value"], "is_preview": False}
             for item in spec["configuration"]
         ] + [
@@ -145,6 +161,7 @@ class FakeInstance:
 
     def request(self, method, path, body=None, query=None):
         self.calls.append((method.upper(), path))
+        self.call_bodies.append((method.upper(), path, copy.deepcopy(body or {})))
         handler = getattr(self, f"_{method.lower()}", None)
         if handler is None:
             return 405, {"message": "method not allowed"}
@@ -164,6 +181,8 @@ class FakeInstance:
             return 200, copy.deepcopy(self.environments.get(match.group(1), []))
         match = re.fullmatch(r"/servers/([^/]+)/destinations", path)
         if match:
+            if not self.destinations_endpoint_present:
+                return 404, {"message": "Not found."}
             return 200, copy.deepcopy(self.destinations.get(match.group(1), []))
         match = re.fullmatch(r"/applications/([^/]+)/envs", path)
         if match:
@@ -171,7 +190,16 @@ class FakeInstance:
         match = re.fullmatch(r"/applications/([^/]+)", path)
         if match:
             found = self.application(match.group(1))
-            return (200, copy.deepcopy(found)) if found else (404, {"message": "not found"})
+            if found is None:
+                return 404, {"message": "not found"}
+            found = copy.deepcopy(found)
+            relation = found.pop("settings", {})
+            if self.settings_response_shape == "fields":
+                found.update(relation)
+            elif self.settings_response_shape == "relation":
+                found["settings"] = relation
+            # "none" is the production shape: the flags are reported nowhere.
+            return 200, found
         match = re.fullmatch(r"/deployments/applications/([^/]+)", path)
         if match:
             return 200, [copy.deepcopy(item) for item in self.deployments.values()]
@@ -218,13 +246,32 @@ class FakeInstance:
 
     def _create_application(self, body):
         settings_keys = set(driver.desired_settings(driver.load_spec(driver.spec_path(RESOURCE))))
+        # The real endpoint answers 422 for is_preview_deployments_enabled with
+        # "This field is not allowed." Reproducing that here is the point: with a
+        # fixture that accepted settings on creation, the payload that production
+        # rejects passed every test in this file.
+        rejected = sorted(settings_keys & set(body))
+        if rejected:
+            return 422, {
+                "message": "Validation failed.",
+                "errors": {name: ["This field is not allowed."] for name in rejected},
+            }
         record = {
             "id": 12,
             "uuid": "app-created",
             "environment_id": 7,
             "fqdn": None,
             "status": "exited",
-            "settings": {},
+            # A newly created application carries the platform's own defaults, not
+            # an empty relation. The exact values are a stand-in; what matters is
+            # that they differ from the declared ones, so convergence has real
+            # drift to repair rather than an empty dict to fill in.
+            "settings": {
+                "is_auto_deploy_enabled": True,
+                "is_preview_deployments_enabled": False,
+                "is_force_https_enabled": True,
+                "connect_to_docker_network": False,
+            },
         }
         for key, value in body.items():
             if key in settings_keys:
@@ -297,6 +344,19 @@ class CommittedSpecTests(unittest.TestCase):
         self.assertEqual(self.spec["target"]["project"], PROJECT)
         self.assertEqual(self.spec["target"]["environment"], ENVIRONMENT)
 
+    def test_the_private_source_names_its_github_app(self) -> None:
+        """Two sources exist on this instance, so the choice cannot be inferred.
+
+        Leaving this null aborted a reconcile against production. Only the
+        installed App can read a private repository; the built-in 'Public GitHub'
+        source cannot. Reverting to null would abort again, one API call before
+        the application is created.
+        """
+
+        source = self.spec["source"]
+        self.assertEqual(source["kind"], "private_github_app")
+        self.assertEqual(source["github_app"], "adapteng-coolify")
+
     def test_the_loopback_bind_is_overridden(self) -> None:
         """The reason this spec exists.
 
@@ -327,8 +387,65 @@ class CommittedSpecTests(unittest.TestCase):
         self.assertEqual(fields["git_branch"], "main")
 
     def test_owner_held_values_are_named_and_never_valued(self) -> None:
+        """The section may say what a key is and whether it is secret, never what it is."""
+
         for entry in self.spec["externally_provided_configuration"]:
-            self.assertEqual(set(entry) - {"note"}, {"key", "reason"})
+            self.assertEqual(set(entry) - {"note", "sensitive"}, {"key", "reason"})
+            self.assertNotIn("value", entry)
+
+    def test_the_provider_project_is_no_longer_an_owner_decision(self) -> None:
+        """It is a published identifier, and app/config.py refuses to start without it.
+
+        Holding it back made a value that is already committed as a repository
+        variable on the platform repository into a startup blocker, which is a
+        ceremony that buys nothing.
+        """
+
+        declared = {item["key"]: item["value"] for item in self.spec["configuration"]}
+        self.assertEqual(declared["AI_GATEWAY_PROVIDER_PROJECT"], "adapteng-workspace-automation")
+        owner_held = {item["key"] for item in self.spec["externally_provided_configuration"]}
+        self.assertNotIn("AI_GATEWAY_PROVIDER_PROJECT", owner_held)
+
+    def test_authentication_material_is_sensitive_and_provenance_is_not(self) -> None:
+        """Redaction follows the reviewed flag, not a guess about the value's shape."""
+
+        flags = {
+            item["key"]: driver.is_sensitive(item)
+            for item in self.spec["externally_provided_configuration"]
+        }
+        self.assertTrue(flags["AI_GATEWAY_BEARER_TOKENS"])
+        self.assertTrue(flags["AI_GATEWAY_DATABASE_URL"])
+        for key in (
+            "AI_GATEWAY_FX_USD_EUR",
+            "AI_GATEWAY_FX_AS_OF",
+            "AI_GATEWAY_FX_SOURCE",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+        ):
+            self.assertFalse(flags[key], f"{key} is provenance or a path, not a credential")
+
+    def test_the_reservation_lease_clears_the_floor_config_computes(self) -> None:
+        """app/config.py refuses a lease at or below the provider attempt window.
+
+        The floor is derived from three other declared values, so changing any of
+        them can make a previously valid lease refuse to start. Recomputing it
+        here means that arrives as a failing test rather than a boot loop.
+        """
+
+        declared = {item["key"]: item["value"] for item in self.spec["configuration"]}
+        timeout = int(declared["AI_GATEWAY_PROVIDER_TIMEOUT_SECONDS"])
+        attempts = int(declared["AI_GATEWAY_PROVIDER_MAX_ATTEMPTS"])
+        backoff = float(declared["AI_GATEWAY_PROVIDER_RETRY_BACKOFF_SECONDS"])
+        lease = int(declared["AI_GATEWAY_RESERVATION_LEASE_SECONDS"])
+        floor = timeout * attempts + backoff * (2 ** (attempts - 1) - 1) + 15
+        self.assertGreater(lease, floor)
+
+    def test_the_adc_path_is_declared_but_not_asserted_inline(self) -> None:
+        """Setting it before the file exists is a boot-time failure, not a warning."""
+
+        owner_held = {item["key"] for item in self.spec["externally_provided_configuration"]}
+        self.assertIn("GOOGLE_APPLICATION_CREDENTIALS", owner_held)
+        declared = {item["key"] for item in self.spec["configuration"]}
+        self.assertNotIn("GOOGLE_APPLICATION_CREDENTIALS", declared)
 
     def test_a_push_to_the_platform_repository_does_not_release(self) -> None:
         self.assertFalse(driver.desired_settings(self.spec)["is_auto_deploy_enabled"])
@@ -441,10 +558,16 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(driver.difference({"base_directory": "/x"}, {}), [("base_directory", "", "/x")])
 
     def test_an_unreadable_settings_block_stops_the_run(self) -> None:
-        """An unverifiable write must never be reported as a converged one."""
+        """An unverifiable write must never be reported as a converged one.
 
-        with self.assertRaises(driver.Abort):
-            driver.stored_settings({"uuid": "app-1"})
+        The guard moved from the reader to settings_delta, because only the spec
+        knows whether an absence was foreseen. A spec that acknowledges nothing
+        still aborts, which is the default this asserts.
+        """
+
+        with self.assertRaises(driver.Abort) as raised:
+            driver.settings_delta(minimal_spec(), {"uuid": "app-1"})
+        self.assertIn("refusing to report success", str(raised.exception))
 
 
 class EnvironmentPlanTests(unittest.TestCase):
@@ -483,6 +606,117 @@ class EnvironmentPlanTests(unittest.TestCase):
         ]
         with self.assertRaises(driver.Abort):
             driver.environment_plan(self.spec, entries)
+
+    def test_a_supplied_owner_held_value_is_created_and_stops_being_pending(self) -> None:
+        create, update, _, absent = driver.environment_plan(
+            self.spec, [], {"WIDGET_DATABASE_URL": "postgresql://example"}
+        )
+        self.assertIn(("WIDGET_DATABASE_URL", "postgresql://example"), create)
+        self.assertEqual(update, [])
+        self.assertEqual(absent, [])
+
+    def test_a_supplied_owner_held_value_that_differs_is_updated(self) -> None:
+        entries = [
+            {"key": "WIDGET_HTTP_HOST", "value": "0.0.0.0"},
+            {"key": "WIDGET_DATABASE_URL", "value": "postgresql://stale"},
+        ]
+        create, update, _, absent = driver.environment_plan(
+            self.spec, entries, {"WIDGET_DATABASE_URL": "postgresql://fresh"}
+        )
+        self.assertEqual(create, [])
+        self.assertEqual(update, [("WIDGET_DATABASE_URL", "postgresql://fresh")])
+        self.assertEqual(absent, [])
+
+    def test_an_unsupplied_owner_held_value_is_never_written_over(self) -> None:
+        """The property that makes a partially configured resource safe to reconcile.
+
+        Nothing in this repository holds the value, so there is nothing to push,
+        so a value set by someone else cannot be replaced by a stale one.
+        """
+
+        entries = [
+            {"key": "WIDGET_HTTP_HOST", "value": "0.0.0.0"},
+            {"key": "WIDGET_DATABASE_URL", "value": "postgresql://set-elsewhere"},
+        ]
+        create, update, unchanged, absent = driver.environment_plan(self.spec, entries)
+        self.assertEqual((create, update, absent), ([], [], []))
+        self.assertNotIn("WIDGET_DATABASE_URL", unchanged)
+
+
+class SuppliedValueTests(unittest.TestCase):
+    """An owner-held value may be handed over by reference, and only by reference."""
+
+    def setUp(self) -> None:
+        driver.reset_redactions()
+        self.addCleanup(driver.reset_redactions)
+        self.spec = minimal_spec()
+
+    def test_a_declared_key_is_accepted(self) -> None:
+        supplied = driver.supplied_values(
+            self.spec, {"COOLIFY_SECRET_WIDGET_DATABASE_URL": "postgresql://example"}
+        )
+        self.assertEqual(supplied, {"WIDGET_DATABASE_URL": "postgresql://example"})
+
+    def test_an_undeclared_key_stops_the_run(self) -> None:
+        """A dispatch must not be able to introduce configuration nobody reviewed."""
+
+        with self.assertRaises(driver.Abort) as raised:
+            driver.supplied_values(self.spec, {"COOLIFY_SECRET_WIDGET_SMUGGLED": "value"})
+        self.assertEqual(raised.exception.code, driver.EXIT_MISCONFIGURED)
+        self.assertIn("WIDGET_SMUGGLED", str(raised.exception))
+
+    def test_an_inline_key_cannot_be_overridden_from_the_environment(self) -> None:
+        """The reviewed spec stays the only source for a declared value."""
+
+        with self.assertRaises(driver.Abort):
+            driver.supplied_values(self.spec, {"COOLIFY_SECRET_WIDGET_HTTP_HOST": "127.0.0.1"})
+
+    def test_an_empty_variable_is_not_a_supplied_value(self) -> None:
+        """An unset repository variable expands to an empty string, not to nothing."""
+
+        for blank in ("", "   "):
+            self.assertEqual(
+                driver.supplied_values(self.spec, {"COOLIFY_SECRET_WIDGET_DATABASE_URL": blank}),
+                {},
+            )
+
+    def test_unrelated_variables_are_ignored(self) -> None:
+        self.assertEqual(
+            driver.supplied_values(self.spec, {"PATH": "/usr/bin", "HOME": "/root"}), {}
+        )
+
+    def test_a_sensitive_value_is_registered_for_redaction(self) -> None:
+        driver.supplied_values(
+            self.spec, {"COOLIFY_SECRET_WIDGET_DATABASE_URL": "postgresql://secret-value"}
+        )
+        self.assertNotIn("postgresql://secret-value", driver.redact("postgresql://secret-value"))
+
+    def test_a_value_marked_not_sensitive_stays_readable(self) -> None:
+        """Provenance is evidence. Masking it would defeat the reason it is recorded."""
+
+        spec = minimal_spec()
+        spec["externally_provided_configuration"] = [
+            {"key": "WIDGET_FX_SOURCE", "reason": "published reference", "sensitive": False}
+        ]
+        driver.supplied_values(spec, {"COOLIFY_SECRET_WIDGET_FX_SOURCE": "ECB daily 2026-08-10"})
+        self.assertEqual(driver.redact("ECB daily 2026-08-10"), "ECB daily 2026-08-10")
+
+    def test_the_default_is_sensitive(self) -> None:
+        """Forgetting the flag must hide a value, not expose one."""
+
+        self.assertTrue(driver.is_sensitive({"key": "K", "reason": "r"}))
+        self.assertTrue(driver.is_sensitive({"key": "K", "reason": "r", "sensitive": True}))
+        self.assertFalse(driver.is_sensitive({"key": "K", "reason": "r", "sensitive": False}))
+
+    def test_a_non_boolean_sensitive_flag_is_refused(self) -> None:
+        spec = minimal_spec()
+        spec["externally_provided_configuration"] = [
+            {"key": "WIDGET_DATABASE_URL", "reason": "owner held", "sensitive": "no"}
+        ]
+        with TemporaryDirectory() as directory:
+            path = write_spec(Path(directory), spec)
+            with self.assertRaises(driver.Abort):
+                driver.load_spec(path)
 
 
 class UniqueMatchTests(unittest.TestCase):
@@ -639,6 +873,40 @@ class ReconcileTests(unittest.TestCase):
         self.assertFalse(captured[0]["instant_deploy"])
         self.assertFalse(captured[0]["autogenerate_domain"])
 
+    def test_the_creation_call_carries_no_settings(self) -> None:
+        """The creation endpoint refuses them; convergence applies them instead."""
+
+        instance = FakeInstance()
+        captured: list[dict] = []
+        original = instance.request
+
+        def recording(method, path, body=None, query=None):
+            if method.upper() == "POST" and path in {
+                "/applications/private-github-app",
+                "/applications/public",
+            }:
+                captured.append(dict(body or {}))
+            return original(method, path, body, query)
+
+        instance.request = recording
+        code, _ = run_operation(driver.operate_reconcile, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertEqual(len(captured), 1)
+        spec = driver.load_spec(driver.spec_path(RESOURCE))
+        for name in driver.desired_settings(spec):
+            self.assertNotIn(name, captured[0])
+
+    def test_settings_are_converged_after_a_creation(self) -> None:
+        """Omitting them from creation must not mean they go unset."""
+
+        instance = FakeInstance()
+        code, report = run_operation(driver.operate_reconcile, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        spec = driver.load_spec(driver.spec_path(RESOURCE))
+        stored = instance.applications[0]["settings"]
+        self.assertEqual(stored, driver.desired_settings(spec))
+        self.assertIn("change connect_to_docker_network", report)
+
     def test_drift_is_written_and_confirmed(self) -> None:
         instance = FakeInstance(with_application=True)
         instance.applications[0]["git_branch"] = "some-feature-branch"
@@ -660,6 +928,72 @@ class ReconcileTests(unittest.TestCase):
         self.assertIn("change env AI_GATEWAY_HTTP_HOST", report)
         stored = {item["key"]: item["value"] for item in instance.environment_entries["app-1"]}
         self.assertEqual(stored["AI_GATEWAY_HTTP_HOST"], "0.0.0.0")
+
+    def test_a_supplied_owner_held_value_is_stored_and_clears_the_pending_line(self) -> None:
+        instance = FakeInstance()
+        secret = "postgresql://ai_gateway_runtime:example-password@db:5432/adapteng_ops"
+        driver.register_redaction(secret)
+        code, report = run_operation(
+            driver.operate_reconcile, instance, supplied={"AI_GATEWAY_DATABASE_URL": secret}
+        )
+        self.assertEqual(code, driver.EXIT_OK)
+        stored = {
+            item["key"]: item["value"]
+            for item in instance.environment_entries[instance.applications[0]["uuid"]]
+        }
+        self.assertEqual(stored["AI_GATEWAY_DATABASE_URL"], secret)
+        self.assertNotIn("PENDING-OWNER env AI_GATEWAY_DATABASE_URL", report)
+
+    def test_a_supplied_secret_never_reaches_the_report(self) -> None:
+        """The property the whole binding-by-reference design exists to hold."""
+
+        instance = FakeInstance()
+        # "example" inside the literal is what marks this a placeholder to
+        # validate_sensitive_references.py. It must appear in the source text, not
+        # only in the interpolated result: the checker reads the line, not the run.
+        # A test fixture is not an exception to that rule — the checker cannot tell
+        # a fake credential from a real one, and it is right not to try.
+        marker = "example-password-must-not-appear"
+        secret = "postgresql://ai_gateway_runtime:example-password-must-not-appear@db/ops"
+        driver.register_redaction(secret)
+        _, report = run_operation(
+            driver.operate_reconcile, instance, supplied={"AI_GATEWAY_DATABASE_URL": secret}
+        )
+        self.assertNotIn(secret, report)
+        self.assertNotIn(marker, report)
+        self.assertIn("AI_GATEWAY_DATABASE_URL", report)
+
+    def test_supplying_a_value_twice_writes_once(self) -> None:
+        """Binding by reference must not make every run a write."""
+
+        instance = FakeInstance()
+        supplied = {"AI_GATEWAY_FX_USD_EUR": "0.865426"}
+        first, _ = run_operation(driver.operate_reconcile, instance, supplied=supplied)
+        self.assertEqual(first, driver.EXIT_OK)
+        instance.calls.clear()
+        second, report = run_operation(driver.operate_reconcile, instance, supplied=supplied)
+        self.assertEqual(second, driver.EXIT_OK)
+        self.assertIn("changed=no", report)
+        self.assertEqual(instance.writes(), [])
+
+    def test_an_unsupplied_owner_held_key_is_still_reported_as_pending(self) -> None:
+        """Supplying one key must not silence the pending line for the others."""
+
+        instance = FakeInstance(with_application=True)
+        instance.environment_entries["app-1"] = [
+            entry
+            for entry in instance.environment_entries["app-1"]
+            if entry["key"] not in {"AI_GATEWAY_DATABASE_URL", "AI_GATEWAY_FX_USD_EUR"}
+        ]
+        code, report = run_operation(
+            driver.operate_reconcile, instance, supplied={"AI_GATEWAY_FX_USD_EUR": "0.865426"}
+        )
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("PENDING-OWNER env AI_GATEWAY_DATABASE_URL", report)
+        self.assertNotIn("PENDING-OWNER env AI_GATEWAY_FX_USD_EUR", report)
+        stored = {item["key"]: item["value"] for item in instance.environment_entries["app-1"]}
+        self.assertEqual(stored["AI_GATEWAY_FX_USD_EUR"], "0.865426")
+        self.assertNotIn("AI_GATEWAY_DATABASE_URL", stored)
 
     def test_an_accepted_write_that_stored_nothing_fails(self) -> None:
         """The reason the run re-reads instead of trusting the write response."""
@@ -723,6 +1057,337 @@ class ReconcileTests(unittest.TestCase):
         with self.assertRaises(driver.Abort) as raised:
             run_operation(driver.operate_reconcile, instance)
         self.assertIn("server", str(raised.exception))
+
+
+class SettingsShapeTests(unittest.TestCase):
+    """Reconcile must complete against an instance that sends no settings relation.
+
+    This is the production shape. The unit-level reader is covered above; this
+    covers the whole operation, because the abort it replaced fired after the
+    application had already been created.
+    """
+
+    def setUp(self) -> None:
+        driver.reset_redactions()
+        self.addCleanup(driver.reset_redactions)
+
+    def test_a_creation_completes_with_flags_as_top_level_fields(self) -> None:
+        instance = FakeInstance()
+        instance.settings_response_shape = "fields"
+        code, report = run_operation(driver.operate_reconcile, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("VERIFY OK", report)
+        spec = driver.load_spec(driver.spec_path(RESOURCE))
+        self.assertEqual(instance.applications[0]["settings"], driver.desired_settings(spec))
+
+    def test_drift_is_repaired_with_flags_as_top_level_fields(self) -> None:
+        instance = FakeInstance(with_application=True)
+        instance.settings_response_shape = "fields"
+        instance.applications[0]["settings"]["is_auto_deploy_enabled"] = True
+        code, report = run_operation(driver.operate_reconcile, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("change is_auto_deploy_enabled", report)
+        self.assertFalse(instance.applications[0]["settings"]["is_auto_deploy_enabled"])
+
+    def test_inspect_reports_which_shape_it_read(self) -> None:
+        instance = FakeInstance(with_application=True)
+        instance.settings_response_shape = "fields"
+        _, report = run_operation(driver.operate_inspect, instance)
+        self.assertIn("top-level fields", report)
+
+    def test_inspect_compares_against_the_object_reconcile_verifies(self) -> None:
+        """Inspect must not report agreement for drift reconcile would repair.
+
+        The list entry and the detail read are different responses. Here the
+        detail read carries drift the list entry does not.
+        """
+
+        instance = FakeInstance(with_application=True)
+        instance.settings_response_shape = "fields"
+        instance.applications[0]["settings"]["is_force_https_enabled"] = True
+        _, report = run_operation(driver.operate_inspect, instance)
+        self.assertIn("setting is_force_https_enabled", report)
+        self.assertIn("matches_spec=no", report)
+
+    def test_inspect_names_the_keys_without_printing_any_value(self) -> None:
+        """The shape dump must stay a shape dump: names only, never values."""
+
+        instance = FakeInstance(with_application=True)
+        instance.applications[0]["private_key_here"] = "supersecretvalue"
+        _, report = run_operation(driver.operate_inspect, instance)
+        self.assertIn("private_key_here", report)
+        self.assertNotIn("supersecretvalue", report)
+
+
+class StoredSettingsTests(unittest.TestCase):
+    """The delivery flags must be readable in whichever shape the API sends them.
+
+    Production returns no settings relation at all. Demanding one aborted a run
+    immediately after it had created the application, leaving a resource behind
+    with a failed report.
+    """
+
+    def setUp(self) -> None:
+        self.spec = driver.load_spec(driver.spec_path(RESOURCE))
+        self.desired = driver.desired_settings(self.spec)
+
+    def test_the_key_constant_matches_what_the_spec_produces(self) -> None:
+        """One list of owned names, so the two readers cannot drift apart."""
+
+        self.assertEqual(set(driver.SETTING_KEYS), set(self.desired))
+
+    def test_a_nested_block_is_read(self) -> None:
+        self.assertEqual(
+            driver.stored_settings({"settings": dict(self.desired)}), self.desired
+        )
+
+    def test_top_level_fields_are_read_when_no_block_is_sent(self) -> None:
+        self.assertEqual(driver.stored_settings(dict(self.desired)), self.desired)
+
+    def test_the_nested_block_wins_when_both_are_present(self) -> None:
+        """The relation is the authoritative copy where one exists."""
+
+        application = dict(self.desired)
+        application["is_force_https_enabled"] = True
+        application["settings"] = dict(self.desired)
+        self.assertEqual(driver.stored_settings(application), self.desired)
+
+    def test_an_empty_block_falls_through_to_the_fields(self) -> None:
+        """An eager-loaded but empty relation is absence, not an answer."""
+
+        application = dict(self.desired)
+        application["settings"] = {}
+        self.assertEqual(driver.stored_settings(application), self.desired)
+
+    def test_neither_shape_reports_nothing_rather_than_aborting(self) -> None:
+        """Reading is not judging. The absence is settings_delta's to rule on."""
+
+        self.assertEqual(driver.stored_settings({"uuid": "app-1", "name": "ai-gateway"}), {})
+
+    def test_a_partial_field_set_is_reported_as_partial(self) -> None:
+        shape = driver.settings_shape({"is_force_https_enabled": False})
+        self.assertIn("top-level fields", shape)
+        self.assertIn(f"1 of {len(driver.SETTING_KEYS)}", shape)
+
+
+class UnverifiableSettingsTests(unittest.TestCase):
+    """A setting the API will not report may be tolerated only if the spec says so.
+
+    Production reports none of the four. The guard that refused to proceed was
+    right in principle and unconditional in practice: it aborted a run that had
+    already created the application. Tolerance now has to be declared, with a
+    reason, in the committed spec.
+    """
+
+    def setUp(self) -> None:
+        driver.reset_redactions()
+        self.addCleanup(driver.reset_redactions)
+        self.spec = driver.load_spec(driver.spec_path(RESOURCE))
+        self.desired = driver.desired_settings(self.spec)
+
+    def test_the_committed_spec_acknowledges_every_flag_with_a_justification(self) -> None:
+        acknowledged = driver.unreportable_settings(self.spec)
+        self.assertEqual(set(acknowledged), set(driver.SETTING_KEYS))
+        for name, entry in acknowledged.items():
+            self.assertTrue(entry["reason"].strip(), name)
+            self.assertTrue(entry["compensating_control"].strip(), name)
+
+    def test_an_unacknowledged_absence_still_aborts(self) -> None:
+        """The fail-closed half of the guard, kept and pinned."""
+
+        spec = copy.deepcopy(self.spec)
+        del spec["settings_not_reported_by_api"]["keys"]["is_force_https_enabled"]
+        with self.assertRaises(driver.Abort) as raised:
+            driver.settings_delta(spec, {"uuid": "app-1"})
+        self.assertIn("is_force_https_enabled", str(raised.exception))
+        self.assertIn("refusing to report success", str(raised.exception))
+
+    def test_a_misspelt_acknowledgement_aborts(self) -> None:
+        """Otherwise a typo silently widens what the tool will ignore."""
+
+        spec = copy.deepcopy(self.spec)
+        spec["settings_not_reported_by_api"]["keys"]["is_force_https_enable"] = {
+            "reason": "x",
+            "compensating_control": "y",
+        }
+        with self.assertRaises(driver.Abort) as raised:
+            driver.unreportable_settings(spec)
+        self.assertIn("is_force_https_enable", str(raised.exception))
+
+    def test_an_acknowledgement_without_a_reason_aborts(self) -> None:
+        spec = copy.deepcopy(self.spec)
+        spec["settings_not_reported_by_api"]["keys"]["is_force_https_enabled"]["reason"] = "  "
+        with self.assertRaises(driver.Abort) as raised:
+            driver.unreportable_settings(spec)
+        self.assertIn("justification", str(raised.exception))
+
+    def test_a_reported_flag_is_still_compared(self) -> None:
+        """Acknowledgement tolerates absence, not disagreement."""
+
+        stored = {"is_force_https_enabled": not self.desired["is_force_https_enabled"]}
+        changes, unverifiable = driver.settings_delta(self.spec, stored)
+        self.assertEqual([name for name, _, _ in changes], ["is_force_https_enabled"])
+        self.assertNotIn("is_force_https_enabled", unverifiable)
+
+    def test_reconcile_completes_when_the_api_reports_none_of_them(self) -> None:
+        """The production shape, end to end, including the creation path."""
+
+        instance = FakeInstance()
+        instance.settings_response_shape = "none"
+        code, report = run_operation(driver.operate_reconcile, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("VERIFY OK", report)
+        self.assertIn("unreported_settings=4", report)
+        self.assertIn("PENDING-OWNER-UI", report)
+
+    def test_an_unreportable_setting_is_never_written(self) -> None:
+        """A write that cannot be re-read must not be attempted."""
+
+        instance = FakeInstance()
+        instance.settings_response_shape = "none"
+        run_operation(driver.operate_reconcile, instance)
+        written = [
+            body
+            for method, path, body in instance.call_bodies
+            if method == "PATCH" and re.fullmatch(r"/applications/[^/]+", path)
+        ]
+        for body in written:
+            self.assertEqual(set(body) & set(driver.SETTING_KEYS), set())
+
+
+class ApiMessageTests(unittest.TestCase):
+    """An error body must report why, not merely that."""
+
+    def setUp(self) -> None:
+        driver.reset_redactions()
+        self.addCleanup(driver.reset_redactions)
+
+    def test_field_errors_are_not_shadowed_by_the_generic_message(self) -> None:
+        """The defect this replaced: a 422 read "Validation failed." and no more.
+
+        Coolify sends the generic message and the field-level errors together.
+        Returning the first key found discarded the only actionable half.
+        """
+
+        rendered = driver.api_message(
+            {
+                "message": "Validation failed.",
+                "errors": {"ports_exposes": ["The ports exposes field is required."]},
+            }
+        )
+        self.assertIn("Validation failed.", rendered)
+        self.assertIn("ports_exposes", rendered)
+
+    def test_a_lone_message_still_renders(self) -> None:
+        self.assertIn("Not found.", driver.api_message({"message": "Not found."}))
+
+    def test_a_body_with_no_known_key_is_still_shown(self) -> None:
+        self.assertIn("unexpected", driver.api_message({"unexpected": "shape"}))
+
+    def test_an_empty_body_is_named(self) -> None:
+        self.assertEqual(driver.api_message(None), "no body")
+
+    def test_a_registered_secret_is_redacted_from_an_error_body(self) -> None:
+        driver.register_redaction("example-password-in-an-error")
+        self.assertNotIn(
+            "example-password-in-an-error",
+            driver.api_message({"message": "rejected example-password-in-an-error"}),
+        )
+
+
+class DestinationResolutionTests(unittest.TestCase):
+    """Placement must survive an instance that does not expose a destination list.
+
+    The production instance answers 404 for /servers/{uuid}/destinations. A
+    creation still needs somewhere to go, and the applications already running
+    in the target environment are the strongest evidence of where that is.
+    """
+
+    def setUp(self) -> None:
+        driver.reset_redactions()
+        self.addCleanup(driver.reset_redactions)
+
+    def absent_endpoint_instance(self) -> "FakeInstance":
+        instance = FakeInstance()
+        instance.destinations_endpoint_present = False
+        return instance
+
+    def test_the_destination_is_inherited_from_a_neighbour(self) -> None:
+        instance = self.absent_endpoint_instance()
+        instance.add_application(name="adapteng-baserow-adapter", destination_uuid="dst-live")
+        code, report = run_operation(driver.operate_reconcile, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("inherited dst-live", report)
+        created = [item for item in instance.applications if item["uuid"] == "app-created"]
+        self.assertEqual(len(created), 1)
+
+    def test_a_nested_destination_object_is_read(self) -> None:
+        """Some versions report the destination as an object, not a flat uuid."""
+
+        instance = self.absent_endpoint_instance()
+        instance.add_application(
+            name="adapteng-baserow-adapter", destination={"uuid": "dst-nested", "name": "coolify"}
+        )
+        _, report = run_operation(driver.operate_reconcile, instance)
+        self.assertIn("inherited dst-nested", report)
+
+    def test_neighbours_on_different_destinations_stop_the_run(self) -> None:
+        """Inheriting from a split environment would be a coin toss."""
+
+        instance = self.absent_endpoint_instance()
+        instance.add_application(name="one", destination_uuid="dst-a")
+        instance.add_application(name="two", destination_uuid="dst-b")
+        with self.assertRaises(driver.Abort) as raised:
+            run_operation(driver.operate_reconcile, instance)
+        self.assertIn("destinations", str(raised.exception))
+
+    def test_a_destination_list_on_the_server_object_is_used(self) -> None:
+        instance = self.absent_endpoint_instance()
+        instance.servers[0]["destinations"] = [{"uuid": "dst-inline", "name": "coolify"}]
+        code, _ = run_operation(driver.operate_reconcile, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+
+    def test_an_empty_environment_still_creates_without_a_destination(self) -> None:
+        """Coolify assigns the default destination when none is given."""
+
+        instance = self.absent_endpoint_instance()
+        code, _ = run_operation(driver.operate_reconcile, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertEqual(len(instance.applications), 1)
+
+    def test_a_declared_destination_with_no_list_to_match_stops_the_run(self) -> None:
+        """Silently ignoring a declared name would place the resource by guess."""
+
+        instance = self.absent_endpoint_instance()
+        instance.add_application(name="neighbour", destination_uuid="dst-live")
+        spec = driver.load_spec(driver.spec_path(RESOURCE))
+        spec["target"]["destination"] = "coolify"
+        with self.assertRaises(driver.Abort) as raised:
+            run_operation(driver.operate_reconcile, instance, spec=spec)
+        self.assertIn("coolify", str(raised.exception))
+
+    def test_the_endpoint_is_still_preferred_when_it_answers(self) -> None:
+        instance = FakeInstance()
+        instance.add_application(name="neighbour", destination_uuid="dst-neighbour")
+        code, report = run_operation(driver.operate_reconcile, instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertNotIn("inherited", report)
+
+    def test_a_non_404_failure_is_not_routed_around(self) -> None:
+        """allow_absent excuses absence, never a broken instance."""
+
+        instance = FakeInstance()
+        original = instance.request
+
+        def failing(method, path, body=None, query=None):
+            if path.endswith("/destinations"):
+                return 500, {"message": "boom"}
+            return original(method, path, body, query)
+
+        instance.request = failing
+        with self.assertRaises(driver.Abort) as raised:
+            run_operation(driver.operate_reconcile, instance)
+        self.assertIn("500", str(raised.exception))
 
 
 class DeployTests(unittest.TestCase):

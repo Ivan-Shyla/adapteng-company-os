@@ -1,7 +1,7 @@
 # AdaptEng Company OS — Environment Registry
 # Production hosts, domains, platform and budgets. NO secrets — names/hostnames/ids only.
 version: 1
-updated: 2026-08-10
+updated: 2026-08-11
 
 platform:
   compute: Hetzner (EU region) — single self-hosted host
@@ -44,19 +44,50 @@ domains:
     service: adapteng-baserow-adapter
     exposure: INTERNAL ONLY (coolify network alias; no public URL — verified 503 externally)
 
-declared_not_yet_created:
-  # Production resources that are designed and named here but DO NOT EXIST yet.
-  # Presence in this block is a declaration, never evidence of a running resource.
+created_not_yet_deployed:
+  # Production resources whose Coolify application EXISTS and whose configuration
+  # has been converged and re-read, but which have never been released. Presence
+  # here is evidence of a configured resource, never of a running service.
   - resource: ai-gateway
     service: ai-gateway            # registry/services.yaml
     repo: adapteng-automation-platform
     path: services/ai-gateway
     target_runtime: Coolify (Hetzner), internal-only on the coolify network
     intended_exposure: INTERNAL ONLY — no public URL, reached by container alias like the Baserow adapter
-    exists_in_production: false
-    coolify_app_uuid: none — application not created
-    endpoint: none — not deployed
-    state: implemented and tested, not deployed
+    exists_in_production: true
+    coolify_app_uuid: e13v7c6zjof7dmcpywqbyas3
+    coolify_project: adapteng-ops (phhk1euleikwkegtr97hexi6)
+    coolify_environment: production
+    coolify_destination: c3dnc3udkoenz9zhw148mbu0   # the destination adapteng-baserow-adapter and n8n-selfhosted use
+    source: GitHub App adapteng-coolify (the platform repository is private, so the public-repo source cannot read it)
+    endpoint: none — never deployed
+    application_status: "exited:unhealthy — the expected state for an application that has never been released"
+    state: created and configured by scripts/coolify_deploy.py reconcile; not deployed
+    creation_evidence:
+      run: 31496735683
+      created: "2026-08-11T13:33Z"
+      declared_by: deploy/ai-gateway.json
+      note: "The run that created it then failed, because this Coolify version reports no delivery-flag settings and the driver refused to claim an unverifiable write. The application was created before that abort; nothing was deployed."
+    configuration_evidence:
+      run: 31497863819
+      completed: "2026-08-11T13:45Z"
+      result: "reconcile ok changed=yes pending_owner_env=3 unreported_settings=4"
+      declared_keys_written_and_reread: 14
+      verified: 2026-08-11
+    pending_owner_held_values:
+      # Names only. These are set on the resource by the owner, or by a run that
+      # supplies them from a secret; their values never appear in a log or a file.
+      - AI_GATEWAY_BEARER_TOKENS
+      - AI_GATEWAY_DATABASE_URL      # blocked on the ai_gateway_runtime Postgres role
+      - GOOGLE_APPLICATION_CREDENTIALS
+    pending_owner_ui_settings:
+      # This Coolify version reports these nowhere on the application resource, so
+      # a write to them could not be verified and the driver does not attempt one.
+      # deploy/ai-gateway.json records why leaving each unset is safe.
+      - is_auto_deploy_enabled
+      - is_preview_deployments_enabled
+      - is_force_https_enabled
+      - connect_to_docker_network
     test_evidence:
       run: 31214858400
       workflow: "AI Gateway Tests"
@@ -67,18 +98,24 @@ declared_not_yet_created:
       jobs_green: [ai-gateway unit tests (ubuntu-latest), ai-gateway unit tests (windows-latest), ai-gateway postgres semantics, ai-gateway supply-chain gates, repo validation]
       verified: 2026-08-10
     database_dependency: postgres-adapteng-ops — migrations 005 and 008_ai_gateway_runtime_hardening.sql are ALREADY APPLIED in production per the owner's post-rollout manual production check; DO NOT REPLAY them at deploy time
-    not_blocked_by: [cost, model pricing, FX configuration]
+    not_blocked_by: [cost, model pricing, FX configuration, Coolify application creation]
     known_deployment_requirements:
       # Both found by reading platform main; recorded in control-plane/current-state.md section 5.
       # Neither is a defect: the defaults are safe, they simply must be overridden or
       # supplemented at deploy time, and that was previously written down nowhere.
       - must set AI_GATEWAY_HTTP_HOST=0.0.0.0 — the Dockerfile defaults to 127.0.0.1, which is unreachable from the container network, so the health check cannot pass
       - /health is liveness only — it returns ok without touching PostgreSQL, so a green health check does not prove database or budget accounting readiness; a separate readiness check is required
-    blocking: "creation and deployment of the Coolify application, then proving the EU Vertex client, Drive adapters, orchestration and canonical approval composition against the running service"
+    blocking: "the three owner-held values above, then deployment, then proving the EU Vertex client, Drive adapters, orchestration and canonical approval composition against the running service"
     budget_binding: budgets.ai_runtime_cap_eur_month (fail-closed cap, not evidenced spend)
     model_binding: external_saas "Google Cloud (Vertex AI + Drive API)" — gemini-3.1-flash-lite, location eu
-    deployment_evidence: UNVERIFIED — GitHub shows no deploy; a recorded deploy plus a no-business-data smoke result against the running service would settle it
+    deployment_evidence: NONE — the application has never been deployed. A recorded deploy plus a no-business-data smoke result against the running service would settle it.
     declared: 2026-08-10
+    created: 2026-08-11
+
+declared_not_yet_created:
+  # Production resources that are designed and named here but DO NOT EXIST yet.
+  # Presence in this block is a declaration, never evidence of a running resource.
+  []
 
 external_saas:
   - name: n8n Cloud
