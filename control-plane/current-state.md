@@ -993,6 +993,34 @@ the six produce *confident* wrong answers, and the two narrow shapes produce a
 confident wrong answer that looks like diligence — which is why, until the sixth,
 they were the dangerous members of the family.
 
+**A related family that is not an instrument failure at all, and needs separating
+because the remedy differs.** In every case above the instrument was consulted and
+its answer misread. In these the answer came *first* and the citation was
+recruited afterwards to support it — so the citation is **true, and its truth is
+independent of the conclusion it is offered for**. Three instances, all from this
+programme:
+
+- WS-6 argued `allowed_signers` belongs outside the reset pair because it
+  "determines *what* verdict, not *whether* a verdict". Workflow lines 69–70 say
+  otherwise. The conclusion — leave it out — was defensible on the loud-versus-
+  silent argument; the reason given was reached for afterwards.
+- WS-6 scoped the `APPROVAL_PATHS` hazard inert by citing `commit_delta_invalid`
+  at 2703. True, and irrelevant: 2701/2703 describe the two-commit shape that
+  produced **all seven** historical `authorized` verdicts, so the cited rule
+  mandates the hazardous shape rather than blocking it. The hazard is inert for a
+  different reason — no classifier exists yet.
+- Mine: §15's second caveat was illustrated with a hand-picked hypothetical while
+  `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256` sat in the same document, real and
+  stronger, already labelled a dead end.
+
+**The tell is checkable and cheap.** Ask whether the citation would still be true
+if the conclusion were false. For all three it would. A supporting citation should
+*fail* when the claim fails; one that cannot is decoration, and it costs the
+implementer who reads "the anchor already blocks this" and skips writing the
+guard. The remedy is not a better search — the search worked — it is stating the
+conclusion and the evidence in that order, and checking the arrow between them
+points the way it is drawn.
+
 **And a limit on this section, established by the section itself.** The
 `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256` error above was committed *after* the
 "sample read as a census" sub-shape was written down, in the same document, about
@@ -1442,6 +1470,69 @@ is covered by the prefix at 65. Two caveats it needs to carry.
    it in, and this test would pass. What stops that is the rule already recorded
    above — adding to the set is never bootstrap — so the invariant is a supplement
    to it, never a substitute.
+
+*A negative half is available for the two cases where the confusion is worst, and
+those two are mechanical.* WS-6's form, taken:
+
+```
+ANCHOR_MACHINERY ∩ (APPROVAL_PATHS ∪ {allowed_signers}) == ∅
+```
+
+The positive assertion catches unprotected additions; this catches the receipt and
+the trust root; the semantic middle stays with the add-is-never-bootstrap rule.
+**The cost is more specific than "not free."** `allowed_signers` has no path
+constant, so the invariant must name it, and the constant has to live in a `.py`
+file — of which both plausible hosts, the verifier (digest 408) and its test
+(digest 423), are members of `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256`. So writing
+this invariant requires a digest re-pin wherever it is put. **It therefore shares
+its scarce resource with owner-decision item 5 and should be taken in the same
+sitting**, not costed separately.
+
+**Why the trust root is the severe case, verified.** Someone asked "what is the
+anchor's machinery?" will read the workflow's sparse-checkout at lines 32–37,
+because it is literally the list of files the anchor reads. Scored:
+
+| Sparse-checkout entry | Protected | Machinery | Invariant |
+| --- | --- | --- | --- |
+| `.gitignore` | no | no | **catches it** |
+| `scripts/validation/verify_rollout_trust_anchor.py` | 99 | yes | correct |
+| `.gitattributes` | 69 | arguable | passes |
+| `.github/trust/rollout-policy/allowed_signers` | prefix 64 | **no** | **passes** |
+
+It also omits the workflow, the test and the runbook. `allowed_signers` is not
+ambiguous: the anchor *reads* it, but it is what the procedure trusts, not part of
+the procedure. Classified as machinery, a **key swap** becomes a change that
+"cannot self-authorize, escalate" instead of one requiring a receipt.
+
+WS-6 noted there is no constant for it. Checked, and it is stronger than that:
+**the path literal `.github/trust/rollout-policy/allowed_signers` does not appear
+in the verifier at all.** Every occurrence of the name is
+`allowed_signers_path: Path` (2581, 2647, 3003), `args.allowed_signers` (3151,
+3188, 3208) or an error-code string. The literal exists in exactly one place in
+the repository — the sparse-checkout list an implementer would copy from. There is
+no second copy for a wrong one to disagree with.
+
+`.gitattributes` is genuinely undecided rather than wrong. It governs LF
+normalization and therefore the digests, so it has a real claim; it is also
+repo-wide, and classifying it bootstrap would let a normalization change merge
+receiptless. That one wants the owner.
+
+**The general pattern, now with three data points: a wrong candidate set is
+dangerous exactly when it contains the verifier.** Every reader's spot-check is
+"is the anchor in it?", so that is the only property a wrong set needs in order to
+be adopted.
+
+| Candidate set | Contains verifier | Wrong how | Danger |
+| --- | --- | --- | --- |
+| workflow sparse-checkout, 32–37 | yes | 2 through, 3 missing | **high** |
+| `CLOSURE_PROCESS_ALLOWED_SOURCE_SHA256`, 392–426 | yes | 9 extra, 2 missing | **high** |
+| `CLOSURE_LOADER_ALLOWED_MODULES`, 378–391 | **no** | disjoint from the anchor | none |
+
+The third is wrong in the largest possible way and is harmless for exactly that
+reason — nobody adopts a set that fails the first check. Both sets that pass the
+first check are wrong in *both* directions. That is three independent
+confirmations that the enumeration has to be written fresh, and it is a stronger
+argument than any of them alone.
 
 Recorded, not built. It is a protected-path change encoding an undecided policy,
 and it waits for both the ruling and the authority to ask for it.
