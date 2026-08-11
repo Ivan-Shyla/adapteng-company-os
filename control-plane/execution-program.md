@@ -785,14 +785,80 @@ deployed gateway:
    1257 returns a plain `sha256` of the normalized bytes **for every path except
    `verify_rollout_trust_anchor.py`**. The marker-substitution branch that WS-1
    flagged as a possible complication applies only to the anchor's own self-entry,
-   so it does not reach either file here: `sha256sum` is the right function.
-   **The live hazard is the other one.** `.gitattributes` at `824b4238` pins only
-   six paths to `eol=lf` — two SQL migrations, `.secrets.baseline` and the three
-   trust-policy files — and **no `.py` file is among them**. On a CRLF working
-   tree, `sha256sum` of the file on disk will not equal what the verifier computes.
-   Normalize to LF before hashing, or hash the blob as git stores it. This
-   programme runs on Windows, so treat it as the default failure rather than an
-   edge case.
+   so it does not reach either file here: `sha256` of the *normalized* bytes is the
+   right function.
+
+   **The line-ending hazard is measured, not inferred.** WS-2 measured it on a
+   platform worktree; it is reproduced here from the canonical blobs, so the
+   numbers do not depend on anyone's git configuration. Both files are stored pure
+   LF (518 and 2882 newlines, zero `CR`), so **any** CRLF checkout of `824b4238`
+   yields exactly these digests:
+
+   | File | `sha256` of disk bytes on a CRLF checkout | `sha256` of LF bytes = **the pin** |
+   |---|---|---|
+   | `approved_assets_github_metadata.py` | `2d065710…` ✗ | `6e3c4f85…` ✓ |
+   | `tests/test_migrate_approved_assets.py` | `bc6e7c2a…` ✗ | `1f181579…` ✓ |
+
+   **The direction matters, and it is the opposite of an ambient risk.** The
+   verifier normalizes, so it is *safe* on a CRLF tree — nothing is broken today
+   and no existing check will warn. The trap is armed at exactly one moment: when
+   someone computes a replacement digest by hashing the file on disk. That is the
+   moment the signature is spent, so the hazard and the scarce resource coincide.
+
+   **The symptom does not tell you which mistake you made.** Both constants raise
+   the identical `TrustError("closure.dynamic_import")` — 1436 for the `sys.path`
+   constant, 1481 for the process one — and each collapses *path absent*
+   (`expected is None`) with *digest mismatched* into that one code, carrying
+   neither the expected nor the actual value. So a missed second pin, a stale
+   digest and a CRLF-inflated digest are three different errors that present
+   identically. Verify the digest before pushing rather than diagnosing after.
+
+   **Use the recipe that cannot see the working tree at all:**
+
+   ```
+   git cat-file blob 824b4238:scripts/validation/approved_assets_github_metadata.py | sha256sum
+   ```
+
+   It reads the stored object, so it is correct regardless of `core.autocrlf`,
+   `.gitattributes` or checkout history. Hashing `read_bytes()` after a manual
+   `\r\n` → `\n` replacement is equivalent; hashing the file on disk is not.
+
+   **The repository already runs this experiment, with a clean control.** WS-2 ran
+   `tests/test_migration_digest_pins.py` on a CRLF checkout: **7 failed, 2 passed**,
+   and the split is exactly the `.gitattributes` membership. Nine SQL migrations
+   exist under `database/migrations/`; the two carrying `eol=lf` —
+   `007_source_identity_reservation.sql` and
+   `008_drive_bridge_replay_reservations.sql` — pass, and the seven without it
+   fail. Same test, same commit, same machine, one variable, 9/9 with no
+   exceptions. The mechanism is visible at line 53 of that test:
+   `hashlib.sha256(migration.path.read_bytes())` — **raw bytes, no
+   normalization**, unlike the anchor. That contrast is the whole story: a checker
+   that normalizes is CRLF-safe and a checker that does not is CRLF-fragile, and
+   the person computing a digest by hand is in the second category.
+
+   **Do not reach for `.gitattributes` as the durable fix here — it is neither
+   free nor effective in this sitting.** It is not free because `.gitattributes`
+   is itself protected, at anchor line 69, so adding `*.py eol=lf` needs the same
+   authority as the re-pin. It is not effective because the attribute governs
+   *checkout*, and the files are already checked out. Measured on a scratch
+   repository with `core.autocrlf=true`, a CRLF file stayed byte-identical through
+   all three natural remedies:
+
+   | Step | `CR` count on disk |
+   |---|---|
+   | fresh checkout, no attributes | 3 |
+   | after committing `*.py text eol=lf` | 3 |
+   | after `git add --renormalize .` | 3 |
+   | after `git checkout -- .` | 3 |
+   | after **deleting the file** and checking it out again | **0** |
+
+   Only the last step converts it, and it is the one nobody thinks to run. So
+   adding the attribute in the same sitting would leave the bytes CRLF while
+   making the file *look* protected — worse than not adding it. One genuinely
+   useful fact from the same experiment: the stored blob is unchanged by the
+   attribute commit, so such a change would **not** invalidate any existing pin.
+   If `.gitattributes` is wanted, it is a separate decision about future
+   checkouts, not a remedy for this one.
 
 Everything else on the path to a deployed, healthy AI Gateway is either AUTO or
 AUTO + FAIL CLOSED under the [autonomy policy](autonomy-policy.md).

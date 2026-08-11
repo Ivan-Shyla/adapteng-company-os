@@ -911,7 +911,7 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with six sub-shapes and ten instances.** WS-1 proposed the
+**The general rule, with seven sub-shapes and twelve instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
@@ -973,14 +973,35 @@ the instrument's range fails to match the question:
   asking what the instrument measures: `--numstat` answers *how many lines
   changed*, never *where line N went*, and the two coincide only below the last
   hunk.
+- **Success mistaken for effect — an action that reports success while changing
+  something other than what its name promises.** The six above are all *read*
+  instruments, misread. This one is a write, and the remedy is different in kind.
+  Deciding whether `.gitattributes` could remove the CRLF hazard for item 5, I ran
+  a scratch repository at `core.autocrlf=true`: committing `*.py text eol=lf`,
+  then `git add --renormalize .`, then `git checkout -- .` all reported success
+  and all left the file byte-identical, still CRLF. `--renormalize` renormalizes
+  the *index*; `checkout -- .` restores files it considers modified, and the file
+  is not modified relative to the index. Only deleting the file and checking it
+  out again converted it. The command whose name most exactly describes the
+  intended effect is the one that does not produce it. **A second instance is my
+  own, one command earlier in the same session:** the first run of that experiment
+  wrote the sample file directly and never had git materialize it, so the CRLF
+  condition was never created and all four rows came back identical — output that
+  reads as clean confirmation of whatever was being tested. The setup step and the
+  remedy step failed the same way: an action assumed to have landed rather than
+  measured. **The remedy does not generalise from the rest of this list.** For a
+  read you ask what the output is true of; for a write, "it succeeded" is never
+  evidence, and the only check is to measure the artefact you wanted changed —
+  here, count the `CR` bytes.
 
-Unifying form, and the reason the six belong together: **every one of these
+Unifying form, and the reason the seven belong together: **every one of these
 instruments returned a true statement, and in no case was the true statement about
 the question being asked.** The helper list truly contained no such script. The
 two `authorized` verdicts were truly `authorized`. The sixteen hits truly
 contained the module name. Line 24 truly is not an import statement. The two
-mechanisms truly exist. The net delta truly is +9. Not one of these is a wrong
-answer; each is a right answer to a question nobody asked.
+mechanisms truly exist. The net delta truly is +9. `git add --renormalize` truly
+renormalized the index. Not one of these is a wrong answer; each is a right answer
+to a question nobody asked.
 
 That is why "check it more carefully" is the wrong remedy and why it failed
 visibly in the sixth instance, where more checking *increased* confidence,
@@ -988,10 +1009,13 @@ correctly, in a rule that was already outside its domain. The check that works
 costs one sentence and is not about correctness at all: **say what the output is
 true of, then compare that to the question.** Range failures answer about the
 wrong set, granularity failures about the wrong unit, axis failures about the
-wrong artefact, and domain failures about the wrong region of the file. Four of
-the six produce *confident* wrong answers, and the two narrow shapes produce a
+wrong artefact, and domain failures about the wrong region of the file. Five of
+the seven produce *confident* wrong answers, and the two narrow shapes produce a
 confident wrong answer that looks like diligence — which is why, until the sixth,
-they were the dangerous members of the family.
+they were the dangerous members of the family. The seventh is the exception that
+proves the rule is about reads: there is no output to say anything true of, only
+an exit status, and an exit status is true of the command rather than of the
+world.
 
 **A related family that is not an instrument failure at all, and needs separating
 because the remedy differs.** In every case above the instrument was consulted and
@@ -1033,6 +1057,24 @@ operative form of every entry here is therefore an action, not a caution** — r
 to the closing brace; name what the instrument enumerates; check where the cost
 of being wrong lands. A reader who takes this section as a list of things to be
 careful about has taken the inert half.
+
+**A second limit, and it is about filing rather than finding.** WS-2 had held the
+evidence for the CRLF hazard in its own session notes for the whole exchange:
+"SQL-migration `sha256` pin tests fail locally, green on Linux CI", recorded under
+environment quirks beside PowerShell syntax problems. The observation was correct
+and correctly written down. It was the *same failure mode* as item 5, already
+firing, on files one directory away — and it stayed invisible while both of us
+reasoned about the hazard in the abstract, because it had been filed as an
+artefact of one machine rather than as a fact about how a digest is computed under
+authority. Nothing about the note was wrong; retrieving it required already
+knowing it mattered. **This is the sharper form of the limit above:** the first
+says a named rule does not fire at the moment of reading source, and this says a
+recorded fact does not fire either, because the misfiling happens at the moment of
+observation, when the thing genuinely does look like housekeeping. The only
+mechanism that surfaced it was an unrelated question — "is `sha256sum` the right
+function?" — reaching the same evidence from the decision side. Which argues for
+indexing this register by *decision affected* rather than by symptom, and against
+any confidence that a fact once written down is a fact available.
 
 **One aggravating factor, from the §12a instance.** Correcting WS-6's census from
 two to seven made WS-6's own argument *stronger* — a well-attested pre-outage
