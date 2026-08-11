@@ -849,19 +849,63 @@ sites, 3120 and 3156, both inside the verify path, and the create path
 awarded check-run observability to the one path that has none.
 
 WS-6's replacement structure is right and the correction is that these are
-**surfaces, not sites**:
+**surfaces, not sites**. WS-6 then corrected its own table upward, from two paths
+to four (adding `validate-trust-root` at 3221 and `main`'s catch-all at 3266).
+Both additions verified exact. **Enumerating every emitting site rather than
+extending the table again gives six, not four** — blob `07f1dafb`, 3274 lines,
+byte-identical to the cached copy:
 
-| Surface | Carries | Which paths have it |
-| --- | --- | --- |
-| stderr | the full dotted code | **both** (3132, 3196) |
-| check run | outcome only — five fixed title/summary pairs (2771–2787), and the payload at 2788–2800 has `summary` and `title` but no `text` field | verify only |
+| Site | Command / condition | Token | Stream | Segments |
+| --- | --- | --- | --- | --- |
+| 3129 | verify — check-run publication failed | `…undetermined.check.failure_update_failed` (fixed) | stderr | **4** |
+| 3132 | verify — the verdict | `…{category}.{code}` | stderr | 3 |
+| 3196 | construct — failure | `…{category}.{exc.code}` | stderr | 3 |
+| 3202 | construct — **success** | `…receipt_created` (fixed) | **stdout** | **2** |
+| 3221 | `validate-trust-root` — failure | `…{category}.{exc.code}` | stderr | 3 |
+| 3266 | any command — uncaught `OSError`/`UnicodeError`/`ValueError` | `…undetermined.internal_failure` (fixed) | stderr | 3 |
+
+`validate-trust-root` additionally prints `{"trust_root":"unconfigured"}` (3211–3216)
+or `{"trust_root":"configured"}` (3227) to stdout, carrying no dotted token at all.
+
+**The check run is a separate surface and is the lossy one.** It exists on the
+verify command alone (`ensure_check_run` at 3141, `complete_check_run` at 3120 and
+3156 — no other call sites in the file), and it carries the outcome only: five
+fixed title/summary pairs at 2771–2787, with the payload at 2788–2800 having
+`summary` and `title` but **no `text` field**. So no dotted code reaches it.
+
+**3129 is inside `_report_failure` itself** — the function begins at 3102 and
+contains both 3129 and 3132 — so that function has two emitting sites, not one,
+and WS-6's "not `_report_failure`, not `_construct_command`, a third emitter"
+frame is right about 3266 and wrong about this one. The consequence is the part
+worth carrying: when check-run publication fails, the run prints **two dotted
+codes**, and their categories can disagree — 3129 is hard-coded `undetermined`
+while the verdict at 3132 may be `unauthorized`.
+
+**Which turns an unstated assumption in the census below into a checked fact.**
+That census deduped per run and reported eight codes summing to 64 across 64
+failure runs — one code per run, which is only sound if no run emits twice.
+`check.failure_update_failed` does not appear anywhere in the census, so no run
+took the 3129 branch, and the one-to-one holds on evidence rather than by
+assumption. The census stands unchanged; what changes is that it is now known to
+stand.
+
+**The token namespace is not uniform, and nothing enforces that it should be.**
+Three shapes exist — two segments at 3202, three at the interpolating sites, four
+at 3129 — so any consumer parsing on "`rollout_trust_anchor` plus category plus
+code" is wrong in both directions. The census regex used here,
+`rollout_trust_anchor\.[A-Za-z0-9_.]+`, is shape-agnostic and so was unaffected;
+that was luck rather than design, since it was chosen to tolerate the pre-#116
+bare codes and not for this.
 
 The collapse is real and is exactly where this document put it. What was wrong is
 that it is **additive**: verify has two surfaces of which one is lossy, create has
-one that is not. Verify is therefore *better* observed, not worse. The ruling on
-2653–2659 does not depend on this — the reader and cost asymmetries in the other
-two rows are untouched — but the observability row was doing rhetorical work it
-could not support.
+one that is not. Verify is therefore *better* observed, not worse. **The accurate
+generalisation is WS-6's:** check-run publication is a property of the *verify
+command*, not of an exception class or of a site — which is what neither "both
+sites name their code" nor "create has one surface" managed to say. The ruling on
+2653–2659 does not depend on any of this — the reader and cost asymmetries in the
+other two rows are untouched — but the observability row was doing rhetorical work
+it could not support.
 
 **And the conclusion is no longer resting on an instrument at all.** WS-6 paid the
 cost it had previously declined and censused every run of
@@ -903,6 +947,15 @@ exactly six. The output-keyed check is the one that settles it: **0 runs with no
 verdict, and per-code counts summing to the failure count.** Both were run here and
 both hold, so the conclusion is unaffected; the check is worth replacing anyway,
 because it would have passed just as confidently on an incomplete retrieval.
+
+**WS-6 sharpened this against itself, and its version is stronger than what is
+above.** The problem is not merely that the check is weak: **it cannot fail in the
+direction it claims to test.** `--log-failed` on a run whose log was not retrieved
+returns empty, empty contains no script name, and a genuine retrieval gap therefore
+makes the *count* short rather than making the check fail — and short is what would
+have been read as the answer rather than as an error. A control whose failure mode
+is indistinguishable from its success mode is a tautology dressed as a control. The
+output-keyed sum was the real evidence and was available the whole time.
 
 **Note what defeated the original search:** the collapse documented in F-8 is one of
 the two instruments WS-6 had to use to investigate a defect in the same file, so the
@@ -1082,11 +1135,22 @@ itself showed **three** mechanisms and an exemption that fires before all of
 them. The sets were the visible artefact; the function was the decision, and I
 described the artefact.
 
-**The general rule, with thirteen sub-shapes and thirty instances.** WS-1 proposed the
+**The general rule, with sixteen sub-shapes and thirty-one instances.** WS-1 proposed the
 right corollary after its own second miss: state not only the boundary you
 searched, but whether the search you chose *could have returned the answer*. That
 generalises everything in this family, and the instances now sort cleanly by how
 the instrument's range fails to match the question:
+
+**On the arithmetic, since this list has twice been the subject of its own
+"correct count beside a list that does not sum to it" entry.** The last three
+sub-shapes below are *cross-cutting*: they re-describe instances already counted
+under earlier shapes rather than adding new ones. The phantom five-run gap is
+counted once, under unchecked arithmetic, and reappears under "a plausible cause"
+as a second reading of the same event; the race proxy is counted once and
+reappears under "a detector defined by a coincidence". Only one genuinely new
+instance is added here — WS-6's four-row table proving short — so the count moves
+by one and not by six. Sub-shapes and instances are different populations, and
+adding a shape is not evidence of a new failure.
 
 - **Too narrow, empty — silence read as absence.** WS-1 searched a shell helper
   list for a module. A helper list enumerates *invoked scripts* and structurally
@@ -1406,7 +1470,48 @@ the instrument's range fails to match the question:
   a claim about any variant has to be tested against each reason separately —
   conjunctions are where a sound argument silently narrows to an unsound one.
 
-Unifying form, and the reason the thirteen belong together: **every one of these
+- **A correction that inherits the scope of the thing it corrects.** Three
+  instances in one thread, which is what makes it a shape rather than an accident.
+  This document framed the anchor's failure reporting as two paths; WS-6 corrected
+  the claim *within* that frame and produced a four-row table; enumerating every
+  emitting site returns **six**. Each participant verified the part being changed
+  and adopted the surrounding frame untested. WS-6 diagnosed its own case exactly
+  — "I checked the half I was correcting and adopted the rest" — and the mechanism
+  is that a correction arrives with its scope already fixed by the error, so the
+  one thing it never questions is the boundary it inherited. **The tell is
+  structural, not statistical:** a table produced by correcting a table is
+  evidence about the corrected cells and about nothing else. **Remedy:** when
+  correcting an enumeration, re-derive the population from the source rather than
+  editing the list — here, listing every `rollout_trust_anchor.` literal in the
+  file took one command and returned two sites that three rounds of careful
+  correction had not.
+
+- **A plausible cause makes its symptom less likely to be re-checked.** WS-6's
+  formulation, and it inverts the order this register otherwise assumes. When I
+  reported a phantom five-run gap, the mechanism I built to explain it was
+  *correct*; that is precisely why nothing prompted a recount, and why it would
+  have survived review — a defect report with a real mechanism attached to a
+  nonexistent symptom is refused only by re-deriving the symptom, and the
+  mechanism's plausibility argues against doing so. WS-6 supplies the mirror
+  instance: its timeline reconstruction for #122 was correct, and that is why it
+  never looked for the emitted code that stated the same conclusion outright.
+  **So explanatory power raises rather than lowers the need for the raw number**,
+  which is the opposite of how explanation is normally treated as evidence.
+
+- **A detector defined by a coincidence detects only instances that share the
+  coincidence.** Also WS-6's, and the strongest member of the family because
+  nothing in its output can be interrogated. The race proxy — "one head SHA
+  carrying opposite verdicts" — selects for races where an earlier attempt
+  happened to be green. That is a property of the accident, not of the defect, so
+  failure-to-different-failure is structurally invisible and running the detector
+  harder never reaches it. The output was non-empty, internally consistent, and
+  every element true. **Check:** state the detector's selection criterion as a
+  sentence and see whether it mentions the defect. "Two runs on one commit
+  disagreed in conclusion" does not mention races at all. This is the census
+  error with the flattering direction removed — the narrowing lived in the
+  instrument's *design* rather than in the query.
+
+Unifying form, and the reason the sixteen belong together: **every one of these
 instruments returned a true statement, and in no case was the true statement about
 the question being asked.** The helper list truly contained no such script. The
 two `authorized` verdicts were truly `authorized`. The sixteen hits truly
