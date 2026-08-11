@@ -772,6 +772,28 @@ def report_placement_sources(client: Client, applications: list) -> None:
         )
 
 
+def report_github_apps(client: Client) -> None:
+    """List the GitHub apps this instance can read private repositories through.
+
+    The spec may leave source.github_app null when exactly one exists. When more
+    than one does, the choice is a decision, not a lookup, so it belongs in the
+    committed spec. Printing the candidates here is what makes that decision
+    reviewable instead of a console discovery.
+    """
+
+    parsed = call(client, "GET", "/github-apps", allow_absent=True)
+    if parsed is None:
+        emit("    github apps: this instance does not report any")
+        return
+    apps = [item for item in expect_list(parsed, "GitHub apps") if isinstance(item, dict)]
+    emit(f"    github apps available: {len(apps)}")
+    for item in sorted(apps, key=lambda entry: entry.get("name") or ""):
+        emit(
+            f"      - {item.get('name')} uuid={item.get('uuid')} "
+            f"organization={item.get('organization') or 'none'}"
+        )
+
+
 def resolve_server(client: Client, declared: str | None) -> dict:
     servers = expect_list(call(client, "GET", "/servers"), "servers")
     usable = [item for item in servers if isinstance(item, dict)]
@@ -941,6 +963,7 @@ def operate_inspect(client: Client, spec: dict) -> int:
     for item in sorted(applications, key=lambda entry: entry.get("name") or ""):
         emit(f"      - {item.get('name')} uuid={item.get('uuid')} status={item.get('status')}")
     report_placement_sources(client, applications)
+    report_github_apps(client)
 
     application = find_application(applications, target["resource_name"])
     if application is None:
