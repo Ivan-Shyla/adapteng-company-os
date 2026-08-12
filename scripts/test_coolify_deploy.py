@@ -1302,7 +1302,7 @@ class ReconcileTests(unittest.TestCase):
         # "example" inside the literal is what marks this a placeholder to
         # validate_sensitive_references.py. It must appear in the source text, not
         # only in the interpolated result: the checker reads the line, not the run.
-        # A test fixture is not an exception to that rule â€” the checker cannot tell
+        # A test fixture is not an exception to that rule ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the checker cannot tell
         # a fake credential from a real one, and it is right not to try.
         marker = "example-password-must-not-appear"
         secret = "postgresql://ai_gateway_runtime:example-password-must-not-appear@db/ops"
@@ -2772,6 +2772,7 @@ class VerifyTests(unittest.TestCase):
         self.assertNotIn("$", command)
         self.assertNotIn("`", command)
         self.assertNotIn("\n", command)
+        self.assertEqual(command.count(chr(34)), 2)
         self.assertIn(driver.READINESS_MARKER, command)
 
     def test_the_probe_reports_a_status_rather_than_raising_on_it(self) -> None:
@@ -2946,7 +2947,7 @@ class PeerInstance(ReadinessInstance):
         self.task_name = driver.PEER_TASK_NAME
         self.next_execution = {
             "status": "success",
-            "message": "ADAPTENG_PEER 10.0.1.7 200 200\n",
+            "message": "ADAPTENG_PEER 200 200\n",
         }
         if with_peer:
             self.add_application(name=PEER_NAME, status="running:unknown")
@@ -2978,7 +2979,7 @@ class PeerVerifyTests(unittest.TestCase):
         code, output = self.run_peer(instance)
         self.assertEqual(code, driver.EXIT_OK)
         self.assertIn(
-            "RESULT peer-verify ok reachable=yes address=10.0.1.7 health=200 ready=200",
+            "RESULT peer-verify ok reachable=yes health=200 ready=200",
             output,
         )
 
@@ -3001,12 +3002,40 @@ class PeerVerifyTests(unittest.TestCase):
         self.assertTrue(all(peer["uuid"] in path for path in written))
         self.assertFalse(any(service["uuid"] in path for path in written))
 
+    def test_the_probe_stays_under_the_measured_acceptance_limit(self) -> None:
+        """The first live run was refused with HTTP 500 for being too long.
+
+        peer-diagnose located the boundary by measurement: 245 characters
+        accepted, 300 refused, with the refused rung differing from an
+        accepted one by padding alone. That number is not derivable from
+        anything in the code, and nothing else in this suite would notice the
+        command crossing it again -- the failure appears only against the live
+        API, several minutes into a run, as a 500 with no field-level reason.
+        """
+
+        command = driver.peer_command(self.real_spec())
+        self.assertLessEqual(len(command), driver.PEER_COMMAND_LIMIT)
+
+    def test_the_probe_reports_a_non_two_hundred_instead_of_crashing(self) -> None:
+        """"reachable but not ready" has to survive as an answer.
+
+        urllib raises on a non-2xx, which would turn a 503 into a missing
+        marker and therefore into "undetermined" -- losing the distinction
+        between a service that cannot be reached and one that answers badly.
+        http.client returns the status, so the distinction survives.
+        """
+
+        command = driver.peer_command(self.real_spec())
+        self.assertIn("http.client", command)
+        self.assertNotIn("HTTPErrorProcessor", command)
+
     def test_the_probe_addresses_the_service_by_name_on_its_declared_port(self) -> None:
         """The command must come from the spec, so it cannot drift from it."""
 
         command = driver.peer_command(self.real_spec())
-        self.assertIn(f"http://{RESOURCE}:8081/health", command)
-        self.assertIn(f"http://{RESOURCE}:8081/ready", command)
+        self.assertIn(f" {RESOURCE} 8081 ", command)
+        self.assertIn("/health", command)
+        self.assertIn("/ready", command)
         self.assertNotIn("127.0.0.1", command)
         self.assertNotIn("localhost", command)
 
@@ -3024,6 +3053,7 @@ class PeerVerifyTests(unittest.TestCase):
         self.assertNotIn("$", command)
         self.assertNotIn("`", command)
         self.assertNotIn("\n", command)
+        self.assertEqual(command.count(chr(34)), 2)
 
     def test_the_probe_presents_no_credential_and_calls_no_model(self) -> None:
         """A reachability check that spent a model call would be a bug.
@@ -3075,7 +3105,7 @@ class PeerVerifyTests(unittest.TestCase):
         instance = PeerInstance()
         instance.next_execution = {
             "status": "success",
-            "message": "ADAPTENG_PEER 10.0.1.7 200 503\n",
+            "message": "ADAPTENG_PEER 200 503\n",
         }
         code, output = self.run_peer(instance)
         self.assertEqual(code, driver.EXIT_FAILED)
@@ -3084,8 +3114,8 @@ class PeerVerifyTests(unittest.TestCase):
 
     def test_the_peer_task_is_returned_to_rest_on_success_and_on_failure(self) -> None:
         for message, expected in (
-            ("ADAPTENG_PEER 10.0.1.7 200 200\n", driver.EXIT_OK),
-            ("ADAPTENG_PEER 10.0.1.7 200 503\n", driver.EXIT_FAILED),
+            ("ADAPTENG_PEER 200 200\n", driver.EXIT_OK),
+            ("ADAPTENG_PEER 200 503\n", driver.EXIT_FAILED),
         ):
             with self.subTest(message=message):
                 instance = PeerInstance()
