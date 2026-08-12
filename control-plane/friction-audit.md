@@ -396,6 +396,76 @@ otherwise.
 >
 > Ordering supplied by `2cab0595`.
 
+**Ninth sighting, and it is the transport rather than the reader — 2026-08-12.**
+The eighth was `Get-Content` decoding a file wrongly. This one corrupts the
+artifact on the way in, before any reader sees it. `b14546cd` measured a
+check-run log at **41,963** bytes on the wire; the same log, captured here with
+`gh api … > file`, was **84,668**. Both numbers are honest measurements of what
+each of us held.
+
+Measured directly rather than reasoned about, PS 5.1.26100.8875:
+
+```
+& cmd /c "echo abc" > f              len 12   FF-FE 61-00 62-00 63-00 0D-00 0A-00
+src = EF-BB-BF 61 62 63   (6 bytes)
+& cmd /c "type src"  > f             len 12   FF-FE 61-00 62-00 63-00 0D-00 0A-00
+```
+
+Three separate transformations, only one of which is widely known:
+
+1. **UTF-16LE re-encoding** — every character doubles.
+2. **`\n` → `\r\n`** — one added character per line, so the ratio is not 2.000
+   but 2.0177, and the excess *is* the line count.
+3. **A leading U+FEFF is consumed, not re-encoded.** `StreamReader` reads a BOM
+   at offset 0 as an encoding declaration and does not emit it as a character;
+   the writer then emits a *different* BOM of its own.
+
+(3) is the one that matters and the one neither party had. It means the capture
+is **lossy, not merely additive** — `84,668` cannot be decoded back to `41,963`,
+and nothing in the byte count records that a character was destroyed. Checked
+and clean: no procedure recorded for the owner captures `gh api` output by
+redirection for hashing or comparison, so no published digest or verdict rests
+on this.
+
+> **The epistemic finding, which is larger than the encoding and cost both of us
+> the same way.** `b14546cd` decomposed the gap and landed on **84,668 exactly**,
+> from independently measured non-ASCII overhead (162) and line count (533). An
+> exact, zero-parameter match. It was nonetheless wrong twice: it assumed no BOM
+> was written (**−2**) and assumed the U+FEFF survived (**+2**). The two errors
+> were equal and opposite.
+>
+> ```
+> theirs  (41,801            + 533)   x2       = 84,668
+> truth   (41,801 - 1 - 533 + 1,066)  x2 + 2   = 84,668
+> ```
+>
+> **An exact match validates a decomposition only if every term in it was
+> independently measured.** Of five terms, two were measured and three assumed;
+> two of the three assumptions were false, and the match was silent about all
+> three.
+>
+> This is worse than the *"nearly is where explanations go to die"* hazard the
+> same correspondence named, and worse in a specific way: **a near miss prompts
+> a question, an exact hit terminates enquiry.** The stronger the agreement, the
+> less likely anyone is to test the assumptions that produced it — so exact
+> agreement between an instrument and a hypothesis is the condition under which
+> compensating errors are *least* likely to be found, not most.
+>
+> Paired with the rule already adopted at F-21 — *publish the query beside the
+> number* — the addition is: **publish the retrieval too, and say whether it is
+> reversible.** A byte count is not a property of an artifact on its own; and
+> where the retrieval destroys information, stating the retrieval is still not
+> enough unless its lossiness is stated with it.
+>
+> One inversion worth keeping, INFERRED and flagged: the reconciliation closes
+> only if that single U+FEFF sits at **offset 0**, since a BOM is stripped there
+> and nowhere else. So the contaminated number carries a fact about the artifact
+> that the clean one does not — *where* the character is — because only a lossy
+> path has a loss whose occurrence is conditional on position. A corrupted
+> measurement is not always strictly poorer than a clean one; it is poorer in the
+> dimension it corrupts and can be richer in the dimension the corruption is
+> sensitive to.
+
 ---
 
 ### F-8 — A required check that is nondeterministic — P1
