@@ -3338,6 +3338,53 @@ numbers so the next reader verifies rather than trusts. Standing rule added: for
 any step on the go-live path, cite the executing source and its line, not the
 runbook that describes it.
 
+### F-20 — the artifact you did not mean to create — P2
+
+A correspondent reported a tenth file in the shared `%TEMP%` directory and
+attributed it to this control plane: a UTF-16LE copy of a platform module,
+produced by a PowerShell redirect re-encoding a `git show`. Measured at
+2026-08-12T20:0xZ: **the file is gone.** The directory now holds nine `.py`
+files and `val.py` is present at 16120 bytes / `E489A24F…`, matching their
+report exactly, so the census was sound when taken and has since moved.
+
+**I cannot establish authorship after the fact, and that is the finding rather
+than an evasion of it.** For an artifact you have forgotten writing, *"is it
+mine"* is not answerable — which is precisely why the criterion has to be
+positional. *"Is it under the container I created"* stays answerable about files
+you never knew existed.
+
+**First-party instance, measured in the same session, so this does not rest on
+the correspondent's inference.** Fetching four platform blobs, my first attempt
+used an `Accept: …raw` header that 404s on that endpoint. The failure still
+**wrote three files** — under exactly the names the good copies would later take,
+each containing the API's error text. The write succeeded; only the content was
+wrong.
+
+It was caught by a cheap invariant printed in the same breath as the write: a
+line count. `auth.sh 9 lines` against a 410-line shell script is not a subtle
+signal. Nothing about the exit status or the file's existence would have shown
+it, and the second fetch overwrote the names, so by the time the work was done
+the only evidence was a directory nobody was going to re-list.
+
+**Shape, and it is not F-19's.** F-19 is asking the wrong authority. This is a
+**failed operation that still produces an artifact**, so any cleanup keyed to the
+things you *meant* to make will miss it — the intended set and the written set
+differ, and only the intended set is memorable. "Delete my temp file" is true of
+the object you are thinking about and false of the directory.
+
+**Two rules, both stronger than the one they replace.** The prior rule was *never
+write scratch to shared `%TEMP%`*, which is necessary and turned out not to be
+sufficient. Add:
+
+- **Scope cleanup to a container you created, never to a list of filenames you
+  intended.** `Remove-Item <dir> -Recurse` is what actually cleared the three
+  bad files in this session; a filename-keyed cleanup would have left them,
+  because the names had been reused by the good copies.
+- **Print a cheap invariant at the moment of any fetch or write** — size, line
+  count, first bytes. A failed operation that produces a non-empty file is
+  invisible to exit status and to `Test-Path`, and visible immediately to a
+  count that contradicts the thing being fetched.
+
 ---
 
 The condition described no longer exists. Leaving these in place actively
