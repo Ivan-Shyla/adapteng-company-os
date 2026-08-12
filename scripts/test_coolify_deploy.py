@@ -1611,13 +1611,30 @@ class UnverifiableSettingsTests(unittest.TestCase):
             self.assertEqual(set(body) & withheld, set())
 
     def test_a_blind_write_is_never_folded_into_the_verified_result(self) -> None:
-        """This run sent it and cannot read it back. Saying otherwise invents a check."""
+        """This run sent it and cannot read it back. Saying otherwise invents a check.
 
+        The named check is read from the spec rather than restated here. An
+        earlier version pinned the literal 'gateway_readiness.py probe', which
+        made this test fail when the spec moved to an instrument that actually
+        rules -- and would equally have kept passing while the report quoted a
+        check nobody runs any more. The assertion is that the report carries
+        whatever the spec names, verbatim, because that quote is what makes an
+        unverified claim visible.
+        """
+
+        named = load_committed_spec()["settings_not_reported_by_api"]["keys"][
+            "connect_to_docker_network"
+        ]["verified_by"]
         instance = FakeInstance()
         instance.settings_response_shape = "none"
         _, report = run_operation(driver.operate_reconcile, instance)
-        self.assertIn("WRITTEN NOT VERIFIED connect_to_docker_network", report)
-        self.assertIn("gateway_readiness.py probe", report)
+        closing = [
+            line
+            for line in report.splitlines()
+            if line.strip().startswith("WRITTEN NOT VERIFIED connect_to_docker_network")
+        ]
+        self.assertEqual(len(closing), 1)
+        self.assertIn(named, closing[0])
 
     def test_a_setting_becomes_writable_only_by_naming_its_check(self) -> None:
         """The named check is the whole permission, so an empty name grants nothing."""
