@@ -3937,18 +3937,41 @@ class ServiceResolveTests(unittest.TestCase):
     ) -> None:
         """The outcome that puts the remaining gap on the caller.
 
-        Embedded DNS answering at all means the service is on a user-defined
-        network, so it is reachable by name from anything else on that network.
-        The peer not being on it is the peer's attachment, not this deployment.
+        The peer is given an alias of its own here, and that is the whole
+        premise of the test rather than fixture decoration. Without one, its
+        name would not resolve from anywhere on the network, so a failure to
+        resolve it would carry no information about attachment at all.
         """
 
         instance = ServiceResolveInstance(census=self.census("localhost", RESOURCE))
+        peer = next(item for item in instance.applications if item["name"] == PEER_NAME)
+        peer["custom_network_aliases"] = PEER_NAME
         code, output = self.run_service(instance)
         self.assertEqual(code, driver.EXIT_FAILED)
         self.assertIn(
             "RESULT service-resolve failed scope=network reason=not_on_shared_network",
             output,
         )
+
+    def test_a_peer_with_no_alias_of_its_own_proves_nothing_about_the_network(
+        self,
+    ) -> None:
+        """The branch beside the one already corrected, making the same error.
+
+        The subject rung was fixed by adding a control, and this rung was left
+        drawing the identical unsound conclusion from the identical evidence:
+        a name that does not resolve because it is not a name, read as a
+        network that is not shared. Found by running the corrected census
+        against the live instance and reading a verdict that could not follow.
+        """
+
+        instance = ServiceResolveInstance(census=self.census("localhost", RESOURCE))
+        peer = next(item for item in instance.applications if item["name"] == PEER_NAME)
+        peer["custom_network_aliases"] = ""
+        code, output = self.run_service(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reason=other_has_no_alias", output)
+        self.assertNotIn("not_on_shared_network", output)
 
     def test_a_service_that_cannot_resolve_itself_accuses_the_deployment(self) -> None:
         instance = ServiceResolveInstance(census=self.census("localhost"))

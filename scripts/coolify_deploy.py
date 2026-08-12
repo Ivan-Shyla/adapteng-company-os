@@ -3476,15 +3476,35 @@ def run_resolution_census(
         return EXIT_FAILED
 
     if other_name not in resolved:
+        other = next(
+            (
+                item
+                for item in neighbours
+                if isinstance(item, dict) and item.get("name") == other_name
+            ),
+            None,
+        )
+        other_alias = alias_verdict(other, other_name)[0] if other else None
+        if other_alias is False:
+            emit(
+                f"    {subject_name} resolves its own name and cannot resolve "
+                f"{other_name}, but {other_name} declares no network alias of "
+                "its own, so that name would not resolve from anywhere on this "
+                f"network. The census cannot see {other_name}'s attachment "
+                "through a name it does not have, and no conclusion about the "
+                "network follows. This is the same unsound step the subject "
+                "rung used to make, in the branch next to it."
+            )
+            emit(
+                f"RESULT {operation} failed scope=name reason=other_has_no_alias"
+            )
+            return EXIT_FAILED
         emit(
             f"    {subject_name} resolves its own name through Docker's "
             f"embedded DNS but cannot resolve {other_name}. The resolver "
-            "works, so this is not a defect of the container being asked: the "
-            "two are not on a shared user-defined network. Sharing a "
-            "destination is sharing a host, not a network, which is exactly "
-            "the gap this probe existed to measure and the reason the API's "
-            "silence about connect_to_docker_network could not be taken for a "
-            "yes."
+            "works and the name is one that could resolve, so this is not a "
+            "defect of the container being asked: the two are not on a shared "
+            "user-defined network."
         )
         emit(f"RESULT {operation} failed scope=network reason=not_on_shared_network")
         return EXIT_FAILED
