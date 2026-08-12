@@ -109,6 +109,7 @@ SECTION_KEYS = {
         "internal_port",
         "public_fqdn",
         "connect_to_docker_network",
+        "network_aliases",
         "peer_probe_application",
     },
     "health_check": {
@@ -643,7 +644,28 @@ def desired_application_fields(spec: dict) -> dict:
         "health_check_timeout": health["timeout_seconds"],
         "health_check_retries": health["retries"],
         "health_check_start_period": health["start_period_seconds"],
+        "custom_network_aliases": declared_network_aliases(spec),
     }
+
+
+def declared_network_aliases(spec: dict) -> str:
+    """The names this container should answer to, in the shape the API stores.
+
+    This is the field the whole network investigation turned on, and it belongs
+    here rather than among the settings for one reason that decides everything:
+    the API reports it. connect_to_docker_network is accepted and reported by
+    nothing, so a write to it can only ever be trusted; this is read back after
+    writing and compared, like every other owned field.
+
+    Docker's embedded DNS answers for container names and network aliases.
+    Coolify names a container after the application uuid, so without an alias
+    the display name is not a name on the network at all -- which is why a
+    container that resolved a neighbour perfectly well could not resolve
+    itself.
+    """
+
+    aliases = spec["network"]["network_aliases"]
+    return ",".join(str(item) for item in aliases)
 
 
 def desired_settings(spec: dict) -> dict:
@@ -3414,14 +3436,38 @@ def run_resolution_census(
         return EXIT_FAILED
 
     if subject_name not in resolved:
+        if control_name and control_name in resolved:
+            emit(
+                f"    {control_name} resolved from inside {subject_name} but "
+                f"{subject_name} did not resolve its own name. The control is "
+                "what separates these: a container on a network with no service "
+                "discovery could not have resolved the control either. So the "
+                "resolver works, this container is on a user-defined network "
+                "with embedded DNS, and the missing thing is the name -- "
+                f"{subject_name} declares no network alias, and Coolify names "
+                "containers after the application uuid rather than after the "
+                "application. Nothing here accuses the network or "
+                f"{other_name}."
+            )
+            emit(
+                f"RESULT {operation} failed scope={subject_role} "
+                "reason=no_network_alias"
+            )
+            return EXIT_FAILED
         emit(
             f"    {PEER_RESOLVE_CERTAIN_NAME} resolved but {subject_name} did "
-            "not, so this container cannot resolve its own name. That is what "
-            "the default Docker bridge looks like: it carries no service "
-            "discovery, so no container name resolves there at all. Whatever "
-            f"{other_name} is attached to, it could not be reached by name "
-            f"from {subject_name}. This is a finding about {subject_name}, and "
-            f"{other_name} remains unaccused."
+            "not, so this container cannot resolve its own name. Two different "
+            "conditions produce exactly that, and this census cannot separate "
+            "them: a network with no service discovery, or a working resolver "
+            "and no alias by that name. "
+            + (
+                f"The control {control_name} did not resolve either, which "
+                "points at the network."
+                if control_name
+                else "No control name was available, so neither is ruled out."
+            )
+            + f" This is a finding about {subject_name}, and {other_name} "
+            "remains unaccused."
         )
         emit(
             f"RESULT {operation} failed scope={subject_role} "

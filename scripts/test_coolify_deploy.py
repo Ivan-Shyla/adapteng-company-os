@@ -37,6 +37,7 @@ RESOURCE = "ai-gateway"
 # Read from the committed spec rather than repeated here, so a change to the
 # declared peer moves the fixture with it instead of silently making every peer
 # test probe an application that no longer exists.
+CONTROL_NAME = "neighbour-with-an-alias"
 PEER_NAME = driver.load_spec(driver.spec_path(RESOURCE))["network"][
     "peer_probe_application"
 ]
@@ -72,6 +73,7 @@ def minimal_spec() -> dict:
             "internal_port": 8081,
             "public_fqdn": None,
             "connect_to_docker_network": True,
+            "network_aliases": ["widget"],
             "peer_probe_application": "ops-runner",
         },
         "health_check": {
@@ -3957,6 +3959,41 @@ class ServiceResolveTests(unittest.TestCase):
             output,
         )
 
+    def test_a_resolving_control_moves_the_verdict_off_the_network(self) -> None:
+        """The reading that reversed a standing conclusion.
+
+        Before the control existed, localhost-only was reported as "no embedded
+        DNS, therefore the default bridge, therefore the platform accepts the
+        network setting without applying it". A control that resolves rules that
+        out by itself: a container on the default bridge cannot resolve a
+        neighbour by name. The two outcomes must not share a verdict, because
+        acting on the wrong one meant reconciling and redeploying a setting that
+        was never the fault.
+        """
+
+        instance = ServiceResolveInstance(census=self.census("localhost", CONTROL_NAME))
+        self.add_control(instance)
+        code, output = self.run_service(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reason=no_network_alias", output)
+        self.assertNotIn("no_service_discovery", output)
+        self.assertIn("declares no network alias", output)
+
+    def test_a_control_that_also_fails_still_accuses_the_network(self) -> None:
+        instance = ServiceResolveInstance(census=self.census("localhost"))
+        self.add_control(instance)
+        code, output = self.run_service(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reason=no_service_discovery", output)
+        self.assertIn("points at the network", output)
+
+    def add_control(self, instance) -> None:
+        instance.add_application(
+            name=CONTROL_NAME,
+            status="running:healthy",
+            custom_network_aliases=CONTROL_NAME,
+        )
+
     def test_both_resolving_is_the_reachability_answer(self) -> None:
         code, output = self.run_service(ServiceResolveInstance())
         self.assertEqual(code, driver.EXIT_OK)
@@ -4378,6 +4415,34 @@ class NetworkPlacementTests(unittest.TestCase):
         )
         self.assertIs(verdict, False)
         self.assertIn("reported and empty", why)
+
+    def test_the_service_answers_to_the_name_a_caller_dials(self) -> None:
+        """The alias and the dialled name have one source, not two.
+
+        A caller reaches this service as http://<resource_name>:<port>. If the
+        alias were declared independently of the resource name the two could
+        drift, and the symptom of that drift is exactly the one measured here:
+        a container on the right network that does not answer to its name.
+        """
+
+        spec = self.real_spec()
+        self.assertIn(
+            spec["target"]["resource_name"], spec["network"]["network_aliases"]
+        )
+
+    def test_the_alias_is_owned_so_it_is_verified_by_read_back(self) -> None:
+        # The distinction from connect_to_docker_network, which is written blind
+        # because the API reports nothing back. This field is reported, so it
+        # belongs among the compared fields rather than among the settings that
+        # can only be trusted.
+        fields = driver.desired_application_fields(self.real_spec())
+        self.assertEqual(fields["custom_network_aliases"], "ai-gateway")
+        self.assertNotIn("custom_network_aliases", driver.SETTING_KEYS)
+
+    def test_several_aliases_are_joined_in_the_shape_the_api_stores(self) -> None:
+        spec = self.real_spec()
+        spec["network"]["network_aliases"] = ["one", "two"]
+        self.assertEqual(driver.declared_network_aliases(spec), "one,two")
 
     def test_the_control_is_chosen_by_the_property_and_not_by_name(self) -> None:
         applications = [
