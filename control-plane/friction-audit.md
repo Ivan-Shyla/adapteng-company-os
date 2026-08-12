@@ -438,17 +438,22 @@ census of `rollout-policy.yml`, decoded from the job logs of all 26 failed
 
 | # | Case | Expected | Failures | Sole/first witness |
 |---|---|---|---|---|
-| 1 | `ok-ok-0-0` | 0 | **8** | `31024309941` |
+| 1 | `ok-ok-0-0` | 0 | **1** | `31414049256` att 1 |
 | 2 | `fail_leave-ok-0-90` | 90 | **1** | `31404500180` att 1 |
 | 3 | `fail_absent-ok-0-90` | 90 | **4** | `31027935863` |
 | 4 | `ok-fail-0-90` | 90 | **4** | `31203208437` |
 | 5 | `fail_leave-ok-37-37` | 37 | **1** | `31488794144` att 1 |
 
-**18 occurrences, 8 branches.** Positions 2 and 5 are singletons, and both
-were read back from raw log context rather than a pattern match: position 2 is
-`assert 1 == 90` at 15:37:15Z on `feature/ai-gateway-owner-decisions`;
+**11 occurrences, 7 branches.** Three of the five positions are singletons, and
+each was read back from raw log context rather than a pattern match: position 2
+is `assert 1 == 90` at 15:37:15Z on `feature/ai-gateway-owner-decisions`;
 position 5 is **`assert 1 == 37`**, an assertion that occurs nowhere else in
 the corpus and that only position 5 can produce.
+
+**This table first read 18 occurrences, and the 18 was contaminated.** Seven of
+them were a *deterministic* regression on `palinaruban-backup-evidence-lifecycle`,
+not this flake, and the correction came from a peer's instrument rather than
+mine — see "the both-hit cell" below.
 
 **The sequential loop turns each failure into a batch of passes.** A failure at
 position *k* means positions 1…*k*−1 **passed, in the same process, seconds
@@ -456,7 +461,7 @@ earlier**. Counting only within the failing runs:
 
 | Case | Passed | Failed |
 |---|---|---|
-| 1 `ok-ok-0-0` | 10× | 8× |
+| 1 `ok-ok-0-0` | 10× | 1× |
 | 2 `fail_leave-ok-0-90` | 9× | 1× |
 | 3 `fail_absent-ok-0-90` | 5× | 4× |
 | 4 `ok-fail-0-90` | 1× | 4× |
@@ -467,7 +472,9 @@ green run is needed to make the argument. Case 5 was reached exactly once, and
 failed. A defect keyed to a case's data cannot pass and fail the same case in
 the same corpus, and cannot move between cases on **consecutive attempts of the
 same commit 21 minutes apart** (`31532517315` att 1 → position 3, att 2 →
-position 4).
+position 4). The pass column is unchanged by the contamination correction: all
+seven discarded occurrences sat at position 1 and therefore contributed no
+passes.
 
 The invariant is on the other side of the assertion. **The observed value is
 `1` in every occurrence; only the expected value changes with the case.** That
@@ -486,26 +493,71 @@ local. The wrong claim was not merely imprecise — it named the wrong class of
 defect, and a reader acting on it would have gone looking at the fixture.
 
 **The job name is not the fault, either.** Of the 26 failed
-`root-rollout-tests` jobs in the corpus, only **18** are this flake. The other
-8 are two unrelated failures that happen to share the job:
+`root-rollout-tests` jobs in the corpus, only **11** are this flake. Eight are
+two unrelated failures that happen to share the job:
 `test_predecessor_collector_ast_transport_policy_accepts_exact_source`
 (6, `assert [...body_invalid] == []`) and
 `ApprovedAssetsRolloutReadinessTests::test_offline_constructor_writes_only_mode_0600_receipt`
-(2, `repository.git_inspection_failed`). Counting by failing *job* therefore
-overstates this flake by 44%. It is the same error as the prefix-based log
-census recorded elsewhere in this register — **a job is not an owner** — and it
+(2, `repository.git_inspection_failed`). The remaining **7** are the
+deterministic regression below. Counting by failing *job* therefore overstates
+this flake by **2.4×**. It is the same error as the prefix-based log census
+recorded elsewhere in this register — **a job is not an owner** — and it
 inflates rather than hides, which is the direction that gets waved through.
 
-**Three of us hid occurrences by re-running, including me.** Seven of the 18
-occurrences sit inside runs whose final conclusion reads `success`, so a
-conclusion-level census sees 11. Two of those seven are mine: I re-ran
-`31532517315` at 23:43Z to unblock #127, which converted a run carrying **two**
-failed attempts into one that reads green. I did this while holding the
-register that exists to detect exactly that. The other sessions each did the
-same on their own branches — one of them found their instance only by going
-looking for who owned the hidden set. Worth stating plainly rather than
-attributing the practice to other people's work: **the census's own authors are
-in the hidden set.**
+**The both-hit cell, and how a peer's instrument corrected mine.** This repo
+runs most workflows twice per SHA (`push` and `pull_request`, seconds apart), so
+it manufactures independent duplicate trials that nobody has to request. WS-2
+built a rate estimator on the *disagreement* cell of those twins —
+`P(disagree) = 2p(1−p)` — and inverted it to **p ≈ 2.5–4.5%**. I had a direct
+attempt-level count that needed no inversion and no independence assumption,
+**18/292 = 6.16%**, which sat inside my own arrival-race prediction of 6–11%
+and above theirs. Two instruments, two answers, and mine looked stronger
+because it assumed less.
+
+The cell that settles it is the one **neither** of us was using. Under
+independence, the number of twin pairs where *both* twins fail is `p²·n` ≈
+**0.46**. Observed: **3** — 6.5× expected, p ≈ 0.011 against independence. All
+three sit on one branch:
+
+| SHA | runs | outcome |
+|---|---|---|
+| `b21b74c5` | 1 | failure |
+| `5f5906da` | 2 | **both twins failure** |
+| `1b2bc448` | 2 | **both twins failure** |
+| `892822b4` | 2 | **both twins failure** |
+| `dc93e727` | 2 | both twins **success**, 5 minutes later |
+
+Four consecutive SHAs on `palinaruban-backup-evidence-lifecycle`, **every run
+on every one of them failed**, all seven at position 1 (`ok-ok-0-0`, the
+success path), on a branch whose subject *is* the lifecycle script — then clean
+at the next commit. That is a regression introduced and fixed inside 32
+minutes, not a timing window. The position mix is the tell: the cluster is
+7/7 at one position, the genuine occurrences spread 1/1/4/4/1 across all five.
+
+**Corrected rate: 11/274 = 4.01% per attempt**, which lands inside WS-2's
+inverted range and near their whole-second model's 3.2%. **My arrival-race duty
+cycle overestimates by roughly 2×**, and my direct count was the contaminated
+one.
+
+The methodological result is worth more than the number. **Twin disagreement is
+intrinsically immune to deterministic failures** — a deterministic fault hits
+both twins and registers as *agreement*, so it is discarded automatically.
+WS-2 claimed only immunity to the conclusion-overwrite problem; the stronger
+property they did not claim is the one that made their estimate right. A raw
+count of occurrences has neither immunity, which is exactly how mine absorbed a
+regression and read it as flake. **The instrument that assumes less is not
+automatically the one that measures better.**
+
+**Three of us hid occurrences by re-running, including me.** Seven of the 11
+genuine occurrences sit inside runs whose final conclusion reads `success`, so
+a conclusion-level census sees four — it loses **64%** of them. Two of the
+seven are mine: I re-ran `31532517315` at 23:43Z to unblock #127, which
+converted a run carrying **two** failed attempts into one that reads green. I
+did this while holding the register that exists to detect exactly that. The
+other sessions each did the same on their own branches — one of them found
+their instance only by going looking for who owned the hidden set. Worth
+stating plainly rather than attributing the practice to other people's work:
+**the census's own authors are in the hidden set.**
 
 **`31488794144` is more load-bearing than anyone holding it realised.** Two
 sessions preserved that run red as evidence that the flake is real. It is also
