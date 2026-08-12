@@ -318,6 +318,47 @@ def emit(text: str = "") -> None:
     print(redact(text))
 
 
+def clip(text: str, limit: int) -> str:
+    """Keep both ends of foreign output, not just the beginning.
+
+    A live peer probe failed with a Python traceback and this tool reported its
+    first 600 characters, which is every stack frame and none of the exception.
+    The one line that says whether the name failed to resolve, the connection
+    was refused, or the socket timed out -- three findings with three different
+    remedies -- is the last line, and head-only truncation is guaranteed to
+    drop it. That is the worst possible choice for the single artefact most
+    likely to appear here.
+
+    So the budget is split across both ends and the elision says how much went
+    missing, because a silent cut is indistinguishable from output that really
+    ended there. The marker is this tool's own text and is not charged against
+    the budget, which is a budget on how much foreign text is reproduced.
+    """
+
+    if len(text) <= limit:
+        return text
+    head = limit // 2
+    tail = limit - head
+    dropped = len(text) - limit
+    return f"{text[:head]}[... {dropped} characters elided ...]{text[-tail:]}"
+
+
+# The probe paths print container output, which this tool did not produce and
+# cannot vouch for. diagnose already routes such output through the shape-based
+# masker; these paths were only getting the registered-value pass, which cannot
+# see a credential this process never held. Same class of text, same treatment.
+CAPTURED_OUTPUT_BUDGET = 800
+
+
+def emit_captured_output(message: object, known: Iterable[str] = ()) -> None:
+    """Report what the container said, masked, clipped at both ends, counted."""
+
+    body, masked = redact_foreign_text(str(message), known=known)
+    emit(f"    captured output: {clip(body, CAPTURED_OUTPUT_BUDGET)!r}")
+    if masked:
+        emit(f"    ({masked} credential-shaped spans masked in the line above)")
+
+
 # --------------------------------------------------------------------------- #
 # Spec
 # --------------------------------------------------------------------------- #
@@ -2868,7 +2909,7 @@ def operate_peer_verify(client: Client, spec: dict, sleep=None) -> int:
             "look exactly like this. peer-tools is the operation that tells "
             "those two apart, by asking the peer what it has."
         )
-        emit(f"    captured output: {str(execution.get('message'))[:600]!r}")
+        emit_captured_output(execution.get("message"), known=(peer_uuid, task_uuid))
         emit("RESULT peer-verify failed reachable=undetermined reason=no_marker")
         return EXIT_FAILED
 
@@ -3008,7 +3049,7 @@ def operate_peer_tools(client: Client, spec: dict, sleep=None) -> int:
         return EXIT_FAILED
 
     message = execution.get("message")
-    emit(f"    captured output: {str(message)[:600]!r}")
+    emit_captured_output(message, known=(peer_uuid, task_uuid))
 
     if verdict is None:
         emit("")
@@ -3137,7 +3178,7 @@ def operate_diagnose(client: Client, spec: dict) -> int:
             )
             emit(
                 f"        id={row.get('id')} status={row.get('status')!r} "
-                f"at={row.get('created_at')!r} message={body[:300]!r}"
+                f"at={row.get('created_at')!r} message={clip(body, 300)!r}"
                 + (f" ({masked} spans masked)" if masked else "")
             )
 
@@ -3156,7 +3197,7 @@ def operate_diagnose(client: Client, spec: dict) -> int:
         lines = [line for line in cleaned.splitlines() if line.strip()]
         emit(f"      {len(lines)} non-empty lines, {masked} credential-shaped spans masked")
         for line in lines[-60:]:
-            emit(f"      | {line[:300]}")
+            emit(f"      | {clip(line, 300)}")
 
     emit("RESULT diagnose ok")
     return EXIT_OK

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import copy
 import datetime
+import hashlib
 import io
 import json
 import re
@@ -3424,6 +3425,133 @@ class PeerToolsTests(unittest.TestCase):
             driver.PEER_TOOLS_TASK_NAME,
             {driver.PEER_TASK_NAME, driver.PEER_LADDER_TASK_NAME, driver.READINESS_TASK_NAME},
         )
+
+
+class ClippedForeignOutputTests(unittest.TestCase):
+    """Which end of a truncated report survives decides what it can say.
+
+    A live peer probe failed with a Python traceback and this tool printed its
+    first 600 characters: every stack frame, none of the exception. The last
+    line is the one that separates a name that did not resolve from a
+    connection that was refused from a socket that timed out -- three findings
+    with three different remedies -- and head-only truncation drops it every
+    time. The instrument was reporting the least informative part of the single
+    artefact it was most likely to be handed.
+    """
+
+    def setUp(self) -> None:
+        driver.reset_redactions()
+
+    @staticmethod
+    def foreign_part(clipped: str) -> str:
+        """Everything the container said, with this tool's marker removed."""
+
+        return re.sub(r"\[\.\.\. \d+ characters elided \.\.\.\]", "", clipped)
+
+    def test_the_exception_survives_a_traceback_longer_than_the_budget(self) -> None:
+        frames = "".join(
+            f'  File "<string>", line {n}, in <lambda>\n' for n in range(200)
+        )
+        text = "Traceback (most recent call last):\n" + frames + (
+            "socket.gaierror: [Errno -2] Name or service not known"
+        )
+        clipped = driver.clip(text, driver.CAPTURED_OUTPUT_BUDGET)
+        self.assertIn("socket.gaierror: [Errno -2] Name or service not known", clipped)
+        self.assertIn("Traceback (most recent call last):", clipped)
+
+    def test_the_elision_says_how_much_went_missing(self) -> None:
+        """A silent cut is indistinguishable from output that ended there."""
+
+        clipped = driver.clip("a" * 1000, 100)
+        self.assertIn("[... 900 characters elided ...]", clipped)
+        self.assertEqual(len(self.foreign_part(clipped)), 100)
+
+    def test_output_within_the_budget_is_untouched(self) -> None:
+        for size in (0, 1, 99, 100):
+            with self.subTest(size=size):
+                text = "b" * size
+                self.assertEqual(driver.clip(text, 100), text)
+
+    def test_the_budget_counts_foreign_characters_not_the_marker(self) -> None:
+        """The marker is this tool's own text, so charging it would shrink the
+        evidence to pay for the note that says evidence was removed.
+
+        The first version of this test counted occurrences of the filler
+        character and read 102 for a budget of 100, because "characters" in the
+        elision marker supplies its own letters. The measurement was wrong, not
+        the code -- a counting instrument that cannot tell the tool's text from
+        the container's is the same confusion this whole helper exists to
+        prevent, one level up.
+        """
+
+        clipped = driver.clip("c" * 500, 100)
+        self.assertEqual(len(self.foreign_part(clipped)), 100)
+        self.assertEqual(set(self.foreign_part(clipped)), {"c"})
+
+    @staticmethod
+    def a_credential_shaped_span() -> str:
+        """Assembled at run time, never spelled out in the source.
+
+        The first version of this test wrote the span as a literal and the
+        repository's own sensitive-reference scanner rejected the commit with
+        literal-secret-assignment. It was right, and the finding is fixed here
+        rather than waived: a scanner cannot tell a synthetic credential from a
+        real one, and a test about masking credential-shaped text is the last
+        place that should ask it to. The input is a readable phrase, so nothing
+        dense appears in this file at all.
+        """
+
+        return hashlib.sha256(b"peer-probe-fixture").hexdigest()[:40]
+
+    def test_container_output_is_shape_masked_not_only_value_masked(self) -> None:
+        """A traceback can carry a credential this process never held.
+
+        diagnose already routed container output through the shape-based
+        masker; the probe paths were getting only the registered-value pass,
+        which by construction cannot see a secret it was never told about.
+        """
+
+        span = self.a_credential_shaped_span()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            driver.emit_captured_output(f"ValueError: {span}")
+        output = buffer.getvalue()
+        self.assertNotIn(span, output)
+        self.assertIn("spans masked", output)
+
+    def test_a_clean_message_reports_no_masking_line(self) -> None:
+        """A masker that always announced itself would be noise, and one that
+        never did could not be told from one that found nothing."""
+
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            driver.emit_captured_output("ConnectionRefusedError: [Errno 111]")
+        output = buffer.getvalue()
+        self.assertIn("ConnectionRefusedError: [Errno 111]", output)
+        self.assertNotIn("spans masked", output)
+
+    def test_the_probe_reports_both_ends_of_a_real_failure(self) -> None:
+        """End to end, on the shape the live run actually produced."""
+
+        tail = "ConnectionRefusedError: [Errno 111] Connection refused"
+        instance = PeerInstance()
+        instance.next_execution = {
+            "status": "failed",
+            "message": "Traceback (most recent call last):\n"
+            + "".join(f'  File "/usr/lib/python3.12/http/client.py", line {n}\n' for n in range(80))
+            + tail,
+        }
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_peer_verify(
+                instance,
+                driver.load_spec(driver.spec_path(RESOURCE)),
+                sleep=lambda _seconds: None,
+            )
+        output = buffer.getvalue()
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reason=no_marker", output)
+        self.assertIn(tail, output)
 
 
 class ForeignTextRedactionTests(unittest.TestCase):
