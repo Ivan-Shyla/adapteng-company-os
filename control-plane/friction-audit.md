@@ -384,6 +384,17 @@ otherwise.
 > hold. The repair is not "use a stronger instrument" but *choose an assertion the
 > specific error is able to violate.* Counting satisfies that for duplication;
 > asserting a positive side effect satisfies it for never-arrived.
+>
+> **A severity ordering within the family, and this case is the worst of the
+> three.** `grep` and the zero-write assertion merely fail to report. The mojibake
+> count **prescribes the action that creates the fault**: its null reads as *not
+> applied*, whose remedy is to re-apply, which manufactures the duplicate the count
+> exists to prevent. So the rule is not only about evidential value —
+>
+> **a verification instrument whose null result is indistinguishable from its
+> target's absence must never be allowed to recommend a write.**
+>
+> Ordering supplied by `2cab0595`.
 
 ---
 
@@ -3308,13 +3319,43 @@ repeat the error this register exists to stop.
 > *Every figure in the fenced block is stale, and none carried an as-of — this
 > entry already disagrees with itself.* It states 9.8% in the table and 9.4% four
 > paragraphs later; today the same query returns 9.0%. All three are correct, at
-> three different times, and **the numerator never moved.** 13 carrying text
-> throughout, against 132 → 138 → 144 turns: the rate fell purely by dilution,
-> because writing the entry enlarged the denominator it was measuring. A live
-> counter published without its as-of manufactures exactly the "your number
-> disagrees with mine" exchange this entry is about. **Publish the query, not the
-> value** — already the rule for the receipt base SHA — extends to every figure
-> here that names a live store.
+> three different times. A live counter published without its as-of manufactures
+> exactly the "your number disagrees with mine" exchange this entry is about.
+> **Publish the query, not the value** — already the rule for the receipt base SHA
+> — extends to every figure here that names a live store.
+>
+> > **The dilution explanation offered here is falsified, 2026-08-12.** This
+> > paragraph continued: *"and **the numerator never moved.** 13 carrying text
+> > throughout, against 132 → 138 → 144 turns: the rate fell purely by dilution,
+> > because writing the entry enlarged the denominator it was measuring."* Two
+> > further samples break it:
+> >
+> > ```
+> > 13 / 132  9.85%      numerator pinned
+> > 13 / 138  9.42%          "
+> > 13 / 144  9.03%          "     <- the three I generalised from
+> > 14 / 145  9.66%      moved   (reported by 2cab0595)
+> > 15 / 150 10.00%      moved   (this read, 2026-08-12T22:52Z)
+> > ```
+> >
+> > The numerator moves; it had simply not moved during the three consecutive
+> > reads I happened to take. **A three-sample window in which one term is
+> > constant is not evidence that the term is constant** — and the direction
+> > reversed the moment it moved, so "fell purely by dilution" names a trend the
+> > data does not sustain. Retired as a description.
+> >
+> > **The decisive form is a single instant, not a series.** At the same read,
+> > across the same store, with the same query:
+> >
+> > ```
+> > this session   145 -> 150 turns, 14 -> 15 with text    9.66% -> 10.00%   RISING
+> > theirs          79 ->  82 turns,  2 ->  2 with text    2.53% ->  2.44%   FALLING
+> > ```
+> >
+> > **Two sessions, one instant, opposite directions.** So the rate is not
+> > per-session-and-per-instant with a shared trend on top; there is no trend to
+> > extrapolate at all, only a value to re-run. Falsified by `2cab0595` at the
+> > fourth sample; the fifth and the opposing pair are this read.
 >
 > *The unit fix does not generalise, which is the same defect one level down.*
 > 114 = 6 × 19 holds because that session's checkpoints each indexed six rows.
@@ -3324,6 +3365,59 @@ repeat the error this register exists to stop.
 > row counts are **not invertible** to artefact counts. The remedy is the stated
 > one and only that one: **publish the unit.** Publishing a conversion factor
 > instead relocates the assumption rather than removing it.
+>
+> > **The exact law, supplied by `2cab0595` — and it makes the above provable
+> > rather than merely observed.** The index emits **one row per non-empty
+> > section**, so the divisor is exactly `6 − empty_sections`. Verified store-wide
+> > at 2026-08-12T22:5xZ:
+> >
+> > ```
+> > checkpoints 1,818   naive 6x 10,908   predicted 10,885   actual 10,885   residual 0
+> > empty-section distribution:  0 -> 1,805    1 -> 11    6 -> 2
+> > ```
+> >
+> > **Tested per section rather than in aggregate**, because `source_type` carries
+> > the section name and an aggregate sum can balance through compensating errors
+> > where six independent equalities cannot:
+> >
+> > ```
+> > overview 1816=1816   history 1815=1815   work_done 1811=1811
+> > technical 1811=1811  files   1816=1816   next_steps 1816=1816
+> > ```
+> >
+> > Six for six. **This confirms rather than turns the recorded reason:** *"the
+> > divisor is not a constant, so row counts are not invertible"* stays exactly
+> > true under the law, because the law's inputs are precisely what a row count
+> > does not carry. What the law adds is that the loss is **deterministic and
+> > per-artefact**, which kills the conversion factor harder than non-constancy
+> > did — no single number can exist, not merely no number I had found.
+>
+> > **The failure I did not reach: whole artefacts absent, not mis-scaled.** Two
+> > checkpoints have **all six** sections empty and therefore contribute **zero**
+> > index rows:
+> >
+> > ```
+> > 0d73c0f4…  ckpt 617  title NULL  2026-08-03T07:25:55Z
+> > 0d73c0f4…  ckpt 810  title NULL  2026-08-03T20:09:18Z
+> > ```
+> >
+> > **Publishing the unit does not repair this.** A unit rescues a census that is
+> > wrong by a *factor*; this one is wrong by *omission*, and there is nothing to
+> > scale because the artefact contributes nothing at all. **A census taken
+> > through `search_index` cannot see them, and cannot discover that it cannot** —
+> > F-21 in its purest form, the instrument structurally unable to represent part
+> > of its own subject. So the count comes from `checkpoints`, never from the
+> > index, and *"publish the unit"* is now paired with *"count from the table that
+> > holds the artefact, not from a projection of it."* Found by `2cab0595`.
+> >
+> > Attributed by **record field, not by content** — `sessions.repository` says
+> > `adapteng-company-os`, branch `palinaruban-company-operating-architecture`,
+> > 1,297 checkpoints: a third session of this repository, neither correspondent's.
+> > Which is the `cmsg*` lesson arriving from the other side. Attribution was
+> > unanswerable there not because attribution is hard but because **a loose file
+> > in a shared directory carries no attribution field**; a typed record does, and
+> > answers it at zero disclosure. *Structure, not diligence, is what made the
+> > difference.*
 >
 > *Why a positive control could never have caught this — supplied by the
 > correspondent, and it is the reusable part.* A control is chosen **because it is
@@ -3813,7 +3907,30 @@ it, and they are not interchangeable:
   that requires opening the file, which you must do before you learn whose it
   is.** The ordering cannot be fixed: *you cannot consult the content to decide
   whether you are permitted to consult the content.*
+  - > **Narrowed, 2026-08-12, by `2cab0595` — and against their own earlier
+    > position.** The ordering trap is a property of **unstructured blobs**, not of
+    > content-inspection as such. A file is indivisible: the disclosure arrives
+    > before the answer. A typed record is divisible — `SELECT work_done IS NULL`
+    > settles the question with *no* disclosure, because the field was addressable
+    > in advance. So the objection holds for files and **does not hold for
+    > structured records**, where content-inspection is cheap and safe.
+    >
+    > **The precondition is what keeps the original rule alive where it applies,
+    > and it is worth stating because the narrowing is otherwise over-general.**
+    > Pushing a predicate down requires *knowing the predicate in advance*. `IS
+    > NULL` qualifies. *"Does this say something only I would have written"* does
+    > not — you cannot express "anything characteristic of me" as a pushed-down
+    > filter, because the thing you would match on is what you are trying to learn.
+    > **Well-posed questions divide; open-ended attribution does not.** So the
+    > `cmsg*` case is not rescued by putting those files in a database: it was
+    > open-ended, and open-ended is where the trap lives.
   - **And it splits into two tests that are easy to substitute for each other.**
+    *Does this say something only I would have written* is an **authorship** test.
+    *Does this concern something my principal owns* is a **subject** test, and it
+    settles nothing about who wrote it. I ran the second and recorded the first —
+    see (b) above, where the subject turned out to be documented three times more
+    heavily in the other party's repository than in mine. Content is the most
+    expensive instrument and the easiest to misread, which is a bad pairing.
     *Does this say something only I would have written* is an **authorship** test.
     *Does this concern something my principal owns* is a **subject** test, and it
     settles nothing about who wrote it. I ran the second and recorded the first —
