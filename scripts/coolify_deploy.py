@@ -63,6 +63,7 @@ OPERATIONS = (
     "status",
     "verify",
     "peer-verify",
+    "peer-diagnose",
     "diagnose",
 )
 FORBIDDEN_METHODS = frozenset({"DELETE"})
@@ -2053,6 +2054,167 @@ def peer_command(spec: dict) -> str:
     )
 
 
+# The first live peer-verify was refused: POST .../scheduled-tasks answered 500
+# on the peer while the same endpoint had always accepted the readiness task on
+# the gateway. Three things differ at once -- the application, the task name and
+# the command -- so the failure on its own does not say which was refused, and a
+# 500 carries no field-level reason to read.
+#
+# This ladder separates them by measurement instead of by guessing. Each rung is
+# written to the same task, so exactly one task is created and the only variable
+# that moves between rungs is the command. A rung that is accepted and a rung
+# that is refused bracket the boundary; the first refusal names it.
+#
+# Nothing is ever armed here, so no command runs inside any container. This
+# probes only what the API will accept, which is the question that was raised.
+PEER_LADDER_TASK_NAME = "adapteng-peer-probe-acceptance"
+PEER_LADDER_TRIVIAL = "echo ADAPTENG_PEER trivial"
+
+
+def peer_ladder(spec: dict) -> list:
+    """Rungs from trivially short to longer than the full probe, ascending.
+
+    The inference this supports is "everything accepted is shorter than
+    everything refused", which is only available if the rungs are monotone in
+    length, so they are built to exact lengths rather than to whatever a
+    convenient string happened to measure.
+    """
+
+    def filler(size: int) -> str:
+        head = "echo ADAPTENG_PEER "
+        return head + "x" * (size - len(head))
+
+    return [
+        ("trivial", filler(26)),
+        # Known accepted on the gateway, so it separates "this application
+        # refuses tasks" from "this command is refused".
+        ("readiness-shaped", readiness_command(spec)),
+        # Padding only: same prefix, no new characters, longer. A refusal of a
+        # filler rung cannot be blamed on anything but its length.
+        ("filler-300", filler(300)),
+        ("peer-full", peer_command(spec)),
+        ("filler-500", filler(500)),
+    ]
+
+
+def operate_peer_diagnose(client: Client, spec: dict) -> int:
+    """Find what the scheduled-task endpoint will accept on the peer.
+
+    Read-mostly: it creates one task, rewrites it a few times, and leaves it
+    disarmed. It never arms anything, so nothing executes in any container.
+    """
+
+    target = spec["target"]
+    peer_name = spec["network"]["peer_probe_application"]
+    emit(f"--- peer-diagnose {peer_name}")
+
+    project = find_project(client, target["project"])
+    environment = (
+        find_environment(client, project["uuid"], target["environment"])
+        if project
+        else None
+    )
+    if project is None or environment is None:
+        emit("    project or environment absent; nothing to diagnose")
+        return EXIT_FAILED
+
+    present = applications_in(client, environment)
+    peer = find_application(present, peer_name)
+    service = find_application(present, target["resource_name"])
+    if peer is None:
+        emit(f"    peer application {peer_name}: ABSENT")
+        return EXIT_FAILED
+
+    peer_uuid = str(peer["uuid"])
+    emit(f"    peer {peer_name}: uuid={peer_uuid} state={peer.get('status')}")
+    if service is not None:
+        emit(
+            f"    service {target['resource_name']}: uuid={service['uuid']} "
+            f"state={service.get('status')}"
+        )
+
+    existing = find_readiness_task(client, peer_uuid, PEER_LADDER_TASK_NAME)
+    task_uuid = str(existing["uuid"]) if existing else None
+    results = []
+
+    for label, command in peer_ladder(spec):
+        body = readiness_task_body(command, armed=False, name=PEER_LADDER_TASK_NAME)
+        if task_uuid is None:
+            status, parsed = client.request(
+                "POST", f"/applications/{peer_uuid}/scheduled-tasks", body=body
+            )
+            verb = "POST"
+        else:
+            status, parsed = client.request(
+                "PATCH",
+                f"/applications/{peer_uuid}/scheduled-tasks/{task_uuid}",
+                body=body,
+            )
+            verb = "PATCH"
+
+        accepted = status in (200, 201)
+        results.append((label, len(command), status, accepted))
+        emit(
+            f"    {verb:5} {label:16} len={len(command):4} -> HTTP {status} "
+            f"{'accepted' if accepted else 'REFUSED: ' + api_message(parsed)}"
+        )
+
+        if accepted and task_uuid is None:
+            found = find_readiness_task(client, peer_uuid, PEER_LADDER_TASK_NAME)
+            if found is None:
+                emit("    the task was accepted but cannot be read back; stopping")
+                return EXIT_FAILED
+            task_uuid = str(found["uuid"])
+
+    emit("")
+    if not any(accepted for _l, _n, _s, accepted in results):
+        emit(
+            "    every rung was refused, including a 26-character echo. The "
+            "command is not what is being rejected: this application does not "
+            "accept scheduled tasks at all, and the probe needs a different "
+            "peer or a different mechanism."
+        )
+        return EXIT_FAILED
+
+    accepted_lengths = [n for _l, n, _s, ok in results if ok]
+    refused_lengths = [n for _l, n, _s, ok in results if not ok]
+    emit(f"    accepted lengths: {sorted(accepted_lengths)}")
+    emit(f"    refused lengths:  {sorted(refused_lengths)}")
+    if refused_lengths and max(accepted_lengths) < min(refused_lengths):
+        emit(
+            f"    every accepted command is shorter than every refused one, so "
+            f"the boundary is length and it lies between "
+            f"{max(accepted_lengths)} and {min(refused_lengths)} characters."
+        )
+    elif refused_lengths:
+        emit(
+            "    the refusals do not sort by length, so length is not the "
+            "boundary; the refused rungs differ from the accepted ones in "
+            "content."
+        )
+    else:
+        emit(
+            "    every rung was accepted, including the full probe. The "
+            "original 500 was therefore not reproducible from the command, "
+            "and the earlier failure needs a different explanation."
+        )
+
+    at_rest = readiness_task_body(
+        PEER_LADDER_TRIVIAL, armed=False, name=PEER_LADDER_TASK_NAME
+    )
+    client.request(
+        "PATCH",
+        f"/applications/{peer_uuid}/scheduled-tasks/{task_uuid}",
+        body=at_rest,
+    )
+    emit(
+        f"    left one disabled task {PEER_LADDER_TASK_NAME} on {peer_name}, "
+        "scheduled for a leap day and holding a harmless echo. It was never "
+        "armed, so it has never run."
+    )
+    return EXIT_OK
+
+
 def readiness_command(spec: dict) -> str:
     """Build the in-container probe from the committed spec, not from guesses."""
 
@@ -2875,6 +3037,8 @@ def run(environ: dict) -> int:
         return operate_verify(client, spec)
     if operation == "peer-verify":
         return operate_peer_verify(client, spec)
+    if operation == "peer-diagnose":
+        return operate_peer_diagnose(client, spec)
     if operation == "diagnose":
         return operate_diagnose(client, spec)
     return operate_deploy(

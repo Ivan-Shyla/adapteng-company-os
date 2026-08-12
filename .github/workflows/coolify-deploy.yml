@@ -42,6 +42,7 @@ on:
           - status
           - verify
           - peer-verify
+          - peer-diagnose
           - diagnose
       service:
         description: "Spec file under deploy/, named without its extension"
