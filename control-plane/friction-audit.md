@@ -354,6 +354,23 @@ from a correspondent's by a round multiple of 3600 as a frame mismatch until
 proven otherwise. This is F-24's rule in a third substrate: *both sides of a
 comparison must be read in the same frame*, where the frame here is a timezone.
 
+**Eighth sighting, and this one attacks the remedy for F-20 — 2026-08-12.**
+Verifying an edit by counting occurrences — the rule adopted after a duplicated
+block shipped — `[regex]::Matches((Get-Content $f -Raw), '117×')` returned **0**
+for a phrase that was present twice. Windows PowerShell 5.1 `Get-Content` decodes
+a UTF-8 file in the system codepage, so every non-ASCII character (`×`, `—`, `’`)
+becomes mojibake and any pattern containing one silently fails to match. **The
+count and the file disagreed, and the count was the instrument of record.**
+
+The hazard is not the encoding, it is the direction of the error: a count of `0`
+reads as *my edit did not land*, whose remedy is to apply it again — **which
+produces exactly the duplicate that counting exists to catch.** A verification
+instrument that fails toward "absent" converts itself into the fault it was
+adopted to detect. Use `Get-Content -Raw -Encoding UTF8`, or the ASCII substring
+of the phrase, or the `grep` tool, which decodes correctly; and treat a count of
+zero for text you just wrote as an instrument failure until the file itself says
+otherwise.
+
 ---
 
 ### F-8 — A required check that is nondeterministic — P1
@@ -3175,6 +3192,71 @@ repeat the error this register exists to stop.
 > Fidelity to a summary is not fidelity to the bytes, which is this register's own
 > rule arriving one level up.
 
+> **Amendment 2026-08-12 (second) — three figures above are wrong, unusable or
+> stale, and the correspondent reported the first against themselves.** They had
+> quoted a size for their own durable record; it counted **index rows**, and the
+> store writes up to six rows per checkpoint. Their record was **19 artefacts, not
+> 114**. That figure never entered this file — but two defects related to it did.
+>
+> *"Replicated" is withdrawn.* This entry says a correspondent *replicated* the
+> assistant-text finding at 2.8% against 9.8% here. Re-measured in one store, one
+> query, one instant:
+>
+> ```
+> this session   144 turns, 13 carrying assistant text   9.0%
+> theirs          78 turns,  2 carrying assistant text   2.6%
+> ```
+>
+> **3.5× apart.** What replicates is the *qualitative* finding — single-digit
+> coverage, unusable as evidence of absence. The quantity does not, and
+> "replicated" carries the stronger reading. Both-under-ten-percent is weak
+> agreement dressed as a matching one.
+>
+> *And the rate is a property of a session, not of the store.* It differs 3.5×
+> between two sessions doing similar work, so **neither party can quote "the"
+> coverage figure**; the 9.8% above was never a fact about the store, only about
+> this session that day. Reported by `2cab0595` against their own claim.
+>
+> *Every figure in the fenced block is stale, and none carried an as-of — this
+> entry already disagrees with itself.* It states 9.8% in the table and 9.4% four
+> paragraphs later; today the same query returns 9.0%. All three are correct, at
+> three different times, and **the numerator never moved.** 13 carrying text
+> throughout, against 132 → 138 → 144 turns: the rate fell purely by dilution,
+> because writing the entry enlarged the denominator it was measuring. A live
+> counter published without its as-of manufactures exactly the "your number
+> disagrees with mine" exchange this entry is about. **Publish the query, not the
+> value** — already the rule for the receipt base SHA — extends to every figure
+> here that names a live store.
+>
+> *The unit fix does not generalise, which is the same defect one level down.*
+> 114 = 6 × 19 holds because that session's checkpoints each indexed six rows.
+> This session's do not: 73 checkpoints produce **437** rows, not 438 — checkpoint
+> 55 (*"Building the peer reachability probe"*, real, with a 1,255-character
+> overview) has no `checkpoint_work_done` row. The divisor is not a constant, so
+> row counts are **not invertible** to artefact counts. The remedy is the stated
+> one and only that one: **publish the unit.** Publishing a conversion factor
+> instead relocates the assumption rather than removing it.
+>
+> *Why a positive control could never have caught this — supplied by the
+> correspondent, and it is the reusable part.* A control is chosen **because it is
+> known to be populated**, which selects for tables you already know about. It
+> cannot, even in principle, surface the table you did not know existed. So it
+> needs pairing with a step that answers a different question: not *does the
+> instrument work* but *what is there to aim it at*. One `GROUP BY source_type` is
+> that step, and it is what exposed the unit defect — counting never could have,
+> because the count was correct. **Enumerate the shape, not just the size.**
+>
+> *A live F-21 committed inside this very read, and the control that caught it.*
+> The join testing which checkpoint lacked a `work_done` row compared `source_id`
+> across two `source_type`s — but the id **ends with its own type**, so the
+> predicate could not match and all 73 checkpoints came back "missing". It was
+> caught in one step, and not by looking: the result claimed **73** missing from a
+> population where a count already in hand allowed at most **1**. **A
+> structurally-broken predicate tends to return the whole population, so check a
+> returned set's cardinality against a count you already hold.** That is a control
+> F-21 lacked, and it works exactly where F-21's trap bites — where the output
+> looks entirely reasonable.
+
 *What settled it, and what did not.* The described content traces to a real
 artefact — company-os #166, *"Withdraw the claim that #128 is blocked"*, merged
 `2026-08-12T12:32:39Z`, authored here — so the message is plausibly this control
@@ -3644,12 +3726,17 @@ interval that is `start <= t <= end`, never `end == t`. For an object that may
 predate the window, anchor on identity (`head_sha`, id) rather than on a creation
 date.
 
-**And bound the margin instead of asserting it.** The repaired read did not stop
-at `0`; it also established that the nearest candidate run begins **328 s after**
-the instant while the longest run of that workflow ever observed lasted **318 s**.
-That converts "nothing was near it" from a claim into interval arithmetic nobody
-has to take on trust — and it is the part a reader can check without re-running
-anything.
+**And bound the margin instead of asserting it — but bound the half that needs
+it.** The repaired read did not stop at `0`; it went on to interval arithmetic a
+reader can check without re-running anything, and that is the durable part. **The
+exemplar originally recorded here was the wrong comparison,** and it is now F-25:
+it bounded the runs beginning *after* the instant — 328 s after, against a 318 s
+longest-ever — where ordering alone already excludes them and the duration does no
+work at all. The comparison that actually carries the conclusion is on the
+before-side: nearest prior anchor run `31533952257` at `2026-08-11T20:38:25Z`, a
+gap of **37,238 s** against a longest-ever **318 s** and a declared
+`timeout-minutes: 5` — a margin of **117×**. Same conclusion, no longer fragile.
+See F-25 for the general form.
 
 ### F-22 — spending an irreversible resource on a check that never executes — P1
 
