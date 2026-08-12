@@ -81,6 +81,30 @@ SETTING = re.compile(
     r"^\s*(?P<name>[A-Za-z][A-Za-z0-9_-]*)\s*=\s*(?P<value>.*?)\s*$"
 )
 
+# ``str.splitlines()`` ends a line on eleven separators; an LF-delimited reader
+# ends it on one. Where the two disagree this gate reads a different file than
+# the tool it vouches for: given ``pg1-path = /mnt/ephemeral\x0c/../../etc``,
+# splitlines() yields the allowed ``/mnt/ephemeral`` and the gate passes, while
+# the whole value resolves to ``/etc``. That is a fail-open in a fail-closed
+# gate, so this module refuses to guess which parser is right -- a separator
+# that could move a line boundary makes the configuration unreadable instead.
+#
+# CR is deliberately absent. ``Path.read_text`` decodes in universal-newline
+# mode, so a lone CR and a CRLF are both already LF by the time any of this
+# runs -- measured, not assumed -- and every parser that reads these files
+# treats CRLF as a line ending regardless. The eight below are the ones
+# ``str.splitlines()`` honours and essentially nothing else does.
+AMBIGUOUS_LINE_SEPARATORS = {
+    "\v": "VT",
+    "\f": "FF",
+    "\x1c": "FS",
+    "\x1d": "GS",
+    "\x1e": "RS",
+    "\x85": "NEL",
+    "\u2028": "LS",
+    "\u2029": "PS",
+}
+
 
 class GuardError(RuntimeError):
     """A rehearsal isolation property could not be established."""
@@ -326,13 +350,34 @@ def check_empty(paths: dict[str, Path]) -> list[Check]:
     return checks
 
 
+def config_lines(text: str, path: Path, name: str) -> list[str]:
+    """Return LF-delimited lines, refusing any separator that could move a boundary.
+
+    A configuration file whose line structure depends on which parser reads it
+    is one this gate cannot establish a property about, so the ambiguity is
+    fatal rather than silently resolved in the gate's favour. With those
+    separators excluded, LF splitting and ``str.splitlines()`` agree on every
+    surviving input, which is what makes the choice between them inert here.
+    """
+    for character, label in AMBIGUOUS_LINE_SEPARATORS.items():
+        if character in text:
+            raise GuardError(
+                f"{name}: {path} contains {label} (U+{ord(character):04X}), which ends a "
+                "line for some readers and not others; its line structure is ambiguous"
+            )
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def read_settings(path: Path, name: str) -> list[tuple[str, str]]:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise GuardError(f"{name}: cannot read {path}") from exc
     settings: list[tuple[str, str]] = []
-    for line in text.splitlines():
+    for line in config_lines(text, path, name):
         stripped = line.split("#", 1)[0]
         match = SETTING.match(stripped)
         if match:
@@ -411,7 +456,11 @@ def check_pgbackrest_config(path: Path, allowed: set[Path]) -> list[Check]:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise GuardError(f"cannot read pgBackRest configuration {path}") from exc
-    remote = [line.strip() for line in text.splitlines() if REMOTE_PG_OPTION.match(line)]
+    remote = [
+        line.strip()
+        for line in config_lines(text, path, "pgbackrest")
+        if REMOTE_PG_OPTION.match(line)
+    ]
     checks = [
         Check(
             "pgbackrest_targets_no_remote_postgresql",

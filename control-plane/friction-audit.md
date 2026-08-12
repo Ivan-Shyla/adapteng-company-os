@@ -2518,6 +2518,89 @@ and it is not mechanisable from the reference alone.
 
 ---
 
+### F-12 — the fail-closed gate fails open on a line boundary — P0
+
+**Status:** fixed in this change. **Live, not latent** — the mechanism works today
+and the direction is toward approval.
+
+**The defect.** `rehearsal_isolation_guard.py` — whose docstring opens
+"Fail-closed isolation gate for the disposable PostgreSQL restore rehearsal" —
+parsed pgBackRest and PostgreSQL configuration with `text.splitlines()`, then
+handed the resulting value to `Path(candidate).resolve()` and tested it for
+membership of an allow-list of ephemeral directories.
+
+**Measured, both arms, same input bytes, only the splitter varied:**
+
+```
+pg1-path = /mnt/ephemeral<FF>/../../etc
+
+splitlines()   -> value '/mnt/ephemeral'                -> allowed -> PASS
+LF-delimited   -> value '/mnt/ephemeral\x0c/../../etc'  -> /etc    -> FAIL
+```
+
+The gate approves a data directory that is not the one the value names. This is
+not a missed detection — the check runs, matches, and returns **true**.
+
+**Why only this one site.** The sibling at `check_pgbackrest_config` screens
+lines with `REMOTE_PG_OPTION`, which is start-anchored, so an over-split can
+truncate the tail without removing the match: it fails **closed**. The
+path-valued site fails **open** because truncation does not remove the value, it
+*replaces* it with a shorter one that satisfies the predicate. Same wrong line
+model, opposite direction, decided entirely by what the consumer does with the
+parsed value.
+
+**The precondition, stated rather than assumed.** This is a divergence only if
+the tools that read these files are LF-delimited. I could not verify pgBackRest's
+or PostgreSQL's parser from here and did not assume it. **The fix does not depend
+on resolving it**: rather than pick a side, the gate now treats a file whose line
+structure is parser-dependent as one it cannot establish a property about, which
+is exactly what `GuardError` is for.
+
+**Fix.** `config_lines()` refuses the eight `str`-only separators by name and
+then splits on `\n`. With those eight excluded, LF-splitting and `splitlines()`
+agree on every surviving input — so the choice between them becomes **inert**
+rather than merely corrected. That is the stronger of the two remedies available,
+and the ranking is the point: repairing the call site fixes the instance; making
+the hazardous choice unobservable retires the class.
+
+**Scale.** All 92 tracked files decode and **zero** contain any of the eight, so
+the new refusal cannot fire on committed content. Suites: 108 tests, OK.
+
+**Against myself: the constant was wrong on the first run, and its own test caught
+it.** I wrote **nine** separators, including CR. `test_every_ambiguous_separator_is_refused`
+failed on CR immediately. `Path.read_text` decodes in universal-newline mode, so
+a lone CR and a CRLF are **both already LF** before any of this code runs —
+measured, not reasoned. CR was unreachable by construction, and the entry
+asserted a hazard that cannot arrive.
+
+The instructive part is that **F-11 had it right**: that entry names *eight*
+`str`-only separators and puts CR in the both-split row. I widened the set from
+eight to nine while writing a new module and never re-derived it — a number
+carried across a context boundary and silently re-scoped, which is precisely the
+population-definition failure the peer sessions and I have now hit six times.
+It was caught only because the constant had a test that enumerated it. **A
+constant with a test is a claim; a constant without one is a memory.**
+
+**What it corrects in F-11.** F-11 concluded the defect there was cosmetic — a
+position error, detection unaffected, "worth stating precisely, because the
+alarming reading is available and wrong." That remains true of F-11. But the
+generalisation it invites — that a wrong line model is a reporting concern — is
+false, and this entry is the counterexample from the same session and the same
+mechanism. **The severity of a line-model defect is a property of the consumer,
+not of the defect.** In a reporter it moves a number; in a gate it moves a
+verdict, toward approval.
+
+**How it was found, because the route matters.** Not by looking for it. A peer
+session's regex audit raised whether a trailing `$` admits a newline; the single
+site in this repo where that anchor is observable is this guard's `SETTING`
+pattern. Establishing that the anchor is inert there required reading the input
+source two lines above the call — and that is where `splitlines()` was. **The
+anchor question was a false lead, and it was the false lead that reached the real
+defect.** A verification that comes back negative still moved the reader to a
+place they had no other reason to stand.
+
+---
+
 ## P3 — obsolete, delete
 
 The condition described no longer exists. Leaving these in place actively
