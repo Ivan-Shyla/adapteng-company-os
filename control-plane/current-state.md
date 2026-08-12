@@ -4409,10 +4409,10 @@ approved-assets jobs demand a label built from each run's *own* `run_id`
 (§16.7), so a standing runner cannot carry it. `ops-runner` being present is
 necessary context, not a substitute for the run-scoped registration.
 
-### 16.5 Sequencing hazard — merge platform #121 *before* running step 1
+### 16.5 Sequencing hazard — merge platform #121 *before* running phase 1
 
-**Step 1 is a one-shot with a non-retryable attempt, and in its shipped form a
-run-selection failure is undiagnosable.** Verified from
+**Phase 1 (`db_status`) is a one-shot with a non-retryable attempt, and in its
+shipped form a run-selection failure is undiagnosable.** Verified from
 `scripts/operations/authorize_approved_assets_phase.sh` on platform `main`, not
 accepted from report:
 
@@ -4456,9 +4456,10 @@ files at the head of this chain — `authorize_approved_assets_phase.sh` and
 1. Owner issues the base-trusted rollout authorization / trust receipt.
 2. #121's two trust-anchor checks go green; **merge #121**, with nothing else
    landing on `main` in between.
-3. *Then* run step 1.
+3. *Then* run **phase 1** (`db_status`) — the first of the five governed phases,
+   not item 1 of this list.
 
-Running step 1 first is the trap: if run-selection fails, the operator gets
+Running **phase 1** first is the trap: if run-selection fails, the operator gets
 `lifecycle.run_not_found` and nothing else, having already spent the attempt.
 
 > **Step 0 exists because a receipt issued against a stale base cannot be
