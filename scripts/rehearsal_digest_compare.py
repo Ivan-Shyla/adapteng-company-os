@@ -58,10 +58,21 @@ def lf_delimited_lines(text: str) -> list[str]:
     higher than the one an operator sees when they open the file at that line.
     The remaining two, LF and the CRLF pair, agree with this function.
 
-    A stray separator is rejected either way: the fragment it produces fails
-    ``ENTRY.fullmatch`` and raises, so this changes the position reported in the
-    error and nothing else. That is the whole point — the number is the only
-    part of the message an operator can act on.
+    A separator *inside* a table name is rejected either way: the fragment fails
+    ``ENTRY.fullmatch`` and raises, so only the reported position changes.
+
+    A separator used as a record *terminator* is not. ``T1|R1|D1\\vT2|R2|D2``
+    splits under ``splitlines()`` into two well-formed entries and was **accepted
+    as a valid two-table digest**; under LF records it is one malformed record
+    and raises. That is a detection change, not a positional one, and it is the
+    direction this module's own docstring demands: a digest file that is
+    malformed must not compare equal to another equally malformed file and
+    report a restore as verified.
+
+    That case cannot reach here from ``rehearsal_capture_digest.sh``, whose
+    ``grep -E`` filter is LF-oriented and drops such a line for having five
+    pipe-separated fields rather than three. It is reachable from any digest
+    file this program did not generate, and ``load_digest`` accepts any path.
 
     Deliberately duplicated from ``validate_sensitive_references.py`` rather than
     imported: every script under ``scripts/`` is a standalone entry point and
