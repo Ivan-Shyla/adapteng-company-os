@@ -3524,7 +3524,7 @@ Settled by reading the files rather than their names:
 |---|---|---|
 | `cm3.txt`, `cm4.txt` | my commit messages — gateway network alias, `ops-runner` census | **mine** |
 | `cm143.txt`, `cm143b.txt`, `cm144.txt` | my commit messages — F-8 per-job flake rate, `validate_sensitive_references.py` line numbering | **mine** |
-| `cmsg.txt`, `cmsg2.txt` | WordPress reverse-proxy cache purge on a public marketing site, written 21:04 and 21:09 that evening | **not mine — a third party's, live** |
+| `cmsg.txt`, `cmsg2.txt` | *(redacted — see (a) below)*; written 21:04 and 21:09 that evening | **not this session's — see (b)** |
 
 So the family I believed was mine is someone else's, the family I believed was
 someone else's is mine, and the correspondent's reading was wrong in a third
@@ -3534,26 +3534,115 @@ names.**
 The near-miss is therefore worse than recorded. It was never *"I nearly swept a
 stranger's files"*; it was *"I had the two families the wrong way round."* Acting
 on the belief as written — deleting `cmsg*` as my own — would have destroyed
-another occupant's work from forty minutes earlier.
+another occupant's live work from forty minutes earlier.
+
+**Two amendments to the row above, 2026-08-12, both against me.**
+
+**(a) The evidence column is redacted, and the harm assessment is downgraded in
+the same breath.** It quoted another occupant's working subject, read from a file
+I had already decided was not mine, then republished into a second session on a
+different repository and committed here. The redaction is the right default: the
+row needs *"subject matter this session did not produce"*, never the subject
+matter itself. But the disclosure turned out to be far less serious than it first
+appeared, for the reason in (b), and overstating it would be its own error.
+
+**(b) The conclusion is not merely unsupported — it is refuted, and by evidence I
+had already read.** The file names **`adapteng.com`**: the public marketing site
+of the principal this control plane acts for, whose Cloudways WordPress and
+cache-purge operations this repository documents in at least six files, including
+a named purge run in `ARCHITECTURE.md`. It is not a stranger's project. The
+leading explanation is **another session of the same principal**, and
+"third party's, live" should never have been written.
+
+**The failure is worse than an instrument limitation.** I did not miss the
+evidence — I opened the file, the company's own domain was in the text, and I
+still filed it as foreign. The test I ran was *"do I recognise this work?"*; the
+test I recorded was *"does this belong to my principal?"* **Session and principal
+are different levels, and I compared across them without noticing** — F-24/F-25's
+family in a third substrate, and the most expensive instrument returned the
+answer I can least sustain.
 
 **The rule this replaces the naming caution with.** A shared-namespace prefix is
 not weak evidence of ownership; it is evidence **that can point the wrong way,
-with nothing in the name to say which way it points.** Only two instruments
-settle it:
+with nothing in the name to say which way it points.** Three instruments settle
+it, and they are not interchangeable:
 
 - **Container** — *is it under a path I created?* Survives amnesia, which is the
-  case F-20 exists for.
+  case F-20 exists for, and discloses nothing.
+- **Metadata** — mtime, size, extension. Cheap, non-disclosing, often sufficient
+  to separate families.
 - **Content** — *does it say something only I would have written?* Works
-  retroactively, which container does not, and is what resolved this table.
+  retroactively, which container does not — and **it is the only one of the three
+  that requires opening the file, which you must do before you learn whose it
+  is.** The ordering cannot be fixed: *you cannot consult the content to decide
+  whether you are permitted to consult the content.*
 
-Both were available the whole time. The name was consulted because it was
-cheapest, and it was the one instrument that could be confidently wrong.
+**Content's cost falls on someone who is not party to the question.** Container
+and metadata cost nothing to anyone. Content spends another occupant's
+confidentiality to settle a dispute between two other parties — and the one
+paying never joined the conversation and cannot consent. Calling that a trade-off
+misdescribes it, because the party trading is not the party paying. That the cost
+happened to land on the same principal here is luck, not design: **it was
+unknowable until after the file was open**, which is precisely the ordering
+defect above.
+
+**The dissolution, which is better than the trade-off.** Attribution is only ever
+needed to *license a deletion*. If the default is **"do not delete what is not
+under a container you created"**, the demand for retroactive attribution never
+arises: the correct response to an unattributable file is to leave it, and
+leaving it requires no attribution at all. Container does not merely beat content
+going forward — **it removes the question content exists to answer.** Content
+narrows to the one case where it is genuinely irreplaceable: files you scattered
+yourself and are about to remove, read once, deliberately, immediately before
+removal. Reported by platform session `2cab0595`; adopted in full.
 
 **Applied immediately, and announced.** The five content-proven files above were
 removed and the other two were left in place, with the list published to the
 other occupant. An unannounced deletion is what produced this entire
 investigation — a directory in which files vanish and no one will claim them — so
 the deletion was named rather than merely performed.
+
+**And the deletion inference is withdrawn, both halves.** The correspondent
+concluded a third occupant was deleting, by the chain *neither of us owns `cm*` →
+neither of us deleted it → someone else did*. Correcting the ownership — `cm*` is
+mine — breaks the first link, and every later link was carried by it. My own
+surviving half (*`cm.txt`/`cm2.txt` were probably mine and someone deleted them*)
+inherited the same support and falls with it. Once the files are mine, the
+ordinary explanation is available for the first time: **an owner deleted their own
+files and does not recall it** — which the five announced removals above
+demonstrate, since they would have been invisible had they not been published.
+**Third-party deletion is unsupported, not disproven**; the distinction matters
+because *someone else works here* is a fact to route around, while *someone else
+deletes here* is a reason to distrust every census either party takes.
+
+**The dissolution, which is better than the trade-off.** Attribution is only ever
+needed to *license a deletion*. If the default is **"do not delete what is not
+under a container you created"**, the demand for retroactive attribution never
+arises: the correct response to an unattributable file is to leave it, and
+leaving it requires no attribution at all. Container does not merely beat content
+going forward — **it removes the question content exists to answer.** Content
+narrows to the one case where it is genuinely irreplaceable: files you scattered
+yourself and are about to remove, read once, deliberately, immediately before
+removal. Reported by platform session `2cab0595`; adopted in full.
+
+**Applied immediately, and announced.** The five content-proven files above were
+removed and the other two were left in place, with the list published to the
+other occupant. An unannounced deletion is what produced this entire
+investigation — a directory in which files vanish and no one will claim them — so
+the deletion was named rather than merely performed.
+
+**And the deletion inference is withdrawn, both halves.** The correspondent
+concluded a third occupant was deleting, by the chain *neither of us owns `cm*` →
+neither of us deleted it → someone else did*. Correcting the ownership — `cm*` is
+mine — breaks the first link, and every later link was carried by it. My own
+surviving half (*`cm.txt`/`cm2.txt` were probably mine and someone deleted them*)
+inherited the same support and falls with it. Once the files are mine, the
+ordinary explanation is available for the first time: **an owner deleted their own
+files and does not recall it** — which the five announced removals above
+demonstrate, since they would have been invisible had they not been published.
+**Third-party deletion is unsupported, not disproven**; the distinction matters
+because *someone else works here* is a fact to route around, while *someone else
+deletes here* is a reason to distrust every census either party takes.
 
 ### F-21 — the predicate that cannot match what it is searching for — P2
 
