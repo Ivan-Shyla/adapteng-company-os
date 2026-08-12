@@ -42,6 +42,7 @@ on:
           - status
           - verify
           - peer-verify
+          - peer-tools
           - peer-diagnose
           - diagnose
       service:

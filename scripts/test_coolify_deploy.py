@@ -2152,6 +2152,7 @@ class EntryPointTests(unittest.TestCase):
                 "status",
                 "verify",
                 "peer-verify",
+                "peer-tools",
                 "peer-diagnose",
                 "diagnose",
             },
@@ -3228,6 +3229,183 @@ class PeerVerifyTests(unittest.TestCase):
         )
         self.assertEqual(
             [m for m, _p in instance.writes() if m == "DELETE"], []
+        )
+
+
+class PeerToolsInstance(PeerInstance):
+    """A peer whose shell answers the census.
+
+    The default output is deliberately *not* the full candidate list: a fake
+    that reported every tool present would let a driver that never read the
+    output pass, and the whole value of this operation is in which lines are
+    missing.
+    """
+
+    def __init__(self, *, census: str | None = None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.task_name = driver.PEER_TOOLS_TASK_NAME
+        self.next_execution = {
+            "status": "success",
+            "message": census
+            if census is not None
+            else "/usr/bin/curl\n/bin/busybox\nADAPTENG_TOOLS end\n",
+        }
+
+
+class PeerToolsTests(unittest.TestCase):
+    """Measuring the peer's capabilities instead of guessing at them.
+
+    The first armed peer probe came back reachable=undetermined
+    reason=no_marker with 'sh: 1: python: not found'. Writing python3 in its
+    place would be a guess that looks like a fix either way, and if the peer
+    has no python at all the next run would establish nothing a second time.
+    peer-diagnose set the precedent: measure the constraint first.
+    """
+
+    def real_spec(self):
+        return driver.load_spec(driver.spec_path(RESOURCE))
+
+    def run_tools(self, instance, spec=None):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_peer_tools(
+                instance, spec or self.real_spec(), sleep=lambda _seconds: None
+            )
+        return code, buffer.getvalue()
+
+    def test_a_completed_census_separates_present_from_absent(self) -> None:
+        instance = PeerToolsInstance()
+        code, output = self.run_tools(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("RESULT peer-tools ok tools=curl,busybox", output)
+        self.assertIn("present: curl busybox", output)
+        self.assertIn("python3", output.split("absent:")[1])
+
+    def test_the_census_is_written_to_the_peer_not_to_the_service(self) -> None:
+        """Same vantage-point requirement as the probe it prepares for."""
+
+        instance = PeerToolsInstance()
+        code, _ = self.run_tools(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        peer = next(item for item in instance.applications if item["name"] == PEER_NAME)
+        service = next(
+            item for item in instance.applications if item["name"] == RESOURCE
+        )
+        written = {
+            path for _method, path in instance.writes() if "scheduled-task" in path
+        }
+        self.assertTrue(written)
+        self.assertTrue(all(peer["uuid"] in path for path in written))
+        self.assertFalse(any(service["uuid"] in path for path in written))
+
+    def test_the_census_contacts_nothing(self) -> None:
+        """It asks what is on PATH; it must not double as a reachability probe.
+
+        An instrument that answered both questions at once could not say which
+        one failed, which is the exact conflation the peer probe already had to
+        be rescued from.
+        """
+
+        command = driver.peer_tools_command()
+        for forbidden in (RESOURCE, "8081", "http", "/health", "/ready"):
+            self.assertNotIn(forbidden, command)
+
+    def test_the_census_obeys_the_in_container_construction_rules(self) -> None:
+        """Coolify runs this as docker exec <c> sh -c '<command>'."""
+
+        command = driver.peer_tools_command()
+        for forbidden in ("'", '"', "$", "`", "\n"):
+            self.assertNotIn(forbidden, command)
+        self.assertLessEqual(len(command), driver.PEER_COMMAND_LIMIT)
+
+    def test_every_candidate_is_actually_asked_for(self) -> None:
+        """A candidate absent from the command reads as absent from the peer."""
+
+        command = driver.peer_tools_command()
+        for tool in driver.PEER_TOOLS_CANDIDATES:
+            self.assertIn(f"command -v {tool}", command)
+
+    def test_the_marker_is_last_so_silence_can_be_read_as_absence(self) -> None:
+        """`command -v` prints nothing for a missing tool.
+
+        Absence is therefore indistinguishable from truncation unless the list
+        is known to have reached its end, which is the only thing the trailing
+        marker is doing. If it moved to the front it would still be found, and
+        every short answer would be silently reported as a set of absences.
+        """
+
+        command = driver.peer_tools_command()
+        self.assertTrue(command.rstrip().endswith(f"echo {driver.PEER_TOOLS_MARKER} end"))
+
+    def test_an_unfinished_census_concludes_nothing_about_any_tool(self) -> None:
+        instance = PeerToolsInstance(census="/usr/bin/curl\n")
+        code, output = self.run_tools(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("RESULT peer-tools failed reason=no_marker", output)
+        self.assertNotIn("present:", output)
+        self.assertIn("/usr/bin/curl", output)
+
+    def test_a_completed_census_with_no_tools_is_an_answer_not_a_gap(self) -> None:
+        """The two failures must not look alike.
+
+        tools=none means the peer was asked and has nothing; no_marker means it
+        was never successfully asked. Collapsing them would repeat the
+        unreachable/undetermined conflation one level down.
+        """
+
+        instance = PeerToolsInstance(census="ADAPTENG_TOOLS end\n")
+        code, output = self.run_tools(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("RESULT peer-tools failed tools=none", output)
+        self.assertNotIn("no_marker", output)
+
+    def test_a_tool_name_inside_an_unrelated_line_is_not_counted(self) -> None:
+        """Substring matching would manufacture tools out of error text.
+
+        'sh: 1: python: not found' is the literal output that prompted this
+        operation, and it contains the name of a tool that is definitively
+        absent.
+        """
+
+        instance = PeerToolsInstance(
+            census="sh: 1: python: not found\n/usr/lib/python3/x\nADAPTENG_TOOLS end\n"
+        )
+        code, output = self.run_tools(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("RESULT peer-tools failed tools=none", output)
+
+    def test_the_report_is_ordered_by_candidate_not_by_output(self) -> None:
+        """The order is the recommendation, so it must not follow the shell."""
+
+        self.assertEqual(
+            driver.read_tool_census("/usr/bin/wget\n/usr/bin/python3\nADAPTENG_TOOLS end"),
+            ["python3", "wget"],
+        )
+
+    def test_the_census_task_is_returned_to_rest_and_never_deleted(self) -> None:
+        instance = PeerToolsInstance()
+        self.run_tools(instance)
+        self.assertEqual(
+            [item["name"] for item in instance.tasks],
+            [driver.PEER_TOOLS_TASK_NAME],
+        )
+        for task in instance.tasks:
+            self.assertIs(task["enabled"], False)
+            self.assertEqual(task["frequency"], driver.READINESS_TASK_FREQUENCY)
+        self.assertEqual([m for m, _p in instance.writes() if m == "DELETE"], [])
+
+    def test_an_absent_peer_is_reported_rather_than_worked_around(self) -> None:
+        instance = PeerToolsInstance(with_peer=False)
+        code, output = self.run_tools(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("RESULT peer-tools failed application=absent", output)
+
+    def test_the_census_uses_its_own_task_name(self) -> None:
+        """Sharing a task with the probe would overwrite the probe's command."""
+
+        self.assertNotIn(
+            driver.PEER_TOOLS_TASK_NAME,
+            {driver.PEER_TASK_NAME, driver.PEER_LADDER_TASK_NAME, driver.READINESS_TASK_NAME},
         )
 
 
