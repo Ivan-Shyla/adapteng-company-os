@@ -89,11 +89,21 @@ SETTING = re.compile(
 # gate, so this module refuses to guess which parser is right -- a separator
 # that could move a line boundary makes the configuration unreadable instead.
 #
-# CR is deliberately absent. ``Path.read_text`` decodes in universal-newline
-# mode, so a lone CR and a CRLF are both already LF by the time any of this
-# runs -- measured, not assumed -- and every parser that reads these files
-# treats CRLF as a line ending regardless. The eight below are the ones
-# ``str.splitlines()`` honours and essentially nothing else does.
+# CR is not in the set below, and its absence is load-bearing rather than an
+# oversight. ``Path.read_text`` decodes in universal-newline mode, so a lone CR
+# and a CRLF are both already LF by the time either reader in this module runs
+# -- measured, not assumed.
+#
+# But ``config_lines`` is a public function taking ``str``, so that guarantee
+# belongs to its callers and not to it. Fed from ``read_bytes().decode()``,
+# ``open(newline="")`` or a subprocess, CR survives, and it reconstructs exactly
+# the fail-open above: ``pg1-path = /etc\x0d/../mnt/ephemeral`` resolves whole to
+# the allowed ``/mnt/ephemeral`` and the gate passes, while a CR-splitting reader
+# takes ``/etc``. The direction is reversed from the VT case and the outcome is
+# the same. ``config_lines`` therefore refuses CR itself rather than trusting the
+# ingress, so the invariant is enforced where it is stated. The eight below are
+# the separators ``str.splitlines()`` honours and essentially nothing else does;
+# CR is handled separately because it is the one every reader honours.
 AMBIGUOUS_LINE_SEPARATORS = {
     "\v": "VT",
     "\f": "FF",
@@ -355,10 +365,24 @@ def config_lines(text: str, path: Path, name: str) -> list[str]:
 
     A configuration file whose line structure depends on which parser reads it
     is one this gate cannot establish a property about, so the ambiguity is
-    fatal rather than silently resolved in the gate's favour. With those
-    separators excluded, LF splitting and ``str.splitlines()`` agree on every
-    surviving input, which is what makes the choice between them inert here.
+    fatal rather than silently resolved in the gate's favour.
+
+    CR is refused here rather than assumed absent. Both readers in this module
+    obtain their text from ``Path.read_text``, which decodes in universal-newline
+    mode and cannot deliver one -- but this function is public and takes ``str``,
+    so that is a property of today's callers, not of this function. Enforcing it
+    here is what makes the guarantee below true of the function itself.
+
+    With CR and those separators excluded, LF splitting and ``str.splitlines()``
+    agree on every surviving input, which is what makes the choice between them
+    inert here.
     """
+    if "\r" in text:
+        raise GuardError(
+            f"{name}: {path} contains CR (U+000D) after decoding, so it was not read in "
+            "universal-newline mode; a CR-splitting reader and this gate would disagree "
+            "about where a value ends"
+        )
     for character, label in AMBIGUOUS_LINE_SEPARATORS.items():
         if character in text:
             raise GuardError(

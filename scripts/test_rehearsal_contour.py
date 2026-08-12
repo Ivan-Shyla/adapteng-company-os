@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import json
+import posixpath
 import re
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -357,6 +358,50 @@ class ConfigLineModelTests(unittest.TestCase):
                         f"a=1{character}b=2\n", Path("pgbackrest.conf"), "gate"
                     )
                 self.assertIn(label, str(caught.exception))
+
+    def test_a_carriage_return_reconstructs_the_fail_open_and_is_refused(self) -> None:
+        """CR is the one separator every reader honours, so it inverts the hazard.
+
+        The eight in ``AMBIGUOUS_LINE_SEPARATORS`` are dangerous because
+        ``splitlines()`` sees a boundary a normal reader does not. CR is
+        dangerous for the opposite reason: a CR-splitting reader stops early
+        where this gate, splitting on LF, reads the whole value. Measured on the
+        value below, the gate resolves ``/etc\\r/../mnt/ephemeral`` to the
+        allowed ``/mnt/ephemeral`` and would pass, while the reader takes
+        ``/etc``. That is the same fail-open this module exists to close,
+        arriving through the one separator the refusal set omits.
+        """
+        allowed = "/mnt/ephemeral"
+        value = f"/etc\r/..{allowed}"
+        self.assertEqual(
+            posixpath.normpath(value),
+            allowed,
+            "the whole value must look allowed, or this proves nothing",
+        )
+        self.assertEqual(value.split("\r")[0], "/etc", "a CR-splitting reader stops here")
+
+        with self.assertRaises(guard.GuardError) as caught:
+            guard.config_lines(f"pg1-path={value}\n", Path("pgbackrest.conf"), "gate")
+        self.assertIn("CR", str(caught.exception))
+
+    def test_the_carriage_return_refusal_is_unreachable_through_this_module(self) -> None:
+        """Bound the previous test: today it guards a path no caller takes.
+
+        Both readers here use ``Path.read_text``, which decodes in
+        universal-newline mode. Written as raw bytes and read back, the CR is
+        already an LF, so the refusal cannot fire through this module's own
+        ingress. It is enforced because ``config_lines`` is public and takes
+        ``str``, and a future caller reading bytes or using ``newline=""`` would
+        reintroduce the fail-open without touching the splitting line.
+        """
+        with TemporaryDirectory() as raw:
+            path = Path(raw) / "pgbackrest.conf"
+            path.write_bytes(b"pg1-path=/etc\r/../mnt/ephemeral\n")
+            self.assertIn(b"\r", path.read_bytes())
+
+            decoded = path.read_text(encoding="utf-8")
+            self.assertNotIn("\r", decoded, "read_text must normalise CR")
+            self.assertEqual(guard.config_lines(decoded, path, "gate")[0], "pg1-path=/etc")
 
     def test_carriage_return_is_normalised_before_the_gate_sees_it(self) -> None:
         """CR is absent from the set because it cannot arrive, not because it is safe."""
