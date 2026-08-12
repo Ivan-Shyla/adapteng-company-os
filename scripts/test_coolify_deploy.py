@@ -2154,6 +2154,7 @@ class EntryPointTests(unittest.TestCase):
                 "verify",
                 "peer-verify",
                 "peer-tools",
+                "peer-resolve",
                 "peer-diagnose",
                 "diagnose",
             },
@@ -3531,7 +3532,15 @@ class ClippedForeignOutputTests(unittest.TestCase):
         self.assertNotIn("spans masked", output)
 
     def test_the_probe_reports_both_ends_of_a_real_failure(self) -> None:
-        """End to end, on the shape the live run actually produced."""
+        """End to end, on the shape the live run actually produced.
+
+        The verdict assertion here was written as reason=no_marker before the
+        exception classifier existed, and it had to change: a probe that ran
+        and raised ConnectionRefusedError is reporting a real negative, not a
+        missing measurement. What this test is actually for is the tail -- that
+        the exception survives a traceback longer than the budget -- and that
+        assertion is unchanged.
+        """
 
         tail = "ConnectionRefusedError: [Errno 111] Connection refused"
         instance = PeerInstance()
@@ -3550,8 +3559,272 @@ class ClippedForeignOutputTests(unittest.TestCase):
             )
         output = buffer.getvalue()
         self.assertEqual(code, driver.EXIT_FAILED)
-        self.assertIn("reason=no_marker", output)
         self.assertIn(tail, output)
+        self.assertIn("reason=connection_refused", output)
+
+
+class PeerResolveInstance(PeerInstance):
+    """A peer whose resolver answers a census of names."""
+
+    def __init__(self, *, census: str | None = None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.task_name = driver.PEER_RESOLVE_TASK_NAME
+        self.next_execution = {
+            "status": "success",
+            "message": census
+            if census is not None
+            else (
+                "ADAPTENG_RESOLVE localhost 127.0.0.1\n"
+                f"ADAPTENG_RESOLVE {PEER_NAME} 172.18.0.4\n"
+                f"ADAPTENG_RESOLVE {RESOURCE} 172.18.0.7\n"
+                "ADAPTENG_RESOLVE end\n"
+            ),
+        }
+
+
+class PeerResolveTests(unittest.TestCase):
+    """The control for the reachability probe, not a second attempt at it.
+
+    The first probe that reached its interpreter raised
+    socket.gaierror: [Errno -3] Temporary failure in name resolution. That is
+    EAI_AGAIN -- the resolver did not answer -- not EAI_NONAME, which is what
+    an unknown name returns. If the peer has no resolver at all then the
+    failure is a fact about the peer and says nothing about the gateway, and
+    reporting it as a reachability verdict would be the same
+    infrastructure-as-policy confusion this tool refuses everywhere else.
+    """
+
+    def real_spec(self):
+        return driver.load_spec(driver.spec_path(RESOURCE))
+
+    def run_resolve(self, instance):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_peer_resolve(
+                instance, self.real_spec(), sleep=lambda _seconds: None
+            )
+        return code, buffer.getvalue()
+
+    def census(self, *names) -> str:
+        lines = [f"ADAPTENG_RESOLVE {name} 172.18.0.{index + 2}" for index, name in enumerate(names)]
+        return "\n".join(lines + ["ADAPTENG_RESOLVE end", ""])
+
+    def test_names_are_asked_in_ascending_order_of_doubt(self) -> None:
+        """The order is the instrument.
+
+        localhost resolves from /etc/hosts with no resolver at all, the peer's
+        own name needs Docker's embedded DNS, and the service name is the open
+        question. How far the list gets is the entire reading, so a different
+        order would answer a different question.
+        """
+
+        self.assertEqual(
+            driver.peer_resolve_names(self.real_spec()),
+            ["localhost", PEER_NAME, RESOURCE],
+        )
+
+    def test_the_census_opens_no_connection(self) -> None:
+        """gethostbyname asks the resolver and stops; nothing is contacted."""
+
+        command = driver.peer_resolve_command(self.real_spec())
+        self.assertIn("gethostbyname", command)
+        for forbidden in ("HTTPConnection", "http", "8081", "/health", "/ready"):
+            self.assertNotIn(forbidden, command)
+
+    def test_the_shell_reaches_the_marker_even_when_python_raises(self) -> None:
+        """Exit status 0 is what keeps the output readable.
+
+        A successful execution is the case in which this instance has been
+        observed to capture stdout, and the resolutions printed before the
+        failure are the measurement. Chaining the marker with ; rather than &&
+        is what makes the job succeed regardless.
+        """
+
+        command = driver.peer_resolve_command(self.real_spec())
+        self.assertTrue(command.rstrip().endswith("; echo ADAPTENG_RESOLVE end"))
+        self.assertNotIn("&&", command)
+
+    def test_the_census_obeys_the_in_container_construction_rules(self) -> None:
+        command = driver.peer_resolve_command(self.real_spec())
+        for forbidden in ("'", "$", "`", "\n"):
+            self.assertNotIn(forbidden, command)
+        self.assertEqual(command.count('"'), 2)
+        self.assertLessEqual(len(command), driver.PEER_COMMAND_LIMIT)
+
+    def test_everything_resolving_clears_the_earlier_failure_as_transient(self) -> None:
+        code, output = self.run_resolve(PeerResolveInstance())
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("RESULT peer-resolve ok resolved=3/3", output)
+
+    def test_a_peer_that_resolves_itself_but_not_the_service_accuses_the_network(self) -> None:
+        """The finding this whole exercise was built to reach."""
+
+        instance = PeerResolveInstance(census=self.census("localhost", PEER_NAME))
+        code, output = self.run_resolve(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn(
+            "RESULT peer-resolve failed scope=network reason=not_on_shared_network",
+            output,
+        )
+
+    def test_a_peer_with_no_service_discovery_leaves_the_service_unaccused(self) -> None:
+        """The default Docker bridge carries no name resolution at all.
+
+        On it, no container name resolves, so the gateway would be unreachable
+        by name from here whatever its own network is. Blaming the network for
+        that would be a verdict the measurement does not support.
+        """
+
+        instance = PeerResolveInstance(census=self.census("localhost"))
+        code, output = self.run_resolve(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn(
+            "RESULT peer-resolve failed scope=peer reason=no_service_discovery", output
+        )
+        self.assertIn("unaccused", output)
+
+    def test_a_broken_resolver_is_scoped_to_the_peer(self) -> None:
+        instance = PeerResolveInstance(census="ADAPTENG_RESOLVE end\n")
+        code, output = self.run_resolve(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn(
+            "RESULT peer-resolve failed scope=peer reason=resolver_broken", output
+        )
+
+    def test_a_census_that_never_ran_claims_nothing(self) -> None:
+        """Distinct from every verdict above, which all require it to have run."""
+
+        instance = PeerResolveInstance(census="sh: 1: python3: not found\n")
+        code, output = self.run_resolve(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("RESULT peer-resolve failed reason=no_marker", output)
+        self.assertNotIn("scope=", output)
+
+    def test_the_census_uses_its_own_task_name(self) -> None:
+        self.assertNotIn(
+            driver.PEER_RESOLVE_TASK_NAME,
+            {
+                driver.PEER_TASK_NAME,
+                driver.PEER_TOOLS_TASK_NAME,
+                driver.PEER_LADDER_TASK_NAME,
+                driver.READINESS_TASK_NAME,
+            },
+        )
+
+
+class ProbeFailureClassificationTests(unittest.TestCase):
+    """A probe that ran and raised is not a probe that failed to run.
+
+    Both produced no marker, and both were reported as undetermined. The
+    exception on the last line of a traceback is a real answer, and reading it
+    is the difference between "could not measure" and "could not be reached".
+    """
+
+    LIVE = (
+        "Job permanently failed after 1 attempts: Traceback (most recent call last):\n"
+        '  File "<string>", line 1, in <module>\n'
+        '  File "/usr/lib/python3.12/socket.py", line 963, in getaddrinfo\n'
+        "    for res in _socket.getaddrinfo(host, port, family, type, proto, flags):\n"
+        "               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"
+        "socket.gaierror: [Errno -3] Temporary failure in name resolution"
+    )
+
+    def test_the_live_failure_is_classified_from_its_exception_line(self) -> None:
+        self.assertEqual(
+            driver.classify_probe_failure(self.LIVE),
+            ("socket.gaierror", "name_not_resolved"),
+        )
+
+    def test_the_exception_name_in_printed_source_context_is_not_a_verdict(self) -> None:
+        """The strongest form of the false-positive, taken from a live case.
+
+        A traceback prints the source around the failing line, so the exact
+        dotted name can appear in the output while describing something the
+        probe merely mentions -- a raise statement in a helper, an entry in a
+        table. It is indented; the real exception is not. Nothing here was
+        raised, so nothing here may be classified.
+        """
+
+        context_only = (
+            "Traceback (most recent call last):\n"
+            '  File "<string>", line 1, in <module>\n'
+            '  File "/usr/lib/python3.12/socket.py", line 963, in getaddrinfo\n'
+            "    socket.gaierror: [Errno -3] Temporary failure in name resolution\n"
+            '    raise ConnectionRefusedError: [Errno 111] Connection refused\n'
+        )
+        self.assertIsNone(driver.classify_probe_failure(context_only))
+
+    def test_a_frame_naming_a_module_is_not_mistaken_for_the_exception(self) -> None:
+        """socket.py appears in a frame of the live traceback and says nothing.
+
+        A signature that matched the name anywhere in the output would
+        manufacture a verdict out of traceback context, which is the failure
+        mode already recorded against name-based log signatures elsewhere.
+        """
+
+        frames_only = (
+            "Traceback (most recent call last):\n"
+            '  File "/usr/lib/python3.12/socket.py", line 963, in getaddrinfo\n'
+            '  File "/usr/lib/python3.12/http/client.py", line 1365, in request\n'
+        )
+        self.assertIsNone(driver.classify_probe_failure(frames_only))
+
+    def test_an_unrecognised_exception_stays_undetermined(self) -> None:
+        """Forcing it into the nearest category would be a guess with a verdict."""
+
+        self.assertIsNone(
+            driver.classify_probe_failure("ValueError: something else entirely")
+        )
+
+    def test_a_missing_interpreter_is_not_an_exception(self) -> None:
+        self.assertIsNone(driver.classify_probe_failure("sh: 1: python: not found"))
+
+    def test_the_last_exception_wins_in_a_chained_traceback(self) -> None:
+        chained = (
+            "socket.gaierror: [Errno -3] Temporary failure in name resolution\n"
+            "During handling of the above exception, another exception occurred:\n"
+            "ConnectionRefusedError: [Errno 111] Connection refused"
+        )
+        self.assertEqual(
+            driver.classify_probe_failure(chained),
+            ("ConnectionRefusedError", "connection_refused"),
+        )
+
+    def test_the_probe_reports_a_raised_exception_as_a_real_negative(self) -> None:
+        instance = PeerInstance()
+        instance.next_execution = {"status": "failed", "message": self.LIVE}
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_peer_verify(
+                instance,
+                driver.load_spec(driver.spec_path(RESOURCE)),
+                sleep=lambda _seconds: None,
+            )
+        output = buffer.getvalue()
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("RESULT peer-verify failed reachable=no reason=name_not_resolved", output)
+        self.assertIn("peer-resolve", output)
+
+    def test_an_unreadable_failure_still_reports_undetermined(self) -> None:
+        """The old verdict must survive for the case it was right about."""
+
+        instance = PeerInstance()
+        instance.next_execution = {
+            "status": "failed",
+            "message": "sh: 1: python3: not found",
+        }
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_peer_verify(
+                instance,
+                driver.load_spec(driver.spec_path(RESOURCE)),
+                sleep=lambda _seconds: None,
+            )
+        output = buffer.getvalue()
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn(
+            "RESULT peer-verify failed reachable=undetermined reason=no_marker", output
+        )
 
 
 class ForeignTextRedactionTests(unittest.TestCase):
