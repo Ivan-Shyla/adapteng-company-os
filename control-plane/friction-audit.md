@@ -576,7 +576,11 @@ Measured over every twin pair in the corpus:
 `agent/vertex-owner-dispatch-fallback`, where the `pull_request` side failed in
 a *different job* of the same workflow — exactly the caveat WS-2 disclosed
 themselves ("the rate is per-workflow not per-job"). That caveat was
-load-bearing, not decorative. Note the two errors partly cancel in the reported
+load-bearing, not decorative — **and it is now measured and closed in F-10:**
+`ce0900dd` is the only one of the eleven attributable to the second job, so the
+per-job rate for the required check is 4.36%, not measurably below the
+workflow figure. Load-bearing for *precision*, immaterial for the *rate*.
+Note the two errors partly cancel in the reported
 count, so the number looks less wrong than the instrument is.
 
 **Every single-commit divergence in the corpus.** Two sessions found two of
@@ -2352,6 +2356,87 @@ unrelated, non-blocking fault on a different service. The measurement that made
 this visible — attempt-1 twin comparison across all 18 workflows — also confirms
 `Adapter Tests` is the *only* other workflow in the repository with any
 divergence beyond a single instance.
+
+---
+
+### F-10 — the per-job caveat is worth 0.1pp, and it resolves the other way — P3
+
+**Status:** closed. This entry retires an open caveat carried in F-8 and repeated
+by the peer session, and records a near-miss that is more useful than the number.
+
+**The caveat.** Every rate in F-8 was measured per *workflow*. `rollout-policy.yml`
+runs two jobs — `root-rollout-tests` and `independent-rollout-policy` — and only
+the first is the required check that gates merges. I wrote that the true per-job
+rate must therefore be **below** the workflow figure, because a workflow-level
+divergence could be caused by either job. The peer session flagged the same
+limitation independently, in their words "per-workflow not per-job." Two sessions
+agreeing that a number is an upper bound is not a measurement of the number.
+
+**Measured.** Attempt-1 job conclusions across all 120 clean twin pairs, split by
+job name:
+
+| job | pairs | divergent | d | implied p |
+|---|---|---|---|---|
+| `root-rollout-tests` | 120 | **10** | 8.33% | **4.36%** |
+| `independent-rollout-policy` | 120 | **1** | 0.83% | 0.42% |
+
+`independent-rollout-policy` contributes **1 of the 11** divergences — the
+`ce0900dd` event already isolated in F-8. So the workflow figure was never an
+aggregate of two comparable sources; one job dominates completely, and the
+workflow rate was the job rate all along.
+
+**All four estimates converge:**
+
+| instrument | n | d | p |
+|---|---|---|---|
+| attempt-1 twin, workflow-level (F-8) | 118 | 8.47% | 4.43% |
+| attempt-1 twin, per-job | 120 | 8.33% | **4.36%** |
+| attempt-1 twin, per-job, deterministic pairs excluded | 116 | 8.62% | **4.51%** |
+
+**The caveat was real and immaterial, and I had its direction wrong.** I predicted
+"below 4.01%". The per-job rate is 4.36%, and once the four deterministically
+broken pairs are removed from the denominator — those job-runs could not have
+exhibited a flake, so they do not belong in it — it is **4.51%, above** the
+figure it was supposed to bound. A caveat that names a real defect can still be
+wrong about both its size and its sign. Stating one is not the same as pricing it.
+
+**The both-hit cell, re-verified at job granularity: still 0.** F-8 licensed the
+`2p(1−p)` inversion on the observation that no commit had both twins hit by the
+flake, against 0.23 expected. At job level the both-*failure* cell holds 4 pairs,
+which looked like a 17× excess and a refutation. It is not. Read by cause:
+
+| SHA | both twins fail with | flake? |
+|---|---|---|
+| `8a2d4313`, `e2e41726`, `a0adabf7` | `collector.…body_invalid`, 1 failed / 168 passed | no — deterministic |
+| `138cafa9` | `repository.git_inspection_failed`, `AssertionError: 1 != 0`, 2 failed / 100 passed | no — deterministic |
+
+Four deterministic faults, correctly absorbed into the agreement cell. That is the
+twin design working as intended, not evidence against it. Expected double-hits at
+p = 4.4% over 120 pairs is 0.23, and 0 observed is the modal outcome.
+
+**The near-miss, which is the part worth keeping.** I classified `138cafa9` as a
+double flake hit and was drafting a retraction of a correct published figure. The
+evidence was that its logs contain the string `fail_absent`, the F-8 fixture name,
+on *both* twins — while the three deterministic pairs contain it on neither. A
+clean discriminating signal, and wrong. The string appears in `138cafa9` as
+`("fail_absent", "ok", "0", 90),` — a **source line of the fixture table, printed
+as traceback context for an unrelated failure.** The F-8 predicate is not the
+presence of the name; it is the assertion `assert 1 == 90` at that position.
+`138cafa9` asserts `1 != 0` in a different test entirely.
+
+So the fixture name is present in the failing and non-failing cases alike, and
+selects on which test happened to be near the traceback. **I matched a token where
+the finding required a predicate** — the same substitution the peer session had
+confessed to one message earlier, about reading `datetime.now(...)` surviving in a
+diff without reading the branch above it. Recognising an error class in someone
+else's work confers no immunity to it; I committed it inside the hour, while
+holding the description of it in view.
+
+**Guard:** when a log signature is used to classify a failure, the signature must
+be the assertion or the raised error, never a fixture, test or symbol name.
+Names appear in source context, in collection output and in unrelated tracebacks;
+only the predicate fires when the fault fires. Cheapest possible check, and the
+one that saved a published number here: read the assertion, not the identifier.
 
 ---
 
