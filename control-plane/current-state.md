@@ -3220,12 +3220,11 @@ four code files, so the delta cannot equal `APPROVAL_PATHS`, and **amending
 > **Do not carry that last sentence into the receipt case — there it is exactly
 > inverted.** It applies to a head whose delta is ordinary code. If a *receipt*
 > has been issued and fails verification, a new commit on top makes the failed
-> receipt the subject and constraint 4 above raises `approval.circular_or_stale`;
-> a fresh nonce guarantees the two receipts differ, so the guard cannot be
-> satisfied by matching them. **The only repair for a failed receipt is to reset
-> the branch to the subject commit and re-issue against a re-confirmed base.**
-> Recorded because the two remedies are opposites and sit twenty lines apart. See
-> §16.5 for the full post-issuance table.
+> receipt the subject and constraint 4 above raises `approval.circular_or_stale`.
+> **Reset the branch to the subject commit and re-issue against a re-confirmed
+> base.** Recorded because the two remedies are opposites and sit twenty lines
+> apart. See §16.5 for the full post-issuance table, the mechanism, and the one
+> alternative route the code permits.
 
 **The reading under which #122 is right.** The anchor checks are advisory
 *precisely because* the required signature cannot be produced inside a pull
@@ -4579,14 +4578,57 @@ Running **phase 1** first is the trap: if run-selection fails, the operator gets
 > `:2701` tests `_approval_material_introduced(base_tree, subject_tree)` — the
 > **subject**, the parent of the receipt commit, must not itself introduce
 > approval material. A second receipt commit makes the first one the subject, so
-> it raises `approval.circular_or_stale`. And a fresh receipt carries a fresh
-> nonce, so the two can never be byte-identical and the guard cannot be dodged.
+> it raises `approval.circular_or_stale`.
 >
-> **Therefore the only repair is to reset the branch back to the subject commit
-> and issue again from a re-confirmed base** — never to add a commit. Inheriting
-> approval material is fine and introducing it is not: the merged receipts already
-> on `main` are inert by design (`_approval_material_introduced`, `:1038`–`:1049`),
-> which is exactly why the guard tests introduction rather than presence.
+> > **The reason first published here was wrong, corrected 2026-08-12.** It read:
+> > *"a fresh receipt carries a fresh nonce, so the two can never be byte-identical
+> > and the guard cannot be dodged."* That describes a repair **that was never
+> > available to be blocked.** Read the function on `main`, by symbol:
+> >
+> > ```
+> > _approval_material_introduced(base, candidate)          77a2f790 :1034-:1056
+> >     return APPROVAL_PATHS
+> >            & _changed_leaf_paths(base, candidate)
+> >            & set(_leaf_entries(candidate))
+> > call site :2701   _approval_material_introduced(base_tree, subject_tree)
+> > ```
+> >
+> > **The receipt's own tree is not an argument.** The guard reads the *parent's*
+> > tree against base and never opens either receipt, so matching them was never a
+> > route and the nonce forecloses nothing. The conclusion is unchanged and in fact
+> > stronger than the reason given for it: **no property of the second receipt can
+> > pass this guard**, because no property of it is examined.
+> >
+> > The nonce does no protective work anywhere in this file — `NONCE_RE.fullmatch`
+> > at `:2414` and `:2946`, generation at `:3036`, and **no ledger, replay store or
+> > cross-run comparison of any kind**. Replay is prevented by the binding fields
+> > and the expiry. Believing otherwise invites the downstream inference *"the nonce
+> > prevents replay, so this binding field is redundant"*, which would relax the
+> > thing actually doing the work. Reported by platform session `c96f72e3`.
+>
+> **The guard is enforced twice, and the second one is the operator's friend.**
+> Not previously recorded here: `_receipt_for_subject` — the helper that *builds*
+> a receipt — carries the identical test at `:2959`, before it constructs
+> anything. So with a failed receipt at the head, the second receipt **cannot be
+> generated in the first place**; the operator is stopped before a signature is
+> spent rather than after.
+>
+> **Reset the branch back to the subject commit and issue again from a
+> re-confirmed base** — never add a commit. Inheriting approval material is fine
+> and introducing it is not: the merged receipts already on `main` are inert by
+> design (`_approval_material_introduced`, `:1034`–`:1056`), which is exactly why
+> the guard tests introduction rather than presence.
+>
+> > **"The only repair" was over-strong — struck 2026-08-12.** Reset is the
+> > simplest route and the one to use. It is not the only one the code permits:
+> > a revert commit that removes the failed approval material, followed by a fresh
+> > receipt, leaves the *reverted* commit as the subject, which introduces nothing.
+> > `require_linear_history` (`:2228`–`:2245`) walks parents to base rejecting only
+> > cycles and merge commits — **a spent receipt sitting in the ancestry is not
+> > itself rejected.** INFERRED from the clauses, not executed. It matters because
+> > "only" would strand an operator who cannot force-push, and because a ceremony
+> > sheet that forecloses a legal route is wrong in the direction that blocks work.
+> > Raised by `c96f72e3`.
 >
 > Both "Update branch" modes being fatal is worth stating twice: **the standard
 > GitHub remedy for a stale base must be applied before issuance, never after.**
