@@ -2599,6 +2599,47 @@ anchor question was a false lead, and it was the false lead that reached the rea
 defect.** A verification that comes back negative still moved the reader to a
 place they had no other reason to stand.
 
+**Amendment — the property that predicts which call sites are exploitable.**
+There are **34** `.splitlines()` call sites across 18 modules under `scripts/`.
+Exactly one was exploitable. "It depends on the consumer" is true and useless;
+executing the *other* guard against the identical attack gives the actual rule.
+
+`postgres_restore_guard.validate_forbidden` builds a set of forbidden production
+identifiers from a file and splits it the same way. Same attack, a form feed
+inside a canonical identifier, run against the real module:
+
+```
+file bytes:  b'adapten\x0cg-ops-db\n'
+
+splitlines() -> {'adapten', 'g-ops-db'}   -> GuardError: omits canonical production IDs
+LF-delimited -> {'adapten\x0cg-ops-db'}   -> GuardError: omits canonical production IDs
+```
+
+**Both arms refuse, and for the same reason.** That guard's predicate is
+`KNOWN_FORBIDDEN.issubset(identifiers)` — a demand that named things be
+**present**. Corruption of any kind removes them, so every parse divergence
+fails it, and the splitter is irrelevant. (The file is SHA-256 pinned by
+`checked_bytes` as well, but the digest is not what saves it here — the
+`issubset` requirement alone is splitter-independent.)
+
+The site fixed in this entry asserted the opposite: that **no** `pgN-path` lies
+outside an allow-list. Truncation does not remove that value, it *shortens* it —
+and a shorter path can land **inside** the allowed set.
+
+So the criterion is not "consumer" but **direction of the predicate**:
+
+| the guard requires | effect of a parse divergence | result |
+|---|---|---|
+| something to be **present** | corruption destroys it | **fails closed** |
+| something to be **absent** | corruption can manufacture absence | **fails open** |
+
+**Corruption cannot manufacture presence, but it can manufacture absence.** A
+gate whose predicate is "nothing forbidden is here" is vulnerable to any parse
+divergence that shrinks, splits or truncates its input; a gate whose predicate is
+"everything required is here" is not. That is checkable by reading a predicate,
+it is why exactly one of 34 sites was exploitable, and it is the half of this
+entry worth carrying to the next module rather than the fix itself.
+
 ---
 
 ## P3 — obsolete, delete
