@@ -341,8 +341,9 @@ every occurrence randomly blocks a merge that has nothing wrong with it.
 > **Superseded, and by 5×.** "Twice" was what two hand-found examples showed.
 > A systematic enumeration of every `push`/`pull_request` twin pair finds
 > **ten** such commits — see the divergence table below. Six of the ten are
-> invisible at conclusion level, which is why hand-searching found four at
-> most and why both examples here happen to be among the visible ones.
+> invisible at conclusion level, and `084c4d17` is one of those six: it was
+> found only because the paragraph below this table went to run attempts
+> rather than conclusions. That is the method that generalises to ten.
 
 Evidence, from the API rather than from a report:
 
