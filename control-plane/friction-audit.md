@@ -2807,7 +2807,49 @@ entry worth carrying to the next module rather than the fix itself.
 
 ---
 
-## P3 — obsolete, delete
+### F-13 — the FX policy says "or stale" and nothing measures age — P2
+
+**Status:** open, platform-side, **not blocking the first model proof**. Filed
+because it is invisible at the moment it would matter and because a fresh rate
+today conceals it entirely.
+
+**The claim.** `ai/model-choices.md`, gate 5, requires that a live gateway "use
+an explicit operator-configured FX rate with `as_of` and fail closed if it is
+missing **or stale**".
+
+**The implementation.** `services/ai-gateway/app/fx.py` (platform, `feee3166`,
+102 lines) is the only thing that reads the triple. `build_fx_config` refuses an
+absent rate, a non-numeric rate, an absent `as_of`, an `as_of` that is not
+ISO-8601, and an `as_of` carrying no UTC offset. It computes nothing from the
+date afterwards. A census of the whole gateway service for a staleness bound —
+`fx.*stale`, `stale.*fx`, `fx_max_age`, `MAX_FX` — returns **nothing**.
+
+**So the gate is bound to the *shape* of `as_of`, not to its *age*.** A rate from
+any year satisfies every check in the file, provided it is spelled with an
+offset. The one property the policy names as disqualifying is the one property
+nothing reads. `as_of` is stored and propagated into the cost record, so the
+staleness is auditable *after* a call and refused *before* none.
+
+**Why it is not blocking, stated as a measurement rather than a hope.** The
+deployed value is `2026-08-10T16:00:00+02:00`, roughly two days old, sourced
+`ECB eurofxref-daily.xml 2026-08-10 EUR/USD 1.1555 inverted`; `0.865426` is
+`1/1.1555` to six places, so the inversion is right. Nothing will fail closed on
+FX during the first proof — which is exactly why this entry exists. The gap
+cannot be found by running the thing that would expose it.
+
+**Shape.** Ninth instance of the recurring defect, and the cleanest statement of
+it yet: the check was bound to the nearest *checkable* property rather than to
+the asserted one. Age needs a clock and a threshold; shape needs neither, and
+shape is what got written. Compare F-12, where the predicate's direction decided
+the failure mode — here the predicate's *subject* is simply a different thing
+from the policy's.
+
+**Remedy, not made here.** It is one comparison against a configured maximum age,
+failing closed, in `build_fx_config` beside the offset check. It belongs in the
+platform repository and to whoever owns `fx.py`; filing it against the wrong
+repository is how the last four population errors started.
+
+---
 
 The condition described no longer exists. Leaving these in place actively
 misleads the next agent.
