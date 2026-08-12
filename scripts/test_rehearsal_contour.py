@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -460,6 +461,70 @@ class DigestParsingTests(unittest.TestCase):
                 "rehearsal.t|1|0123456789abcdef0123456789abcdef",
                 label="left",
             )
+
+    def test_a_non_lf_separator_cannot_terminate_a_record(self) -> None:
+        """A digest whose records are joined by a non-LF separator is malformed.
+
+        This is the one case where LF records are stricter than ``splitlines()``
+        rather than merely numbered differently. Under ``splitlines()`` the text
+        below breaks into two well-formed entries and was accepted as a valid
+        two-table digest; under LF records it is a single malformed record and
+        raises.
+
+        That matters because this parser exists so a malformed digest cannot
+        compare equal to another equally malformed digest and report a restore as
+        verified. The separators are exercised individually rather than as one
+        representative so that a partial regression cannot hide behind a passing
+        sibling.
+        """
+        for separator in ("\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"):
+            text = (
+                "rehearsal.a|1|0123456789abcdef0123456789abcdef"
+                f"{separator}"
+                "rehearsal.b|2|fedcba9876543210fedcba9876543210"
+            )
+            with self.subTest(separator=repr(separator)):
+                self.assertEqual(len(text.splitlines()), 2, "splitlines would accept two entries")
+                with self.assertRaises(compare.DigestError):
+                    compare.parse_digest(text, label="left")
+
+    def test_a_separator_inside_a_table_name_is_rejected_and_numbered_from_lf(self) -> None:
+        """The other case: rejected either way, but at the number the file shows."""
+        for separator in ("\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"):
+            text = (
+                "rehearsal.a|1|0123456789abcdef0123456789abcdef\n"
+                f"rehearsal{separator}b|2|fedcba9876543210fedcba9876543210\n"
+                "rehearsal.c|3|0123456789abcdef0123456789abcdef\n"
+            )
+            with self.subTest(separator=repr(separator)):
+                with self.assertRaises(compare.DigestError) as caught:
+                    compare.parse_digest(text, label="left")
+                self.assertIn("line 2", str(caught.exception))
+
+    def test_the_generator_filter_cannot_emit_the_stricter_case(self) -> None:
+        """Bound the claim in the helper docstring instead of asserting it.
+
+        ``rehearsal_capture_digest.sh`` filters psql output through an
+        LF-oriented ``grep -E``. A record joined by a non-LF separator carries
+        five pipe-separated fields and is dropped there, so that input cannot
+        arrive from this repository's own generator — it is reachable only from a
+        digest file this program did not produce, which ``load_digest`` accepts.
+        The filter is read from the script rather than restated here, so the
+        bound fails if the generator's filter is ever loosened.
+        """
+        script = (ROOT / "scripts" / "rehearsal_capture_digest.sh").read_text(encoding="utf-8")
+        match = re.search(r"grep -E '([^']+)'", script)
+        self.assertIsNotNone(match, "the generator's record filter was not found")
+        record_filter = re.compile(match.group(1))
+
+        joined = (
+            "rehearsal.a|1|0123456789abcdef0123456789abcdef"
+            "\v"
+            "rehearsal.b|2|fedcba9876543210fedcba9876543210"
+        )
+        self.assertIsNone(record_filter.fullmatch(joined), "generator would have emitted it")
+        for line in VALID_DIGEST.split("\n"):
+            self.assertIsNotNone(record_filter.fullmatch(line), "generator would drop a good line")
 
 
 class DigestComparisonTests(unittest.TestCase):
