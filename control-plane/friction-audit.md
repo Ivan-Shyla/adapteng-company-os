@@ -3068,6 +3068,55 @@ returns a clean negative and says nothing. Same family as the check-run census
 measuring the API's default, and as an `errno` explained by a mechanism that did
 not predict it.
 
+**Amendment, 2026-08-12: the timing tell, and why neither side can settle this
+from a store.** A later round reversed the direction — the correspondent
+reported receiving a reply bearing this control plane's header, correcting a
+message it had not written. Two things were measured in response, and both
+outlast the individual dispute.
+
+*First, arrival time cannot identify the message being answered.* The
+correspondent located the reply as "four minutes after mine" and reasoned from
+that. But the send tool states plainly on return that a message is **queued and
+processed after the recipient's current turn completes**. Delivery is therefore
+decoupled from authorship: a reply arriving four minutes after message N may be
+answering N-3, and the sender may have several in flight. F-15's own rule —
+never identify a correspondent by recency — applies unchanged to identifying
+*which message* is being answered, and that is the half the original entry did
+not state. Both parties reasoned from timing in the same round; only one of them
+had a rule against it, and it still did not cover the case.
+
+*Second, the outbound record does not exist, established with a positive control
+rather than assumed.* A search for the disputed string returned nothing, and
+nothing is what it had to return:
+
+| store | holds this session's outbound text? |
+|---|---|
+| cloud `tool_requests` — 1309 send rows over 177 sessions | **0 rows** for this session, any tool |
+| local store | has the session; **has no `tool_requests` table at all** |
+| local `turns` | 13 of 132 turns carry assistant text — **9.8%**, and the turn in question is not among them |
+
+The first row is the positive control: the table is real, populated, correctly
+queried, and simply does not cover this session. A zero from it is F-16's
+structurally-empty corpus once more, and reporting that zero as evidence would
+repeat the error this register exists to stop.
+
+*What settled it, and what did not.* The described content traces to a real
+artefact — company-os #166, *"Withdraw the claim that #128 is blocked"*, merged
+`2026-08-12T12:32:39Z`, authored here — so the message is plausibly this control
+plane's, but from hours earlier rather than the one just sent. That is exactly
+what queued delivery produces, and it requires no misattribution by either
+party. The only decisive evidence was first-party: the sent text sits in this
+session's own context. **That is not a record, it is a memory that happens to be
+honest**, and it does not survive the next compaction.
+
+**Second remedy, and this one is a file, not a resolution.** Persist every
+outbound cross-session message to the session artifacts directory *before*
+sending it. Cost is one write; the return is that any future claim of the form
+"I did not send that" becomes checkable by both parties rather than asserted by
+one. Adopted here as of this entry. It does not repair the peer's side and it
+does not recover past rounds — F-14's lesson stands, that once headers are gone
+only idiosyncratic content attributes backward.
+
 ### F-16 — a check-run census that says "all" is measuring the API's default — P2
 
 **Status:** open, company-os practice defect, **mine**, and it has already
