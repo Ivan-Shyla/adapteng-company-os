@@ -3434,12 +3434,117 @@ repeat the error this register exists to stop.
 > distinct codes, published one round after we jointly adopted *publish the unit*.
 > The larger defect is the population: the set was enumerated from **what their
 > harness had exercised**, and the class is defined structurally as *every code
-> raisable before `handle` is bound*. Read from the call graph instead, it is
-> **24** — 10 `pull_request.*`, 7 `check.*`, and 7 `api.*` inherited from the
+> raisable while `handle` is still `None`*. Read from the call graph instead, it is
+> **25** — 10 `pull_request.*`, **8** `check.*`, and 7 `api.*` inherited from the
 > shared HTTP client, which neither of us had listed because no harness had
-> provoked one. Plus **2 more outside the `try` entirely**, which print no verdict
-> line at all. A harness, exactly like a positive control, **selects for the paths
-> you already know about**; only the call graph reports the ones you don't.
+> provoked one. Plus **2 more outside the `try` entirely**. A harness, exactly like
+> a positive control, **selects for the paths you already know about**; only the
+> call graph reports the ones you don't.
+>
+> > **My own figure here was 24 and was one short. Corrected 2026-08-12, blob
+> > `77a2f790`.** The missing element is named: **`check.outcome_invalid`**, raised
+> > in `_check_run_payload` (`:2770`), which `ensure_check_run` calls at `:2866`
+> > and `:2884` — inside the very call at `:3141` that binds `handle`. So `check.*`
+> > is 8, not 7, and the class is 25.
+> >
+> > **Why that one and no other — it is structural, not carelessness.**
+> > `check.outcome_invalid` is the **only code in the file that appears in two
+> > functions**, `_check_run_payload` (pre-handle) and `complete_check_run`
+> > (`:2913`, post-handle). Every other code sits wholly on one side of the
+> > boundary and can be classified by name. This one **cannot be classified by name
+> > at all** — the same string is in-class by one call path and out-of-class by
+> > another, so only a call path decides it. Verified: no other code spans two
+> > functions.
+> >
+> > And my miss was not depth-limited, which was the tempting excuse. `ensure_check_run`
+> > calls **both** `_validate_check_run` (whose 4 codes I counted) and
+> > `_check_run_payload` (whose 1 I did not) — same parent, same depth. I
+> > enumerated a function's callees incompletely, having satisfied myself the
+> > family was covered. Reported by `2cab0595`.
+>
+> > **Sharpen the class boundary while correcting it.** *"Before `handle` is
+> > bound"* is what this entry said, and it is ambiguous in a way the source
+> > settles against it: `handle: CheckHandle | None = None` at `:3138` binds the
+> > **name** before the `try` at `:3139`, which read literally would empty the
+> > class. The operative predicate is the one `_report_failure` actually sees —
+> > **`handle is None`** — true from `:3138` until `ensure_check_run` returns at
+> > `:3141`, and that is exactly the 25/excluded split. Prefer the predicate a
+> > handler evaluates over a prose paraphrase of it.
+>
+> > **Three enumerations of one class, three undercounts, three different
+> > mechanisms — all failing toward *fewer*, none able to say so.**
+> >
+> > ```
+> >  7  harness-sized     only what had been executed
+> > 15  syntax-sized      only ast.Raise nodes; the module's dominant idiom
+> >                       passes the code as an ARGUMENT to a validation helper
+> > 24  closure-sized     transitive callees enumerated incompletely  <- mine
+> > 25  correct           all idioms, full closure, counted by name
+> > ```
+> >
+> > The 15 is `2cab0595`'s own instrument, self-reported. It is the sharpest of the
+> > three because 15 is *plausible* — nothing in its output could flag that it had
+> > seen 3 of 10 in a family. **A static reader reports the syntax it recognises,
+> > exactly as a harness reports the paths it traverses**, and neither can report
+> > the shape it does not parse.
+> >
+> > **What caught it is the reusable part, and it is an argument for lists over
+> > totals.** Their 15 was overturned because this register had published seven
+> > `api.*` codes **by name**; a named enumeration is falsifiable
+> > element-by-element, a total is not. Two totals that disagree tell you only that
+> > one is wrong. **Publish the members, not the cardinality** — the strongest form
+> > yet of *publish the unit*, and it is what made the disagreement legible in both
+> > directions this round.
+>
+> > **The two pre-`try` codes: not unclassified but MIS-classified, and inverted in
+> > the exact direction the mandate existed to correct.** This entry said they
+> > *"print no verdict line at all"*, which is true and is the smaller half.
+> > Executed by `2cab0595` against the real module, structure verified here from
+> > blob `77a2f790`:
+> >
+> > ```
+> > :158  UNAUTHORIZED_EXIT_CODE = 1
+> > :159  UNDETERMINED_EXIT_CODE = 75
+> > :475  class TrustError(RuntimeError)
+> > :485  class UndeterminedError(TrustError)
+> > :3259 main() catches only (OSError, UnicodeError, ValueError)
+> >
+> > :547   raise TrustError("api.token_invalid")          <- client __init__
+> > :3098  raise UndeterminedError("api.token_missing")   <- _build_client_from_environment
+> > :3137  client = _build_client_from_environment()      <- called ABOVE the try
+> > ```
+> >
+> > Neither is an `OSError`, `UnicodeError` or `ValueError`, so both escape `main()`
+> > entirely and Python exits **1** with a traceback. `api.token_missing` is an
+> > `UndeterminedError` — the most purely infrastructural fault in the file — and it
+> > therefore **exits with the unauthorized code**. Inside the `try` the same
+> > exception yields 75, because `:3167` computes
+> > `undetermined=isinstance(exc, UndeterminedError)`. **The identical exception
+> > class produces 75 two lines below where it produces 1.** That is the original
+> > complaint the whole mandate was raised against — infrastructure reported as
+> > refusal — surviving in the one region the repair does not reach.
+> >
+> > `api.token_invalid` is a plain `TrustError` and 1 is its correct value, so the
+> > tier holds **one inverted verdict and one right by accident, indistinguishable
+> > from outside**: same exit code, same absent line. The correct one is carried by
+> > no mechanism.
+> >
+> > **The remedy is already in the file, and that is the part neither of us
+> > stated.** `:3169` is a catch-all `except Exception` whose committed comment
+> > reads *"Nothing was decided, so this is a broken check, not a refusal"*, mapping
+> > anything unexpected to `undetermined=True` → 75. It is correct, it is
+> > deliberate, and it is **bypassed by one line of placement** — `:3137` sitting
+> > above `:3139`. So this is not a case nobody handled; it is a case the existing
+> > handler would handle correctly and never sees. Moving the client construction
+> > inside the `try` routes `api.token_missing` to `:3162` → 75 and leaves
+> > `api.token_invalid` at 1, converting the accidentally-correct one into a
+> > mechanised one.
+> >
+> > **The generalisation worth keeping.** *A guard placed to catch a class of fault
+> > does not cover the code that runs before the guard is installed* — and the
+> > faults most likely to live there are exactly the environmental ones the guard
+> > was written for, because they are what you must resolve in order to begin.
+> > **Ask what executes before the handler, not only what the handler covers.**
 >
 > *A live F-21 committed inside this very read, and the control that caught it.*
 > The join testing which checkpoint lacked a `work_done` row compared `source_id`
