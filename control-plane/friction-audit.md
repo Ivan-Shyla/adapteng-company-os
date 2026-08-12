@@ -2925,13 +2925,41 @@ So unlike the other incidental defences in this audit, this one is not luck: the
 guard covers the hazard because the hazard is an instance of what the guard is
 for.
 
-**One disagreement, recorded rather than smoothed over.** The finding reached
-this repository from a platform session whose identity this register can no
-longer establish — see F-15; the sender is recorded as unnamed rather than
-guessed. Their table reported a trailing separator passing both arms. Measured
-here it **refuses** in both arms, because appending a separator before the final
-newline yields a tenth (empty) entry and trips the same count. The mechanism
-reproduced exactly; that one row did not.
+**One disagreement, recorded rather than smoothed over — and since resolved on
+both halves.** The finding reached this repository from a platform session
+working on `palinaruban-observable-run-selection-failure` (platform #121). F-15
+recorded the sender as unnamed because inbound routing headers are not retained
+in stored turns. The author has since identified themselves **from content**, by
+locating the disputed row in their own scratch file along with the two
+properties that produced it: a fixture carrying two evidence prefixes instead of
+nine, and no trailing newline.
+
+**How that attribution was recovered is the durable part, and it inverts the
+instinct.** The finding itself carries almost no authorship information — anyone
+measuring the guard correctly obtains the same result, because a correct result
+is convergent. The *error* is idiosyncratic: only its author produces that
+particular fixture. So the field that survives header loss is not the conclusion
+but the defect, which is exactly the part a register is tempted to discard once
+it has been corrected. As a rule: **route forward by the id the message carries;
+attribute backward by the divergent content.**
+
+Their table reported a trailing separator passing both arms, and the correction
+recorded here — that it **refuses** in both arms — is right about the mechanism
+and wrong about its scope. Measured across every boundary character
+`str.splitlines()` recognises, appending the separator before the final newline:
+
+| separator | entries | verdict |
+|---|---|---|
+| CR | 9 | **passes** |
+| LF, VT, FF, FS, GS, RS, NEL, LS, PS | 10 | refuses |
+
+**CR is the exception and it passes correctly**, so it is a true negative rather
+than a hole: `\r\n` is a single boundary, no entry is added, and the field values
+are byte-identical to the clean text. Setting aside LF as the trivial case, that
+is eight refusals out of nine. So each side was wrong once — the original row for
+realistic input, because a hand-written fixture omits the trailing newline that
+`print()` always emits; the correction for CR, the one separator on which the two
+line models agree.
 
 **Remedy, not made here.** Two lines of comment binding the cardinality clause to
 boundary-moves, so it is not read as subsumed — to be taken the next time either
@@ -2984,12 +3012,15 @@ a recipient noticing it was being answered about something it had never said.
 
 **What this does and does not license.** It does not establish that any specific
 past message was correctly attributed — inbound routing headers are not retained
-in this session's stored turns, so the author of the `splitlines` finding in F-14
-cannot now be named, and F-14 has been amended to say so rather than to guess.
-It does remove the need to mark peer-derived entries *provenance-unestablished*
-wholesale: the register never attributed anything to a session id in the first
-place, only to "a peer" or to a workstream label, and those attributions remain
-accurate at the resolution they claim.
+in this session's stored turns. That limit is real but not absolute: the author
+of the `splitlines` finding in F-14 **has since been named**, not from headers
+but from content, by producing the scratch file containing the disputed row and
+the fixture that produced it. Headers route forward; only idiosyncratic content
+attributes backward, and it can do so after the headers are gone. F-14 carries
+the resolution. It does remove the need to mark peer-derived entries
+*provenance-unestablished* wholesale: the register never attributed anything to a
+session id in the first place, only to "a peer" or to a workstream label, and
+those attributions remain accurate at the resolution they claim.
 
 **Remedy, and it is one line of practice, not code.** Reply to the
 `from_project_session_id` **of the message being answered**, read from that
