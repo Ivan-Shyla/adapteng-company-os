@@ -356,8 +356,9 @@ Identical trees, opposite verdicts. Both were re-run to green, which is why
 the current check-run conclusions all read `success` and the failures are
 invisible unless you look at run attempts.
 
-**Third instance, 2026-08-11, and it is the strongest of the three because it
-is a rate rather than a disagreement.** Run `31532517315` on `fca8f278`
+**Third instance, 2026-08-11. It refutes the folk remedy; it does not measure a
+rate, and the sentence that said otherwise is retracted below.** Run
+`31532517315` on `fca8f278`
 (platform PR #127) carries **three** attempts of the same workflow on the same
 bytes:
 
@@ -367,9 +368,30 @@ bytes:
 | 2 | 20:42:39Z | **failure** | `root-rollout-tests` |
 | 3 | 23:43:34Z | success | none |
 
-Two failures in three attempts on one commit. The earlier evidence shows the
-check *disagreeing with itself*; this shows how often. It also refutes the
+~~Two failures in three attempts on one commit. The earlier evidence shows the
+check *disagreeing with itself*; this shows how often.~~ It also refutes the
 folk remedy directly: attempt 2 **was** a re-run, and it did not clear.
+
+**"Shows how often" is withdrawn, and it was wrong by roughly 14×.** Read as a
+rate, 2-of-3 is **66.7%**. The measured per-attempt flake rate is **4.66%**
+pooled — see the attempt-1 amendment in F-10, which also shows why the 9.47%
+attempt-1 figure is not this quantity. At 4.66%, `P(≥2 of 3) ≈ 0.63%`, about
+**1 in 158**. Unusual; not a measurement of how often anything happens.
+
+A peer proposed 1-in-27 instead, using 08-11's local 11.5%. That is the better
+correction of the two but it still conditions on the day the event occurred,
+which selects on the outcome; and 08-11's 11.5% is 3/26 with a 95% interval of
+[4.0%, 29.0%], which contains the pooled rate. The pooled figure is the honest
+one, and either way the conclusion is the same: this run is an unusual draw, not
+a frequency.
+
+**Three attempts is a sample of size three.** A ratio computed from 3 trials is
+not a rate however carefully it is written, and "shows how often" is precisely
+the phrase a reader would have carried off. What the run does establish needs no
+rate at all and is unaffected by this retraction: **one re-run, still red.** The
+folk remedy is refuted by a single counter-example, which is the correct
+instrument for refuting a universal claim — and that was always the load-bearing
+half of this paragraph.
 
 The run's top-level conclusion now reads `success`, which is the second and
 independent way conclusion-reading undercounts this defect. The known one is
@@ -2501,6 +2523,35 @@ disagreement, which is the definition, not cross-commit frequency, which is a
 proxy.** Third instrument in this entry to encode a population definition
 invisibly inside an extraction rule, and the second to do it while the warning
 against it was on screen.
+
+**The five-case loop converts this into a per-case hazard, and that is the
+number that describes the race.** F-8 establishes that the failing test is a
+`for` over five cases that aborts at the first failure
+(`tests/test_migrate_approved_assets.py` 890–897 at `feee3166`, re-read to
+confirm: the list opens at 890, the loop is 897, the case id at 898–900 is an
+f-string, which is why the case names appear in no grep). So a per-*test* rate
+`p` implies a per-*case* hazard `q = 1 − (1−p)^(1/5)`:
+
+| input | p | implied q |
+|---|---|---|
+| flake per-run | 3.86% | **0.78%** |
+| twin inversion | 4.82% | **0.98%** |
+| attempt-1, conflated | 9.47% | 1.97% |
+
+**Corrected per-case band: [0.78%, 0.98%].** The observed first-passage
+positions — 1, 1, 4, 4, 1 across the five cases — fit a uniform per-case hazard
+(χ² = 4.98, df = 4), which is what a timing race predicts and what a
+data-dependent fault cannot.
+
+**And here the conflated bracket did measurable downstream damage.** A peer
+carried a competing timing model at 3.2% per operation. Against the bracket
+[4%, 9.5%] it read as 1.6–4× high — a range whose lower end is close enough to
+call agreement. Against the corrected band it reads as **3.3–4.1× high**, which
+is not a near-miss and admits no reading in which the model was nearly right.
+**An inflated uncertainty band does not merely lose precision; it launders
+disagreement into compatibility.** That is the practical cost of quoting a
+bracket whose endpoints measure different populations, and it is why the left
+endpoint being "conservative" was not harmless.
 
 ---
 
