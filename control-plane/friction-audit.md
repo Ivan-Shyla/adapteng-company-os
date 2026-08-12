@@ -341,6 +341,19 @@ treat a `failures=0` that arrives alongside any error text as unread rather than
 zero. Same family as the entries above: the shell did something other than what
 the code says, silently, and the wrong answer was well-formed.
 
+**Seventh sighting, within the hour, same shape — 2026-08-12.** Measuring the
+bound in F-25, `[datetime]$run.run_started_at` parsed the API's `Z`-suffixed
+timestamps into **local** time (CEST, UTC+2) while the comparison instant had
+been converted with `.ToUniversalTime()`. Every figure came out shifted by
+exactly 7200 s: the after-side gap read `+7528 s` instead of `+328 s`, and the
+margin read `94.5×` instead of `117×`. **Both were plausible, neither was
+flagged, and the qualitative conclusion was unchanged** — which is why it would
+have shipped. **Normalise every timestamp with `.ToUniversalTime()` at the point
+of parsing, never at the point of comparison**, and treat a figure that differs
+from a correspondent's by a round multiple of 3600 as a frame mismatch until
+proven otherwise. This is F-24's rule in a third substrate: *both sides of a
+comparison must be read in the same frame*, where the frame here is a timezone.
+
 ---
 
 ### F-8 — A required check that is nondeterministic — P1
@@ -3731,6 +3744,49 @@ nothing in either entry warned of the interaction.
 that they *"gave a proof and withheld its premise, in the same exchange where I
 criticised stopping at the first refutable mechanism."* I merged it without
 asking for the query, which is the same omission from the receiving side.
+
+### F-25 — the bound placed on the half that did not need it — P2
+
+**First instance, mine, in owner-facing evidence.** To show no anchor run was
+executing at `06:59:03Z` I published: *"the nearest candidate begins 328 s after
+the instant, and the longest anchor run ever observed lasted 318 s."* The
+arithmetic is right and the comparison is inapposite. **A run that starts after
+an instant cannot contain it, however long it lasts** — that half is excluded by
+ordering alone, and attaching a duration bound to it does nothing except present
+a 10-second margin as though something depended on it.
+
+The population splits by *reason for exclusion*, and only one half needs a
+duration argument:
+
+| half | excluded by | needs a duration bound? |
+|---|---|---|
+| starts after the instant | ordering | no |
+| **starts before the instant** | **duration** | **yes — and I never gave one** |
+
+Re-measured with every timestamp normalised to UTC: nearest before-side run
+`31533952257` starts `2026-08-11T20:38:25Z`, a gap of **37,238 s**, against a
+longest-ever window of **318 s** — a **117×** margin, plus a declared
+`timeout-minutes: 5` ceiling on the job.
+
+**The published exclusion was correct and its published argument did not cover
+the case that could have broken it.** Nothing before the instant was bounded at
+all; the conclusion survived because the true margin is enormous, which I had not
+checked. F-24's "true by luck" in a second substrate — there an unstated premise,
+here an unexamined half.
+
+- **When excluding a population, split it by *why* each member is excluded and
+  confirm every subset is covered by an argument that applies to it.** One
+  comparison spread over a heterogeneous population will bound the easy half
+  twice and the hard half never.
+- **Prefer the margin that is structural over the one that is incidental.** 328
+  versus 318 invites a reader to recheck it and would flip on any future run;
+  37,238 versus 318 cannot be disturbed.
+- **A sound calculation is not a sound argument.** A reader who verifies the
+  arithmetic and then notices the comparison is beside the point trusts the
+  document less than one who finds a number wrong.
+
+Raised by platform session `2cab0595` in the same message in which they retracted
+an overstatement of their own.
 
 ---
 
