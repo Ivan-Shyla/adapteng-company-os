@@ -2438,6 +2438,70 @@ Names appear in source context, in collection output and in unrelated tracebacks
 only the predicate fires when the fault fires. Cheapest possible check, and the
 one that saved a published number here: read the assertion, not the identifier.
 
+**The attempt-1 rate is not a bound on this flake, and the both-hit cell is empty
+by signature rather than by luck.** A peer session proposed that `2p(1−p)` is
+structurally blind to pairs that fail *together*, reported **7** such pairs
+against the 4 above, and concluded the published figure is low by 2.3× with the
+truth in [4%, 9.5%]. The upper endpoint is 27 attempt-1 failures across 285
+`rollout-policy.yml` runs. **That 9.47% reproduces exactly.** The inference drawn
+from it does not.
+
+Classifying all 27 by the assertion that fired — never by a name, per the guard
+directly above:
+
+| assertion | disagreeing | both-fail | contaminated | test |
+|---|---|---|---|---|
+| `assert 1 == 90` | **8** | **0** | 0 | `…cleanup_status_is_fail_closed` |
+| `assert 1 == 37` | 1 | 0 | 0 | same |
+| `assert 1 == 0` | 1 | 0 | 7 | same |
+| `<no assertion>` (`Set up job`) | 1 | 0 | 0 | — |
+| `collector.…body_invalid` | 0 | **6** | 0 | `…transport_policy_accepts_exact_source` |
+| `AssertionError: 1 != 0` | 0 | **2** | 0 | `…writes_only_mode_0600_receipt` |
+
+**The two columns do not intersect.** Every occurrence of the F-8 assertion sits
+in a disagreeing pair; every both-fail occurrence carries a different assertion.
+The both-hit cell is not merely 0 against 0.23 expected — it contains no flake
+occurrence at all. `138cafa9` is the one subtlety and it cuts the same way: the
+flake's *test* does fail there, but raising `repository.git_inspection_failed`
+rather than asserting `1 == N`. Same test, different predicate — exactly the
+near-miss recorded above, and the reason that guard is worth its space.
+
+So 9.47% measures a different population: **16 of the 27 are breakage,
+contamination or infrastructure; 11 are flake-consistent.** Inverting the twin
+formula on those 11 over 120 pairs gives **p ≈ 4.8%**, against 4.36–4.51%
+published. Every route lands in [3.9%, 4.8%]; none lands near 9.47%. The figure
+is not a lower bound depressed by hidden double-hits, because the double-hits are
+absent by measurement rather than by assumption.
+
+**Where the 7 comes from, established by enumeration rather than by guessing at
+the peer's method.** Crossing the two scoping choices available:
+
+| conclusion read | contamination | pairs | ≥1 fail | disagree | both-fail |
+|---|---|---|---|---|---|
+| attempt 1 | excluded | 120 | 15 | 11 | **4** |
+| attempt 1 | retained | 123 | 18 | 11 | 7 |
+| top-level | excluded | 120 | 9 | 5 | 4 |
+| **top-level** | **retained** | **123** | **12** | **5** | **7** |
+
+Only the last row reproduces their 12 / 5 / 7, and it requires *both* choices at
+once. Their rate was taken at attempt 1 — correctly, and it reproduces — but the
+pair analysis offered to correct that rate was taken at top level, where one
+conclusion stands for the last attempt however many failed beneath it. **A single
+claim was assembled from two units, and the half meant to remove a bias carried
+the precise bias this register was opened to record.**
+
+**The discriminator I reached for first failed in the same direction.** Before
+the table above, the partition was by recurrence: a signature appearing on more
+than one commit is breakage. It labelled `assert 1 == 90` — 8 commits across 7
+days — as BREAKAGE. Recurrence over scattered commits is what a *flake* does; the
+rule inverted the thing it was built to detect, and would have converted the
+strongest evidence for F-8 into evidence against it. What corrected it is the
+distinction this entry already turns on: **the discriminator must be same-commit
+disagreement, which is the definition, not cross-commit frequency, which is a
+proxy.** Third instrument in this entry to encode a population definition
+invisibly inside an extraction rule, and the second to do it while the warning
+against it was on screen.
+
 ---
 
 ### F-11 — a required check numbers lines with the wrong definition — P2
