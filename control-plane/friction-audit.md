@@ -397,6 +397,41 @@ Identical trees, opposite verdicts. Both were re-run to green, which is why
 the current check-run conclusions all read `success` and the failures are
 invisible unless you look at run attempts.
 
+> **Why this defect leaves no trace in anyone's merge experience — the structural
+> form, added 2026-08-12 and reported by `b14546cd`.** Everything above treats
+> conclusion-level invisibility as a *measurement* obstacle to be worked around by
+> reading attempts. It is more than that. `root-rollout-tests` is one of the five
+> contexts required by the ruleset on `main` — confirmed today by direct read:
+>
+> ```
+> Fail on unencrypted secret-like content
+> independent-rollout-policy
+> n8n isolation
+> root-rollout-tests
+> Validate repository structure and content
+> ```
+>
+> **Required-status evaluation is conclusion-level by construction.** A re-run
+> that turns a run green satisfies the requirement, and the ruleset never sees
+> the attempt that failed. So every instance of this flake is *either* a red
+> check somebody retried away *or* an attempt-level record the merge gate does
+> not read — and there is no third case.
+>
+> **F-8 is therefore structurally invisible to the exact surface that governs
+> merges.** Two consequences worth stating plainly for the owner:
+>
+> 1. **The flake rate cannot be recovered from merge experience.** "We have never
+>    been blocked by this" is fully consistent with a 4.36% per-job rate, because
+>    the mechanism that clears it is the same one that erases it.
+> 2. **A green required check on a head does not mean that check has never failed
+>    on that head.** For anything that depends on a check having *held* — the
+>    trust-anchor ceremony most of all — the conclusion is the wrong field to
+>    read. Pin the attempt.
+>
+> This also disposes of a tempting reading of the divergence table: the failures
+> are not rare because the flake is rare. They are rare *in the record* because
+> the record is kept at the level where they have already been resolved.
+
 **Third instance, 2026-08-11. It refutes the folk remedy; it does not measure a
 rate, and the sentence that said otherwise is retracted below.** Run
 `31532517315` on `fca8f278`
@@ -805,6 +840,45 @@ the **sole witness of position 5** in the entire corpus, and the only
 occurrence anywhere carrying `assert 1 == 37`. Re-running it would have
 destroyed the only proof that the last case is reachable at all — a fact none
 of the three of us knew when we agreed to preserve it.
+
+> **Correction 2026-08-12 — the run was re-run, and that sentence is wrong.**
+> Attempt 2 started `07:26:33Z` and the run-level conclusion is now **`success`**.
+> Not dispatched from this control plane. The preservation agreement was
+> therefore broken, and the prediction attached to it can be checked instead of
+> assumed. Measured directly:
+>
+> ```
+> run 31488794144        conclusion = success        attempts = 2
+>   attempt 1  2026-08-11T11:55:15Z  failure
+>   attempt 2  2026-08-12T07:26:33Z  success
+> attempt-1 job 93770186272  root-rollout-tests  failure
+>   log still retrievable, 84,668 bytes
+>   "assert 1 == 37"                 present
+>   lifecycle.run_selection_failed   x2
+>   pagination_race                  x0
+> ```
+>
+> **Nothing was destroyed.** The witness survives intact at attempt scope; only
+> the *default* scope lost it. So the correct claim — the one that should have
+> been written — is that a re-run **moves evidence from the level everyone reads
+> to a level only a pinned query reaches**, which is a visibility change, not a
+> deletion. I asserted destruction, three sessions coordinated around it, and the
+> experiment that settled it was one nobody intended to run.
+>
+> That is this register's recurring level error committed by me about **the
+> evidence itself**: I read what a re-run does at conclusion level and concluded
+> it about the artifact. *Widen for counts, pin for proofs* — and, added by
+> `b14546cd`, **pin for evidence**, because an artifact and the proof of it are
+> lost at the same level and preserved by the same fix.
+>
+> The one thing that does survive from the original sentence: it was right that
+> the run mattered more than anyone knew. It was wrong about what threatened it.
+>
+> **And the exhibit is now stronger than when it was inferred.**
+> `pagination_race` appearing **zero** times while `lifecycle.run_selection_failed`
+> appears twice is the swallowed token measured rather than read out of the
+> shell — the `2>/dev/null` on the helper's stderr, observed in its effect.
+> Reported by `b14546cd`, reproduced here from the preserved log.
 
 **Why a transient becomes a hard failure.** In
 `scripts/operations/authorize_approved_assets_phase.sh` the `select-queued-run`
@@ -3932,8 +4006,9 @@ failing job fails its run; therefore the entry is not a job. I cited
 `GET /actions/runs/<id>/jobs` and stopped there.
 
 **The claim was true. The premise was unstated, and the premise is the query.**
-That endpoint defaults to the *latest attempt only*. Measured across all four
-scopings on run `31533947898`:
+That endpoint returns each job's **latest** run — which is the same thing as "the
+latest attempt" only when every job re-ran. Measured across all four scopings on
+run `31533947898`:
 
 | query | entries | failures | proof holds? |
 |---|---|---|---|
@@ -3959,6 +4034,18 @@ nothing in either entry warned of the interaction.
 - **Prefer the scoping that is immune, not the one that happens to be right.**
   `/attempts/2/jobs` and `/jobs` agree today; only the first still agrees after a
   re-run or a widening.
+- **And the agreement is a property of this repository, not of the endpoint.**
+  `b14546cd` surveyed every multi-attempt run here — **10 of 10** — and found the
+  default listing identical to the latest attempt's, with a uniform `run_attempt`
+  in every one. No counterexample exists, because **every re-run in this
+  repository is a full re-run.** GitHub's *"Re-run failed jobs"* produces the
+  partial case, where the default listing mixes attempt *N* for the jobs that
+  re-ran with attempt *N-1* for those that did not — and there the two scopings
+  part. So the entry above is right for a reason it did not state, which is the
+  same defect it exists to record, one level up. Verified here on
+  `31488794144`: default `/jobs` returns 2 entries both stamped `run_attempt=2`,
+  `filter=all` returns 4 split evenly across two attempts — a **full** re-run, so
+  the two scopings coincide by construction rather than by luck.
 - **Both sides of a comparison must be read at the same level.** Third appearance
   in three substrates — a denominator, a set of identifiers, and now a proof.
   Here the two sides are a *conclusion* and a *listing*; reading the conclusion at
