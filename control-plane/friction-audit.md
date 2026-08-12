@@ -338,6 +338,12 @@ indistinguishable on this machine without that check.
 twice.** It is one of the five checks required by the platform ruleset, so
 every occurrence randomly blocks a merge that has nothing wrong with it.
 
+> **Superseded, and by 5×.** "Twice" was what two hand-found examples showed.
+> A systematic enumeration of every `push`/`pull_request` twin pair finds
+> **ten** such commits — see the divergence table below. Six of the ten are
+> invisible at conclusion level, which is why hand-searching found four at
+> most and why both examples here happen to be among the visible ones.
+
 Evidence, from the API rather than from a report:
 
 | Commit | `push` run | `pull_request` run |
@@ -516,8 +522,10 @@ because it assumed less.
 
 The cell that settles it is the one **neither** of us was using. Under
 independence, the number of twin pairs where *both* twins fail is `p²·n` ≈
-**0.46**. Observed: **3** — 6.5× expected, p ≈ 0.011 against independence. All
-three sit on one branch:
+**0.46** — computed with the contaminated `p = 6.16%`; with the corrected rate
+it is **0.23**, so the discrepancy below is larger, not smaller, than first
+stated. Observed: **3** — p ≈ 0.011 against independence. All three sit on one
+branch:
 
 | SHA | runs | outcome |
 |---|---|---|
@@ -537,7 +545,9 @@ minutes, not a timing window. The position mix is the tell: the cluster is
 **Corrected rate: 11/274 = 4.01% per attempt**, which lands inside WS-2's
 inverted range and near their whole-second model's 3.2%. **My arrival-race duty
 cycle overestimates by roughly 2×**, and my direct count was the contaminated
-one.
+one. An independent estimator built below puts it at **4.43%**; the register
+carries **≈4% per attempt** as the figure, supported by two instruments that
+share no failure mode.
 
 The methodological result is worth more than the number. **Twin disagreement is
 intrinsically immune to deterministic failures** — a deterministic fault hits
@@ -547,6 +557,113 @@ property they did not claim is the one that made their estimate right. A raw
 count of occurrences has neither immunity, which is exactly how mine absorbed a
 regression and read it as flake. **The instrument that assumes less is not
 automatically the one that measures better.**
+
+**Correction to the paragraph above: the immunity WS-2 *did* claim is the one
+they did not have.** I let stand their claim that twin disagreement is immune to
+the conclusion-overwrite problem, on the reasoning that twins "require nobody to
+press re-run". That is true of how the trials are *produced* and false of how
+they are *read*. A conclusion-level detector compares each twin's final
+`conclusion`; re-run either side to green and the pair reads as agreement.
+Measured over every twin pair in the corpus:
+
+| detector | reports | true positives | false positives | missed |
+|---|---|---|---|---|
+| conclusion-level twin | 5 | 4 | 1 | 6 |
+| attempt-1 twin | 10 | 10 | 0 | 0 |
+
+**Precision 4/5, recall 4/10.** The false positive is `ce0900dd` on
+`agent/vertex-owner-dispatch-fallback`, where the `pull_request` side failed in
+a *different job* of the same workflow — exactly the caveat WS-2 disclosed
+themselves ("the rate is per-workflow not per-job"). That caveat was
+load-bearing, not decorative. Note the two errors partly cancel in the reported
+count, so the number looks less wrong than the instrument is.
+
+**Every single-commit divergence in the corpus.** Two sessions found two of
+these by hand and read them as a matched pair, one preserved and one re-run.
+There are ten:
+
+| SHA | push | pull_request | side hit | readable? |
+|---|---|---|---|---|
+| `8ee55f3f` | 31027935863 **failure** | 31027941321 success | push | yes |
+| `836dca62` | 31028319019 success | 31028320004 success | pr | **no** — re-run |
+| `f7d4e7e8` | 31203205170 success | 31203208437 success | pr | **no** — re-run |
+| `016ee67b` | 31404500180 **failure** | 31404532145 success | push | yes |
+| `2af34cf1` | 31410536810 success | 31410587868 success | push | **no** — re-run |
+| `2c9824ba` | 31412597674 success | 31412621141 **failure** | pr | yes |
+| `084c4d17` | 31414009822 success | 31414049256 success | pr | **no** — re-run |
+| `e1d113c8` | 31483724882 success | 31483726386 success | pr | **no** — re-run |
+| `bda389d2` | 31488790487 success | 31488794144 **failure** | pr | yes |
+| `fca8f278` | 31532511735 success | 31532517315 success | pr | **no** — re-run |
+
+Six of the ten are invisible to `gh run list`, the checks UI and the PR page,
+and **all six are invisible because of a re-run**. The corpus holds exactly six
+multi-attempt runs, so the correspondence is total: **the hidden-occurrence set
+and the hidden-divergence set are the same set** — one defect, not two. Two of
+the four readable divergences are `push`-side failures against a green
+`pull_request`, visible in the API and invisible to anyone watching the PR.
+
+**Who gets re-run.** Five of the six are on the `pull_request` twin, one on the
+`push` twin. People re-run the check that gates the merge, so the `push` twin is
+a nearly-pristine control channel — and its single contaminating event,
+`31410536810`, is one the owning session disclosed voluntarily and unprompted.
+That disclosure is worth more than they claimed for it.
+
+**The estimator with both immunities.** Attempt 1 of each twin cannot be
+overwritten by a re-run, and a deterministic fault hits both twins and lands in
+the agreement cell. Over 118 clean twin pairs:
+
+| cell | observed | expected under independence |
+|---|---|---|
+| both twins hit | **0** | 0.23 |
+| exactly one | 10 | — |
+| neither | 108 | — |
+
+`d = 10/118 = 8.47%`; inverting `2p(1−p)` gives **p = 4.43%**. The both-hit
+cell — the anomaly that exposed the deterministic cluster — is now **exactly
+zero against 0.23 expected**. Independence holds once the regression is removed,
+which retroactively licenses the inversion that the cluster had invalidated.
+
+| instrument | survives re-run | rejects determinism | p |
+|---|---|---|---|
+| conclusion-level twin (WS-2) | ✗ | ✓ | **2.1%** |
+| direct attempt count (mine, #138) | ✓ | ✗ | **6.16%** |
+| direct count, hand-decontaminated (#139) | ✓ | ✓ | **4.01%** |
+| attempt-1 twin (this entry) | ✓ | ✓ | **4.43%** |
+
+The two instruments carrying one immunity each are wrong in **opposite
+directions**, each by roughly the size of its own blind spot: re-run blindness
+deletes failures and biases *down*; deterministic blindness adds them and biases
+*up*. The two carrying both agree to within half a point.
+
+The part worth carrying: **each session built the instrument whose blind spot
+flattered its own hypothesis.** My arrival-race model predicted 6–11% and my
+instrument returned 6.16%; WS-2's whole-second model predicted 3.2% and theirs
+returned 2.1%. Neither blind spot was chosen — the bias is structural, not
+motivated — but the effect is indistinguishable from having chosen one, and
+**neither of us could have detected it alone.** The correction lives in the cell
+that only exists once both instruments are built over the same pairs.
+
+**A summary field re-denotes on the time axis too.** Re-running leaves
+attempt-level records intact — logs, conclusions and byte counts all survive,
+and any claim that a re-run destroys evidence is withdrawn. But four top-level
+fields move and one of them is a clock. On `31532517315`, read directly:
+
+| field | attempt 1 | after the third attempt |
+|---|---|---|
+| `conclusion` | failure | **success** |
+| `run_attempt` | 1 | **3** |
+| `run_started_at` | 2026-08-11T20:21:34Z | **2026-08-11T23:43:34Z** |
+| `created_at` | 2026-08-11T20:21:34Z | 2026-08-11T20:21:34Z |
+
+The run object dates a 20:21Z failure at 23:43Z: the remediation clock in the
+position where the occurrence clock belongs. `created_at` is the safe ordering
+key **at the top level only** — per attempt it moves as expected (attempt 2
+reads 20:42:41Z), and attempt 2's `created_at` is two seconds *later* than its
+own `run_started_at`, so it is not a creation timestamp in the ordinary sense
+either. This defect lands on the **same rows** as the `conclusion` defect, the
+re-run ones, so the time axis loses no additional occurrences; it corrupts the
+ones already lost, which is worse than losing them, because a corrupted row
+still reads as data.
 
 **Three of us hid occurrences by re-running, including me.** Seven of the 11
 genuine occurrences sit inside runs whose final conclusion reads `success`, so
