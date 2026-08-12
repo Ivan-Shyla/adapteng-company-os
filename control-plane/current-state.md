@@ -2958,14 +2958,59 @@ All four paths verified present in `PROTECTED_EXACT_PATHS`, read from
 **#128 is the third instance, and it was measured rather than inferred.** At head
 `36cdc765`: `gh pr view` reports `mergeable: MERGEABLE`, `mergeStateStatus:
 UNSTABLE`. The required set was read from live ruleset `20236725` — five
-contexts, and **neither anchor check-run is among them**. All thirty check-runs
-on that head were enumerated: **28 success, 2 failure**, the two failures being
-`Base-trusted rollout authorization` and `Verify exact current head from merged
-base`. Every other check appears exactly twice, once per twin; those two appear
-once each, because `rollout-trust-anchor.yml` triggers on `pull_request_target`
-alone and GitHub posts one check-run for the workflow and one for its single job.
-`drive-service-supply-chain` is **green, twice** — worth stating because it was
-reported to this control plane as the failing mark.
+contexts, and **neither anchor check-run is among them**. The check-runs on that
+head were enumerated: **30 under `filter=latest`, 28 success and 2 failure**, the
+two failures being `Base-trusted rollout authorization` and `Verify exact current
+head from merged base`.
+
+**Two mechanisms first recorded here were wrong, and the census that produced
+them was run against an unstated filter.** Both are corrected below; the verdict
+above is unaffected, because the required set and its ten green results do not
+change under either correction.
+
+*The filter.* `GET /commits/{sha}/check-runs` defaults to `filter=latest`, which
+returns the newest run **per check name** and silently drops superseded ones. The
+same head returns **40 check-runs and 4 non-success under `filter=all`**. The word
+"all" in the first census was the API's default, not a measurement — the fourth
+sub-shape of this record's recurring failure, and the one that reads as
+authoritative because the number is exact.
+
+*The duplicate anchor name.* This section first said GitHub posts one check-run
+for the workflow and one for its single job. **It does not.** GitHub Actions
+creates a check-run per *job* only; the second is POSTed by the verifier itself.
+The discriminator is casing, and it was in the evidence from the start:
+
+| | `Verify exact current head from merged base` | `Base-trusted rollout authorization` |
+|---|---|---|
+| Source | GitHub Actions, per job | `verify_rollout_trust_anchor.py` via Checks API |
+| Matches | `rollout-trust-anchor.yml:19` job `name:` | `CHECK_NAME` at line 49 |
+| `external_id` | GitHub UUID | `adapteng-rollout-trust-v1:<repo>:128` |
+| `details_url` | `/actions/runs/<run>/job/<job>` | bare `/runs/<id>` |
+
+The workflow's own `name:` at line 1 is **Title Case** — `Base-Trusted Rollout
+Authorization` — and the check-run is **sentence case**. They are not the same
+string, and matching on a name without checking the casing that separated the two
+candidates is what produced the wrong mechanism. `permissions: checks: write` at
+line 9 is the grant this POST requires, so it is load-bearing rather than
+incidental. Both check-runs report `app.slug = github-actions`, which is why the
+workflow-level reading survived as long as it did.
+
+*`drive-service-supply-chain`.* This section first called it **green, twice**,
+and used that to reject a correspondent's report that it was the failing mark on
+a transient PyPI `BrokenPipeError`. **The correspondent was right and this record
+was wrong.** Under `filter=all` its history on this head is:
+
+```
+2026-08-11T20:38:25Z  failure   run 31533947898
+2026-08-11T20:38:27Z  success   run 31533952023
+2026-08-12T06:58:17Z  success   run 31533947898   ← re-run of the failed job
+```
+
+It genuinely failed, and was re-run green at 06:58:17Z — *between* their
+measurement and this one. Their remedy ("re-run that job") was correct and had
+already been applied. Two observers measured different states of the world and
+the later one asserted the earlier was mistaken; the defect is asserting a
+disagreement without first checking whether the subject had moved.
 
 **So #128 is not blocked, and any statement that it is should be withdrawn.**
 What holds it is this section's own interim stance, not GitHub. Under the
@@ -2976,6 +3021,33 @@ makes the owner's decision here a governance choice, not a mechanical
 obstruction: sign the receipt, or settle §15 in favour of merging ordinary
 protected changes past an advisory refusal. Both are one sentence; only the owner
 can write either.
+
+**If the owner chooses to sign, the shape of the approval commit is constrained
+in four ways**, all read from `verify_rollout_trust_anchor.py` on `main`. They
+are recorded here because "re-sign the approval" is not an executable
+instruction, and three of the four fail *after* a correct signature:
+
+1. **Both files or neither.** Line 2703 tests `_changed_leaf_paths(subject_tree,
+   head_tree) != APPROVAL_PATHS` — set equality, over
+   `.github/trust/rollout-policy/approval.json` **and** `approval.sig` (lines
+   55–60). A commit touching only the receipt is a strict subset and fails
+   `approval.commit_delta_invalid` exactly as a six-file delta does.
+2. **The approval commit must be the tip.** The subject is
+   `head_commit.parents[0]` (line 2694), so any later push makes the *approval
+   commit* the subject and the new head's delta ordinary code — the same
+   `commit_delta_invalid`. "Approve, then fix one more thing" silently
+   invalidates the authorization, which makes this the constraint most likely to
+   be tripped in practice.
+3. **Rebase, never merge.** `len(head_commit.parents) != 1` (line 2689) is
+   checked *before* the delta, so refreshing the branch with a merge commit
+   yields `approval.commit_parent_invalid` — a different verdict than the one the
+   instruction above prepares a reader for.
+4. **The subject must not itself introduce approval material**, or line 2701
+   raises `approval.circular_or_stale`.
+
+This also explains #128's current verdict without reading a log: its head changes
+four code files, so the delta cannot equal `APPROVAL_PATHS`, and **amending
+`36cdc765` fails identically**. The remedy is a new commit on top, not an amend.
 
 **The reading under which #122 is right.** The anchor checks are advisory
 *precisely because* the required signature cannot be produced inside a pull

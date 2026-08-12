@@ -2998,6 +2998,61 @@ property of a message, not of a conversation. Where a finding is recorded from a
 external sender, cite the id carried by the message that delivered it, or record
 that it is unavailable.
 
+### F-16 — a check-run census that says "all" is measuring the API's default — P2
+
+**Status:** open, company-os practice defect, **mine**, and it has already
+produced one published wrong statement about another team's pull request.
+
+**The claim.** This control plane enumerated the check-runs on platform #128 at
+`36cdc765`, reported **"all thirty check-runs: 28 success, 2 failure"**, and used
+that census to tell a correspondent that their report of a failing
+`drive-service-supply-chain` was wrong. The census was correct arithmetic over
+the wrong population.
+
+**The measurement.** `GET /repos/{repo}/commits/{sha}/check-runs` accepts a
+`filter` parameter defaulting to `latest`, which returns the newest run **per
+check name** and drops every superseded one. On the same head, unchanged:
+
+| filter | total | non-success |
+|---|---|---|
+| `latest` (default, and what was measured) | 30 | 2 |
+| `all` (what "all" was reported to mean) | **40** | **4** |
+
+And the disputed check's real history on that head:
+
+```
+2026-08-11T20:38:25Z  failure   run 31533947898
+2026-08-11T20:38:27Z  success   run 31533952023
+2026-08-12T06:58:17Z  success   run 31533947898   ← re-run of the failed job
+```
+
+**So the correspondent was right.** `drive-service-supply-chain` did fail, on a
+transient PyPI `BrokenPipeError` inside `docker build`, and their prescribed
+remedy — re-run that job — had already been applied at 06:58:17Z, *between* their
+measurement and this one. They were reporting the world as it was; this control
+plane reported the world as it had since become, and called the difference an
+error in them.
+
+**Shape, and it is the twelfth instance, with a new aggravating feature.** The
+population was bound to the nearest *retrievable* set — whatever the endpoint
+returns by default — rather than to the set actually asserted, which is *every*
+check-run on the head. Compare the secrets census measured against the wrong
+repository. What is new here is that the wrong population **did not merely omit,
+dismiss or concur — it manufactured a contradiction of a correct external
+report**, and did so with an exact-sounding integer that made the claim harder to
+question, not easier.
+
+**The second defect is temporal and is the more general one.** Two observers
+measured a moving subject at different times, and the later one treated the
+disagreement as the other's error rather than as evidence that the subject had
+moved. A check-run census is a timestamped observation, not a property of a SHA.
+Any disagreement about CI state should first ask *when* the other party looked.
+
+**Remedy, one line of practice.** Pass `filter=all` explicitly when the word
+"all" is going to appear in the finding, report the filter alongside the count,
+and quote the observation time. Where a census contradicts an external report,
+re-read before publishing the contradiction.
+
 ---
 
 The condition described no longer exists. Leaving these in place actively
