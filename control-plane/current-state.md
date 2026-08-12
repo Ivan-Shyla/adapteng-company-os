@@ -4457,6 +4457,39 @@ files at the head of this chain — `authorize_approved_assets_phase.sh` and
 Running step 1 first is the trap: if run-selection fails, the operator gets
 `lifecycle.run_not_found` and nothing else, having already spent the attempt.
 
+**What the owner will actually see, and it is misleading.** The anchor's red mark
+appears **twice** on the head. That is one verification and one display artifact,
+not two failed verifications. Measured at platform head `36cdc765` with
+`filter=all` — reported by platform session `2cab0595`, then re-measured here
+rather than accepted:
+
+| check-run | window | duration | what it is |
+|---|---|---|---|
+| `93920483971` | `2026-08-11T20:38:32Z` → `20:38:45Z` | **13 s** | the genuine execution |
+| `94036100476` | `2026-08-12T06:59:03Z` → `06:59:03Z` | **0 s** | manufactured |
+
+The genuine one falls *inside* the only anchor run that ever executed on that
+head — `31533952257`, attempt 1, `20:38:25Z` → `20:38:48Z`. The zero-duration one
+has no run behind it at all. Checked against the whole population rather than a
+window: of **92** recorded runs of `rollout-trust-anchor.yml`, across every head
+and every date, **0** were updated at `06:59:xx`; the nearest neighbour is
+`31572475175` at `07:04:45Z`, five minutes later and on a different commit.
+
+Both marks sit in check-suite `85541064513`, which belongs to the **push** run of
+Adapter Tests rather than to the anchor's own suite. That is the mechanism: the
+mark is unowned, so re-running an unrelated workflow sweeps it up and re-emits it
+with one timestamp because nothing was executed.
+
+**What this does and does not change.** It does **not** change the decision. The
+genuine result is still `failure`, and the anchor is still absent from the
+required set — re-read from the ruleset API at the same time, which returns
+exactly five contexts: `Fail on unencrypted secret-like content`,
+`independent-rollout-policy`, `n8n isolation`, `root-rollout-tests`,
+`Validate repository structure and content`. What it changes is the *reading*: a
+count of red marks is not a count of verifications, so do not infer two
+independent failures, and do not expect re-running the anchor to clear the
+duplicate — its trigger is not what produced it.
+
 **#121 must not be merged ahead of the signature to get there faster.** Its five
 ruleset-required checks are green and the two red trust-anchor checks are *not*
 in `main-protected`'s required set — so the merge button is available. The
