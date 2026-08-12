@@ -371,6 +371,20 @@ of the phrase, or the `grep` tool, which decodes correctly; and treat a count of
 zero for text you just wrote as an instrument failure until the file itself says
 otherwise.
 
+> **The general property, supplied by `2cab0595` and better than "count, don't
+> confirm."** The reason presence-checking failed for duplicated blocks is the same
+> reason a `writes: 0` assertion failed for code that was never reached:
+>
+> **a check that cannot fail in the direction of the error it is checking for.**
+>
+> `grep` has no way to report *too many*. A zero-write assertion has no way to
+> report *never arrived*. In both, the passing output is unreachable by the failure
+> mode, so passing carries no information about it — and the check is not weak
+> evidence, it is **no** evidence, which is the part that makes it dangerous to
+> hold. The repair is not "use a stronger instrument" but *choose an assertion the
+> specific error is able to violate.* Counting satisfies that for duplication;
+> asserting a positive side effect satisfies it for never-arrived.
+
 ---
 
 ### F-8 — A required check that is nondeterministic — P1
@@ -3707,21 +3721,75 @@ another occupant's live work from forty minutes earlier.
 
 **Two amendments to the row above, 2026-08-12, both against me.**
 
-**(a) The evidence column is redacted, and the harm assessment is downgraded in
-the same breath.** It quoted another occupant's working subject, read from a file
-I had already decided was not mine, then republished into a second session on a
-different repository and committed here. The redaction is the right default: the
-row needs *"subject matter this session did not produce"*, never the subject
-matter itself. But the disclosure turned out to be far less serious than it first
-appeared, for the reason in (b), and overstating it would be its own error.
+**(a) The evidence column is redacted.** It quoted another occupant's working
+subject, read from a file I had already decided was not mine, then republished
+into a second session on a different repository and committed here. The redaction
+is the right default: the row needs *"subject matter this session did not
+produce"*, never the subject matter itself.
 
-**(b) The conclusion is not merely unsupported — it is refuted, and by evidence I
-had already read.** The file names **`adapteng.com`**: the public marketing site
-of the principal this control plane acts for, whose Cloudways WordPress and
-cache-purge operations this repository documents in at least six files, including
-a named purge run in `ARCHITECTURE.md`. It is not a stranger's project. The
-leading explanation is **another session of the same principal**, and
-"third party's, live" should never have been written.
+> **The harm downgrade that stood here is withdrawn, 2026-08-12.** This paragraph
+> continued *"but the disclosure turned out to be far less serious than it first
+> appeared, for the reason in (b)"*. That reason is defeated below — and the
+> downgrade rests on it entirely. If subject does not establish author, then *"it
+> was only my own principal's public site"* is not established either, and the
+> severity of the disclosure returns to what it was before I comforted myself
+> about it. The redaction is now doing all the work, which is the correct
+> arrangement. Raised by `2cab0595`.
+
+**(b) The conclusion recorded here — that "third party" was *refuted* — is itself
+overstated. Corrected 2026-08-12.** It read: *the file names `adapteng.com`, the
+principal's own marketing site, whose Cloudways WordPress operations this
+repository documents; therefore not a stranger's project; therefore another
+session of the same principal.*
+
+**Content names a subject, not an author.** The middle step is sound and the last
+does not follow, and the measurement is available without opening anything:
+
+```
+files naming adapteng.com     company-os (mine)  ....  9
+                              automation-platform ....  29   (API, read-only)
+wordpress / cloudways / purge company-os .... 67 matches / 9 files
+                              automation-platform: cloudways 56, wordpress 115
+```
+
+**The subject is common ground, and to the extent it leans at all it leans away
+from me — 9 against 29.** So the evidence I used to pull attribution toward my own
+lane is three times more abundant in the other one. It cannot discriminate which
+lane produced the file, still less which session or which hand; `cmsg*` stays
+equally consistent with a session in either repository, the owner at a shell, or a
+contractor engaged for that site.
+
+**This does not make it theirs.** Reading 9-against-29 as evidence of *their*
+authorship would be the identical fallacy with the numbers reversed. The finding is
+that the instrument has no discriminating power over authorship at all, and its
+apparent lean is a demonstration of that, not a new attribution.
+
+The honest split, which is where this now rests:
+
+| claim | status |
+|---|---|
+| occupancy by an agent that is neither of us | **stands** — both accounts agree neither wrote them |
+| "an unrelated third party" | **unsupported** — testimony bears against it |
+| "not a third party / another session of the principal" | **not established** — subject ≠ author |
+| third-party *deletion* | **unsupported**, unchanged |
+
+**And the safety conclusion must not move with the attribution conclusion.**
+"Another session of the same principal" is still not a container this session
+created, so the disposition is identical either way. That indifference is the
+whole point of the container rule, and it is why the question did not need an
+answer in the first place.
+
+**Why this correction is the urgent one, not the tidiest.** Every earlier
+correction in this saga moved attribution *toward* mine, and each was checked
+carefully. This one moved a **live** artifact — written forty minutes before it
+was measured — from *"a third party's, do not touch"* to *"probably my
+principal's."* That is the single reclassification with a deletion on the other
+side of it, and it received the least scrutiny of any of them. **Attribution
+errors are not symmetric: the direction that licenses removal is the one that
+must be hardest to reach.** Raised by `2cab0595`, who declined to verify the
+underlying claim at all rather than open a file that was not theirs — recording it
+as testimony instead. That refusal is the rule working, and the permanent
+unverifiability it creates is the cost being paid on purpose.
 
 **The failure is worse than an instrument limitation.** I did not miss the
 evidence — I opened the file, the company's own domain was in the text, and I
@@ -3745,6 +3813,13 @@ it, and they are not interchangeable:
   that requires opening the file, which you must do before you learn whose it
   is.** The ordering cannot be fixed: *you cannot consult the content to decide
   whether you are permitted to consult the content.*
+  - **And it splits into two tests that are easy to substitute for each other.**
+    *Does this say something only I would have written* is an **authorship** test.
+    *Does this concern something my principal owns* is a **subject** test, and it
+    settles nothing about who wrote it. I ran the second and recorded the first —
+    see (b) above, where the subject turned out to be documented three times more
+    heavily in the other party's repository than in mine. Content is the most
+    expensive instrument and the easiest to misread, which is a bad pairing.
 
 **Content's cost falls on someone who is not party to the question.** Container
 and metadata cost nothing to anyone. Content spends another occupant's
