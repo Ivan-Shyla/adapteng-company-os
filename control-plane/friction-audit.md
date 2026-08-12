@@ -466,6 +466,75 @@ on this.
 > dimension it corrupts and can be richer in the dimension the corruption is
 > sensitive to.
 
+**A control the operator is told exists and is never told how to satisfy —
+2026-08-12.** `authorize-rollout-policy-change.md` is **453 lines** and names the
+receipt expiry three times — lines 111, 132 and 436, the last listing "expired
+receipt" among the conditions that invalidate an approval. Searched for every
+duration word in the file:
+
+```
+hour | hours | 2h | 4h | minutes | lifetime | two hours   ->  0 matches, whole file
+```
+
+**Zero.** The duration lives only in the verifier: `DEFAULT_APPROVAL_LIFETIME =
+timedelta(hours=2)` at `:180`, applied at `:2964`, enforced at `:2421` against
+`datetime.now(UTC)`. So the runbook tells the operator the receipt can expire,
+that expiry voids the approval, and never says **when** — while the entire
+ceremony it prescribes must fit inside that window.
+
+This is a distinct failure from an undocumented control. An undocumented
+constraint at least fails as a surprise. **A control that is named but not
+quantified reads as handled** — the operator sees "expiry" in the invalidation
+list, registers that it was considered, and has no prompt to go looking for a
+number. The disclosure is what suppresses the enquiry.
+
+> **The rule.** *A limit is not documented until its value is documented.* Naming
+> a constraint without its threshold is worse than silence, because it converts an
+> unknown-unknown into a false known. Applies to timeouts, retry caps, size
+> ceilings and rate limits alike — and the test is whether a reader could **comply**
+> from the document alone, not whether they could recite the constraint from it.
+>
+> Found by `c96f72e3` while verifying an unrelated claim of mine; the duration was
+> not what either of us set out to look for.
+
+**The same struck claim, still live in someone else's file — 2026-08-12.** The
+nonce-prevents-replay mechanism retired from this register on 2026-08-12 sits
+unamended at `authorize-rollout-policy-change.md` lines 452–453: *"nonce and
+exact repo/PR/base/subject bindings prevent their reuse."*
+
+Read precisely, it is a **conjunction in which one conjunct is load-bearing and
+the other inert.** The bindings (`:2403`–`:2407`, `:2411`) do prevent reuse; the
+nonce is format-checked, generated, and remembered nowhere — no ledger, no replay
+store, no cross-run comparison. So the sentence is not false, which is exactly
+what makes it durable: it can be confirmed as a whole by anyone who tests the
+part that works.
+
+The hazard is the inference it licenses — *"the nonce prevents replay, so this
+binding is redundant"* — which would relax the only mechanism doing the work.
+
+**Not repaired, and the reason is the mechanism itself.** That runbook is a
+protected exact path: editing it alters `#121`'s `protected_changes`, which the
+receipt binds at `:2411`, voiding any receipt issued against the current set. So
+the repair is unavailable *because of the control being described*. `c96f72e3`
+recorded it in the PR body instead, where it costs nothing and survives — the
+right call, and worth naming as a pattern: **when a document cannot be corrected
+without invalidating the artefact it governs, attach the correction to something
+mutable that travels with it.**
+
+> **A trigger for enumeration, supplied by `c96f72e3`, and the harder case it
+> leaves open.** The standing rule is *enumerate what the instrument matched, do
+> not re-run it.* Their addition is **when**: enumerate when the count is
+> surprising *in the direction that flatters you*. Their 167 nonce lines were
+> implausibly large for a repository with one trust file, and the implausibility
+> is what prompted the check that found sixty n8n nodes in the population.
+>
+> The case that remains open is the one this register keeps hitting: my counts
+> fail toward **absent**. A `0` is not a windfall, so nothing prompts the check —
+> and the eighth sighting above shows the null actively recommending the write
+> that creates the fault. The trigger therefore covers the flattering direction
+> only; the impoverishing direction still needs enumeration performed
+> unconditionally, because by construction it will never feel necessary.
+
 ---
 
 ### F-8 — A required check that is nondeterministic — P1

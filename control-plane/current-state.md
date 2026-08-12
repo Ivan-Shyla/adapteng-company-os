@@ -4640,6 +4640,75 @@ Running **phase 1** first is the trap: if run-selection fails, the operator gets
 > analysis of #128 and are unchanged; what is new here is the post-issuance
 > repair path, and the correction to a sentence in that section which recommends
 > "a new commit on top" for a case where it is the one thing that cannot work.
+>
+> > **Blast radius of that correction, bounded 2026-08-13 — and it runs in my
+> > favour, which is why it is recorded.** The defect was in *this* record, not in
+> > the operator's instructions. `authorize-rollout-policy-change.md` step 6
+> > (line 437) already reads *"…invalidates the approval and requires **dropping
+> > the old approval commit** before re-signing."* An owner following the platform
+> > runbook would never have reached the trap. What was wrong was my sheet, which
+> > paraphrased the repair without that clause. Raised by `c96f72e3`, who had no
+> > reason to hand me the smaller number and did.
+
+> **THE TWO-HOUR CLOCK — a one-shot wall-clock constraint that appears in no
+> runbook, and the single most likely way this ceremony fails.** Raised by
+> `c96f72e3`; constants and call sites verified here against platform `main`.
+>
+> ```
+>  178  MAX_APPROVAL_LIFETIME     = timedelta(hours=4)     validation ceiling only
+>  179  MAX_CLOCK_SKEW            = timedelta(minutes=5)   tolerance on the EARLY side only
+>  180  DEFAULT_APPROVAL_LIFETIME = timedelta(hours=2)     what construct actually sets
+> 2964  expires_at = created_at + DEFAULT_APPROVAL_LIFETIME
+> 2421  created_at - MAX_CLOCK_SKEW <= evaluation_time < expires_at
+> 2425  raise TrustError("receipt.stale_or_future")
+> 3153  evaluation_time = datetime.now(UTC)                wall clock, at check-run time
+> ```
+>
+> **The entire ceremony must complete within two hours of `construct`** —
+> the independent field re-review, the commit, the push, every required check,
+> and the merge. Wall clock, including time spent waiting or thinking.
+>
+> **It is not configurable, and that is firmer than "2 h default, 4 h max"
+> suggests.** `construct` exposes five flags — `--pr-number`, `--private-key`,
+> `--output-directory`, `--allowed-signers`, `--ssh-keygen` (`:3246`–`:3250`) —
+> and **no lifetime option**. `MAX_APPROVAL_LIFETIME` is used only as a ceiling
+> when *validating* a receipt (`:2422`–`:2423`), never as a settable value, so
+> the 4 h is unreachable through the supported tool and exists to bound a
+> hand-edited receipt. The window is exactly two hours. `MAX_CLOCK_SKEW` widens
+> only the early edge and buys no extra time at the end.
+>
+> **Where the two hours actually go — measured, not estimated.** The full check
+> suite on #121's head (`d4c942e6`) ran `17:33:59Z`→`17:35:46Z`: **107 seconds**,
+> longest single context 103 s. `construct`, commit and push are seconds. So CI
+> is not the constraint and roughly **115 of the 120 minutes are available for
+> the human step** — runbook step 4, *"independently compare the receipt fields
+> to the reviewed objects."*
+>
+> That step is the only unbounded activity in the window, and **it cannot be
+> moved out of the window, because it operates on the receipt that starts the
+> clock.** Front-load every review that does not require the receipt; enter
+> `construct` with only the field comparison left to do.
+>
+> **If the window is missed:** the anchor fails `receipt.stale_or_future`
+> (`:2425`), raised on the timestamps *before* any base or tree state is
+> consulted — so it fails identically no matter how correct everything else is,
+> and **re-running cannot clear it.** The repair is to re-`construct` (a fresh
+> receipt, a fresh two hours, a fresh signature) and drop the old approval commit
+> per runbook line 437. See the discriminator table in the cancelled-anchor note
+> above: a stale receipt and a provisioning stall both present as a red anchor
+> mark and require opposite actions.
+>
+> **INFERRED, flagged:** any re-execution of the anchor check more than two hours
+> after `construct` — a re-push, or a "re-run all checks" — fails on the clock
+> regardless of base state. Read from the clauses, not executed.
+>
+> **This compounds with the known flake.** `root-rollout-tests` is a required
+> context and is nondeterministic (two documented CI instances; `c96f72e3`
+> reproduces 10/200 ≈ 5.0 % locally). A spurious red inside the window costs a
+> re-run, and **re-runs are charged against the two hours.** The defect #121
+> exists to make diagnosable is therefore also a hazard to the ceremony that must
+> merge #121 — at 107 s a re-run is cheap, but the operator must know it is
+> spending a budget rather than retrying for free.
 
 > **Third precondition, and it fires earlier than either of the two above.** Two
 > anchor check-runs on one head is not a cosmetic double-report — it is a refusal
@@ -4943,6 +5012,24 @@ has no run behind it at all.
 > > treat the receipt as refused and re-sign. Re-signing a receipt in response to
 > > an infrastructure cancellation is the failure this whole lane exists to
 > > prevent, and it is the natural reading of a bare red mark.
+> >
+> > > **Bounded 2026-08-13 — the instruction above is correct only inside a window
+> > > I did not know existed when I wrote it.** See §16.5a: the receipt expires
+> > > **two hours** after `construct`. Re-running is the right cure for a
+> > > provisioning stall *while the receipt is live*; **after expiry it is futile**,
+> > > because `receipt.stale_or_future` is raised before anything about the base
+> > > state is consulted, and no number of re-runs can clear it. The two cases are
+> > > indistinguishable from the mark and are separated only by the verdict line:
+> > >
+> > > | verdict line / annotation | meaning | correct action |
+> > > |---|---|---|
+> > > | `exceeded the maximum execution time` | provisioning stall | **re-run** |
+> > > | `receipt.stale_or_future` | window expired | **re-construct**, drop the old approval commit |
+> > >
+> > > Unbounded, "re-run, do not re-sign" is worse than incomplete: past expiry it
+> > > instructs the operator to spend the only resource that is actually gone. A
+> > > remedy that is correct in one regime and futile in the other, where the two
+> > > regimes present identically, must carry its discriminator or it is a trap.
 
 **The population was also narrower than the question.** The earlier revision
 searched runs of `rollout-trust-anchor.yml` alone, while the question is whether
