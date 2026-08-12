@@ -63,6 +63,7 @@ OPERATIONS = (
     "status",
     "verify",
     "peer-verify",
+    "peer-tools",
     "peer-diagnose",
     "diagnose",
 )
@@ -2115,6 +2116,79 @@ def peer_ladder(spec: dict) -> list:
     return sorted(rungs, key=lambda rung: len(rung[1]))
 
 
+# The first armed peer probe ran and reported, exactly as designed,
+# reachable=undetermined reason=no_marker with the captured output
+# 'sh: 1: python: not found'. So the probe never executed, and the peer's own
+# shell named the reason.
+#
+# The obvious next move is to write python3 instead of python. That is a guess.
+# It would look like a fix whether or not it is one, and if ops-runner has no
+# python of any name the run would come back undetermined a second time having
+# established nothing. The same reasoning applied to the HTTP 500 produced
+# peer-diagnose, and measuring there cleared two suspects that a guessed fix
+# would have left standing.
+#
+# So this measures the peer's capabilities before anything is fitted to them.
+# It is a census, not a probe: it asks only which interpreters and HTTP clients
+# exist on PATH and contacts nothing. Reachability stays unmeasured here on
+# purpose, because an instrument that answers two questions at once cannot say
+# which one failed.
+PEER_TOOLS_TASK_NAME = "adapteng-peer-tool-census"
+PEER_TOOLS_MARKER = "ADAPTENG_TOOLS"
+# Ordered by how short the resulting probe would be, not alphabetically: the
+# first present entry is the one the probe should be built on.
+PEER_TOOLS_CANDIDATES = (
+    "python3",
+    "python",
+    "curl",
+    "wget",
+    "nc",
+    "busybox",
+    "perl",
+    "node",
+)
+
+
+def peer_tools_command() -> str:
+    """One line that names what the peer has, and proves it finished saying so.
+
+    ``command -v`` prints an absolute path when the tool exists and prints
+    nothing when it does not, so each line is self-labelling and absence is
+    silent. Silence is only readable as absence if the list is known to have
+    run to the end, which is what the trailing marker is for: with it, a
+    missing line is a genuinely missing tool; without it, the output could
+    equally have been truncated by a shell that died partway through.
+
+    Same construction rules as the other in-container commands, for the same
+    reason -- Coolify runs this as docker exec <c> sh -c '<command>' -- so
+    there is no single quote, no double quote, no dollar and no backtick
+    anywhere here, and it is one line.
+    """
+
+    census = "; ".join(f"command -v {tool}" for tool in PEER_TOOLS_CANDIDATES)
+    return f"{census}; echo {PEER_TOOLS_MARKER} end"
+
+
+def read_tool_census(message: object) -> list[str]:
+    """Which candidates the peer reported, in the order they were asked for.
+
+    Matching is on the basename of each printed path rather than on a substring
+    of the whole message, so a path that merely contains a candidate name --
+    /usr/lib/python3/... in an unrelated error line, say -- cannot be counted
+    as a tool that exists.
+    """
+
+    if not isinstance(message, str):
+        return []
+    printed = set()
+    for line in message.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("/"):
+            continue
+        printed.add(stripped.rsplit("/", 1)[-1])
+    return [tool for tool in PEER_TOOLS_CANDIDATES if tool in printed]
+
+
 def operate_peer_diagnose(client: Client, spec: dict) -> int:
     """Find what the scheduled-task endpoint will accept on the peer.
 
@@ -2827,6 +2901,138 @@ def operate_peer_verify(client: Client, spec: dict, sleep=None) -> int:
     return EXIT_OK
 
 
+def operate_peer_tools(client: Client, spec: dict, sleep=None) -> int:
+    """Ask the peer what it has, before fitting a probe to what it might have.
+
+    This runs the census inside the peer with the same armed-then-disarmed
+    scheduled task the other probes use, and reports the answer without acting
+    on it. It contacts no service and presents no credential: ``command -v``
+    opens no socket.
+
+    A tool reported here is present. A tool not reported is absent, provided
+    the marker arrived; if it did not, nothing is claimed about any of them.
+    """
+
+    sleep = sleep or time.sleep
+    target = spec["target"]
+    peer_name = spec["network"]["peer_probe_application"]
+
+    emit(f"--- peer-tools {peer_name}")
+
+    project = find_project(client, target["project"])
+    environment = (
+        find_environment(client, project["uuid"], target["environment"])
+        if project
+        else None
+    )
+    if project is None or environment is None:
+        emit("    project or environment absent; nothing to census")
+        emit("RESULT peer-tools failed application=absent")
+        return EXIT_FAILED
+
+    peer = find_application(applications_in(client, environment), peer_name)
+    if peer is None:
+        emit(f"    peer application {peer_name}: ABSENT")
+        emit("RESULT peer-tools failed application=absent")
+        return EXIT_FAILED
+
+    peer_uuid = str(peer["uuid"])
+    emit(f"    peer {peer_name}: uuid={peer_uuid} state={peer.get('status')}")
+
+    command = peer_tools_command()
+    task_uuid, disposition = converge_readiness_task(
+        client, peer_uuid, command, PEER_TOOLS_TASK_NAME
+    )
+    emit(f"    census task {PEER_TOOLS_TASK_NAME}: {disposition} uuid={task_uuid}")
+
+    before = executions_snapshot(list_executions(client, peer_uuid, task_uuid))
+    emit(f"    executions already recorded: {before[0]}")
+
+    armed = write_readiness_task(
+        client,
+        peer_uuid,
+        task_uuid,
+        readiness_task_body(command, armed=True, name=PEER_TOOLS_TASK_NAME),
+        PEER_TOOLS_TASK_NAME,
+    )
+    if not task_is_armed(armed):
+        raise Abort(
+            "the census task did not arm; refusing to wait for an execution "
+            "that cannot happen"
+        )
+    emit(
+        f"    armed at {READINESS_ARMED_FREQUENCY} and waiting for Coolify's "
+        "scheduler; it will be returned to rest either way"
+    )
+
+    try:
+        execution, verdict, reason = await_probe_answer(
+            client, peer_uuid, task_uuid, before, sleep, PEER_TOOLS_MARKER
+        )
+    finally:
+        at_rest = disarm_readiness_task(
+            client, peer_uuid, task_uuid, command, PEER_TOOLS_TASK_NAME
+        )
+        if at_rest:
+            emit("    returned to rest: disabled, and scheduled for a leap day.")
+        else:
+            emit(
+                f"    COULD NOT DISARM the census task {task_uuid} on application "
+                f"{peer_uuid}. It is still enabled and will keep running every "
+                "minute until it is disabled: PATCH /applications/"
+                f"{peer_uuid}/scheduled-tasks/{task_uuid} with enabled=false, or "
+                "run this operation again, which disarms before anything else."
+            )
+
+    if not at_rest:
+        emit("RESULT peer-tools failed reason=task_left_armed")
+        return EXIT_FAILED
+
+    if execution is None:
+        emit("")
+        emit(
+            "    no identifiable new execution was recorded while the task was "
+            f"armed ({reason or 'no_execution'}), so the census did not "
+            "demonstrably run and no tool is claimed present or absent."
+        )
+        emit(f"RESULT peer-tools failed reason={reason or 'no_execution'}")
+        return EXIT_FAILED
+
+    message = execution.get("message")
+    emit(f"    captured output: {str(message)[:600]!r}")
+
+    if verdict is None:
+        emit("")
+        emit(
+            f"    the execution finished but carries no {PEER_TOOLS_MARKER} "
+            "marker, so the census did not run to the end. The output above is "
+            "reported as-is and nothing is concluded from which lines are "
+            "missing: an unfinished list and a short one look the same."
+        )
+        emit("RESULT peer-tools failed reason=no_marker")
+        return EXIT_FAILED
+
+    found = read_tool_census(message)
+    absent = [tool for tool in PEER_TOOLS_CANDIDATES if tool not in found]
+    emit("")
+    emit(f"    present: {' '.join(found) if found else '(none of the candidates)'}")
+    emit(f"    absent:  {' '.join(absent) if absent else '(none)'}")
+    if not found:
+        emit(
+            "    The census completed and found none of the candidates, so the "
+            "peer has no interpreter or HTTP client this probe knows how to "
+            "use. That is a real answer, not a missing one."
+        )
+        emit("RESULT peer-tools failed tools=none")
+        return EXIT_FAILED
+    emit(
+        "    Nothing was contacted and no credential was presented; this "
+        "operation only asked what is on PATH."
+    )
+    emit(f"RESULT peer-tools ok tools={','.join(found)}")
+    return EXIT_OK
+
+
 DIAGNOSE_LOG_LINES = 200
 
 
@@ -3064,6 +3270,8 @@ def run(environ: dict) -> int:
         return operate_verify(client, spec)
     if operation == "peer-verify":
         return operate_peer_verify(client, spec)
+    if operation == "peer-tools":
+        return operate_peer_tools(client, spec)
     if operation == "peer-diagnose":
         return operate_peer_diagnose(client, spec)
     if operation == "diagnose":
