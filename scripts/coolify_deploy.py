@@ -2047,8 +2047,16 @@ PEER_HEALTH_PATH = "/health"
 # explicit gethostbyname was dropped to fit, which costs the resolved address
 # in the report and costs no proven fact.
 PEER_COMMAND_LIMIT = 245
+# The interpreter is the one the peer was measured to have, not the one it was
+# assumed to have. The first armed run failed with 'sh: 1: python: not found',
+# and peer-tools then reported /usr/bin/python3, /usr/bin/curl and /usr/bin/perl
+# present on ops-runner with bare `python` absent. Writing python3 straight off
+# the shell error would have been the same guess with a better prior; the census
+# is what turns it into a reading, and it also establishes curl as the fallback
+# if this interpreter ever goes away.
+PEER_INTERPRETER = "python3"
 PEER_COMMAND = (
-    'python -c "'
+    PEER_INTERPRETER + ' -c "'
     "import http.client as H,sys;v=sys.argv;"
     "f=lambda p:(lambda c:(c.request(v[3],p),c.getresponse().status)[1])"
     "(H.HTTPConnection(v[1],int(v[2]),timeout=5));"
@@ -2856,8 +2864,9 @@ def operate_peer_verify(client: Client, spec: dict, sleep=None) -> int:
             f"    the execution finished but carries no {PEER_MARKER} marker, so "
             "the probe did not run to completion inside the peer. Reporting "
             "undetermined rather than unreachable: a missing answer is not a "
-            "negative answer, and a peer image without python would look exactly "
-            "like this."
+            "negative answer, and a peer image without the interpreter would "
+            "look exactly like this. peer-tools is the operation that tells "
+            "those two apart, by asking the peer what it has."
         )
         emit(f"    captured output: {str(execution.get('message'))[:600]!r}")
         emit("RESULT peer-verify failed reachable=undetermined reason=no_marker")

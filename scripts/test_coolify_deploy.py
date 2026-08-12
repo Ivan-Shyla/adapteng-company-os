@@ -3003,6 +3003,23 @@ class PeerVerifyTests(unittest.TestCase):
         self.assertTrue(all(peer["uuid"] in path for path in written))
         self.assertFalse(any(service["uuid"] in path for path in written))
 
+    def test_the_probe_runs_an_interpreter_the_peer_was_measured_to_have(self) -> None:
+        """The first armed run died on `sh: 1: python: not found`.
+
+        peer-tools then reported python3, curl and perl present on the peer and
+        bare python absent. This pins the probe to that reading: the
+        interpreter must be one the census actually asks about, and it must not
+        be the name that was measured missing. Deriving the guard from
+        PEER_TOOLS_CANDIDATES rather than restating "python3" keeps the two
+        halves of the fix attached -- a probe fitted to a tool the census never
+        looks for would be a guess again, and nothing else here would say so.
+        """
+
+        command = driver.peer_command(self.real_spec())
+        self.assertIn(driver.PEER_INTERPRETER, driver.PEER_TOOLS_CANDIDATES)
+        self.assertTrue(command.startswith(f"{driver.PEER_INTERPRETER} -c "))
+        self.assertNotRegex(command, r"(?<![a-z0-9])python(?![0-9])")
+
     def test_the_probe_stays_under_the_measured_acceptance_limit(self) -> None:
         """The first live run was refused with HTTP 500 for being too long.
 
