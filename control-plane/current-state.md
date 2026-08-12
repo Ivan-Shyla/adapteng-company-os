@@ -335,8 +335,8 @@ Verified from `main` and CI, not from narrative.
 
   **What that exit 0 actually required, established 2026-08-12 by reading
   `fetch_all` rather than trusting its name.** A peer finding about integer-bound
-  validation in this module prompted the check; the finding does not reach this
-  path, but the audit it triggered strengthens the precondition evidence, so it
+  validation prompted the check; the finding does not reach this path, but the
+  audit it triggered strengthens the precondition evidence, so it
   is recorded here rather than discarded. `environment_secret_absent` is emitted
   at one line and is reachable only after a complete enumeration:
 
@@ -357,6 +357,27 @@ Verified from `main` and CI, not from narrative.
   This is the opposite of the recurring shape and worth naming as such: the
   check is bound to the thing asserted — *this name is absent from the complete
   set* — rather than to the nearest observable, *the request did not fail*.
+
+  **Independently verified 2026-08-12, and the correction runs the other way.**
+  The originating peer re-read the same code at `origin/main = 6ecdd5fb` and
+  confirmed each link: `identity_key: str = "id"` defaults at 250, the integer
+  bound sits at 275-276, the string branch at 278, and **`fetch_all(endpoint,
+  "secrets", identity_key="name")` at 520** — so the integer bound is unreachable
+  on the secret-enumeration path, exactly as recorded above. They also confirmed
+  the `total_count` cross-page comparison (270-271), duplicate rejection
+  (284-285), the per-page SHA-256 digest (291), and that the handler returns
+  `2 if exc.code in RETRYABLE_ERROR_CODES else 1` (509-513) with **no path
+  returning 0**.
+
+  Their finding also turned out not to live in the module named when it was
+  first reported: it is in the sibling `collect_approved_assets_predecessor.py`,
+  where `_positive_id` is defined at 432 and called at eight sites, and which is
+  byte-identical between `main` and their branch. Two modules define
+  `MAX_SAFE_ID` to the same value, which is what sent the earlier reading to the
+  wrong copy. **None of that changes the conclusion here** — it is recorded
+  because §16.3's "do not pre-create these secrets" instruction rests on this
+  enumeration being complete, and that now stands on two independent readings
+  rather than one.
 
   What is true and unchanged is the guard itself. Every one of the five jobs in
   `migrate-approved-assets.yml` opens with a
@@ -4248,7 +4269,11 @@ Not policy — four independent hard stops, each measured:
 **Do not pre-create the two secrets to "help".** Their absence is a verified
 precondition of step 1; pre-creating them fails the step closed and consumes a
 non-retryable attempt. This was established by complete enumeration (6/6) and is
-re-confirmed above.
+re-confirmed above. The enumeration behind it is **independently verified by two
+readings** — see §4's `environment_secret_absent` analysis: every page fetched
+and cross-checked on `total_count`, duplicates rejected, each page re-read and
+compared by SHA-256, and no error path capable of returning exit 0. Absence there
+is a proven complete enumeration, not an API call that merely did not object.
 
 ### 16.4 What is usable today, without the proof
 
