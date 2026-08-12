@@ -333,6 +333,31 @@ Verified from `main` and CI, not from narrative.
   thing, two absent secret names, instead of to the thing actually asserted, an
   owner-run lifecycle that creates and destroys them within one dispatch.
 
+  **What that exit 0 actually required, established 2026-08-12 by reading
+  `fetch_all` rather than trusting its name.** A peer finding about integer-bound
+  validation in this module prompted the check; the finding does not reach this
+  path, but the audit it triggered strengthens the precondition evidence, so it
+  is recorded here rather than discarded. `environment_secret_absent` is emitted
+  at one line and is reachable only after a complete enumeration:
+
+  - every page fetched, with `total_count` compared across pages and any change
+    raising `github_metadata.pagination_race`;
+  - the final page reconciled against the running item count, so a truncated
+    read cannot pass as a short last page;
+  - duplicate identities rejected;
+  - **every page then re-read and compared by SHA-256 fingerprint** before the
+    result is returned.
+
+  Every failure raises `MetadataError`, and the handler returns 1, or 2 when
+  retryable — so **no error path can produce exit 0.** Absence here is a proven
+  complete enumeration, not merely an API call that did not object. Note also
+  that secret enumeration passes `identity_key="name"`, taking the string branch,
+  so the `MAX_SAFE_ID` integer bound is not even on this path.
+
+  This is the opposite of the recurring shape and worth naming as such: the
+  check is bound to the thing asserted — *this name is absent from the complete
+  set* — rather than to the nearest observable, *the request did not fail*.
+
   What is true and unchanged is the guard itself. Every one of the five jobs in
   `migrate-approved-assets.yml` opens with a
   "Require staged run-bound authorization before checkout" step that runs
