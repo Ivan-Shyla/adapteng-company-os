@@ -1302,7 +1302,7 @@ class ReconcileTests(unittest.TestCase):
         # "example" inside the literal is what marks this a placeholder to
         # validate_sensitive_references.py. It must appear in the source text, not
         # only in the interpolated result: the checker reads the line, not the run.
-        # A test fixture is not an exception to that rule — the checker cannot tell
+        # A test fixture is not an exception to that rule â€” the checker cannot tell
         # a fake credential from a real one, and it is right not to try.
         marker = "example-password-must-not-appear"
         secret = "postgresql://ai_gateway_runtime:example-password-must-not-appear@db/ops"
@@ -2152,6 +2152,7 @@ class EntryPointTests(unittest.TestCase):
                 "status",
                 "verify",
                 "peer-verify",
+                "peer-diagnose",
                 "diagnose",
             },
         )
@@ -3141,6 +3142,63 @@ class PeerVerifyTests(unittest.TestCase):
         peer = spec["network"]["peer_probe_application"]
         self.assertTrue(peer)
         self.assertNotEqual(peer, spec["target"]["resource_name"])
+
+    def test_the_ladder_rises_in_length_so_a_refusal_brackets_a_boundary(self) -> None:
+        """Out of order, the rungs cannot bracket anything.
+
+        The whole inference is "everything accepted is shorter than everything
+        refused", which is only available if the rungs are monotone.
+        """
+
+        lengths = [len(command) for _label, command in driver.peer_ladder(self.real_spec())]
+        self.assertEqual(lengths, sorted(lengths))
+        self.assertLess(lengths[0], 40)
+
+    def test_two_ladder_rungs_differ_only_in_length(self) -> None:
+        """Length has to be separable from content or the answer is ambiguous.
+
+        The filler rungs share a prefix and add nothing but repeated padding,
+        so a refusal of the longer one cannot be blamed on a new character.
+        """
+
+        rungs = dict(driver.peer_ladder(self.real_spec()))
+        short, long = rungs["filler-300"], rungs["filler-500"]
+        self.assertTrue(long.startswith(short))
+        self.assertEqual(set(long[len(short):]), {"x"})
+        self.assertLess(len(short), len(long))
+
+    def test_the_diagnostic_never_arms_anything(self) -> None:
+        """It asks what the API accepts, not what the container does.
+
+        Arming would run a command inside a production peer to answer a
+        question about request validation, which is a far larger action than
+        the question needs.
+        """
+
+        instance = PeerInstance()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_peer_diagnose(instance, self.real_spec())
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertTrue(instance.tasks)
+        for task in instance.tasks:
+            self.assertIs(task["enabled"], False)
+            self.assertEqual(task["frequency"], driver.READINESS_TASK_FREQUENCY)
+        self.assertEqual(instance.executions, [])
+
+    def test_the_diagnostic_creates_exactly_one_task(self) -> None:
+        """One task, rewritten per rung, so the command is the only variable."""
+
+        instance = PeerInstance()
+        with redirect_stdout(io.StringIO()):
+            driver.operate_peer_diagnose(instance, self.real_spec())
+        self.assertEqual(
+            [item["name"] for item in instance.tasks],
+            [driver.PEER_LADDER_TASK_NAME],
+        )
+        self.assertEqual(
+            [m for m, _p in instance.writes() if m == "DELETE"], []
+        )
 
 
 class ForeignTextRedactionTests(unittest.TestCase):
