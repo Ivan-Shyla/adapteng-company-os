@@ -4541,7 +4541,25 @@ Running **phase 1** first is the trap: if run-selection fails, the operator gets
 > | `8be4edab` | #125 | 0 | no |
 > | `0ded056d` | #124 | 1 | no |
 > | **`d4c942e6`** | **#121** | **1** | **no — the ceremony is safe today** |
-> | `36cdc765` | (worked example) | **2** | **yes — live right now** |
+> | `36cdc765` | #128 — **merged** | **2** | guard would fire, but see below |
+>
+> **Exposure is narrower than "live", corrected 2026-08-12.** The one head that
+> satisfies `total_count > 1` belongs to a **merged** pull request (#128, merged
+> `12:57:14Z`). The anchor workflow declares:
+>
+> ```
+> on: pull_request_target:
+>       branches: [main]
+>       types: [opened, edited, reopened, synchronize, ready_for_review]
+> ```
+>
+> On a merged PR, `opened`, `synchronize`, `reopened` and `ready_for_review` are
+> all unreachable — leaving **`edited` alone**, since a title or body edit still
+> emits `pull_request_target`. So the live path is one narrow trigger on a closed
+> PR, and **no open PR is currently exposed at all.** Both this control plane and
+> `2cab0595` initially wrote it as broadly armed; they measured the retraction
+> first. The *latent* form is what matters and is unchanged: any future head that
+> acquires a duplicate arms `unauthorized.check.list_ambiguous`.
 >
 > So this does not block the owner today, and step 0 exists to keep it that way:
 > **re-run the count immediately before issuing.** If it ever reads 2, the fix is
@@ -4572,13 +4590,40 @@ has no run behind it at all.
 > read; re-measured here with the containment test it should always have been:
 >
 > ```
-> runs where run_started_at <= 06:59:03Z <= updated_at   ->   0   (of all 92)
-> nearest run 31572475175 starts 07:04:31Z — 328 s AFTER the instant
-> longest anchor-run window ever observed                ->   318 s
+> runs whose window contains 06:59:03Z   ->   0   (of all 93)
 > ```
 >
-> No run reaches, and the margin is now bounded rather than asserted: the
-> nearest candidate begins later than the longest anchor run has ever lasted.
+> **The bound was on the wrong side, corrected 2026-08-12.** The first published
+> version of this block offered *"the nearest candidate begins 328 s after the
+> instant, and the longest anchor run ever observed lasted 318 s"* — arithmetic
+> that is sound and a comparison that does no work. **A run that starts after an
+> instant cannot contain it, however long it lasts.** Duration is irrelevant on
+> that side, so the 10-second margin was answering a question nobody had. Raised
+> by platform session `2cab0595`; re-measured here with every timestamp
+> normalised to UTC:
+>
+> ```
+> AFTER-side   nearest 31572475175 starts 07:04:31Z, +328 s
+>              -> excluded by ordering alone; no duration argument needed
+>
+> BEFORE-side  nearest 31533952257 starts 2026-08-11T20:38:25Z   <- the side that needs one
+>              gap to the instant ................... 37,238 s
+>              duration required to still be running   37,238 s
+>              longest anchor window ever observed ........ 318 s  (31116200705, a74b6c67)
+>              margin ..................................... 117x
+> ```
+>
+> Restated: an anchor run could only have been executing at that instant if it
+> had lasted **117 times longer than any anchor run in the corpus**. The workflow
+> also declares `timeout-minutes: 5` on its single job, so that is a configured
+> ceiling and not merely an observed one. As first published, a future run
+> starting 100 s after the instant would have appeared to break the argument
+> while changing nothing; restated, nothing short of a four-hundred-fold outlier
+> touches it.
+>
+> **The corpus also moved while this was being written** — 92 runs at the first
+> measurement, **93** now. The spanning count is 0 under both, which is the point
+> of preferring a re-derived census to a preserved number.
 
 **The population was also narrower than the question.** The earlier revision
 searched runs of `rollout-trust-anchor.yml` alone, while the question is whether
