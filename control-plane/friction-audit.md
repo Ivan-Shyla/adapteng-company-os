@@ -2440,6 +2440,84 @@ one that saved a published number here: read the assertion, not the identifier.
 
 ---
 
+### F-11 — a required check numbers lines with the wrong definition — P2
+
+**Status:** fixed in this change. Latent, not live — zero current instances.
+
+**The defect.** `validate_sensitive_references.py` read tracked files with
+`path.read_text(encoding="utf-8").splitlines()`, numbered them with
+`enumerate(lines, 1)`, and printed `f"{path}:{number}: {rule}"` — a reference the
+reader is expected to open. `str.splitlines()` breaks on **eleven** separators,
+not one:
+
+| | bytes | str |
+|---|---|---|
+| `0x0a` LF, `0x0d` CR | split | split |
+| `0x0b` VT, `0x0c` FF, `0x1c` FS, `0x1d` GS, `0x1e` RS, `0x85` NEL, `0x2028` LS, `0x2029` PS | **no** | split |
+
+Any of the eight `str`-only separators in a tracked file shifts every subsequent
+reported line number **up by one** relative to an editor or `git diff`.
+Demonstrated with a form feed on line 2 and a secret literal on true line 5: the
+check reported **line 6**, the file shows **line 5**.
+
+**Detection is unaffected.** Identical rules fire in both arms. This is a
+position error, not a miss — worth stating precisely, because the alarming
+reading (a secret scanner with a false negative) is available and wrong.
+
+**Scale.** Scanned all 92 tracked files: **zero** contain any of the eight, and
+`lf_delimited_lines(text) != text.splitlines()` for **0 of 92**. The fix is a
+provable no-op on the present corpus and correct on the hypothetical one.
+
+**Fix.** A named `lf_delimited_lines()` helper stating the definition it uses —
+split on `\n`, then drop a single trailing empty record so that a terminated
+file does not gain a phantom last line — plus five tests pinning the seven
+terminator cases, all eight separators, the CR case, the numbering consequence,
+and agreement with `splitlines()` on LF-only text. Suite: 107 tests, OK.
+
+**Why it is P2 despite having no instance.** The failure is silent and
+self-consistent: a wrong line number looks exactly like a right one, and the
+reader who opens `path:6` and finds nothing concludes the *check* is stale
+rather than the *number* wrong. The cost is paid in trust of a required gate.
+
+**What it corrects in the register.** The peer session concluded that shipped
+code gets a library primitive and a test suite while the measuring instrument
+gets neither, and that this is why line-counting defects survive. **This is
+shipped code, with a test suite, gating CI, carrying the identical defect** — so
+the shipped-vs-instrument boundary does not hold. Their own sharper point
+explains why: **a line count reads as a definition, and a definition invites no
+question**, so the review that catches a proxy has no trigger. It survives a test
+suite for the same reason it reaches the inside of a replacement instrument.
+
+**Method note, against myself.** My first attempt to demonstrate this inserted
+the form feed *inside* the secret literal, and both arms then lost a rule —
+producing an apparent **false negative in a secret scanner**, which is a much
+larger finding than the real one. It is an artefact: inserting the byte changed
+the *content*, not only the *splitting*. I had conflated the mutation with the
+mechanism. Third instance in one session of a confound that made the finding
+**bigger** — never once smaller. That asymmetry is the tell, and it is cheaper to
+check than the finding: **if an experiment's confound would have understated the
+result, it rarely gets built.**
+
+**Second method note, caught in review of this entry.** The paragraph above
+originally read "the terminator semantics already settled in F-7". F-7 is about
+a documented local check being weaker than the check that decides; the
+terminator question was settled in peer correspondence and **has never appeared
+in this register at all**. A cross-reference is the one claim in a document that
+carries its own apparent verification — a number invites "measured how?", but
+"see F-7" reads as already-checked, and the cost of checking rises with the
+length of the file that makes citing attractive. This register is now eleven
+entries and 2,400 lines, quoted by three sessions. **Guard: an F-number cited in
+prose must be opened, not remembered.**
+
+Every `F-n` mention in this file was then checked against the `### F-n` headings:
+all eleven resolve, no dangling references. **That check would not have caught
+the error that prompted it** — F-7 exists; it simply says something else. An
+existence check is the automatable half, and the half that was never in doubt.
+The failure mode worth guarding is a citation that resolves and misdescribes,
+and it is not mechanisable from the reference alone.
+
+---
+
 ## P3 — obsolete, delete
 
 The condition described no longer exists. Leaving these in place actively
