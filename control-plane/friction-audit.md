@@ -644,6 +644,52 @@ motivated — but the effect is indistinguishable from having chosen one, and
 **neither of us could have detected it alone.** The correction lives in the cell
 that only exists once both instruments are built over the same pairs.
 
+**The recall defect is confined to this workflow, and that is worse than if it
+generalised.** The obvious next question is whether 4/10 recall degrades every
+row of the cross-workflow table the detector was used to build. It does not.
+All 18 workflows in the repository, every `push`/`pull_request` pair, attempt-1
+conclusions:
+
+| workflow | pairs | re-runs | detector reports | real | missed |
+|---|---|---|---|---|---|
+| **Rollout Policy** | 121 | 6 | 5 | **11** | **6** |
+| Adapter Tests | 122 | 4 | 3 | 3 | 0 |
+| Validate Repo | 375 | 2 | 1 | 1 | 0 |
+| Secret Scan (hard fail) | 374 | 2 | 0 | 0 | 0 |
+| 5 others | 54 | 2 | 0 | 0 | 0 |
+
+The 11 counts divergence of *any* cause; **10 of the 11 are this flake**, the
+eleventh being `ce0900dd`. So the detector scores **4/10 against F-8** and
+**5/11 against divergence generally**. Both are stated because conflating those
+two denominators is the error this register already carries twice.
+
+**The prediction that recall loss tracks the re-run count is falsified.**
+Adapter Tests has four re-runs and loses nothing. Hiding a divergence needs a
+*conjunction* — attempt 1 failed **and** the re-run cleared **and** the twin
+passed. What the four Adapter Tests re-runs actually were:
+
+| SHA | attempt 1 | why it hides nothing |
+|---|---|---|
+| `d4c17314` | **success** | a re-run of an already-green run |
+| `983fd124` (push) | failure | **twin also failed** — agreement, not divergence |
+| `983fd124` (pr) | failure | **twin also failed** — same SHA, both sides re-run |
+| `7066f555` | **cancelled** | not a failure at all |
+
+Against Rollout Policy, where **6 of 6** are `attempt 1 failure → cleared → twin
+passed`. That conjunction is precisely the signature of a genuine, clearing,
+single-sided intermittent fault — which is to say, **the detector loses
+divergences only where there is a real flake to lose.**
+
+So the instrument is not uniformly biased; it is **accurate everywhere except at
+the phenomenon it exists to measure**. Perfect recall on the workflows with
+nothing to find, 45% on the one with something. A uniform bias is a calibration
+problem and a constant fixes it. This cannot be fixed that way, because the
+error is *conditioned on the presence of the signal*: the rows that look most
+trustworthy are trustworthy for exactly the reason that makes the remaining row
+untrustworthy. The published cross-workflow table is right in three rows of four
+and wrong in the fourth by 2.2×, and the fourth is not the unlucky row — it is
+the only one that had a flake in it.
+
 **A summary field re-denotes on the time axis too.** Re-running leaves
 attempt-level records intact — logs, conclusions and byte counts all survive,
 and any claim that a re-run destroys evidence is withdrawn. But four top-level
@@ -2257,6 +2303,55 @@ conclusion survived and the reason did not, which is this document's own rule
 about which of the two carries forward — **verifying the absence of a form is not
 verifying the absence of the property**, and the check that distinguishes them is
 to search for the behaviour rather than for the text that last expressed it.
+
+---
+
+### F-9 — `Adapter Tests` divergence is at least two mechanisms, not one — P3
+
+`Adapter Tests` gives different verdicts to its `push` and `pull_request` twins
+on **3 of 122** commits — 2.46% disagreement, implying p ≈ 1.2% per run. A peer
+session reported this as "a second, unrelated nondeterminism" and attributed it
+to a `pip install --require-hashes` step. Both halves need correcting, and the
+entry exists mainly so a red check on platform #128 is not misread.
+
+**It is not one mechanism.** The three divergences, with failing job and step
+read from the API rather than from the check name:
+
+| SHA | date | failing job | failing step |
+|---|---|---|---|
+| `b5a80341` | 07-26 | `reservation-postgres-semantics` | Exercise reservation SQL against ephemeral PostgreSQL |
+| `21e0e096` | 07-31 | `reservation-postgres-semantics` | Initialize containers |
+| `36cdc765` | 08-11 | `drive-service-supply-chain` | Build the clean reference Drive service image |
+
+Two jobs, three steps. Two of the three are service-container lifecycle — one
+literally "Initialize containers", the other SQL against an ephemeral
+PostgreSQL — which is a startup race. The third is an image build and shares
+nothing with them. **Quoting 2.46% as a single rate repeats the error this
+register already carries as "a job is not an owner":** the unit being counted is
+the workflow, and the workflow is not the fault. The honest statement is at most
+1.2% per run split across two or three unrelated causes, none individually
+characterised.
+
+**The step name was misreported, and the difference is not cosmetic.** The
+failing step on `36cdc765` is "Build the clean reference Drive service image",
+not a bare `pip install --require-hashes`. The hashed install is presumably
+*inside* that image build — but an image build carries layer caching, a base
+image and a registry pull, none of which a bare pip install has, so the
+candidate causes are a different set.
+
+**Confirmed exactly as reported otherwise:** `36cdc765` push `31533947898` at
+20:38:22Z **failure** against pull_request `31533952023` at 20:38:25Z
+**success** — three seconds apart, neither re-run, same commit, opposite
+verdicts.
+
+**Why P3 rather than P1.** `drive-service-supply-chain` is not in the ruleset's
+required set, so this blocks no merge and costs no one a re-run. It is recorded
+for one reason: **it is currently red on platform #128, and #128 is the fix for
+F-8.** Anyone reading that red as evidence against #128 would be reading an
+unrelated, non-blocking fault on a different service. The measurement that made
+this visible — attempt-1 twin comparison across all 18 workflows — also confirms
+`Adapter Tests` is the *only* other workflow in the repository with any
+divergence beyond a single instance.
 
 ---
 
