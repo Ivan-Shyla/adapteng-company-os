@@ -330,6 +330,17 @@ than in memory. **Always confirm with a byte-level `EF BF BD` count via
 mojibake verdict.** A file that displays wrongly and a file that *is* wrong are
 indistinguishable on this machine without that check.
 
+**Sixth sighting, different mechanism, same lesson — 2026-08-12.** A probe
+assigned the repository to `$R` and then the run object to `$r`. **PowerShell
+variable names are case-insensitive, so those are one variable**, and every
+subsequent `"repos/$R/..."` interpolated a serialised hashtable into the URL. The
+failure surfaced as six identical `unsupported protocol scheme ""` errors far
+from the assignment, with the real output — `total=`, `failures=0` — looking like
+a legitimate empty result. **Never distinguish two variables by case alone**, and
+treat a `failures=0` that arrives alongside any error text as unread rather than
+zero. Same family as the entries above: the shell did something other than what
+the code says, silently, and the wrong answer was well-formed.
+
 ---
 
 ### F-8 — A required check that is nondeterministic — P1
@@ -3674,6 +3685,52 @@ fixture, is what classifies. *Assert the category, not only the code.*
 control plane holds read-only. What is mine is step 0 of §16.5, which now
 requires confirming the head carries exactly one anchor check-run before the
 ceremony — measured 2026-08-12 as 1 on #121, so the owner is not blocked today.
+
+### F-24 — the proof whose premise is its own query — P2
+
+**First instance, and it was a proof I merged in #191.** Having argued the anchor
+doubling four ways, I published the one that "does not depend on a clock": a run
+reads `conclusion=success` while its own job listing contains a `failure`; a
+failing job fails its run; therefore the entry is not a job. I cited
+`GET /actions/runs/<id>/jobs` and stopped there.
+
+**The claim was true. The premise was unstated, and the premise is the query.**
+That endpoint defaults to the *latest attempt only*. Measured across all four
+scopings on run `31533947898`:
+
+| query | entries | failures | proof holds? |
+|---|---|---|---|
+| `/jobs` (default) | 10 | 1 — the anchor | yes, by luck of the default |
+| `/jobs?filter=all` | 20 | 3 — anchor ×2 + `drive-service-supply-chain` | **no** |
+| `/attempts/1/jobs` | 10 | 2 | no — that attempt concluded `failure` |
+| `/attempts/2/jobs` | 10 | 1 — the anchor | **yes, and immune** |
+
+Under `filter=all` the listing carries an earlier attempt's genuine failure,
+which coexists with a green run legitimately. Same surface reading, innocent
+explanation available, proof gone.
+
+**The sharp part: it is destroyed by a habit this register recommends.** Two
+entries earlier the correct advice is to widen a listing with `filter=all` so a
+reader's defaults cannot hide rows. Apply that good habit to this proof and the
+proof dies. **A remedy for one failure mode was the attack on another**, and
+nothing in either entry warned of the interaction.
+
+- **A number's query is provenance; a proof's query is a premise.** Provenance
+  tells the reader where a figure came from. A premise is load-bearing: change it
+  and the conclusion is no longer supported. For anything *argued* rather than
+  merely counted, state the scope as a condition of the argument.
+- **Prefer the scoping that is immune, not the one that happens to be right.**
+  `/attempts/2/jobs` and `/jobs` agree today; only the first still agrees after a
+  re-run or a widening.
+- **Both sides of a comparison must be read at the same level.** Third appearance
+  in three substrates — a denominator, a set of identifiers, and now a proof.
+  Here the two sides are a *conclusion* and a *listing*; reading the conclusion at
+  run level and the listing at all-attempts level is the entire defect.
+
+**Reported against their own filing** by platform session `b14546cd`, who wrote
+that they *"gave a proof and withheld its premise, in the same exchange where I
+criticised stopping at the first refutable mechanism."* I merged it without
+asking for the query, which is the same omission from the receiving side.
 
 ---
 
