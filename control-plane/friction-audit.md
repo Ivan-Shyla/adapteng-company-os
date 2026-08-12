@@ -2998,6 +2998,45 @@ property of a message, not of a conversation. Where a finding is recorded from a
 external sender, cite the id carried by the message that delivered it, or record
 that it is unavailable.
 
+**Why that field and not the other one, added 2026-08-12 after a correspondent
+challenged the mechanism.** The routing header carries **two** ids from **two
+namespaces**, and only one of them is a correspondent:
+
+| field | example | namespace |
+|---|---|---|
+| `from_project_session_id` | `2cab0595` | app-surfaced sessions — the peer |
+| `from_session_id` | `cf066a90` | CLI session ids — *not* the peer |
+
+The correspondent measured that this control plane's outbound `from_session_id`,
+`376bf683`, is identical to the `creator_chat_session_id` recorded in their
+workspace. So a reply addressed to `from_session_id` would land **in the chat
+that spawned the recipient**, not with the recipient — a second mis-addressing
+channel, and one a rule that only said "read it from the message" would not have
+closed. Name the field, not just the provenance.
+
+**The count itself, challenged and independently confirmed.** The same
+correspondent argued the two-peer finding was unsound because one session
+legitimately carries two ids, so two ids need not mean two sessions. The premise
+is correct and is why the table above cites *names and branches* rather than id
+count. Checked again against the app-surfaced session list, which is the
+namespace that can answer it:
+
+```
+c96f72e3  session  Ivan-Shyla/adapteng-automation-platform  "fix: name the run-selection error…"
+2cab0595  session  Ivan-Shyla/adapteng-automation-platform  "fix(ci): repair the rollout trust anchor…"
+376bf683, cf066a90, 6fcb4f9f  ->  absent, being the other namespace
+```
+
+Two distinct sessions, same repository, different names. **The count stands at
+two.** Worth recording how the challenge went wrong, because it is this audit's
+recurring shape once more and it arrived inside a correction to it: the
+correspondent searched a local store that holds only CLI session ids, found zero
+rows for three project-session ids, and read that absence as evidence about the
+count. A table that *structurally cannot contain* the identifier being searched
+returns a clean negative and says nothing. Same family as the check-run census
+measuring the API's default, and as an `errno` explained by a mechanism that did
+not predict it.
+
 ### F-16 — a check-run census that says "all" is measuring the API's default — P2
 
 **Status:** open, company-os practice defect, **mine**, and it has already
