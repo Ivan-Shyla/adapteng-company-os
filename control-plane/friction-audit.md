@@ -3112,6 +3112,21 @@ dismiss or concur — it manufactured a contradiction of a correct external
 report**, and did so with an exact-sounding integer that made the claim harder to
 question, not easier.
 
+**And the corroboration that made it harder still was not independent — this is
+the sharpest form of the entry and it is the correspondent's.** The wrong figure
+was confirmed back to this control plane by the very party it contradicted, in
+the words *"thirty of thirty… I have no quarrel with any of it."* They have since
+established why: their census called the same endpoint and inherited the same
+unstated default. **Two instruments agreed because they shared a defect, and the
+agreement was presented as corroboration.** The general rule, theirs and adopted
+verbatim: **when a second measurement agrees, the question is not whether it
+agrees but whether it *could have disagreed*.** A confirmation that was
+incapable of dissent carries no information, and it is worse than a lone wrong
+number, because a reader weights the second source most. Practically: before
+citing a confirming measurement, state what it would have taken for that
+measurement to come out differently. If nothing would have, it is one
+measurement reported twice.
+
 **The second defect is temporal and is the more general one.** Two observers
 measured a moving subject at different times, and the later one treated the
 disagreement as the other's error rather than as evidence that the subject had
@@ -3130,6 +3145,34 @@ than this entry's: two of their populations have *identical* cardinality, so a
 figure moved from one to the other is **verifiably** correct in the destination
 and no audit can catch it. Attaching provenance to a figure is therefore
 necessary and not sufficient — the population must travel too.
+
+**A mechanism for the extra four has been proposed and is recorded unproven.**
+The same correspondent reports that the two `filter=all` copies of the anchor
+failure share an `external_id` and a check *suite*, that the suite belongs to an
+unrelated **push** run rather than to the anchor's own run, and that the second
+copy is zero-duration with `started_at == completed_at`. The structural half —
+an unowned check-run filing into the commit's push suite — is checkable and
+would explain why the leak is push-side. **The causal half, that re-running the
+unrelated workflow duplicated the red mark, is not supported by the evidence
+offered.** Their own figures put the re-run's completion at `06:58:17Z` and the
+run's `updated_at` at `06:59:03Z`, forty-six seconds apart: `updated_at` is
+therefore not the run's completion time but a last-modified field, and a
+check-run landing in that run's suite is exactly the kind of event that *writes*
+to it. **A timestamp match between an event and a field that event would update
+is the weakest available causal evidence** — equally consistent with the reverse
+direction and with a third writer. The zero duration points the same way, since
+`started_at == completed_at` is the signature of a script POSTing
+`status: completed` in a single call, i.e. the verifier running again on a
+fail-fast path, rather than of a platform copying a third party's check-run.
+
+This is kept in F-16 rather than waved through because the two mechanisms imply
+**different inflation models for the same count**: one correlating anchor reds
+with push re-run activity, the other with anchor invocations. F-16 is about which
+population a number is over, so a census correction that adopts the wrong
+inflation model reproduces the original defect one level up. The discriminating
+read is whether any workflow invoking the verifier ran at `06:59:03Z`. It has not
+been taken here — check-run archaeology is closed to this control plane by the
+owner, and the defect lies in the correspondent's own mandate.
 
 ### F-17 — two Actions fields that look stable and are not — P2
 

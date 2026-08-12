@@ -3105,6 +3105,13 @@ same head returns **40 check-runs and 4 non-success under `filter=all`**. The wo
 sub-shape of this record's recurring failure, and the one that reads as
 authoritative because the number is exact.
 
+*As-of, because F-16's own remedy says to quote one and this section had not.*
+Re-read at **2026-08-12T15:06:02Z**, both figures reproduce unchanged:
+`filter=latest` → 30 total / 2 non-success; `filter=all` → 40 total / 4
+non-success. A check-run census is a timestamped observation and not a property
+of a SHA, so every figure in this section is to be read as of that instant and
+re-measured before it is quoted against anyone.
+
 *The duplicate anchor name.* This section first said GitHub posts one check-run
 for the workflow and one for its single job. **It does not.** GitHub Actions
 creates a check-run per *job* only; the second is POSTed by the verifier itself.
