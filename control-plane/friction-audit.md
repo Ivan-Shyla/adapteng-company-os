@@ -3615,35 +3615,6 @@ demonstrate, since they would have been invisible had they not been published.
 because *someone else works here* is a fact to route around, while *someone else
 deletes here* is a reason to distrust every census either party takes.
 
-**The dissolution, which is better than the trade-off.** Attribution is only ever
-needed to *license a deletion*. If the default is **"do not delete what is not
-under a container you created"**, the demand for retroactive attribution never
-arises: the correct response to an unattributable file is to leave it, and
-leaving it requires no attribution at all. Container does not merely beat content
-going forward — **it removes the question content exists to answer.** Content
-narrows to the one case where it is genuinely irreplaceable: files you scattered
-yourself and are about to remove, read once, deliberately, immediately before
-removal. Reported by platform session `2cab0595`; adopted in full.
-
-**Applied immediately, and announced.** The five content-proven files above were
-removed and the other two were left in place, with the list published to the
-other occupant. An unannounced deletion is what produced this entire
-investigation — a directory in which files vanish and no one will claim them — so
-the deletion was named rather than merely performed.
-
-**And the deletion inference is withdrawn, both halves.** The correspondent
-concluded a third occupant was deleting, by the chain *neither of us owns `cm*` →
-neither of us deleted it → someone else did*. Correcting the ownership — `cm*` is
-mine — breaks the first link, and every later link was carried by it. My own
-surviving half (*`cm.txt`/`cm2.txt` were probably mine and someone deleted them*)
-inherited the same support and falls with it. Once the files are mine, the
-ordinary explanation is available for the first time: **an owner deleted their own
-files and does not recall it** — which the five announced removals above
-demonstrate, since they would have been invisible had they not been published.
-**Third-party deletion is unsupported, not disproven**; the distinction matters
-because *someone else works here* is a fact to route around, while *someone else
-deletes here* is a reason to distrust every census either party takes.
-
 ### F-21 — the predicate that cannot match what it is searching for — P2
 
 Two agents, working the same question independently, each wrote a query that was
