@@ -2019,29 +2019,40 @@ READINESS_EXECUTION_INTERVAL_SECONDS = 10
 # address-level probe run from there has been unable to answer.
 PEER_TASK_NAME = "adapteng-peer-reachability-probe"
 PEER_MARKER = "ADAPTENG_PEER"
+# Both paths are probed because they differ in what they touch: /health answers
+# without reaching the database, /ready does not. Neither reads the
+# Authorization header, so no credential is presented and no model call can
+# occur on either.
+PEER_HEALTH_PATH = "/health"
 # Same construction rules as READINESS_COMMAND, for the same reason: Coolify
 # runs it as docker exec <container> sh -c '<command>' and escapes single
 # quotes, so there is no single quote, no dollar and no backtick anywhere here,
-# and it is one line.
+# and it is one line. It also carries no double quote, because the whole
+# program is already inside one; every string it needs arrives through argv.
 #
-# Three independent facts, in the order that makes a partial answer readable.
-# gethostbyname proves DNS and reports the address it resolved. create_connection
-# proves TCP to the declared internal port. The two status codes prove HTTP.
-# Both paths are requested because they differ in what they touch, and neither
-# reads the Authorization header, so no credential is presented and no model
-# call can occur.
+# It must additionally stay SHORT. The first live run was refused with HTTP 500,
+# and peer-diagnose located the cause by measurement rather than by guess: the
+# endpoint accepted 245 characters and refused 300, with the refused rung
+# differing from an accepted one by padding alone. PEER_COMMAND_LIMIT is that
+# measured bound, and a test holds the command under it.
+#
+# http.client is used rather than urllib because it returns a non-2xx status
+# instead of raising, so no error-processor patch is needed. That patch was
+# most of what made the first attempt too long, and its absence is what makes
+# "reachable but not ready" a reportable answer rather than a crash.
+#
+# Connecting by NAME is what proves reachability: a status code coming back
+# from http://ai-gateway:8081 establishes DNS, TCP and HTTP together. An
+# explicit gethostbyname was dropped to fit, which costs the resolved address
+# in the report and costs no proven fact.
+PEER_COMMAND_LIMIT = 245
 PEER_COMMAND = (
     'python -c "'
-    "import socket,urllib.request as R,sys;"
-    "R.HTTPErrorProcessor.http_response=lambda s,q,r:r;"
-    "R.HTTPErrorProcessor.https_response=lambda s,q,r:r;"
-    "a=socket.gethostbyname(sys.argv[1]);"
-    "c=socket.create_connection((sys.argv[1],int(sys.argv[2])),5);"
-    "c.close();"
-    "print(sys.argv[5],a,R.urlopen(sys.argv[3],timeout=5).status,"
-    "R.urlopen(sys.argv[4],timeout=5).status)"
-    '" {host} {port} http://{host}:{port}/health http://{host}:{port}/ready '
-    + PEER_MARKER
+    "import http.client as H,sys;v=sys.argv;"
+    "f=lambda p:(lambda c:(c.request(v[3],p),c.getresponse().status)[1])"
+    "(H.HTTPConnection(v[1],int(v[2]),timeout=5));"
+    "print(v[4],f(v[5]),f(v[6]))"
+    '" {host} {port} GET ' + PEER_MARKER + " {health} {ready}"
 )
 
 
@@ -2051,6 +2062,8 @@ def peer_command(spec: dict) -> str:
     return PEER_COMMAND.format(
         host=spec["target"]["resource_name"],
         port=spec["network"]["internal_port"],
+        health=PEER_HEALTH_PATH,
+        ready=READINESS_PATH,
     )
 
 
@@ -2084,17 +2097,22 @@ def peer_ladder(spec: dict) -> list:
         head = "echo ADAPTENG_PEER "
         return head + "x" * (size - len(head))
 
-    return [
+    rungs = [
         ("trivial", filler(26)),
         # Known accepted on the gateway, so it separates "this application
         # refuses tasks" from "this command is refused".
         ("readiness-shaped", readiness_command(spec)),
+        ("peer-full", peer_command(spec)),
         # Padding only: same prefix, no new characters, longer. A refusal of a
         # filler rung cannot be blamed on anything but its length.
         ("filler-300", filler(300)),
-        ("peer-full", peer_command(spec)),
         ("filler-500", filler(500)),
     ]
+    # Sorted rather than hand-ordered: the rungs are real commands whose lengths
+    # change when they are edited, and the first version of this list stopped
+    # being ascending the moment one of them was shortened. Sorting keeps the
+    # bracketing sound without depending on anyone re-checking the order.
+    return sorted(rungs, key=lambda rung: len(rung[1]))
 
 
 def operate_peer_diagnose(client: Client, spec: dict) -> int:
@@ -2772,30 +2790,39 @@ def operate_peer_verify(client: Client, spec: dict, sleep=None) -> int:
         return EXIT_FAILED
 
     fields = verdict.split()
-    if len(fields) != 3 or fields[1] != "200" or fields[2] != "200":
+    if len(fields) != 2 or fields[0] != "200" or fields[1] != "200":
         emit("")
         emit(
             f"    the peer answered {PEER_MARKER} {verdict}, which is not the "
-            "shape of a fully successful probe (address, /health 200, /ready 200)."
+            f"shape of a fully successful probe ({PEER_HEALTH_PATH} 200, "
+            f"{READINESS_PATH} 200). The probe ran and got an answer, so this "
+            "is a real negative rather than a missing measurement."
         )
         emit(f"RESULT peer-verify failed reachable=no answer={verdict!r}")
         return EXIT_FAILED
 
-    address, health_status, ready_status = fields
+    health_status, ready_status = fields
+    port = spec["network"]["internal_port"]
     emit("")
-    emit(f"    DNS: {service_name} resolved from inside {peer_name} to {address}")
-    emit(f"    TCP: connected to {service_name}:{spec['network']['internal_port']}")
-    emit(f"    HTTP: /health {health_status}, /ready {ready_status}")
     emit(
-        "    Peer reachability confirmed. A different container on the shared "
-        "network resolved this service by name, opened a TCP connection to its "
-        "internal port, and got an answer from both endpoints. No public route "
-        "was used or created, no credential was presented, and no model was "
-        "called: both paths answer before the Authorization header is read."
+        f"    {peer_name} addressed http://{service_name}:{port} by name and "
+        f"got {PEER_HEALTH_PATH} {health_status}, {READINESS_PATH} "
+        f"{ready_status}."
     )
     emit(
-        f"RESULT peer-verify ok reachable=yes address={address} "
-        f"health={health_status} ready={ready_status}"
+        "    Peer reachability confirmed. A status code returned to a "
+        "different container from a name-addressed connection establishes DNS, "
+        "TCP and HTTP together: none of the three can have failed and still "
+        "produce this answer."
+    )
+    emit(
+        "    No public route was used or created, no credential was presented, "
+        "and no model was called: both paths answer before the Authorization "
+        "header is read."
+    )
+    emit(
+        f"RESULT peer-verify ok reachable=yes health={health_status} "
+        f"ready={ready_status}"
     )
     return EXIT_OK
 
