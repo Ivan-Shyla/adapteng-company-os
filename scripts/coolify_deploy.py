@@ -68,6 +68,7 @@ OPERATIONS = (
     "service-resolve",
     "peer-diagnose",
     "diagnose",
+    "networks",
 )
 FORBIDDEN_METHODS = frozenset({"DELETE"})
 
@@ -3585,6 +3586,192 @@ def operate_diagnose(client: Client, spec: dict) -> int:
     return EXIT_OK
 
 
+def destination_facts(application: dict) -> dict:
+    """What the payload says about the destination, values and not key names.
+
+    ``destination`` arrives as a nested object on some versions and as a bare
+    id on others. Both are read, and what is returned is the union, because the
+    question being asked -- which Docker network is this container placed on --
+    is answered by the nested object's ``network`` field when it is present and
+    by nothing at all when it is not.
+    """
+
+    facts: dict = {}
+    for key in ("destination_id", "destination_type"):
+        if key in application:
+            facts[key] = application.get(key)
+    nested = application.get("destination")
+    if isinstance(nested, dict):
+        for key in ("uuid", "name", "network", "server_id"):
+            if key in nested:
+                facts[f"destination.{key}"] = nested.get(key)
+    elif nested is not None:
+        facts["destination"] = nested
+    return facts
+
+
+# The fields on an application payload that can decide whether one container
+# reaches another by name. They are reported with their values because the
+# whole difficulty in this investigation has been that a key existing said
+# nothing whatever about what it held: connect_to_docker_network was accepted
+# by the API, reported by nothing, and applied by nothing.
+NETWORK_BEARING_KEYS = (
+    "additional_networks_count",
+    "additional_servers_count",
+    "custom_network_aliases",
+    "custom_docker_run_options",
+    "ports_exposes",
+    "ports_mappings",
+    "fqdn",
+)
+
+
+def network_facts_of(application: dict) -> dict:
+    facts = destination_facts(application)
+    for key in NETWORK_BEARING_KEYS:
+        if key in application:
+            facts[key] = application.get(key)
+    return facts
+
+
+def shared_network_verdict(subject: dict, peer: dict) -> tuple[bool | None, str]:
+    """Do these two applications sit on one destination, hence one network?
+
+    Returned as a tristate on purpose. ``None`` is not a shortcoming to be
+    tidied away: an API that does not report the destination cannot be made to
+    answer this, and a False manufactured from an absent field would be the
+    same mistake as reading a setting the API never returned.
+    """
+
+    left = destination_uuid_of(subject)
+    right = destination_uuid_of(peer)
+    if left is None or right is None:
+        return None, "the API does not report a destination for both, so this is undecidable here"
+    if left == right:
+        return True, f"both are placed on destination {left}"
+    return False, f"they are placed on different destinations: {left} and {right}"
+
+
+def alias_verdict(application: dict, wanted: str) -> tuple[bool | None, str]:
+    """Does this application answer to the name a caller would dial?
+
+    A shared network is necessary and not sufficient. Docker's embedded DNS
+    resolves container names and network aliases, and Coolify names containers
+    after the application uuid, not after the application's display name. So a
+    caller dialling http://ai-gateway:8081 needs ``ai-gateway`` to be an alias.
+    Reporting the aliases separately from the network keeps two independent
+    reasons for the same symptom from being read as one.
+    """
+
+    raw = application.get("custom_network_aliases")
+    if raw is None:
+        return None, "custom_network_aliases is not reported by this API"
+    text = raw if isinstance(raw, str) else str(raw)
+    aliases = [item.strip() for item in text.replace(",", " ").split() if item.strip()]
+    if not aliases:
+        return False, f"no aliases are declared, so the name {wanted!r} is not one"
+    if wanted in aliases:
+        return True, f"{wanted!r} is among the declared aliases {aliases}"
+    return False, f"the declared aliases are {aliases}, which do not include {wanted!r}"
+
+
+def operate_networks(client: Client, spec: dict) -> int:
+    """Report the placement of this application and its caller, and change nothing.
+
+    This exists because a settings field was written, accepted, and had no
+    effect, and four separate readings inferred attachment from something a
+    detached container can also do. Reachability of a database over the default
+    bridge is not attachment; a healthy container is not attachment; a 2xx on a
+    write is not attachment. What this prints instead is the placement itself,
+    with values, for the subject and for the application that will actually
+    dial it -- so that the next decision is taken against a measurement rather
+    than against the absence of a contradiction.
+
+    Every call is a GET. Nothing is created, armed, written or deployed.
+    """
+
+    target = spec["target"]
+    subject_name = str(target["resource_name"])
+    peer_name = str(spec["network"]["peer_probe_application"])
+    port = spec["network"]["internal_port"]
+    emit(f"--- networks {spec['service']}")
+
+    project = find_project(client, target["project"])
+    environment = (
+        find_environment(client, project["uuid"], target["environment"])
+        if project
+        else None
+    )
+    if project is None or environment is None:
+        emit("    project or environment absent; nothing to report")
+        emit("RESULT networks failed application=absent")
+        return EXIT_FAILED
+
+    listed = applications_in(client, environment)
+    details: dict = {}
+    for item in sorted(listed, key=lambda entry: entry.get("name") or ""):
+        name = item.get("name")
+        uuid = item.get("uuid")
+        if not isinstance(name, str) or not isinstance(uuid, str):
+            continue
+        detail = call(client, "GET", f"/applications/{uuid}")
+        if not isinstance(detail, dict):
+            continue
+        details[name] = detail
+        emit(f"    {name} uuid={uuid} status={detail.get('status')!r}")
+        for key, value in network_facts_of(detail).items():
+            body, masked = redact_foreign_text(str(value), known=(uuid,))
+            emit(
+                f"      {key}={clip(body, 200)!r}"
+                + (f" ({masked} spans masked)" if masked else "")
+            )
+
+    subject = details.get(subject_name)
+    peer = details.get(peer_name)
+    if subject is None or peer is None:
+        missing = [
+            name
+            for name, value in ((subject_name, subject), (peer_name, peer))
+            if value is None
+        ]
+        emit(f"    cannot compare: absent from this environment: {missing}")
+        emit("RESULT networks failed application=absent")
+        return EXIT_FAILED
+
+    emit("")
+    emit(
+        f"    for http://{subject_name}:{port} to answer from {peer_name}, "
+        "three independent things must hold:"
+    )
+    shared, shared_why = shared_network_verdict(subject, peer)
+    alias, alias_why = alias_verdict(subject, subject_name)
+    emit(f"      1 same network      : {verdict_word(shared)} -- {shared_why}")
+    emit(f"      2 the name is an alias: {verdict_word(alias)} -- {alias_why}")
+    emit(
+        "      3 embedded DNS reachable from the caller: NOT DECIDABLE HERE -- "
+        "no API field reports it; service-resolve measures it from inside"
+    )
+    emit(
+        "    a shared destination is necessary and not sufficient, so 1 alone "
+        "must not be read as reachability."
+    )
+
+    emit("")
+    emit(
+        f"RESULT networks ok shared_network={verdict_word(shared)} "
+        f"alias={verdict_word(alias)}"
+    )
+    return EXIT_OK
+
+
+def verdict_word(value: bool | None) -> str:
+    """Three words for three states, so that unknown cannot be read as no."""
+
+    if value is None:
+        return "UNREPORTED"
+    return "YES" if value else "NO"
+
+
 def operate_status(client: Client, spec: dict) -> int:
     target = spec["target"]
     emit(f"--- status {spec['service']}")
@@ -3712,6 +3899,8 @@ def run(environ: dict) -> int:
         return operate_peer_diagnose(client, spec)
     if operation == "diagnose":
         return operate_diagnose(client, spec)
+    if operation == "networks":
+        return operate_networks(client, spec)
     return operate_deploy(
         client,
         spec,

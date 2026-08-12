@@ -2175,6 +2175,7 @@ class EntryPointTests(unittest.TestCase):
                 "service-resolve",
                 "peer-diagnose",
                 "diagnose",
+                "networks",
             },
         )
         workflow = (
@@ -4318,6 +4319,137 @@ class DiagnoseTests(unittest.TestCase):
         code, output = self.run_diagnose(instance)
         self.assertEqual(code, driver.EXIT_OK)
         self.assertIn("executions ever recorded: 0", output)
+
+
+class NetworkPlacementTests(unittest.TestCase):
+    """The placement report, and the three states its verdicts must keep apart."""
+
+    def real_spec(self) -> dict:
+        return driver.load_spec(driver.spec_path(RESOURCE))
+
+    def test_two_applications_on_one_destination_share_a_network(self) -> None:
+        left = {"destination_id": 1, "destination": {"uuid": "dest-a"}}
+        right = {"destination": {"uuid": "dest-a"}}
+        verdict, why = driver.shared_network_verdict(left, right)
+        self.assertIs(verdict, True)
+        self.assertIn("dest-a", why)
+
+    def test_two_applications_on_different_destinations_do_not(self) -> None:
+        verdict, why = driver.shared_network_verdict(
+            {"destination": {"uuid": "dest-a"}}, {"destination": {"uuid": "dest-b"}}
+        )
+        self.assertIs(verdict, False)
+        self.assertIn("dest-a", why)
+        self.assertIn("dest-b", why)
+
+    def test_an_unreported_destination_is_unknown_and_not_false(self) -> None:
+        # The distinction this test defends is the whole reason the verdict is a
+        # tristate. A False manufactured from an absent field would be the same
+        # error as reading a setting the API never returns.
+        verdict, why = driver.shared_network_verdict({"destination": {"uuid": "d"}}, {})
+        self.assertIsNone(verdict)
+        self.assertIn("undecidable", why)
+
+    def test_the_three_states_are_three_distinct_words(self) -> None:
+        words = {
+            driver.verdict_word(True),
+            driver.verdict_word(False),
+            driver.verdict_word(None),
+        }
+        self.assertEqual(len(words), 3)
+        self.assertNotEqual(driver.verdict_word(None), driver.verdict_word(False))
+
+    def test_an_absent_alias_field_is_unreported_not_a_denial(self) -> None:
+        verdict, why = driver.alias_verdict({}, "ai-gateway")
+        self.assertIsNone(verdict)
+        self.assertIn("not reported", why)
+
+    def test_an_empty_alias_field_is_a_denial(self) -> None:
+        # Reported and empty is a measurement; absent is not. They must not
+        # collapse onto one another.
+        verdict, _ = driver.alias_verdict({"custom_network_aliases": ""}, "ai-gateway")
+        self.assertIs(verdict, False)
+
+    def test_the_wanted_name_is_found_among_declared_aliases(self) -> None:
+        for raw in ("ai-gateway", "other ai-gateway", "other,ai-gateway"):
+            with self.subTest(raw=raw):
+                verdict, _ = driver.alias_verdict(
+                    {"custom_network_aliases": raw}, "ai-gateway"
+                )
+                self.assertIs(verdict, True)
+
+    def test_a_near_miss_alias_is_not_a_match(self) -> None:
+        verdict, why = driver.alias_verdict(
+            {"custom_network_aliases": "ai-gateway-2"}, "ai-gateway"
+        )
+        self.assertIs(verdict, False)
+        self.assertIn("ai-gateway-2", why)
+
+    def test_network_facts_report_values_and_not_only_key_names(self) -> None:
+        facts = driver.network_facts_of(
+            {
+                "destination": {"uuid": "dest-a", "network": "coolify"},
+                "custom_network_aliases": "ai-gateway",
+                "additional_networks_count": 0,
+                "unrelated": "ignored",
+            }
+        )
+        self.assertEqual(facts["destination.network"], "coolify")
+        self.assertEqual(facts["custom_network_aliases"], "ai-gateway")
+        self.assertEqual(facts["additional_networks_count"], 0)
+        self.assertNotIn("unrelated", facts)
+
+    def instance_with_caller(self, *, peer: bool = True, peer_destination: str = "dst-1"):
+        """A subject and the application that will dial it, both placed.
+
+        Both halves matter. A fixture with only the subject could not tell a
+        report that compares two placements from one that prints a single
+        placement twice.
+        """
+
+        instance = FakeInstance(with_application=True)
+        instance.applications[0]["destination"] = {"uuid": "dst-1", "network": "coolify"}
+        instance.applications[0]["custom_network_aliases"] = ""
+        if peer:
+            instance.add_application(
+                name="ops-runner",
+                destination={"uuid": peer_destination, "network": "coolify"},
+            )
+        return instance
+
+    def test_the_operation_writes_nothing(self) -> None:
+        instance = self.instance_with_caller()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            driver.operate_networks(instance, self.real_spec())
+        self.assertEqual({method for method, _ in instance.calls}, {"GET"})
+
+    def test_a_shared_destination_alone_is_not_reported_as_reachability(self) -> None:
+        instance = self.instance_with_caller()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_networks(instance, self.real_spec())
+        output = buffer.getvalue()
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("shared_network=YES", output)
+        self.assertIn("necessary and not sufficient", output)
+        self.assertIn("NOT DECIDABLE HERE", output)
+        self.assertIn("service-resolve", output)
+
+    def test_a_split_destination_is_reported_as_such(self) -> None:
+        instance = self.instance_with_caller(peer_destination="dst-2")
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            driver.operate_networks(instance, self.real_spec())
+        self.assertIn("shared_network=NO", buffer.getvalue())
+
+    def test_an_absent_caller_fails_rather_than_comparing_one_side(self) -> None:
+        instance = self.instance_with_caller(peer=False)
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_networks(instance, self.real_spec())
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("RESULT networks failed application=absent", buffer.getvalue())
 
 
 if __name__ == "__main__":
