@@ -47,6 +47,7 @@ on:
           - service-resolve
           - peer-diagnose
           - diagnose
+          - networks
       service:
         description: "Spec file under deploy/, named without its extension"
         required: true

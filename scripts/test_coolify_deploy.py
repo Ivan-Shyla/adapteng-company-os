@@ -37,6 +37,7 @@ RESOURCE = "ai-gateway"
 # Read from the committed spec rather than repeated here, so a change to the
 # declared peer moves the fixture with it instead of silently making every peer
 # test probe an application that no longer exists.
+CONTROL_NAME = "neighbour-with-an-alias"
 PEER_NAME = driver.load_spec(driver.spec_path(RESOURCE))["network"][
     "peer_probe_application"
 ]
@@ -72,6 +73,7 @@ def minimal_spec() -> dict:
             "internal_port": 8081,
             "public_fqdn": None,
             "connect_to_docker_network": True,
+            "network_aliases": ["widget"],
             "peer_probe_application": "ops-runner",
         },
         "health_check": {
@@ -2175,6 +2177,7 @@ class EntryPointTests(unittest.TestCase):
                 "service-resolve",
                 "peer-diagnose",
                 "diagnose",
+                "networks",
             },
         )
         workflow = (
@@ -3934,18 +3937,41 @@ class ServiceResolveTests(unittest.TestCase):
     ) -> None:
         """The outcome that puts the remaining gap on the caller.
 
-        Embedded DNS answering at all means the service is on a user-defined
-        network, so it is reachable by name from anything else on that network.
-        The peer not being on it is the peer's attachment, not this deployment.
+        The peer is given an alias of its own here, and that is the whole
+        premise of the test rather than fixture decoration. Without one, its
+        name would not resolve from anywhere on the network, so a failure to
+        resolve it would carry no information about attachment at all.
         """
 
         instance = ServiceResolveInstance(census=self.census("localhost", RESOURCE))
+        peer = next(item for item in instance.applications if item["name"] == PEER_NAME)
+        peer["custom_network_aliases"] = PEER_NAME
         code, output = self.run_service(instance)
         self.assertEqual(code, driver.EXIT_FAILED)
         self.assertIn(
             "RESULT service-resolve failed scope=network reason=not_on_shared_network",
             output,
         )
+
+    def test_a_peer_with_no_alias_of_its_own_proves_nothing_about_the_network(
+        self,
+    ) -> None:
+        """The branch beside the one already corrected, making the same error.
+
+        The subject rung was fixed by adding a control, and this rung was left
+        drawing the identical unsound conclusion from the identical evidence:
+        a name that does not resolve because it is not a name, read as a
+        network that is not shared. Found by running the corrected census
+        against the live instance and reading a verdict that could not follow.
+        """
+
+        instance = ServiceResolveInstance(census=self.census("localhost", RESOURCE))
+        peer = next(item for item in instance.applications if item["name"] == PEER_NAME)
+        peer["custom_network_aliases"] = ""
+        code, output = self.run_service(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reason=other_has_no_alias", output)
+        self.assertNotIn("not_on_shared_network", output)
 
     def test_a_service_that_cannot_resolve_itself_accuses_the_deployment(self) -> None:
         instance = ServiceResolveInstance(census=self.census("localhost"))
@@ -3954,6 +3980,41 @@ class ServiceResolveTests(unittest.TestCase):
         self.assertIn(
             "RESULT service-resolve failed scope=service reason=no_service_discovery",
             output,
+        )
+
+    def test_a_resolving_control_moves_the_verdict_off_the_network(self) -> None:
+        """The reading that reversed a standing conclusion.
+
+        Before the control existed, localhost-only was reported as "no embedded
+        DNS, therefore the default bridge, therefore the platform accepts the
+        network setting without applying it". A control that resolves rules that
+        out by itself: a container on the default bridge cannot resolve a
+        neighbour by name. The two outcomes must not share a verdict, because
+        acting on the wrong one meant reconciling and redeploying a setting that
+        was never the fault.
+        """
+
+        instance = ServiceResolveInstance(census=self.census("localhost", CONTROL_NAME))
+        self.add_control(instance)
+        code, output = self.run_service(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reason=no_network_alias", output)
+        self.assertNotIn("no_service_discovery", output)
+        self.assertIn("declares no network alias", output)
+
+    def test_a_control_that_also_fails_still_accuses_the_network(self) -> None:
+        instance = ServiceResolveInstance(census=self.census("localhost"))
+        self.add_control(instance)
+        code, output = self.run_service(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reason=no_service_discovery", output)
+        self.assertIn("points at the network", output)
+
+    def add_control(self, instance) -> None:
+        instance.add_application(
+            name=CONTROL_NAME,
+            status="running:healthy",
+            custom_network_aliases=CONTROL_NAME,
         )
 
     def test_both_resolving_is_the_reachability_answer(self) -> None:
@@ -4318,6 +4379,224 @@ class DiagnoseTests(unittest.TestCase):
         code, output = self.run_diagnose(instance)
         self.assertEqual(code, driver.EXIT_OK)
         self.assertIn("executions ever recorded: 0", output)
+
+
+class NetworkPlacementTests(unittest.TestCase):
+    """The placement report, and the three states its verdicts must keep apart."""
+
+    def real_spec(self) -> dict:
+        return driver.load_spec(driver.spec_path(RESOURCE))
+
+    def test_two_applications_on_one_destination_share_a_network(self) -> None:
+        left = {"destination_id": 1, "destination": {"uuid": "dest-a"}}
+        right = {"destination": {"uuid": "dest-a"}}
+        verdict, why = driver.shared_network_verdict(left, right)
+        self.assertIs(verdict, True)
+        self.assertIn("dest-a", why)
+
+    def test_two_applications_on_different_destinations_do_not(self) -> None:
+        verdict, why = driver.shared_network_verdict(
+            {"destination": {"uuid": "dest-a"}}, {"destination": {"uuid": "dest-b"}}
+        )
+        self.assertIs(verdict, False)
+        self.assertIn("dest-a", why)
+        self.assertIn("dest-b", why)
+
+    def test_an_unreported_destination_is_unknown_and_not_false(self) -> None:
+        # The distinction this test defends is the whole reason the verdict is a
+        # tristate. A False manufactured from an absent field would be the same
+        # error as reading a setting the API never returns.
+        verdict, why = driver.shared_network_verdict({"destination": {"uuid": "d"}}, {})
+        self.assertIsNone(verdict)
+        self.assertIn("undecidable", why)
+
+    def test_the_three_states_are_three_distinct_words(self) -> None:
+        words = {
+            driver.verdict_word(True),
+            driver.verdict_word(False),
+            driver.verdict_word(None),
+        }
+        self.assertEqual(len(words), 3)
+        self.assertNotEqual(driver.verdict_word(None), driver.verdict_word(False))
+
+    def test_an_absent_alias_field_is_unreported_not_a_denial(self) -> None:
+        verdict, why = driver.alias_verdict({}, "ai-gateway")
+        self.assertIsNone(verdict)
+        self.assertIn("not a key", why)
+
+    def test_a_null_alias_field_is_a_denial_and_not_unreported(self) -> None:
+        """The distinction the first version of this function did not make.
+
+        It read a null value as "the API does not report this field", and so
+        reported UNREPORTED for ai-gateway while a neighbour on the same
+        instance carried a populated value in the very same field. Reported and
+        null is a measurement; the key being absent is not.
+        """
+
+        verdict, why = driver.alias_verdict(
+            {"custom_network_aliases": None}, "ai-gateway"
+        )
+        self.assertIs(verdict, False)
+        self.assertIn("reported and empty", why)
+
+    def test_the_service_answers_to_the_name_a_caller_dials(self) -> None:
+        """The alias and the dialled name have one source, not two.
+
+        A caller reaches this service as http://<resource_name>:<port>. If the
+        alias were declared independently of the resource name the two could
+        drift, and the symptom of that drift is exactly the one measured here:
+        a container on the right network that does not answer to its name.
+        """
+
+        spec = self.real_spec()
+        self.assertIn(
+            spec["target"]["resource_name"], spec["network"]["network_aliases"]
+        )
+
+    def test_the_alias_is_owned_so_it_is_verified_by_read_back(self) -> None:
+        # The distinction from connect_to_docker_network, which is written blind
+        # because the API reports nothing back. This field is reported, so it
+        # belongs among the compared fields rather than among the settings that
+        # can only be trusted.
+        fields = driver.desired_application_fields(self.real_spec())
+        self.assertEqual(fields["custom_network_aliases"], "ai-gateway")
+        self.assertNotIn("custom_network_aliases", driver.SETTING_KEYS)
+
+    def test_several_aliases_are_joined_in_the_shape_the_api_stores(self) -> None:
+        spec = self.real_spec()
+        spec["network"]["network_aliases"] = ["one", "two"]
+        self.assertEqual(driver.declared_network_aliases(spec), "one,two")
+
+    def test_the_control_is_chosen_by_the_property_and_not_by_name(self) -> None:
+        applications = [
+            {"name": "ai-gateway", "custom_network_aliases": None},
+            {"name": "n8n-selfhosted", "custom_network_aliases": None},
+            {"name": "adapteng-baserow-adapter", "custom_network_aliases": "adapteng-baserow-adapter"},
+        ]
+        name, why = driver.alias_control_name(applications, {"ai-gateway"})
+        self.assertEqual(name, "adapteng-baserow-adapter")
+        self.assertIn("alias", why)
+
+    def test_a_neighbour_aliased_to_some_other_name_is_not_a_control(self) -> None:
+        # The control has to answer to its own name, because that is the name
+        # the census will ask for. An alias pointing elsewhere would make the
+        # control rung fail on a working network.
+        name, _ = driver.alias_control_name(
+            [{"name": "other", "custom_network_aliases": "something-else"}], set()
+        )
+        self.assertIsNone(name)
+
+    def test_the_subject_and_the_other_name_cannot_be_the_control(self) -> None:
+        applications = [{"name": "ai-gateway", "custom_network_aliases": "ai-gateway"}]
+        name, why = driver.alias_control_name(applications, {"ai-gateway"})
+        self.assertIsNone(name)
+        self.assertIn("no control name", why)
+
+    def test_the_census_puts_the_control_before_the_names_in_doubt(self) -> None:
+        names = driver.resolve_census_names("ai-gateway", "ops-runner", "control-app")
+        self.assertEqual(names, ["localhost", "control-app", "ai-gateway", "ops-runner"])
+
+    def test_the_census_without_a_control_keeps_its_previous_shape(self) -> None:
+        names = driver.resolve_census_names("ai-gateway", "ops-runner")
+        self.assertEqual(names, ["localhost", "ai-gateway", "ops-runner"])
+
+    def test_the_census_command_with_a_control_still_fits_the_task_field(self) -> None:
+        command = driver.resolve_census_command(
+            driver.resolve_census_names(
+                "ai-gateway", "ops-runner", "adapteng-baserow-adapter"
+            )
+        )
+        self.assertLessEqual(len(command), driver.PEER_COMMAND_LIMIT)
+        self.assertEqual(command.count("'"), 0)
+        self.assertEqual(command.count('"'), 2)
+        self.assertEqual(len(command.splitlines()), 1)
+
+    def test_an_empty_alias_field_is_a_denial(self) -> None:
+        # Reported and empty is a measurement; absent is not. They must not
+        # collapse onto one another.
+        verdict, _ = driver.alias_verdict({"custom_network_aliases": ""}, "ai-gateway")
+        self.assertIs(verdict, False)
+
+    def test_the_wanted_name_is_found_among_declared_aliases(self) -> None:
+        for raw in ("ai-gateway", "other ai-gateway", "other,ai-gateway"):
+            with self.subTest(raw=raw):
+                verdict, _ = driver.alias_verdict(
+                    {"custom_network_aliases": raw}, "ai-gateway"
+                )
+                self.assertIs(verdict, True)
+
+    def test_a_near_miss_alias_is_not_a_match(self) -> None:
+        verdict, why = driver.alias_verdict(
+            {"custom_network_aliases": "ai-gateway-2"}, "ai-gateway"
+        )
+        self.assertIs(verdict, False)
+        self.assertIn("ai-gateway-2", why)
+
+    def test_network_facts_report_values_and_not_only_key_names(self) -> None:
+        facts = driver.network_facts_of(
+            {
+                "destination": {"uuid": "dest-a", "network": "coolify"},
+                "custom_network_aliases": "ai-gateway",
+                "additional_networks_count": 0,
+                "unrelated": "ignored",
+            }
+        )
+        self.assertEqual(facts["destination.network"], "coolify")
+        self.assertEqual(facts["custom_network_aliases"], "ai-gateway")
+        self.assertEqual(facts["additional_networks_count"], 0)
+        self.assertNotIn("unrelated", facts)
+
+    def instance_with_caller(self, *, peer: bool = True, peer_destination: str = "dst-1"):
+        """A subject and the application that will dial it, both placed.
+
+        Both halves matter. A fixture with only the subject could not tell a
+        report that compares two placements from one that prints a single
+        placement twice.
+        """
+
+        instance = FakeInstance(with_application=True)
+        instance.applications[0]["destination"] = {"uuid": "dst-1", "network": "coolify"}
+        instance.applications[0]["custom_network_aliases"] = ""
+        if peer:
+            instance.add_application(
+                name="ops-runner",
+                destination={"uuid": peer_destination, "network": "coolify"},
+            )
+        return instance
+
+    def test_the_operation_writes_nothing(self) -> None:
+        instance = self.instance_with_caller()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            driver.operate_networks(instance, self.real_spec())
+        self.assertEqual({method for method, _ in instance.calls}, {"GET"})
+
+    def test_a_shared_destination_alone_is_not_reported_as_reachability(self) -> None:
+        instance = self.instance_with_caller()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_networks(instance, self.real_spec())
+        output = buffer.getvalue()
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("shared_network=YES", output)
+        self.assertIn("necessary and not sufficient", output)
+        self.assertIn("NOT DECIDABLE HERE", output)
+        self.assertIn("service-resolve", output)
+
+    def test_a_split_destination_is_reported_as_such(self) -> None:
+        instance = self.instance_with_caller(peer_destination="dst-2")
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            driver.operate_networks(instance, self.real_spec())
+        self.assertIn("shared_network=NO", buffer.getvalue())
+
+    def test_an_absent_caller_fails_rather_than_comparing_one_side(self) -> None:
+        instance = self.instance_with_caller(peer=False)
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_networks(instance, self.real_spec())
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("RESULT networks failed application=absent", buffer.getvalue())
 
 
 if __name__ == "__main__":

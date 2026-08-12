@@ -68,6 +68,7 @@ OPERATIONS = (
     "service-resolve",
     "peer-diagnose",
     "diagnose",
+    "networks",
 )
 FORBIDDEN_METHODS = frozenset({"DELETE"})
 
@@ -108,6 +109,7 @@ SECTION_KEYS = {
         "internal_port",
         "public_fqdn",
         "connect_to_docker_network",
+        "network_aliases",
         "peer_probe_application",
     },
     "health_check": {
@@ -642,7 +644,28 @@ def desired_application_fields(spec: dict) -> dict:
         "health_check_timeout": health["timeout_seconds"],
         "health_check_retries": health["retries"],
         "health_check_start_period": health["start_period_seconds"],
+        "custom_network_aliases": declared_network_aliases(spec),
     }
+
+
+def declared_network_aliases(spec: dict) -> str:
+    """The names this container should answer to, in the shape the API stores.
+
+    This is the field the whole network investigation turned on, and it belongs
+    here rather than among the settings for one reason that decides everything:
+    the API reports it. connect_to_docker_network is accepted and reported by
+    nothing, so a write to it can only ever be trusted; this is read back after
+    writing and compared, like every other owned field.
+
+    Docker's embedded DNS answers for container names and network aliases.
+    Coolify names a container after the application uuid, so without an alias
+    the display name is not a name on the network at all -- which is why a
+    container that resolved a neighbour perfectly well could not resolve
+    itself.
+    """
+
+    aliases = spec["network"]["network_aliases"]
+    return ",".join(str(item) for item in aliases)
 
 
 def desired_settings(spec: dict) -> dict:
@@ -2284,16 +2307,27 @@ PEER_RESOLVE_COMMAND = (
 )
 
 
-def resolve_census_names(subject_name: str, other_name: str) -> list:
+def resolve_census_names(subject_name: str, other_name: str, control_name: str | None = None) -> list:
     """Ascending in doubt, because the order is what carries the reading.
 
-    localhost resolves from /etc/hosts with no resolver at all; the subject's
-    own name needs Docker's embedded DNS, which only exists on a user-defined
-    network; the other name needs that network to be shared. Each rung fails
-    for a different reason, so how far the list gets is the measurement.
+    localhost resolves from /etc/hosts with no resolver at all; the control is a
+    neighbour that declares its own name as a network alias, so it is the rung
+    that decides whether embedded DNS answers at all; the subject's own name and
+    the other name then need that name to be an alias too.
+
+    The control was not here originally, and its absence produced a wrong
+    reading. Without it the subject's own name was the rung carrying the weight,
+    and a failure there was read as "no embedded DNS on this network". But the
+    subject declares no alias, so that name could not have resolved on a
+    perfectly working network either. The rung tested two things at once and was
+    reported as testing one.
     """
 
-    return [PEER_RESOLVE_CERTAIN_NAME, subject_name, other_name]
+    names = [PEER_RESOLVE_CERTAIN_NAME]
+    if control_name:
+        names.append(control_name)
+    names.extend([subject_name, other_name])
+    return names
 
 
 def resolve_census_command(names: list) -> str:
@@ -3294,7 +3328,24 @@ def run_resolution_census(
     subject_uuid = str(subject["uuid"])
     emit(f"    {subject_role} {subject_name}: uuid={subject_uuid} state={subject.get('status')}")
 
-    names = resolve_census_names(subject_name, other_name)
+    neighbours = [
+        call(client, "GET", f"/applications/{item['uuid']}")
+        for item in applications_in(client, environment)
+        if isinstance(item.get("uuid"), str)
+    ]
+    control_name, control_why = alias_control_name(
+        [item for item in neighbours if isinstance(item, dict)],
+        {subject_name, other_name},
+    )
+    emit(f"    control name: {control_name or 'none'} -- {control_why}")
+    if control_name is None:
+        emit(
+            "    without a control the census cannot separate 'this network has "
+            "no embedded DNS' from 'this name is not an alias', and the second "
+            "reading was taken for the first once already."
+        )
+
+    names = resolve_census_names(subject_name, other_name, control_name)
     command = resolve_census_command(names)
     emit(f"    asking for, in order: {' '.join(names)}")
 
@@ -3385,14 +3436,38 @@ def run_resolution_census(
         return EXIT_FAILED
 
     if subject_name not in resolved:
+        if control_name and control_name in resolved:
+            emit(
+                f"    {control_name} resolved from inside {subject_name} but "
+                f"{subject_name} did not resolve its own name. The control is "
+                "what separates these: a container on a network with no service "
+                "discovery could not have resolved the control either. So the "
+                "resolver works, this container is on a user-defined network "
+                "with embedded DNS, and the missing thing is the name -- "
+                f"{subject_name} declares no network alias, and Coolify names "
+                "containers after the application uuid rather than after the "
+                "application. Nothing here accuses the network or "
+                f"{other_name}."
+            )
+            emit(
+                f"RESULT {operation} failed scope={subject_role} "
+                "reason=no_network_alias"
+            )
+            return EXIT_FAILED
         emit(
             f"    {PEER_RESOLVE_CERTAIN_NAME} resolved but {subject_name} did "
-            "not, so this container cannot resolve its own name. That is what "
-            "the default Docker bridge looks like: it carries no service "
-            "discovery, so no container name resolves there at all. Whatever "
-            f"{other_name} is attached to, it could not be reached by name "
-            f"from {subject_name}. This is a finding about {subject_name}, and "
-            f"{other_name} remains unaccused."
+            "not, so this container cannot resolve its own name. Two different "
+            "conditions produce exactly that, and this census cannot separate "
+            "them: a network with no service discovery, or a working resolver "
+            "and no alias by that name. "
+            + (
+                f"The control {control_name} did not resolve either, which "
+                "points at the network."
+                if control_name
+                else "No control name was available, so neither is ruled out."
+            )
+            + f" This is a finding about {subject_name}, and {other_name} "
+            "remains unaccused."
         )
         emit(
             f"RESULT {operation} failed scope={subject_role} "
@@ -3401,15 +3476,35 @@ def run_resolution_census(
         return EXIT_FAILED
 
     if other_name not in resolved:
+        other = next(
+            (
+                item
+                for item in neighbours
+                if isinstance(item, dict) and item.get("name") == other_name
+            ),
+            None,
+        )
+        other_alias = alias_verdict(other, other_name)[0] if other else None
+        if other_alias is False:
+            emit(
+                f"    {subject_name} resolves its own name and cannot resolve "
+                f"{other_name}, but {other_name} declares no network alias of "
+                "its own, so that name would not resolve from anywhere on this "
+                f"network. The census cannot see {other_name}'s attachment "
+                "through a name it does not have, and no conclusion about the "
+                "network follows. This is the same unsound step the subject "
+                "rung used to make, in the branch next to it."
+            )
+            emit(
+                f"RESULT {operation} failed scope=name reason=other_has_no_alias"
+            )
+            return EXIT_FAILED
         emit(
             f"    {subject_name} resolves its own name through Docker's "
             f"embedded DNS but cannot resolve {other_name}. The resolver "
-            "works, so this is not a defect of the container being asked: the "
-            "two are not on a shared user-defined network. Sharing a "
-            "destination is sharing a host, not a network, which is exactly "
-            "the gap this probe existed to measure and the reason the API's "
-            "silence about connect_to_docker_network could not be taken for a "
-            "yes."
+            "works and the name is one that could resolve, so this is not a "
+            "defect of the container being asked: the two are not on a shared "
+            "user-defined network."
         )
         emit(f"RESULT {operation} failed scope=network reason=not_on_shared_network")
         return EXIT_FAILED
@@ -3585,6 +3680,224 @@ def operate_diagnose(client: Client, spec: dict) -> int:
     return EXIT_OK
 
 
+def destination_facts(application: dict) -> dict:
+    """What the payload says about the destination, values and not key names.
+
+    ``destination`` arrives as a nested object on some versions and as a bare
+    id on others. Both are read, and what is returned is the union, because the
+    question being asked -- which Docker network is this container placed on --
+    is answered by the nested object's ``network`` field when it is present and
+    by nothing at all when it is not.
+    """
+
+    facts: dict = {}
+    for key in ("destination_id", "destination_type"):
+        if key in application:
+            facts[key] = application.get(key)
+    nested = application.get("destination")
+    if isinstance(nested, dict):
+        for key in ("uuid", "name", "network", "server_id"):
+            if key in nested:
+                facts[f"destination.{key}"] = nested.get(key)
+    elif nested is not None:
+        facts["destination"] = nested
+    return facts
+
+
+# The fields on an application payload that can decide whether one container
+# reaches another by name. They are reported with their values because the
+# whole difficulty in this investigation has been that a key existing said
+# nothing whatever about what it held: connect_to_docker_network was accepted
+# by the API, reported by nothing, and applied by nothing.
+NETWORK_BEARING_KEYS = (
+    "additional_networks_count",
+    "additional_servers_count",
+    "custom_network_aliases",
+    "custom_docker_run_options",
+    "ports_exposes",
+    "ports_mappings",
+    "fqdn",
+)
+
+
+def network_facts_of(application: dict) -> dict:
+    facts = destination_facts(application)
+    for key in NETWORK_BEARING_KEYS:
+        if key in application:
+            facts[key] = application.get(key)
+    return facts
+
+
+def shared_network_verdict(subject: dict, peer: dict) -> tuple[bool | None, str]:
+    """Do these two applications sit on one destination, hence one network?
+
+    Returned as a tristate on purpose. ``None`` is not a shortcoming to be
+    tidied away: an API that does not report the destination cannot be made to
+    answer this, and a False manufactured from an absent field would be the
+    same mistake as reading a setting the API never returned.
+    """
+
+    left = destination_uuid_of(subject)
+    right = destination_uuid_of(peer)
+    if left is None or right is None:
+        return None, "the API does not report a destination for both, so this is undecidable here"
+    if left == right:
+        return True, f"both are placed on destination {left}"
+    return False, f"they are placed on different destinations: {left} and {right}"
+
+
+def alias_verdict(application: dict, wanted: str) -> tuple[bool | None, str]:
+    """Does this application answer to the name a caller would dial?
+
+    A shared network is necessary and not sufficient. Docker's embedded DNS
+    resolves container names and network aliases, and Coolify names containers
+    after the application uuid, not after the application's display name. So a
+    caller dialling http://ai-gateway:8081 needs ``ai-gateway`` to be an alias.
+    Reporting the aliases separately from the network keeps two independent
+    reasons for the same symptom from being read as one.
+
+    Absent and null are held apart deliberately, and the first version of this
+    function did not hold them apart: it read ``None`` as "not reported", and so
+    reported UNREPORTED for an application whose neighbour on the same instance
+    carried a populated value in the very same field. Whether the API reports a
+    field is answered by the key being present; what it reports is answered by
+    the value. Binding the first question to the second is the same mistake this
+    whole operation exists to expose.
+    """
+
+    if "custom_network_aliases" not in application:
+        return None, "custom_network_aliases is not a key this API returns"
+    raw = application.get("custom_network_aliases")
+    text = "" if raw is None else raw if isinstance(raw, str) else str(raw)
+    aliases = [item.strip() for item in text.replace(",", " ").split() if item.strip()]
+    if not aliases:
+        return False, f"the field is reported and empty, so the name {wanted!r} is not an alias"
+    if wanted in aliases:
+        return True, f"{wanted!r} is among the declared aliases {aliases}"
+    return False, f"the declared aliases are {aliases}, which do not include {wanted!r}"
+
+
+def alias_control_name(applications: list, exclude: set) -> tuple[str | None, str]:
+    """A neighbour that demonstrably carries an alias, to be used as a control.
+
+    The resolution census asks for the subject's own name and reads a failure as
+    absence of embedded DNS. That inference is only sound if the subject's own
+    name is one the resolver could ever have answered -- that is, if it is an
+    alias. It was not, so the rung was broken and the reading taken from it was
+    wrong.
+
+    The control is discovered by the property it has to have rather than typed
+    in as a name, because a hard-coded control would silently stop being a
+    control the day its alias was removed.
+    """
+
+    for item in sorted(applications, key=lambda entry: entry.get("name") or ""):
+        name = item.get("name")
+        if not isinstance(name, str) or name in exclude:
+            continue
+        verdict, _ = alias_verdict(item, name)
+        if verdict is True:
+            return name, f"{name} declares its own name as a network alias"
+    return None, "no neighbour declares an alias, so no control name is available"
+
+
+def operate_networks(client: Client, spec: dict) -> int:
+    """Report the placement of this application and its caller, and change nothing.
+
+    This exists because a settings field was written, accepted, and had no
+    effect, and four separate readings inferred attachment from something a
+    detached container can also do. Reachability of a database over the default
+    bridge is not attachment; a healthy container is not attachment; a 2xx on a
+    write is not attachment. What this prints instead is the placement itself,
+    with values, for the subject and for the application that will actually
+    dial it -- so that the next decision is taken against a measurement rather
+    than against the absence of a contradiction.
+
+    Every call is a GET. Nothing is created, armed, written or deployed.
+    """
+
+    target = spec["target"]
+    subject_name = str(target["resource_name"])
+    peer_name = str(spec["network"]["peer_probe_application"])
+    port = spec["network"]["internal_port"]
+    emit(f"--- networks {spec['service']}")
+
+    project = find_project(client, target["project"])
+    environment = (
+        find_environment(client, project["uuid"], target["environment"])
+        if project
+        else None
+    )
+    if project is None or environment is None:
+        emit("    project or environment absent; nothing to report")
+        emit("RESULT networks failed application=absent")
+        return EXIT_FAILED
+
+    listed = applications_in(client, environment)
+    details: dict = {}
+    for item in sorted(listed, key=lambda entry: entry.get("name") or ""):
+        name = item.get("name")
+        uuid = item.get("uuid")
+        if not isinstance(name, str) or not isinstance(uuid, str):
+            continue
+        detail = call(client, "GET", f"/applications/{uuid}")
+        if not isinstance(detail, dict):
+            continue
+        details[name] = detail
+        emit(f"    {name} uuid={uuid} status={detail.get('status')!r}")
+        for key, value in network_facts_of(detail).items():
+            body, masked = redact_foreign_text(str(value), known=(uuid,))
+            emit(
+                f"      {key}={clip(body, 200)!r}"
+                + (f" ({masked} spans masked)" if masked else "")
+            )
+
+    subject = details.get(subject_name)
+    peer = details.get(peer_name)
+    if subject is None or peer is None:
+        missing = [
+            name
+            for name, value in ((subject_name, subject), (peer_name, peer))
+            if value is None
+        ]
+        emit(f"    cannot compare: absent from this environment: {missing}")
+        emit("RESULT networks failed application=absent")
+        return EXIT_FAILED
+
+    emit("")
+    emit(
+        f"    for http://{subject_name}:{port} to answer from {peer_name}, "
+        "three independent things must hold:"
+    )
+    shared, shared_why = shared_network_verdict(subject, peer)
+    alias, alias_why = alias_verdict(subject, subject_name)
+    emit(f"      1 same network      : {verdict_word(shared)} -- {shared_why}")
+    emit(f"      2 the name is an alias: {verdict_word(alias)} -- {alias_why}")
+    emit(
+        "      3 embedded DNS reachable from the caller: NOT DECIDABLE HERE -- "
+        "no API field reports it; service-resolve measures it from inside"
+    )
+    emit(
+        "    a shared destination is necessary and not sufficient, so 1 alone "
+        "must not be read as reachability."
+    )
+
+    emit("")
+    emit(
+        f"RESULT networks ok shared_network={verdict_word(shared)} "
+        f"alias={verdict_word(alias)}"
+    )
+    return EXIT_OK
+
+
+def verdict_word(value: bool | None) -> str:
+    """Three words for three states, so that unknown cannot be read as no."""
+
+    if value is None:
+        return "UNREPORTED"
+    return "YES" if value else "NO"
+
+
 def operate_status(client: Client, spec: dict) -> int:
     target = spec["target"]
     emit(f"--- status {spec['service']}")
@@ -3712,6 +4025,8 @@ def run(environ: dict) -> int:
         return operate_peer_diagnose(client, spec)
     if operation == "diagnose":
         return operate_diagnose(client, spec)
+    if operation == "networks":
+        return operate_networks(client, spec)
     return operate_deploy(
         client,
         spec,
