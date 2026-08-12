@@ -373,17 +373,26 @@ check *disagreeing with itself*; this shows how often.~~ It also refutes the
 folk remedy directly: attempt 2 **was** a re-run, and it did not clear.
 
 **"Shows how often" is withdrawn, and it was wrong by roughly 14×.** Read as a
-rate, 2-of-3 is **66.7%**. The measured per-attempt flake rate is **4.66%**
-pooled — see the attempt-1 amendment in F-10, which also shows why the 9.47%
-attempt-1 figure is not this quantity. At 4.66%, `P(≥2 of 3) ≈ 0.63%`, about
-**1 in 158**. Unusual; not a measurement of how often anything happens.
+rate, 2-of-3 is **66.7%**. The measured per-attempt flake rate is **4.2–4.4%**
+on the paired, decontaminated population — see the attempt-1 amendment in F-10,
+which also shows why the 9.47% attempt-1 figure is not this quantity. At that
+rate, `P(≥2 of 3) ≈ 0.5%`, about **1 in 180**. Unusual; not a measurement of how
+often anything happens.
+
+> **Corrected before this entry was merged: the first draft said 4.66%, about
+> 1 in 158, and that denominator was selected on the outcome.** It pooled the
+> five days of a peer's table, which were the days that *had* failures. Across
+> all 11 days with runs, 5 carry zero failures and 93 runs sit on them. The
+> defensible denominators are all 285 runs (3.51%) or the 119 decontaminated
+> pairs (4.20% direct, 4.39% by inversion). The conclusion is unchanged and
+> slightly strengthened — 1 in 180 rather than 1 in 158 — but the number was
+> arrived at by inheriting somebody's table as a population.
 
 A peer proposed 1-in-27 instead, using 08-11's local 11.5%. That is the better
 correction of the two but it still conditions on the day the event occurred,
 which selects on the outcome; and 08-11's 11.5% is 3/26 with a 95% interval of
-[4.0%, 29.0%], which contains the pooled rate. The pooled figure is the honest
-one, and either way the conclusion is the same: this run is an unusual draw, not
-a frequency.
+[4.0%, 29.0%], which contains the pooled rate. Either way the conclusion is the
+same: this run is an unusual draw, not a frequency.
 
 **Three attempts is a sample of size three.** A ratio computed from 3 trials is
 not a rate however carefully it is written, and "shows how often" is precisely
@@ -2489,11 +2498,33 @@ rather than asserting `1 == N`. Same test, different predicate — exactly the
 near-miss recorded above, and the reason that guard is worth its space.
 
 So 9.47% measures a different population: **16 of the 27 are breakage,
-contamination or infrastructure; 11 are flake-consistent.** Inverting the twin
-formula on those 11 over 120 pairs gives **p ≈ 4.8%**, against 4.36–4.51%
-published. Every route lands in [3.9%, 4.8%]; none lands near 9.47%. The figure
-is not a lower bound depressed by hidden double-hits, because the double-hits are
-absent by measurement rather than by assumption.
+contamination or infrastructure; 11 are disagreements, of which 10 carry the
+F-8 assertion** and one (`ce0900dd`) is runner provisioning. Inverting the twin
+formula on those 10 over 119 decontaminated pairs gives **p ≈ 4.4%**, direct
+counting gives 4.20%, and dropping the deterministically-broken pairs from the
+denominator gives 4.82% — against 4.36–4.51% published. Every route lands in
+[3.5%, 4.8%]; **none lands near 9.47%**. The figure is not a lower bound
+depressed by hidden double-hits, because the double-hits are absent by
+measurement rather than by assumption.
+
+**The endpoint that reads the run is not the endpoint that reads its jobs, and
+only one of them is leak-free.** `runs/{id}/attempts/1/jobs` returns **18**
+entries belonging to a different workflow entirely (`Base-trusted rollout
+authorization`). An instrument that aggregates `any(job.conclusion ==
+"failure")` therefore inherits another workflow's verdict: on `084c4d17` and
+`ce0900dd` the push twin has every real job green and an alien job red. The
+run's own `attempts/1` conclusion reads `success` for both, correctly. So the
+leak **relocates a genuine flake occurrence out of the disagreement cell and
+into the agreement cell** — the one direction that would falsify the
+independence argument above.
+
+The censuses in this register read the run-level conclusion and were never
+exposed. **That was a consequence of the unit chosen, not a defence anyone
+designed** — the same shape as the `fullmatch` immunity examined below, where a
+property held for a reason nobody had picked. The guard worth stating is
+positive: **an instrument must whitelist its population by name at extraction.
+What an endpoint returns is a fact about the endpoint, not about the thing being
+measured.**
 
 **Where the 7 comes from, established by enumeration rather than by guessing at
 the peer's method.** Crossing the two scoping choices available:
@@ -2534,24 +2565,43 @@ f-string, which is why the case names appear in no grep). So a per-*test* rate
 
 | input | p | implied q |
 |---|---|---|
-| flake per-run | 3.86% | **0.78%** |
-| twin inversion | 4.82% | **0.98%** |
+| all runs, 10/285 | 3.51% | 0.71% |
+| **paired decontaminated, 10/238** | **4.20%** | **0.85%** |
+| **twin inversion, 119 pairs** | **4.39%** | **0.89%** |
+| twin inversion, deterministic pairs dropped | 4.82% | 0.98% |
 | attempt-1, conflated | 9.47% | 1.97% |
 
-**Corrected per-case band: [0.78%, 0.98%].** The observed first-passage
-positions — 1, 1, 4, 4, 1 across the five cases — fit a uniform per-case hazard
-(χ² = 4.98, df = 4), which is what a timing race predicts and what a
-data-dependent fault cannot.
+**Corrected per-case band: [0.85%, 0.98%].** The numerator is **10**, not the 11
+disagreements: `ce0900dd` is a disagreement but its cause is `Set up job` —
+runner provisioning, one of only two such failures in all 285 runs — so it
+belongs in the divergence count and not in the flake numerator. The observed
+first-passage positions fit a uniform per-case hazard, which is what a timing
+race predicts and what a data-dependent fault cannot: attempt-level
+[1, 1, 4, 4, 1] gives χ² = 4.91, attempt-1 [1, 1, 4, 3, 1] gives χ² = 4.00, both
+on 4 df. **The two vectors are the same data at different units** — the extra
+occurrence at position 4 is attempt 2 of `31532517315`, which F-8 names
+explicitly (att 1 → position 3, att 2 → position 4). Neither count is wrong.
 
 **And here the conflated bracket did measurable downstream damage.** A peer
 carried a competing timing model at 3.2% per operation. Against the bracket
 [4%, 9.5%] it read as 1.6–4× high — a range whose lower end is close enough to
-call agreement. Against the corrected band it reads as **3.3–4.1× high**, which
+call agreement. Against the corrected band it reads as **3.3–3.7× high**, which
 is not a near-miss and admits no reading in which the model was nearly right.
 **An inflated uncertainty band does not merely lose precision; it launders
-disagreement into compatibility.** That is the practical cost of quoting a
-bracket whose endpoints measure different populations, and it is why the left
-endpoint being "conservative" was not harmless.
+disagreement into compatibility.** Decontaminating *both* ends narrows the
+interval from 1.25× wide to 1.15× wide, which is the sharper form of the same
+point: **a band wide enough to argue inside is a measurement of the instrument,
+not of the model.**
+
+**The contamination set was an enumeration that had drifted from its predicate.**
+It was carried as four hard-coded SHA prefixes. The property those four share is
+`head_branch == palinaruban-backup-evidence-lifecycle`, and that branch carries
+**five** — `138cafa9` is the fifth, and this register had it filed as a
+deterministic both-fail pair rather than as contamination. The classification
+consequence is nil, since both exclude it from the flake, but the mechanism is
+the entry's own subject one more time: **a population fixed by listing its
+members cannot notice a new member, while the predicate that generated the list
+would have.**
 
 ---
 
