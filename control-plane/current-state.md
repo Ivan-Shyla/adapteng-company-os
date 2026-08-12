@@ -4257,5 +4257,55 @@ The AI path is the only thing gated. Already deployed and running in Coolify:
 Platform CI is green at `6ecdd5fb` — 14 check-runs, 14 success, identical under
 `filter=latest` and `filter=all`, so the count is not subject to F-16.
 
+### 16.5 Sequencing hazard — merge platform #121 *before* running step 1
+
+**Step 1 is a one-shot with a non-retryable attempt, and in its shipped form a
+run-selection failure is undiagnosable.** Verified from
+`scripts/operations/authorize_approved_assets_phase.sh` on platform `main`, not
+accepted from report:
+
+```
+254:      --created-after "$dispatch_after" 2>/dev/null   <- helper stderr discarded
+256:  selection_status=$?
+261:  if [ "$selection_status" -ne 2 ]; then
+262:    printf '%s\n' "lifecycle.run_selection_failed" >&2
+265:  sleep 2                                             <- status 2 retries silently
+268:  printf '%s\n' "lifecycle.run_not_found" >&2          <- exhaustion, no code
+```
+
+The helper's error code travels on stderr and `2>/dev/null` throws it away. Only
+a status that is neither 0 nor 2 names anything. A **retryable** status 2
+exhausts the loop and terminates at a bare `lifecycle.run_not_found`.
+
+**Platform #128 widened that label.** It made `github_metadata.pagination_race`
+retryable, so status 2 now carries two distinct causes where it previously
+carried one. `lifecycle.run_not_found` went from one-to-one with
+`run_selection.zero` to **one-to-two**, with no output separating them. Neither
+PR could see this alone: the reclassification and the instrumentation are each
+correct, and the gap lives only in their interaction.
+
+**Platform #121 at `6197a1e` fixes exactly this**, and touches exactly the two
+files at the head of this chain — `authorize_approved_assets_phase.sh` and
+`docs/runbooks/migrate-approved-assets.md`. The exhaustion branch gains
+`lifecycle.run_not_found_status=` and `lifecycle.run_not_found_stderr=`.
+
+**Correct order, and it is not the obvious one:**
+
+1. Owner issues the base-trusted rollout authorization / trust receipt.
+2. #121's two trust-anchor checks go green; **merge #121.**
+3. *Then* run step 1.
+
+Running step 1 first is the trap: if run-selection fails, the operator gets
+`lifecycle.run_not_found` and nothing else, having already spent the attempt.
+
+**#121 must not be merged ahead of the signature to get there faster.** Its five
+ruleset-required checks are green and the two red trust-anchor checks are *not*
+in `main-protected`'s required set — so the merge button is available. The
+first-model-proof runbook forecloses it anyway: *"A designated owner must issue
+the trust receipt through the documented out-of-band process; do not bypass or
+weaken the failing trust checks."* This is the live instance of the open question
+in §15, and it resolves against merging.
+
+
 
 
