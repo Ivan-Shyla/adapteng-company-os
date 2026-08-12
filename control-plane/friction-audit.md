@@ -349,6 +349,30 @@ Identical trees, opposite verdicts. Both were re-run to green, which is why
 the current check-run conclusions all read `success` and the failures are
 invisible unless you look at run attempts.
 
+**Third instance, 2026-08-11, and it is the strongest of the three because it
+is a rate rather than a disagreement.** Run `31532517315` on `fca8f278`
+(platform PR #127) carries **three** attempts of the same workflow on the same
+bytes:
+
+| Attempt | Started | Conclusion | Failing job |
+|---|---|---|---|
+| 1 | 20:21:34Z | **failure** | `root-rollout-tests` |
+| 2 | 20:42:39Z | **failure** | `root-rollout-tests` |
+| 3 | 23:43:34Z | success | none |
+
+Two failures in three attempts on one commit. The earlier evidence shows the
+check *disagreeing with itself*; this shows how often. It also refutes the
+folk remedy directly: attempt 2 **was** a re-run, and it did not clear.
+
+The run's top-level conclusion now reads `success`, which is the second and
+independent way conclusion-reading undercounts this defect. The known one is
+that a re-run to green hides the occurrence. The other is that **a run carries
+one conclusion however many attempts failed beneath it** — here one field
+stands in for three attempts and two failures. Every census in this register,
+including the ones taken to correct the first bias, used the *run* as its unit.
+The correct unit is the **attempt**, and no census has yet used it, so every
+occurrence count on record should be read as a lower bound.
+
 **Re-verified 2026-08-10 against the API, and one alternative explanation is now
 ruled out.** WS-6 asked — correctly, and without asserting it — whether the
 `2c9824ba` split might be its newly-found `pull_request.state_invalid`
@@ -381,10 +405,41 @@ here.** F-3 exists in this register because a confident, coherent, wrong
 mechanism was published and believed. WS-6 had a coherent mechanism and asked
 instead of asserting; the answer is no, and F-8 keeps its evidence.
 
-The failure is always the same case of
+~~The failure is always the same case of
 `test_production_lifecycle_cleanup_status_is_fail_closed`: the `ok-fail-0-90`
 case exits 1 with `lifecycle.run_selection_failed` instead of reaching the
-cleanup path and exiting 90.
+cleanup path and exiting 90.~~
+
+**"Always the same case" is false, and it pointed at the wrong mechanism.**
+The test is always
+`test_production_lifecycle_cleanup_status_is_fail_closed`, but the parameter
+case varies. Read from the attempt logs rather than from a summary:
+
+| Run / attempt | Failing case | Assertion |
+|---|---|---|
+| `31532517315` attempt 1 | `fail_absent-ok-0-90` | `assert 1 == 90` |
+| `31532517315` attempt 2 | `ok-fail-0-90` | `assert 1 == 90` |
+| `31414049256` attempt 1 | `ok-ok-0-0` | `assert 1 == 0` |
+
+Three distinct cases, and two of them on **consecutive attempts of the same
+commit, 21 minutes apart**. A defect keyed to a case's data cannot move
+between cases like that.
+
+The invariant is on the other side of the assertion. **The observed value is
+`1` in every occurrence; only the expected value changes with the case.** That
+`1` is the shell's literal `exit 1`, which fires for any non-zero non-2 helper
+status, so it carries no information about what the helper did — the causal
+datum appears nowhere in the failure message. What every failing case shares is
+the *selection path*, which every case traverses regardless of its data, and
+which is where the timing defect lives. `ok-ok-0-0` is decisive on its own: it
+injects nothing at all, so there is no fault for a data-dependent explanation
+to be about.
+
+This mattered. "Always the same case" invites the reading that one fixture is
+malformed, which is a bounded, local, data-shaped problem; the truth is a
+timing window on a path shared by every case, which is neither bounded nor
+local. The wrong claim was not merely imprecise — it named the wrong class of
+defect, and a reader acting on it would have gone looking at the fixture.
 
 **Why a transient becomes a hard failure.** In
 `scripts/operations/authorize_approved_assets_phase.sh` the `select-queued-run`
