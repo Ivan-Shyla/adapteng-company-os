@@ -246,6 +246,15 @@ Verified from `main` and CI, not from narrative.
   a signed rollout trust receipt. The trust root is armed with a real Ed25519 key
   for `rollout-approval@adapteng.com`; the private half is not on the control
   plane's host, which is what makes this owner-only rather than merely pending.
+  **The receipt is a policy requirement, not a mechanical one, and an earlier
+  statement here that #128 is *blocked* was wrong.** Measured at head
+  `36cdc765`: `mergeable: MERGEABLE`, `mergeStateStatus: UNSTABLE`, all five
+  required contexts of ruleset `20236725` green on both twins, and the only two
+  red check-runs of thirty are the anchor pair, which is **not** in the required
+  set. GitHub would permit this merge today. What holds #128 is §15's interim
+  stance, and the owner's sentence is therefore a governance choice — sign the
+  receipt, or settle §15 — rather than an unblocking action. See §15 for the
+  full measurement.
   The `run` phase then additionally requires
   `COMPANY_OS_FIRST_MODEL_PROOF_AUTHORIZED`, and gate 6 requires the owner to
   ratify the `AG-007` acceptance set.
@@ -2936,15 +2945,37 @@ correctly returns `rollout_trust_anchor.unauthorized.approval.commit_delta_inval
 because a protected change arrived without an owner-signed receipt commit; and
 the two anchor checks are advisory, so GitHub permits the merge.
 
-| | Platform #122 | Platform #121 |
-|---|---|---|
-| Protected paths touched | `verify_rollout_trust_anchor.py`, `authorize-rollout-policy-change.md` | `authorize_approved_assets_phase.sh`, `migrate-approved-assets.md` |
-| Anchor verdict | `unauthorized.approval.commit_delta_invalid` | `unauthorized.approval.commit_delta_invalid` |
-| Required checks | all green | all green |
-| Outcome | **merged** 20:44:08Z | **left open** |
+| | Platform #122 | Platform #121 | Platform #128 |
+|---|---|---|---|
+| Protected paths touched | `verify_rollout_trust_anchor.py`, `authorize-rollout-policy-change.md` | `authorize_approved_assets_phase.sh`, `migrate-approved-assets.md` | `approved_assets_github_metadata.py` |
+| Anchor verdict | `unauthorized.approval.commit_delta_invalid` | `unauthorized.approval.commit_delta_invalid` | refusal, both anchor check-runs red |
+| Required checks | all green | all green | **all five green, on both twins** |
+| Outcome | **merged** 20:44:08Z | **left open** | **left open** |
 
 All four paths verified present in `PROTECTED_EXACT_PATHS`, read from
 `verify_rollout_trust_anchor.py` on `main` rather than from either report.
+
+**#128 is the third instance, and it was measured rather than inferred.** At head
+`36cdc765`: `gh pr view` reports `mergeable: MERGEABLE`, `mergeStateStatus:
+UNSTABLE`. The required set was read from live ruleset `20236725` — five
+contexts, and **neither anchor check-run is among them**. All thirty check-runs
+on that head were enumerated: **28 success, 2 failure**, the two failures being
+`Base-trusted rollout authorization` and `Verify exact current head from merged
+base`. Every other check appears exactly twice, once per twin; those two appear
+once each, because `rollout-trust-anchor.yml` triggers on `pull_request_target`
+alone and GitHub posts one check-run for the workflow and one for its single job.
+`drive-service-supply-chain` is **green, twice** — worth stating because it was
+reported to this control plane as the failing mark.
+
+**So #128 is not blocked, and any statement that it is should be withdrawn.**
+What holds it is this section's own interim stance, not GitHub. Under the
+bootstrap/ordinary distinction proposed below, #128 is **ordinary** — a
+retryability fix that happens to touch a protected path, not a repair to the
+anchor's own machinery — so it is the case that should wait for a receipt. That
+makes the owner's decision here a governance choice, not a mechanical
+obstruction: sign the receipt, or settle §15 in favour of merging ordinary
+protected changes past an advisory refusal. Both are one sentence; only the owner
+can write either.
 
 **The reading under which #122 is right.** The anchor checks are advisory
 *precisely because* the required signature cannot be produced inside a pull
