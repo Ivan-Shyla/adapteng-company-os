@@ -144,6 +144,46 @@ Verified from `main` and CI, not from narrative.
   managed database over the shared network. That, rather than the address probe,
   is what establishes the gateway's attachment.
 
+  **Struck 2026-08-12, and this is the whole paragraph rather than a clause.**
+  Run `31592116180` asked readiness *from outside the container* — from that same
+  operations runner — and got `reachable=yes ready=yes` against
+  `http://ai-gateway:8081`. So "readiness could not be asked from outside" is
+  false, "the in-container probe was necessary" is false, and
+  `placement=runner_off_application_network` at `31531842811` above was a wrong
+  verdict, not a finding. The runner was on the applications' network the whole
+  time.
+
+  **What the census actually measured.** Coolify names containers after the
+  application *uuid*; Docker's embedded DNS answers for container names and
+  network aliases. `ai-gateway` declared no `custom_network_aliases`, so its
+  display name could not have resolved on a perfectly working network either.
+  The rung "the runner does not resolve the application, not even itself" tested
+  two conditions — *is there a route* and *is this string a name* — and was
+  reported as testing one. Adding a control rung, a neighbour discovered at run
+  time by the property of declaring its own name as an alias, separated them:
+  run `31590576870`, from inside ai-gateway, resolved
+  `adapteng-baserow-adapter` to `10.0.1.11` while `ai-gateway` did not resolve
+  at all. A container on the default bridge cannot resolve a neighbour by name,
+  so attachment was never the defect. The same run refutes the sentence above
+  that made "healthy for hours" evidence of detachment.
+
+  **The remedy, and the proof.** `deploy/ai-gateway.json` now declares
+  `network.network_aliases: ["ai-gateway"]`, mapped to the `custom_network_aliases`
+  field the API reports — so it is owned and verified by read-back rather than
+  written blind, which is the categorical difference from `connect_to_docker_network`.
+  Reconcile `31591098088` wrote `'' -> 'ai-gateway'` and re-read it clean; deploy
+  `31591141640` recreated only this application, because Docker binds aliases at
+  container creation. `ai-gateway` then resolved to `10.0.1.14`, and peer probe
+  `31591412394` reached `/health` 200 and `/ready` 200 from `ops-runner` by name.
+  No public FQDN, no port mapping, no credential presented, no model called.
+
+  **Eighth instance of the recurring shape, and the costliest.** The check was
+  bound to the nearest nameable thing — a display name — rather than to the thing
+  asserted. It survived two justifications and one self-correction, and it sent a
+  redeploy at the wrong subject. The tell was available throughout and unread: a
+  neighbour carried a populated `custom_network_aliases` on the same API call that
+  showed ai-gateway's empty.
+
   **Update, 2026-08-12: that probe is no longer the only thing asking.** The
   readiness above was a scheduled task run on demand — a measurement, not a
   control. Platform PR #127 merged as `feee3166` and put a `HEALTHCHECK` in
@@ -158,7 +198,10 @@ Verified from `main` and CI, not from narrative.
   gate that did not exist: with `health_check.enabled` false and no `HEALTHCHECK`
   in the image, `ApplicationDeploymentJob::health_check` set `newVersionIsHealthy`
   and returned without testing anything, which is how this service was once
-  reported healthy for hours while detached from the network. Now the probe asks
+  reported healthy for hours without anything having been tested. (That sentence
+  previously read "while detached from the network". It is struck: the container
+  was attached throughout — see the census correction above. The health gate's
+  absence is the whole of the defect; detachment was never part of it.) Now the probe asks
   `/ready`, `/ready` opens a database connection, and a container that cannot
   reach Postgres is rolled back instead of promoted. **The readiness proof became
   a readiness gate.**
@@ -173,6 +216,39 @@ Verified from `main` and CI, not from narrative.
   Bound is not the same as correct — a secret cannot be read back from either
   store, by design — so the first live model call is what would prove the Vertex
   key, and it is held for the owner's GO. **Vertex inference calls remain 0.**
+
+  **Gate state re-measured 2026-08-12, against the six gates in
+  `ai/model-choices.md`.** Gate 2 (a running service as budget authority) is
+  green: the gateway is deployed, `running:healthy`, and `/ready` — which opens a
+  database connection — returns 200 *from the caller side* at run `31592116180`.
+  Gate 3 (real Vertex client and service account wired in) is green: run
+  `31592180105` reports `credentials=bound` with
+  `/secrets/vertex-service-account.json` present and both environment keys set.
+  The FX half of gate 5 is green by construction rather than by inspection —
+  `operate_deploy` refuses to trigger while any key declared under
+  `externally_provided_configuration` is absent from the stored resource
+  environment, and deploy `31591141640` passed that gate, so
+  `AI_GATEWAY_FX_USD_EUR`, `AI_GATEWAY_FX_AS_OF` and `AI_GATEWAY_FX_SOURCE` are
+  all present on the container. Presence is not correctness: the values are read
+  from repository variables and never printed here.
+
+  **What is left is owner-held, and it is a chain rather than a switch.** The
+  proof driver's `preflight` phase (`scripts/company_os_first_model_proof.py`,
+  platform) calls the drive adapter's `prepare`, which runs
+  `_verify_completed_replay` against live Postgres and Drive. Those replay
+  records exist only after the approved-assets import has run. That import is
+  `migrate-approved-assets.yml`, whose five phases each require an exact
+  phase-specific acknowledgement and the dedicated
+  `adapteng-approved-assets-rollout` runner; and it should not run before
+  platform #128, which removes a manufactured pagination race in that very path.
+  #128 edits `scripts/validation/approved_assets_github_metadata.py`, which
+  `verify_rollout_trust_anchor.py` lists in `PROTECTED_EXACT_PATHS`, so it needs
+  a signed rollout trust receipt. The trust root is armed with a real Ed25519 key
+  for `rollout-approval@adapteng.com`; the private half is not on the control
+  plane's host, which is what makes this owner-only rather than merely pending.
+  The `run` phase then additionally requires
+  `COMPANY_OS_FIRST_MODEL_PROOF_AUTHORIZED`, and gate 6 requires the owner to
+  ratify the `AG-007` acceptance set.
 
   The entry stayed wrong for one turn after it had become false, and the reason
   is worth keeping: `verify` ranked executions by an `id` that this Coolify
