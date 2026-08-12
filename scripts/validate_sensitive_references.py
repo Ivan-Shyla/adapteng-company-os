@@ -1773,11 +1773,19 @@ def inspect_line(
 def lf_delimited_lines(text: str) -> list[str]:
     """Split into LF-delimited records, matching editor and ``git diff`` numbering.
 
-    ``str.splitlines()`` breaks on eleven separators — CR, VT, FF, FS, GS, RS,
-    NEL, LS and PS as well as LF — so a tracked file containing any of them
-    would make this validator report a line number higher than the one the
-    reader sees when they open the file at ``path:number:``. Detection is
-    unaffected either way; the reported position is not.
+    ``str.splitlines()`` breaks on eleven separators. Nine of them — CR, VT, FF,
+    FS, GS, RS, NEL, LS and PS — split where this function does not, so a tracked
+    file containing any of them would make this validator report a line number
+    higher than the one the reader sees when they open the file at
+    ``path:number:``. Detection is unaffected either way; the reported position
+    is not.
+
+    The other two separators are LF and the CRLF pair, and both agree with this
+    function: ``splitlines()`` treats CRLF as a single boundary, and ``split``
+    leaves the CR at the end of the record rather than starting a new one. CRLF
+    is named here because it is the separator most likely to appear in this
+    repository — a Windows checkout produces it — and naming only the nine that
+    differ would leave a reader to assume the most common case was overlooked.
     """
     lines = text.split("\n")
     if lines and lines[-1] == "":

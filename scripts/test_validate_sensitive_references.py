@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import ast
+import tempfile
 from pathlib import Path
 import unittest
 import unicodedata
@@ -32,9 +34,11 @@ STATUS_ROOT = Path(__file__).resolve().parents[1]
 class LfDelimitedLineSplitTests(unittest.TestCase):
     """Reported line numbers must match what the reader sees at ``path:number:``.
 
-    ``str.splitlines()`` breaks on eleven separators. Any of the eight that are
-    not LF or CR would shift every subsequent reported line number up by one
-    relative to an editor or ``git diff``.
+    ``str.splitlines()`` breaks on eleven separators. Nine of them — CR, VT, FF,
+    FS, GS, RS, NEL, LS and PS — would shift every subsequent reported line
+    number up by one relative to an editor or ``git diff``. The other two are LF
+    and the CRLF pair, which agree with this function; CRLF is the reason a
+    Windows checkout is unaffected.
     """
 
     def test_matches_terminator_semantics(self) -> None:
@@ -69,6 +73,184 @@ class LfDelimitedLineSplitTests(unittest.TestCase):
     def test_agrees_with_splitlines_on_lf_only_text(self) -> None:
         text = "alpha\nbeta\ngamma\n"
         self.assertEqual(lf_delimited_lines(text), text.splitlines())
+
+    def test_the_documented_separator_counts_are_measured_not_asserted(self) -> None:
+        """Pin the docstring's "eleven" and "nine" to what CPython actually does.
+
+        The docstring on ``lf_delimited_lines`` used to say eleven and then name
+        ten, and this class used to say nine differ and then exercise eight. A
+        prose count that no test evaluates is free to drift away from the code it
+        describes, so both numbers are computed here from the separators
+        themselves.
+        """
+        separators = {
+            "LF": "\n",
+            "CR": "\r",
+            "CRLF": "\r\n",
+            "VT": "\v",
+            "FF": "\f",
+            "FS": "\x1c",
+            "GS": "\x1d",
+            "RS": "\x1e",
+            "NEL": "\x85",
+            "LS": "\u2028",
+            "PS": "\u2029",
+        }
+        boundaries = {
+            name for name, char in separators.items() if len(f"a{char}b".splitlines()) == 2
+        }
+        self.assertEqual(boundaries, set(separators))
+
+        divergent = {
+            name
+            for name, char in separators.items()
+            if len(f"a{char}b".splitlines()) != len(lf_delimited_lines(f"a{char}b"))
+        }
+        self.assertEqual(
+            divergent,
+            {"CR", "VT", "FF", "FS", "GS", "RS", "NEL", "LS", "PS"},
+            "the separators that shift a reported line number",
+        )
+        self.assertEqual(set(separators) - divergent, {"LF", "CRLF"})
+
+    def test_the_duplicated_copy_has_not_drifted(self) -> None:
+        """``rehearsal_digest_compare`` carries its own copy; pin them together.
+
+        Scripts under ``scripts/`` are standalone entry points and none of them
+        import each other, so the second site duplicates the helper rather than
+        importing this module. Duplication's only real risk is divergence, so the
+        two copies are compared on every separator and on the terminator cases
+        rather than trusted to stay identical by inspection.
+        """
+        from scripts.rehearsal_digest_compare import lf_delimited_lines as copy
+
+        cases = [
+            "",
+            "\n",
+            "abc",
+            "abc\n",
+            "a\nb",
+            "a\nb\n",
+            "a\n\n",
+            "\r\n",
+            "alpha\rbeta\n",
+        ]
+        cases += [f"alpha{char}beta\ngamma\n" for char in "\v\f\x1c\x1d\x1e\x85\u2028\u2029"]
+        for text in cases:
+            with self.subTest(text=repr(text)):
+                self.assertEqual(copy(text), lf_delimited_lines(text))
+
+
+class LineNumberingConstructTests(unittest.TestCase):
+    """No module may number lines for a human by enumerating ``splitlines()``.
+
+    The defect this bans was fixed twice, in two separate changes, because the
+    first fix's population was "the site where the defect was found" rather than
+    "everywhere the construct occurs". A second instance was then found by
+    reading, not by any check. This test is the population: it evaluates the
+    construct across the whole tree, so a third instance fails here instead of
+    waiting to be noticed.
+
+    It parses rather than greps, so the form that binds the split to a variable
+    first — which a single-line regex misses — is caught as well.
+    """
+
+    def _python_sources(self) -> list[Path]:
+        return sorted(
+            path
+            for path in STATUS_ROOT.rglob("*.py")
+            if not any(part.startswith(".") for part in path.relative_to(STATUS_ROOT).parts)
+        )
+
+    def _offenders(self, path: Path) -> list[int]:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        split_bound: set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            value = node.value
+            if (
+                isinstance(value, ast.Call)
+                and isinstance(value.func, ast.Attribute)
+                and value.func.attr == "splitlines"
+            ):
+                split_bound.update(
+                    target.id for target in node.targets if isinstance(target, ast.Name)
+                )
+
+        found: list[int] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if not (isinstance(node.func, ast.Name) and node.func.id == "enumerate"):
+                continue
+            if len(node.args) != 2:
+                continue
+            start = node.args[1]
+            if not (isinstance(start, ast.Constant) and start.value == 1):
+                continue
+            subject = node.args[0]
+            inline = (
+                isinstance(subject, ast.Call)
+                and isinstance(subject.func, ast.Attribute)
+                and subject.func.attr == "splitlines"
+            )
+            via_name = isinstance(subject, ast.Name) and subject.id in split_bound
+            if inline or via_name:
+                found.append(node.lineno)
+        return found
+
+    def test_the_census_finds_the_construct_when_it_is_present(self) -> None:
+        """The census must be able to fail, in both forms, before it is trusted.
+
+        A tree-wide check that currently reports nothing looks identical whether
+        it works or is silently matching nothing at all, so it is exercised here
+        against sources that do contain the construct.
+        """
+        inline = "for number, line in enumerate(text.splitlines(), 1):\n    pass\n"
+        via_variable = "rows = text.splitlines()\nfor number, line in enumerate(rows, 1):\n    pass\n"
+        clean = (
+            "rows = lf_delimited_lines(text)\n"
+            "for number, line in enumerate(rows, 1):\n"
+            "    pass\n"
+            "for index, item in enumerate(other.splitlines()):\n"
+            "    pass\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for name, source, expected in (
+                ("inline.py", inline, [1]),
+                ("via_variable.py", via_variable, [2]),
+                ("clean.py", clean, []),
+            ):
+                path = Path(directory) / name
+                path.write_text(source, encoding="utf-8")
+                with self.subTest(name=name):
+                    self.assertEqual(self._offenders(path), expected)
+
+    def test_the_census_actually_reaches_this_repository(self) -> None:
+        """Assert the population, not just the verdict.
+
+        A census that resolved to the wrong directory, or to none, would report a
+        clean tree just as convincingly as a clean tree does. Both modules that
+        have carried this construct must be inside what was scanned.
+        """
+        scanned = {path.relative_to(STATUS_ROOT).as_posix() for path in self._python_sources()}
+        self.assertIn("scripts/validate_sensitive_references.py", scanned)
+        self.assertIn("scripts/rehearsal_digest_compare.py", scanned)
+        self.assertIn(Path(__file__).resolve().relative_to(STATUS_ROOT).as_posix(), scanned)
+        self.assertGreater(len(scanned), 30)
+
+    def test_no_tracked_module_numbers_lines_from_splitlines(self) -> None:
+        offenders = [
+            f"{path.relative_to(STATUS_ROOT).as_posix()}:{line}"
+            for path in self._python_sources()
+            for line in self._offenders(path)
+        ]
+        self.assertEqual(
+            offenders,
+            [],
+            "use lf_delimited_lines(text) so the reported number matches the file",
+        )
 
 
 class SensitiveReferenceValidatorTests(unittest.TestCase):
