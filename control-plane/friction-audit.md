@@ -2983,7 +2983,7 @@ and the session list:
 | fact | value |
 |---|---|
 | sessions on `adapteng-automation-platform` | **84** |
-| distinct platform session ids in this session's inbound | **2** — `2cab0595`, `c96f72e3` |
+| distinct platform session ids in this session's inbound | **2** as of that census — **now 3**, see the correction below |
 | what those two ids are | *different* sessions, different names, different branches |
 | what this control plane recorded them as | **one peer whose id "has changed three times"** |
 
@@ -3058,15 +3058,33 @@ c96f72e3  session  Ivan-Shyla/adapteng-automation-platform  "fix: name the run-s
 376bf683, cf066a90, 6fcb4f9f  ->  absent, being the other namespace
 ```
 
-Two distinct sessions, same repository, different names. **The count stands at
-two.** Worth recording how the challenge went wrong, because it is this audit's
-recurring shape once more and it arrived inside a correction to it: the
-correspondent searched a local store that holds only CLI session ids, found zero
-rows for three project-session ids, and read that absence as evidence about the
-count. A table that *structurally cannot contain* the identifier being searched
-returns a clean negative and says nothing. Same family as the check-run census
-measuring the API's default, and as an `errno` explained by a mechanism that did
-not predict it.
+Two distinct sessions, same repository, different names. **The count stood at
+two when measured.** Worth recording how the challenge went wrong, because it is
+this audit's recurring shape once more and it arrived inside a correction to it:
+the correspondent searched a local store that holds only CLI session ids, found
+zero rows for three project-session ids, and read that absence as evidence about
+the count. A table that *structurally cannot contain* the identifier being
+searched returns a clean negative and says nothing. Same family as the check-run
+census measuring the API's default, and as an `errno` explained by a mechanism
+that did not predict it.
+
+**The count is now three, corrected 2026-08-12 the same evening.** A third
+platform session wrote in:
+
+```
+b14546cd  session  Ivan-Shyla/adapteng-automation-platform
+          "fix(ci): scope the n8n isolation check…"   branch palinaruban-test-waiver-horizon-exit-code
+```
+
+It had not appeared in the inbound set when the census above was taken, so the
+census was right and is now out of date — which is the distinction this entry
+was opened to enforce, arriving against its own number. **A correspondent census
+is a measurement with a timestamp, not a standing fact**, and any entry that
+cites one should be read as *as-of*, exactly as F-19 says of a value that was
+correct when written and does not announce when it stops being. The direction of
+the error also matters: an undercount of correspondents is the condition that
+produces mis-addressing in the first place, so this number failing upward is the
+failure mode the entry exists to prevent, not a harmless drift.
 
 **Amendment, 2026-08-12: the timing tell, and why neither side can settle this
 from a store.** A later round reversed the direction — the correspondent
