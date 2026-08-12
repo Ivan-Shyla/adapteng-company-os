@@ -250,6 +250,38 @@ Verified from `main` and CI, not from narrative.
   `COMPANY_OS_FIRST_MODEL_PROOF_AUTHORIZED`, and gate 6 requires the owner to
   ratify the `AG-007` acceptance set.
 
+  **The import's hardest gate is a missing pair of secrets, and it is measured.**
+  Every one of the five jobs in `migrate-approved-assets.yml` opens with a
+  "Require staged run-bound authorization before checkout" step that runs
+  `test -n` on `APPROVED_ASSETS_PHASE_AUTHORIZATION_JSON` and
+  `APPROVED_ASSETS_REVIEWED_EVIDENCE_JSON` — before `actions/checkout`, so no
+  phase can reach any code with either absent. Neither exists. Measured in the
+  **`Ivan-Shyla/adapteng-automation-platform`** repository at repo level (3
+  secrets) and in all four environments — `approved-assets-import`,
+  `approved-assets-migrations`, `approved-assets-preflight`,
+  `company-os-vertex-runtime-readiness` (6/1/6/3 secrets). The population is
+  complete: `Ivan-Shyla` is a User account, so organisation secrets cannot exist.
+  `APPROVED_ASSETS_MIGRATION_EVIDENCE_JSON`, required by the migrate phase's
+  reviewed-binding receipt, is likewise absent.
+
+  Every *mechanical* dependency of the import is already provisioned —
+  `APPROVED_ASSETS_DATABASE_URL`, `APPROVED_ASSETS_BASE_IDEMPOTENCY_KEY`,
+  `CANONICAL_40_CONTENT_FOLDER_ID`, `GOOGLE_SERVICE_ACCOUNT_JSON_B64` and both
+  contents-read tokens all exist. What is missing is exactly and only the
+  owner's staged authorization and reviewed-evidence payloads. That is the right
+  shape for an owner-only gate, and it is why no amount of control-plane work
+  moves it.
+
+  **Population note, recorded because it cost a turn.** These secrets belong to
+  the *platform* repository. `migrate-approved-assets.yml` does not exist in
+  company-os at all — this repository holds nine workflows, none of them
+  approved-assets, and zero environments. A census for the two names run here
+  returns nothing, and the honest reading of that nothing is "wrong repository",
+  not "secret missing". Both readings produce the same verdict this time, which
+  is precisely what makes the error cheap to miss: the conclusion survived while
+  the evidence for it did not. Tenth instance of the recurring shape, and the
+  first where the bad instrument agreed with the good one.
+
   The entry stayed wrong for one turn after it had become false, and the reason
   is worth keeping: `verify` ranked executions by an `id` that this Coolify
   instance always returns as `null`, so no row ever counted as new and the tool
