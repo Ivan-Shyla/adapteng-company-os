@@ -4491,15 +4491,67 @@ ungoverned in between        runner dispatch + post-run bookkeeping
 
 windows over the 300 s cap   1 of 94  -> 31116200705, 318 s, success
   attempt 2  window 318 s = job 263 s + dispatch 54 s + bookkeeping 1 s
-  attempt 1  window 307 s = job 303 s, CANCELLED
+  attempt 1  window 307 s = job 303 s = 1 s + step 300 s + 2 s, CANCELLED
 ```
 
 **The run supplying the 318 s maximum is the run that breaches the cap.** So the
 substitution swaps a bound all 94 observations satisfy for one they falsify, and
 lowers it by 18 s while doing so. Attempt 1 is the sharper exhibit: the cap observed
-*firing*, and the job it cancelled recorded at **303 s** — so the declared figure is
-not exact even on the seconds it does govern. Dispatch is unbounded in principle, so
+*firing* — annotation *"The job has exceeded the maximum execution time of 5m0s"*,
+verbatim, so **observed rather than inferred**. Dispatch is unbounded in principle, so
 no total bound on the window follows from it. Raised by `2cab0595`.
+
+> **Struck 2026-08-13 — *"and the job it cancelled recorded at 303 s — so the
+> declared figure is not exact even on the seconds it does govern."* Refuted at the
+> step clock.** The cancelled job's only step ran `15:31:01Z`–`15:36:01Z` = **300 s
+> exact**; the 303 s is 1 s of pre-step assignment plus 2 s of post-cancel teardown.
+> The cap is exact on what it governs. What survives untouched is the load-bearing
+> half: the cap does not bound the *window*.
+>
+> **The manner is the finding.** This is envelope-versus-execution — the distinction
+> I had just accepted from `2cab0595` at the run/job level — recurring at the
+> job/step level **inside the sentence correcting it**. Not a lapse of attention: I
+> applied the fix at the level where it was handed to me and stopped. So the rule
+> already recorded here as *"a rule recorded is not a rule applied"* needs its
+> sharper form:
+>
+> **a distinction is not applied until it is applied at every level the data has,
+> and the level immediately below the one just repaired is where it will next be
+> violated** — because that is the level the repair drew attention away from.
+
+> **Rival cause, excluded — and the exclusion was necessary, not decorative.**
+> `rollout-trust-anchor.yml` declares `concurrency.cancel-in-progress: true` at
+> lines 13–15, eleven lines above `timeout-minutes: 5` at line 21. `cancelled`
+> followed by a successful later attempt is the textbook signature of concurrency
+> cancellation. Taking the exact-300 s timing as sufficient would have been **right
+> by luck**, with a documented rival sitting unexamined in the same file. The
+> annotation discriminates; the timing alone does not.
+>
+> **Coincidence with a hypothesis is not evidence for it while a rival cause remains
+> unexamined — and a rival co-located with the measured thing is the one least
+> likely to be looked for**, because reading the file to find the cap is the same
+> act that would have shown the rival, and it already succeeded. Exclusion by
+> `2cab0595`.
+
+> **What the 318 s measures — `2cab0595`, replicated from the step records.** Both
+> figures are provisioning, not verification. Attempt 1 ran `Set up job` and nothing
+> else: checkout and the verifier never started. Attempt 2: setup 246 s, checkout
+> 1 s, verify 14 s. **Real work is 15 s**, provisioning 93.5 % of the job; across
+> 94 windows median 22 s, p90 37 s, second-largest 174 s.
+>
+> So 318 s is one provisioning stall at 14× the median on the day the runner hung,
+> and the single cap firing in 95 attempts terminated that stall rather than any
+> verification. The striking gets **stronger**: the declared figure's sole empirical
+> instance bounds an infrastructure fault. 117× is unchanged and now explained —
+> 318 s of stalled provisioning around 15 s of work.
+>
+> Owner-facing consequence, recorded in §16 rather than only here: attempt 2 cleared
+> setup with 54 s of headroom and spent 15, so the anchor was ~**39 s** from being
+> cancelled for reasons unrelated to what it verifies. **A cancelled anchor job is
+> indistinguishable at the surface from the infrastructure failures this lane exists
+> to stop reporting as refusals** — so the cap can manufacture the very class of red
+> mark the mandate abolishes. Read the annotation before the mark; re-run, do not
+> re-sign.
 
 - **A declared limit and an observed maximum are not two arguments for one claim.**
   They bound different quantities, and only one of them was ever measured against
@@ -4510,10 +4562,24 @@ no total bound on the window follows from it. Raised by `2cab0595`.
 
 **Third instance, mine, found while checking the second — and it is the census
 rather than the bound.** Run-level `run_started_at` is the **latest** attempt's
-start. On this same run, attempt 1 (`15:31:00Z`–`15:36:04Z`) ends **21 s before its
-own run's window begins** and lies wholly outside it, so a census over run windows
+start. On this same run, attempt 1 (`15:30:57Z`–`15:36:04Z`) ends **20 s before its
+own run's window begins** (`run_started_at` = `15:36:24Z`) and lies wholly outside
+it, so a census over run windows
 cannot see any non-latest attempt. Re-scoped to attempts: **95** intervals against
 94, containing the instant **0** either way.
+
+> **Corrected 2026-08-13, and it is the same defect a third time in the same
+> passage.** This interval was recorded as `15:31:00Z`–`15:36:04Z`, which pairs the
+> **job** start with the **attempt** end — the attempt starts `15:30:57Z`. The gap
+> was given as 21 s, measured from job-completed `15:36:03Z`, while the interval
+> displayed ends at `15:36:04Z`, where the figure is 20 s. Neither touches the
+> conclusion — attempt 1 lies wholly outside its run's window under every pairing.
+>
+> It is recorded because of **where** it sits: inside the paragraph establishing
+> that run-level and attempt-level must not be mixed. Caught by `2cab0595`.
+> **The passage announcing a distinction is the passage most likely to violate it**,
+> because attention is spent on naming the levels rather than on the arithmetic
+> between them.
 
 The zero survives — **by population, not by method.** This corpus holds exactly one
 re-run and its hidden attempt is 5.64 days from the instant. Had the re-run been

@@ -4840,24 +4840,52 @@ has no run behind it at all.
 >
 > windows exceeding the 300 s cap   1 of 94   -> 31116200705, 318 s, conclusion success
 >   attempt 2   window 318 s = job 263 s + dispatch 54 s + bookkeeping 1 s
->   attempt 1   window 307 s = job 303 s, conclusion CANCELLED
+>   attempt 1   window 307 s = job 303 s = 1 s + step 300 s + 2 s, CANCELLED
 > ```
 >
 > **The one run supplying the 318 s maximum is the one run that breaches the cap.**
 > So substituting the declared figure would replace a bound satisfied by all 94
 > observations with one the data already falsifies — and *lower* it, 318 to 300.
-> Attempt 1 is the sharper exhibit: that is the cap observed firing, and the job it
-> cancelled is recorded at **303 s**. The cap therefore does not bound the window,
-> and is not exact even on the job seconds it does govern. Dispatch is not merely
-> ungoverned but unbounded in principle — a saturated runner pool extends the window
-> with no configured limit — so no total bound on the window follows from it at all.
-> The 117× margin never needed it and is unchanged without it.
+> Attempt 1 is the sharper exhibit: that is the cap observed firing — the job
+> carries the annotation *"The job has exceeded the maximum execution time of
+> 5m0s"* verbatim, so the firing is **observed, not inferred**. Dispatch is not
+> merely ungoverned but unbounded in principle — a saturated runner pool extends
+> the window with no configured limit — so no total bound on the window follows
+> from it at all. The 117× margin never needed it and is unchanged without it.
+>
+> > **Struck 2026-08-13 — *"and is not exact even on the job seconds it does
+> > govern"*, from the sentence above. Refuted at the step clock by `2cab0595`
+> > and replicated here.** The cancelled job's *only* step ran
+> > `15:31:01Z`–`15:36:01Z` = **300 s, exact to the second**. The 303 s is 1 s of
+> > pre-step assignment plus 2 s of post-cancel teardown. The cap is exact on
+> > what it governs; 303 is the envelope around it.
+> >
+> > The manner of the error is the point. This is the **envelope-versus-execution**
+> > distinction — the one I had accepted from the same peer one level up, in the
+> > sentence immediately preceding — recurring at the job/step level *inside the
+> > paragraph that corrects it*. A distinction is not a rule until it is applied
+> > at every level the data has, and the level below the one you just fixed is
+> > where it will next be violated.
+> >
+> > **What survives, and it is the load-bearing half:** the cap does not bound the
+> > window. That was never in doubt and does not rest on the struck clause.
+>
+> > **Rival cause, excluded — raised by `2cab0595`, verified here.** The same
+> > workflow file declares `concurrency.cancel-in-progress: true` at lines 13–15,
+> > eleven lines above `timeout-minutes: 5` at line 21. A `cancelled` conclusion
+> > followed by a successful later attempt is the textbook signature of
+> > concurrency cancellation, so the timing alone would have been *right by luck*
+> > with a documented rival sitting unexamined in the same file. The annotation
+> > settles it directly. **Coincidence with a hypothesis is not evidence for it
+> > while a rival cause remains unexamined — and the rival is most dangerous when
+> > it is co-located with the thing being measured.**
 >
 > **A second defect, mine, found while checking the first: the census could not see
 > what it was scanning for.** Run-level `run_started_at` is the *latest* attempt's
-> start, so on this same run attempt 1 (`15:31:00Z`–`15:36:04Z`) ends **21 s before
-> its own run's window begins** and lies wholly outside it. A census over run windows
-> is structurally blind to every non-latest attempt. Re-run at attempt scope:
+> start, so on this same run attempt 1 (`15:30:57Z`–`15:36:04Z`) ends **20 s before
+> its own run's window begins** (`run_started_at` = `15:36:24Z`) and lies wholly
+> outside it. A census over run windows is structurally blind to every non-latest
+> attempt. Re-run at attempt scope:
 >
 > ```
 > run-level intervals ......  94    containing 06:59:03Z -> 0
@@ -4872,6 +4900,49 @@ has no run behind it at all.
 > **The corpus moved twice while this was being written** — 92 runs, then 93, now
 > **94**. The spanning count is 0 under all three, which is the point of preferring
 > a re-derived census to a preserved number.
+>
+> > **What the 318 s actually measures — supplied by `2cab0595` 2026-08-13,
+> > replicated here from the step records. This is the half that reaches the
+> > ceremony.** Both figures in the table above are provisioning, not verification:
+> >
+> > ```
+> > attempt 1  Set up job ........................... 300 s  CANCELLED (cap fired)
+> >            no further step ran — checkout and the verifier never started
+> >
+> > attempt 2  Set up job ........................... 246 s
+> >            Checkout only the merged trust anchor .. 1 s
+> >            Verify signed protected-boundary receipt 14 s
+> > ```
+> >
+> > **The anchor's real work is 15 s.** Provisioning was 246 s — 93.5 % of the
+> > successful job. Across all 94 windows the median is 22 s and p90 is 37 s; the
+> > second-largest is 174 s. So 318 s is not a long verification. It is one
+> > provisioning stall of 14× the median on the single day the runner hung, and
+> > the cap's one firing in 95 attempts terminated **that stall**, not the anchor's
+> > work.
+> >
+> > This strengthens the striking rather than softening it: the declared figure was
+> > not merely a bound on the wrong quantity, its sole empirical instance bounds an
+> > **infrastructure fault**. The 117× margin is unchanged and now explained — it is
+> > 318 s of stalled provisioning wrapped around 15 s of work.
+> >
+> > **The consequence for the ceremony, and the reason this is here rather than only
+> > in the friction register.** Attempt 2 cleared setup with **54 s** of headroom
+> > under the cap and spent 15 of it — so on that day the anchor came within about
+> > **39 s** of being cancelled for reasons having nothing to do with what it
+> > verifies. A cancelled anchor job is indistinguishable at the surface from the
+> > infrastructure failures this lane exists to stop reporting as refusals: red
+> > mark, no verdict line, exit 1. **The cap can manufacture the exact class of red
+> > mark the mandate was written to eliminate.**
+> >
+> > **No change is proposed and none should be made now.** The lane is frozen and
+> > the workflow is the owner's to alter. The operational instruction is narrower:
+> > if the anchor job comes back cancelled during the ceremony, **read the
+> > annotation before reading the mark** — `"exceeded the maximum execution time"`
+> > means a provisioning stall and the correct response is to re-run, *not* to
+> > treat the receipt as refused and re-sign. Re-signing a receipt in response to
+> > an infrastructure cancellation is the failure this whole lane exists to
+> > prevent, and it is the natural reading of a bare red mark.
 
 **The population was also narrower than the question.** The earlier revision
 searched runs of `rollout-trust-anchor.yml` alone, while the question is whether
