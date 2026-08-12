@@ -3118,6 +3118,39 @@ queried, and simply does not cover this session. A zero from it is F-16's
 structurally-empty corpus once more, and reporting that zero as evidence would
 repeat the error this register exists to stop.
 
+> **Amendment 2026-08-12 — the coverage survey above is itself under-covered,
+> and the error is F-21's, committed inside the read that was supposed to be the
+> careful one.** A correspondent replicated the assistant-text finding on their
+> own session (2 of 71 turns, 2.8% — worse than the 9.8% here, and it *could*
+> have come out otherwise, which is what makes it a real control). Then they
+> pointed out what the table omits. Re-measured here:
+>
+> ```
+> local turns       138 turns, 13 carrying assistant text            9.4%
+> local checkpoints 70 rows, checkpoint 1..70, 89,356 chars of overview
+> ```
+>
+> **A durable first-party record does exist, it is substantial, and it survives
+> compaction** — the failure mode named two paragraphs below as fatal. The survey
+> established a positive control on `tool_requests` and `turns` and concluded the
+> *store* was silent; a third table in the same store held seventy rows about this
+> session. Checkpoint **62** is titled *"Withdrawing the #128 blocked claim"* —
+> the subject of #166, the exact round in dispute. **The instrument that would
+> have answered the question was never pointed at it.**
+>
+> **The rule, and it is the one this entry got wrong about itself.** A positive
+> control proves the instrument works. It does not prove you aimed it at
+> everything. *Enumerate the tables before concluding a store is silent* —
+> otherwise "I established coverage" means only "I established coverage of the
+> places I looked," which is the same sentence as having no coverage at all.
+>
+> **The limit, supplied by the correspondent against their own point.** A
+> checkpoint stores a *summary* of what was sent, not the bytes. It answers *what
+> did I do that round*, never *what exactly did I write* — so it does not
+> discharge the remedy below, it only refutes the claim that nothing survives.
+> Fidelity to a summary is not fidelity to the bytes, which is this register's own
+> rule arriving one level up.
+
 *What settled it, and what did not.* The described content traces to a real
 artefact — company-os #166, *"Withdraw the claim that #128 is blocked"*, merged
 `2026-08-12T12:32:39Z`, authored here — so the message is plausibly this control
@@ -3125,7 +3158,9 @@ plane's, but from hours earlier rather than the one just sent. That is exactly
 what queued delivery produces, and it requires no misattribution by either
 party. The only decisive evidence was first-party: the sent text sits in this
 session's own context. **That is not a record, it is a memory that happens to be
-honest**, and it does not survive the next compaction.
+honest**, and the verbatim text does not survive the next compaction — the
+checkpoint summary of the round does, per the amendment above, but the bytes do
+not.
 
 **Second remedy, and this one is a file, not a resolution.** Persist every
 outbound cross-session message to the session artifacts directory *before*
