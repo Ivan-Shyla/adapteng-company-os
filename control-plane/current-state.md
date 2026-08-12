@@ -4341,10 +4341,73 @@ only the authorization pair, which by design must not exist beforehand.
 
 ### 16.4 What is usable today, without the proof
 
-The AI path is the only thing gated. Already deployed and running in Coolify:
-`adapteng-baserow-adapter` (running, healthy) and `n8n-selfhosted` (running).
-Platform CI is green at `6ecdd5fb` — 14 check-runs, 14 success, identical under
-`filter=latest` and `filter=all`, so the count is not subject to F-16.
+> **Corrected 2026-08-12 against the live Coolify API.** An earlier revision of
+> this section listed *two* running applications and recorded `ai-gateway` as
+> **ABSENT**. That was accurate when first inspected, before the spec was
+> reconciled. It is now stale in the direction that matters: the gateway exists,
+> is healthy, and holds a working database connection. Re-measured read-only via
+> runs `31628304311` (`status`), `31628416902` (`verify`) and `31628544080`
+> (`inspect`) — no write operation was issued.
+
+**The data plane is up.** Coolify project `adapteng-ops`, environment
+`production`, four applications:
+
+| application | uuid | status |
+|---|---|---|
+| `adapteng-baserow-adapter` | `rrzq6gk3qpjfwuphvj1vsfzq` | **running:healthy** |
+| `ai-gateway` | `e13v7c6zjof7dmcpywqbyas3` | **running:healthy** |
+| `n8n-selfhosted` | `z3alm18h2giehus9ztzzk9gq` | running:unknown |
+| `ops-runner` | `o145rw7urft00qoj3y9vnrma` | running:unknown |
+
+All four share destination `c3dnc3udkoenz9zhw148mbu0`. The database
+`adapteng-ops-db` (`pgdgbwzsuuxhw55g8v5opjgn`, `postgres:16`) is
+**running:healthy**, not publicly exposed, internal address
+`pgdgbwzsuuxhw55g8v5opjgn:5432/adapteng_ops`.
+
+**Gateway convergence, measured.** Newest deployment
+`wp9zip4o4cjmee0679pl6gj6`, state `finished`, created `2026-08-12T12:57:17Z`.
+Declared environment is fully applied — **12 of 12 declared keys unchanged**.
+The Vertex service-account file is mounted into the container rather than passed
+as an environment value, which is why the workflow's passthrough for it is empty
+and why that emptiness is *not* a gap:
+
+| mount path | backing path |
+|---|---|
+| `/secrets/vertex-service-account.json` | `/data/coolify/applications/e13v7c6zjof7dmcpywqbyas3/secrets/…` |
+
+**Readiness is proven from inside the container, not asserted.** The `verify`
+operation armed the `adapteng-readiness-probe` scheduled task, observed one
+execution succeed at `2026-08-12T18:36:02Z`, and returned it to rest:
+
+```
+the container answered ADAPTENG_READY 200
+RESULT verify ok ready=yes answer=200
+```
+
+`/ready` opens a database connection where `/health` does not, so this is a
+**database proof**, not just a liveness ping.
+
+**What this specifically does not prove, and the tool says so itself.** Both
+endpoints answer *before* the Authorization header is read, and neither calls a
+model. So no inference capability, no token acceptance and no Vertex round trip
+is established by any of the above. FIRST MODEL PROOF remains unproven; what has
+moved is that everything underneath it is now measured as working.
+
+**Two divergences, both benign but worth knowing before the owner reads the UI.**
+
+| observed | note |
+|---|---|
+| `stored health check enabled=False` | the spec declares `GET /ready` expecting 200; Coolify is not enforcing that check itself, so `running:healthy` reflects the container, not the declared probe |
+| four settings `PENDING-OWNER-UI` | `connect_to_docker_network`, `is_auto_deploy_enabled`, `is_force_https_enabled`, `is_preview_deployments_enabled` are not reported by this API at all — they can be read only in the Coolify UI |
+
+**`fqdn: none, as declared.`** This is the fourth hard stop in §16.3 and it is
+working as designed: there is deliberately no public route to the gateway, which
+is also why the control plane cannot call it directly from here.
+
+**Do not read `ops-runner` as satisfying the rollout runner requirement.** The
+approved-assets jobs demand a label built from each run's *own* `run_id`
+(§16.7), so a standing runner cannot carry it. `ops-runner` being present is
+necessary context, not a substitute for the run-scoped registration.
 
 ### 16.5 Sequencing hazard — merge platform #121 *before* running step 1
 
