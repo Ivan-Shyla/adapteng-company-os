@@ -246,25 +246,71 @@ Verified from `main` and CI, not from narrative.
   a signed rollout trust receipt. The trust root is armed with a real Ed25519 key
   for `rollout-approval@adapteng.com`; the private half is not on the control
   plane's host, which is what makes this owner-only rather than merely pending.
-  **The receipt is a policy requirement, not a mechanical one, and an earlier
-  statement here that #128 is *blocked* was wrong.** Measured at head
-  `36cdc765`: `mergeable: MERGEABLE`, `mergeStateStatus: UNSTABLE`, all five
-  required contexts of ruleset `20236725` green on both twins, and the only two
-  red check-runs of thirty are the anchor pair, which is **not** in the required
-  set. GitHub would permit this merge today. What holds #128 is §15's interim
-  stance, and the owner's sentence is therefore a governance choice — sign the
-  receipt, or settle §15 — rather than an unblocking action. See §15 for the
-  full measurement.
+  **RESOLVED 2026-08-12 under the owner's sole-authority directive: #128 is
+  merged.** Classified **C — advisory refusal that binding policy allows the
+  owner to merge past** — on the authority of
+  `docs/runbooks/authorize-rollout-policy-change.md` lines 320-339, which state
+  that before the anchor "can be a merge gate, an owner must independently
+  establish" five live controls, the first being a non-bypassable ruleset
+  requiring the exact check, and that "until these controls are proven, **the
+  check is review evidence only**." Control 1 is not established: ruleset
+  `20236725` is the only ruleset, requires exactly five contexts, and the anchor
+  is not among them; no classic branch protection exists. Line 147 also names the
+  actor on `unauthorized` as "an approver, **or the author**". Merged as platform
+  `main` **`6ecdd5fb224eae878ed49a522857bc5a21c32b9f`**, post-merge **14/14
+  check-runs success, zero non-success**, all five required contexts green —
+  including `root-rollout-tests`, the flake #128 itself fixed. The diff was read
+  before merging: the `verify_rollout_trust_anchor.py` change is **pin-table
+  sha256 updates only, no logic change**, and the metadata change reclassifies a
+  transient pagination race as retryable while **still failing closed** on retry
+  exhaustion. No listed control was weakened.
+
+  **Refinement, and it narrows the governance gap usefully.** The anchor is not
+  unguarded: `rollout-policy.yml` runs `tests/test_rollout_trust_anchor.py`
+  inside **`root-rollout-tests`, which is required**, so an edit that guts the
+  verifier's logic fails a required check. Verified that #128 touched four files
+  and **not** that test file, so this coverage was fully in force and honestly
+  green. What is unwired is narrower and exactly this: **the approval
+  *requirement*.** The two required invocations elsewhere
+  (`validate.yml`, `secret-scan.yml`) both run only `validate-trust-root`, which
+  validates the signers file and never evaluates an approval, a subject commit
+  or a protected-path delta. So a protected-path change with an absent or
+  invalid owner approval merges today. Residual controls are that one test file
+  — which a same-PR edit to it defeats — and review, which this ruleset sets to
+  **zero required approvals**. Two dispositions, both the owner's: promote
+  `Base-trusted rollout authorization` into the required set, or accept the
+  anchor as advisory and record that decision so it stops being re-derived. If
+  promoted, price this first: `undetermined` stops being a red mark and becomes
+  a **merge lock**, which is why the verdict namespaces were split.
   The `run` phase then additionally requires
   `COMPANY_OS_FIRST_MODEL_PROOF_AUTHORIZED`, and gate 6 requires the owner to
   ratify the `AG-007` acceptance set.
 
-  **The import's hardest gate is a missing pair of secrets, and it is measured.**
-  Every one of the five jobs in `migrate-approved-assets.yml` opens with a
+  **Correction — their absence is the required precondition, not the gate, and
+  an earlier statement here that the missing pair *is* the hardest gate was
+  wrong in kind.** The two names are staged **transiently** by
+  `scripts/operations/authorize_approved_assets_phase.sh`: step 5 writes them to
+  the exact Environment through stdin, and step 8 cleanup deletes them again and
+  then proves them absent. Step 1 of that same protocol *requires* both absent
+  before it will dispatch. The platform's own tooling agrees and names the
+  desired state plainly — `approved_assets_github_metadata.py assert-secret-absent`
+  returns **exit 0 `environment_secret_absent`**, verified 2026-08-12 for both
+  names across all three phase Environments (6/6). **So pre-installing them, the
+  action the earlier wording invited, fails step 1 closed and burns the attempt;
+  the runbook is explicit that a burned run is never retried — "begin again with
+  a new dispatch, locator, and receipt."** Recording this as the thirteenth
+  instance of the recurring shape, and the first that would have caused damage
+  rather than only a wrong belief: the gate was bound to the nearest *checkable*
+  thing, two absent secret names, instead of to the thing actually asserted, an
+  owner-run lifecycle that creates and destroys them within one dispatch.
+
+  What is true and unchanged is the guard itself. Every one of the five jobs in
+  `migrate-approved-assets.yml` opens with a
   "Require staged run-bound authorization before checkout" step that runs
   `test -n` on `APPROVED_ASSETS_PHASE_AUTHORIZATION_JSON` and
   `APPROVED_ASSETS_REVIEWED_EVIDENCE_JSON` — before `actions/checkout`, so no
-  phase can reach any code with either absent. Neither exists. Measured in the
+  phase can reach any code with either absent; that is what makes the staging
+  run-bound rather than standing. Measured in the
   **`Ivan-Shyla/adapteng-automation-platform`** repository at repo level (3
   secrets) and in all four environments — `approved-assets-import`,
   `approved-assets-migrations`, `approved-assets-preflight`,
@@ -276,10 +322,24 @@ Verified from `main` and CI, not from narrative.
   Every *mechanical* dependency of the import is already provisioned —
   `APPROVED_ASSETS_DATABASE_URL`, `APPROVED_ASSETS_BASE_IDEMPOTENCY_KEY`,
   `CANONICAL_40_CONTENT_FOLDER_ID`, `GOOGLE_SERVICE_ACCOUNT_JSON_B64` and both
-  contents-read tokens all exist. What is missing is exactly and only the
-  owner's staged authorization and reviewed-evidence payloads. That is the right
-  shape for an owner-only gate, and it is why no amount of control-plane work
-  moves it.
+  contents-read tokens all exist. **The actual gate is the authorization
+  lifecycle, and the control plane is disqualified from running it three times
+  over, independently.** (1) *Host.* `docs/runbooks/migrate-approved-assets.md`
+  lines 328-332 are a hard stop on Windows — "do not use PowerShell, native
+  Windows, or WSL without a separately installed and trusted POSIX
+  distribution" — and this control plane is Windows. (2) *Permission.* Step 1
+  must bounded-paginate every runner registration and prove zero, and step 6
+  registers one; `GET /repos/.../actions/runners` returns 404 for this identity
+  and `repos/{repo}.permissions` reports **`admin: false`**, so
+  `assert-runners-absent` returns `github_metadata.api_failed` — **undetermined,
+  not "runners absent"**, and the distinction is the same one the trust anchor
+  draws at its line 2783. (3) *Human content.* The v4 packet emitted by
+  `validate_approved_assets_rollout.py evidence-template` carries `review: null`
+  and `coordinator: null` as **two separately bound decisions**, plus
+  `managed_backup`, `isolated_restore` and `rehearsal` — a real disposable
+  restore with endpoint-isolation proof, not paperwork. Any one of the three is
+  disqualifying on its own. That is the right shape for an owner-only gate, and
+  it is why no amount of control-plane work moves it.
 
   **Population note, recorded because it cost a turn.** These secrets belong to
   the *platform* repository. `migrate-approved-assets.yml` does not exist in
