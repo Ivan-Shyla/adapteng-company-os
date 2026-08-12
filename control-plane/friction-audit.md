@@ -3290,6 +3290,54 @@ approver). Same split, same file, whenever the freeze lifts.
 former defect: the condition was bound to the nearest *available* verdict name
 rather than to the one that means what happened.
 
+### F-19 — asking the environment a question only the executable can answer — P2
+
+Two instances, both in this control plane, both caught before they reached the
+owner, both found the same way: by reading the script instead of describing it.
+
+**Instance 1 — the interpreter that is present and still refused.** Owner lifted
+the safety constraint, so I re-tested the four hard stops on the go-live path to
+see which were policy and which were capability. `Get-Command bash` returned
+`C:\WINDOWS\system32\bash.exe`, and Git Bash at
+`C:\Program Files\Git\bin\bash.exe`. I drafted the conclusion that the POSIX stop
+was **soft**. It is not. `authorize_approved_assets_phase.sh` lines 113–118:
+
+```
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    printf '%s\n' "lifecycle.trusted_posix_required" >&2
+    exit 1
+```
+
+The script detects and refuses **exactly** the workaround, before any work. I had
+asked the *host* whether a POSIX shell existed. The only authority on whether the
+script would accept one was the script.
+
+**Instance 2 — the chain that was wrong by a factor of five.** §16.2 was written
+from the runbook's prose. Read from the script's argument parsing and the
+workflow's inputs, it is five governed phases rather than one step, each
+consuming the previous phase's run ID; and the operator never dispatches the
+workflow, because the script does it at line 237. The prose was not lying — it
+was a summary, and I promoted a summary to an execution plan.
+
+**Shape, and it is a new one for this register.** Every earlier F-16 sibling is a
+question put to the *wrong corpus*, or to no corpus. This is a question put to
+the wrong **authority**: the corpus consulted was real, populated and correctly
+read, and still could not settle the question, because the deciding fact lived in
+the artefact that would execute. **Capability is not permission, and description
+is not contract.** When the question is "will this run", the only source that
+answers it is the thing that runs.
+
+Sharper than the general form: both instances would have produced a *confident*
+wrong answer, not a missing one. Instance 1 had positive evidence — a real
+interpreter at a real path. Instance 2 had an authoritative document. Neither
+looked like a gap, which is why neither prompted a second look.
+
+**Disposition.** Both fixed in `current-state.md` §16.2/§16.3/§16.6, with line
+numbers so the next reader verifies rather than trusts. Standing rule added: for
+any step on the go-live path, cite the executing source and its line, not the
+runbook that describes it.
+
 ---
 
 The condition described no longer exists. Leaving these in place actively
