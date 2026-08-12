@@ -302,6 +302,72 @@ class PgBackRestConfigurationTests(unittest.TestCase):
                 result_of(checks, "pgbackrest_data_directory_is_declared_ephemeral")
             )
 
+    def test_separator_truncated_path_is_refused_not_accepted(self) -> None:
+        """A form feed used to end the value early and win the gate's approval."""
+        with TemporaryDirectory() as raw:
+            directory = Path(raw)
+            data = directory / "source"
+            data.mkdir()
+            body = f"[rehearsal]\npg1-path={data}\f/../../etc\n"
+            path = self.write(directory, body)
+            # The mechanism, asserted rather than described: splitlines() ends
+            # the value at the form feed, leaving exactly the allowed prefix,
+            # while the value an LF-delimited reader sees escapes the directory.
+            self.assertEqual(body.splitlines()[1], f"pg1-path={data}")
+            self.assertNotIn("\f", body.splitlines()[1])
+            with self.assertRaises(guard.GuardError):
+                guard.check_pgbackrest_config(path, {data.resolve()})
+
+    def test_every_ambiguous_separator_is_refused(self) -> None:
+        with TemporaryDirectory() as raw:
+            directory = Path(raw)
+            data = directory / "source"
+            data.mkdir()
+            for character, label in guard.AMBIGUOUS_LINE_SEPARATORS.items():
+                with self.subTest(separator=label):
+                    path = self.write(
+                        directory, f"[rehearsal]\npg1-path={data}{character}/../../etc\n"
+                    )
+                    with self.assertRaises(guard.GuardError):
+                        guard.check_pgbackrest_config(path, {data.resolve()})
+
+
+class ConfigLineModelTests(unittest.TestCase):
+    def test_matches_splitlines_when_no_ambiguous_separator_is_present(self) -> None:
+        for text in (
+            "",
+            "a=1",
+            "a=1\n",
+            "a=1\nb=2\n",
+            "a=1\n\nb=2\n",
+            "[section]\n# comment\nkey = value\n",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    guard.config_lines(text, Path("pgbackrest.conf"), "gate"),
+                    text.splitlines(),
+                )
+
+    def test_each_separator_is_named_in_the_failure(self) -> None:
+        for character, label in guard.AMBIGUOUS_LINE_SEPARATORS.items():
+            with self.subTest(separator=label):
+                with self.assertRaises(guard.GuardError) as caught:
+                    guard.config_lines(
+                        f"a=1{character}b=2\n", Path("pgbackrest.conf"), "gate"
+                    )
+                self.assertIn(label, str(caught.exception))
+
+    def test_carriage_return_is_normalised_before_the_gate_sees_it(self) -> None:
+        """CR is absent from the set because it cannot arrive, not because it is safe."""
+        with TemporaryDirectory() as raw:
+            path = Path(raw) / "pgbackrest.conf"
+            path.write_bytes(b"a=1\rb=2\r\nc=3\n")
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("\r", text)
+            self.assertEqual(
+                guard.config_lines(text, path, "gate"), ["a=1", "b=2", "c=3"]
+            )
+
 
 class GuardCommandTests(unittest.TestCase):
     def arrange(self, directory: Path) -> list[str]:
