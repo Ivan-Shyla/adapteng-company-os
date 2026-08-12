@@ -2849,6 +2849,93 @@ failing closed, in `build_fx_config` beside the offset check. It belongs in the
 platform repository and to whoever owns `fx.py`; filing it against the wrong
 repository is how the last four population errors started.
 
+### F-14 — the clause that holds the evidence guard is not the clause that looks like the check — P3
+
+**Status:** open, company-os, **not a live defect and deliberately not fixed**.
+Filed so that the next person to tidy this code knows which half is load-bearing,
+because the code does not say so and no test says so either.
+
+**The construct.** Identical in two shipped files —
+`scripts/postgres_restore_c_final_assert.py:117` and
+`scripts/postgres_restore_transaction_probe.py:160`:
+
+```python
+evidence_lines = evidence.splitlines()
+if len(evidence_lines) != len(RUNNER_EVIDENCE_PREFIXES) or not all(
+    sum(line.startswith(prefix) for line in evidence_lines) == 1
+    for prefix in RUNNER_EVIDENCE_PREFIXES
+):
+    raise ...
+```
+
+The surviving lines are then printed as the run's audit evidence — nine fields
+including `runner_manifest_sha256=`, the two identity digests, four inventory
+digests and `runner_path=`-class values.
+
+**The ingress matters and is not universal-newline.** Both sites read
+`completed.stderr.decode("utf-8", errors="strict")` — subprocess bytes, decoded
+explicitly. So CR is *not* collapsed on the way in, and `str.splitlines()` here
+splits on all nine of the characters that `split("\n")` does not: VT, FF, FS, GS,
+RS, NEL, LS, PS and CR. A guard fed by `Path.read_text()` would see eight.
+
+**The measurement.** 9 separators × 9 evidence fields = 81 interior injections
+per file, run against the predicate read out of the source with `ast` rather than
+retyped, so the harness cannot pass while the subject drifts:
+
+| arm | c_final_assert | transaction_probe |
+|---|---|---|
+| as shipped | **0 / 81 accepted** | **0 / 81 accepted** |
+| cardinality clause removed | **81 / 81 accepted** | **81 / 81 accepted** |
+
+Both fail closed today. That is the whole reason this is P3 and not P0.
+
+**But the per-prefix test is not what holds.** It reads as the check — "each
+field appears exactly once" — and it looks to subsume a mere count. It does not.
+An interior separator splits one field into two lines; the fragment carries no
+prefix, so every prefix still appears exactly once and the `all(... == 1)` test
+is satisfied. Only the cardinality test notices that there are now ten lines
+where nine were expected. Remove it — the natural tidy, since it looks redundant
+— and all 81 pass while the audit record prints a **32-character
+`runner_manifest_sha256=`** as though it were a digest.
+
+**Nothing pins it.** A census of `scripts/test_*.py` for `RUNNER_EVIDENCE_PREFIXES`,
+`evidence_lines`, or either raise message returns **zero** hits. The guard is
+inline in `main()`, behind a live `subprocess.run` and an
+`os.open(..., os.O_DIRECTORY)` that does not exist on Windows, so it is not
+reachable from a test without extracting it. Deleting the cardinality clause
+would break no check in CI.
+
+**Why it is documented rather than fixed.** Both files are digest-pinned in
+`scripts/postgres_restore_procedure_manifest.json` — by sha256, by git blob sha,
+and inside a `member_tree_sha256` rollup — and both pins were verified exact at
+`f7382f5`. The manifest's own digest is asserted at 36 sites across 8 modules.
+Editing either file to extract a testable predicate therefore forces a manifest
+re-ceremony across a restore trust boundary, in the middle of a production
+rollout, to obtain **no change in present-day behaviour**. That is the wrong
+trade. The finding is worth more written down than acted on.
+
+**Shape.** A cardinality pin is *separator-set-independent*: it does not need to
+know which characters split, so it catches CR here and would catch a tenth
+separator added by a future Python. An exclusion list requires enumerating the
+set correctly and re-checking it whenever the ingress changes. Where the expected
+record count is known, the count is the stronger defence — and this guard already
+contains it, for a different stated reason (rejecting extra evidence lines).
+Rejecting a boundary move is the same act, because a fragment *is* an extra line.
+So unlike the other incidental defences in this audit, this one is not luck: the
+guard covers the hazard because the hazard is an instance of what the guard is
+for.
+
+**One disagreement, recorded rather than smoothed over.** The finding reached
+this repository from a peer agent, whose table reported a trailing separator
+passing both arms. Measured here it **refuses** in both arms, because appending a
+separator before the final newline yields a tenth (empty) entry and trips the
+same count. Their mechanism reproduced exactly; that one row did not.
+
+**Remedy, not made here.** Two lines of comment binding the cardinality clause to
+boundary-moves, so it is not read as subsumed — to be taken the next time either
+file is opened for a reason that already requires re-issuing the manifest, and
+not before.
+
 ---
 
 The condition described no longer exists. Leaving these in place actively
