@@ -3452,6 +3452,42 @@ sufficient. Add:
   invisible to exit status and to `Test-Path`, and visible immediately to a
   count that contradicts the thing being fetched.
 
+### F-21 — the predicate that cannot match what it is searching for — P2
+
+Two agents, working the same question independently, each wrote a query that was
+well-formed, returned a clean answer, and **structurally could not have found the
+subject it was looking for.** Both caught it; neither was saved by the result
+looking wrong, because it didn't.
+
+| | the query | why it could not match |
+|---|---|---|
+| mine | anchor runs *updated at* `06:59:03Z` | a run that started earlier and finished later **contains** the instant while stamping a different `updated_at`. The containment case is the only interesting one, and it is exactly the one excluded. |
+| theirs | runs with `created=2026-08-12` | returns runs *created* that day, excluding the one run created Aug 11 and **re-run** Aug 12 — the single run the question was about. |
+
+Both answers survived re-measurement on the corrected predicate, which is the
+trap: **a defective query that happens to return the true answer leaves no
+evidence it was defective.** Mine reported `0` and the corrected containment test
+also reports `0`. Nothing in the output distinguished them.
+
+**Shape, and it is not F-16's.** F-16 is an API *default* silently narrowing a
+result set — the fix is to pass `filter=all`. Here the default is irrelevant and
+the API behaves correctly; the defect is in the **choice of predicate**, and no
+flag repairs it. It is also not F-19: the authority answered was the right one,
+it was simply asked a question whose shape excluded the answer.
+
+**The rule.** Before trusting a negative, state the case that would produce a
+positive and check that the predicate can express it. For an instant against an
+interval that is `start <= t <= end`, never `end == t`. For an object that may
+predate the window, anchor on identity (`head_sha`, id) rather than on a creation
+date.
+
+**And bound the margin instead of asserting it.** The repaired read did not stop
+at `0`; it also established that the nearest candidate run begins **328 s after**
+the instant while the longest run of that workflow ever observed lasted **318 s**.
+That converts "nothing was near it" from a claim into interval arithmetic nobody
+has to take on trust — and it is the part a reader can check without re-running
+anything.
+
 ---
 
 The condition described no longer exists. Leaving these in place actively

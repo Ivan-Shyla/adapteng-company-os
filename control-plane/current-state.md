@@ -4470,15 +4470,73 @@ rather than accepted:
 
 The genuine one falls *inside* the only anchor run that ever executed on that
 head — `31533952257`, attempt 1, `20:38:25Z` → `20:38:48Z`. The zero-duration one
-has no run behind it at all. Checked against the whole population rather than a
-window: of **92** recorded runs of `rollout-trust-anchor.yml`, across every head
-and every date, **0** were updated at `06:59:xx`; the nearest neighbour is
-`31572475175` at `07:04:45Z`, five minutes later and on a different commit.
+has no run behind it at all.
+
+> **Predicate corrected 2026-08-12, and the correction is worth more than the
+> claim it repairs.** An earlier revision of this paragraph tested which anchor
+> runs were *updated at* `06:59:xx`. That is the wrong test: a run that started
+> earlier and finished later contains the instant without ever stamping a
+> matching timestamp, so the query could not have found the very thing it was
+> looking for. Identified by platform session `2cab0595` as a defect in its own
+> read; re-measured here with the containment test it should always have been:
+>
+> ```
+> runs where run_started_at <= 06:59:03Z <= updated_at   ->   0   (of all 92)
+> nearest run 31572475175 starts 07:04:31Z — 328 s AFTER the instant
+> longest anchor-run window ever observed                ->   318 s
+> ```
+>
+> No run reaches, and the margin is now bounded rather than asserted: the
+> nearest candidate begins later than the longest anchor run has ever lasted.
+
+**The population was also narrower than the question.** The earlier revision
+searched runs of `rollout-trust-anchor.yml` alone, while the question is whether
+*any* workflow could have posted. Re-checked across every workflow file at
+platform `main`, rather than a named subset:
+
+| | |
+|---|---|
+| workflow files on `main` | **16** |
+| invoking `verify_rollout_trust_anchor.py` | **3** — `rollout-trust-anchor.yml`, `secret-scan.yml`, `validate.yml` |
+| holding `checks: write` | **1** — `rollout-trust-anchor.yml` |
+
+The other two callers use the `validate-trust-root` subcommand and run under
+`contents: read`; they cannot create a check-run. So exactly one workflow in the
+repository is capable of posting, and none of its 92 runs contains the instant.
+
+**A positive discriminator, not only an absence.** `details_url` separates
+job-backed check-runs from API-created ones outright:
+
+```
+/actions/runs/31533947898/job/94035941636   drive-service-supply-chain      job-backed
+/actions/runs/31533952257/job/93920450167   Verify exact current head…      job-backed
+/runs/93920483971                           Base-trusted rollout auth…      API-created
+/runs/94036100476                           Base-trusted rollout auth…      API-created
+```
+
+**Both** anchor marks carry the run-less legacy form; neither is backed by a job.
+That is the same conclusion the job-listing contradiction below reaches, arrived
+at from an unrelated field.
 
 Both marks sit in check-suite `85541064513`, which belongs to the **push** run of
-Adapter Tests rather than to the anchor's own suite. That is the mechanism: the
-mark is unowned, so re-running an unrelated workflow sweeps it up and re-emits it
-with one timestamp because nothing was executed.
+Adapter Tests rather than to the anchor's own suite.
+
+**What is not established — recorded because the temptation is to overclaim.**
+The *cause* of the second mark is **not measured**. An earlier revision of this
+paragraph stated it as mechanism: that the mark is unowned, so re-running an
+unrelated workflow sweeps it up and re-emits it with one timestamp because
+nothing was executed. That remains a plausible reading of the evidence, but it is
+**inferred, not observed** — no creating process was ever caught in the act.
+Elimination covers workflows; it does not exclude a manual invocation carrying a
+token from a workstation, which the API cannot see at all. The correction was
+pressed by the correspondent whose own thesis it weakens, which is the reason to
+take it.
+
+**The remedy does not depend on the cause, which is why it should be done
+anyway.** Two red marks against one verification is sufficient on its own to
+justify making the POST idempotent on `external_id`, or associating it with its
+own run. Idempotency closes the defect under every hypothesis, including the
+manual one that cannot be ruled out.
 
 **Stronger still, and it does not depend on a clock.** Every argument above reads
 timestamps, so it is worth having one that cannot be defeated by a re-stamp.
