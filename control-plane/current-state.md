@@ -4373,10 +4373,17 @@ carried one. `lifecycle.run_not_found` went from one-to-one with
 PR could see this alone: the reclassification and the instrumentation are each
 correct, and the gap lives only in their interaction.
 
-**Platform #121 at `6197a1e` fixes exactly this**, and touches exactly the two
+**Platform #121 fixes exactly this**, and touches exactly the two
 files at the head of this chain — `authorize_approved_assets_phase.sh` and
 `docs/runbooks/migrate-approved-assets.md`. The exhaustion branch gains
 `lifecycle.run_not_found_status=` and `lifecycle.run_not_found_stderr=`.
+
+> **Do not pin #121 to a commit here.** An earlier revision cited head
+> `6197a1e`; by 2026-08-12 the head was `d4c942e`, so anyone checking out the
+> recorded SHA would have verified a superseded branch. It is an open PR in
+> another agent's lane and its head moves. Read the head at merge time. This is
+> F-19's shape one step on — a value that was correct when written and is not
+> self-announcing when it stops being correct.
 
 **Correct order, and it is not the obvious one:**
 
