@@ -4692,22 +4692,45 @@ Running **phase 1** first is the trap: if run-selection fails, the operator gets
 >    path, synthetic API response — the head itself was not manufactured on
 >    GitHub.
 >
-> **The silent class is 24 codes, not one — and 2 more are worse.** `list_ambiguous`
-> is not a special case; *every* verdict raisable before `:3141` binds `handle`
+> **The silent class is 25 codes, not one — and 2 more are worse.** `list_ambiguous`
+> is not a special case; *every* verdict raisable while `handle` is still `None`
 > lands on the same silent surface. Enumerated from the call graph rather than
 > from a harness, against blob `77a2f790`:
 >
-> | tier | where | codes | verdict line | authorization mark |
-> |---|---|---|---|---|
-> | 0 | `_build_client_from_environment` / client `__init__`, called at `:3137` — **outside the `try`** | 2 — `api.token_missing`, `api.token_invalid` | **none — raw traceback** | not published |
-> | 1 | `fetch_live_pull_request` `:3140` and `ensure_check_run` `:3141` | **24** — 10 `pull_request.*`, 7 `check.*`, 7 `api.*` from the shared client | correct category | **not published** |
-> | 2 | `verify_pull_request` `:3146` onward | the rest | correct category | published |
+> | tier | where | codes | verdict line | exit code | authorization mark |
+> |---|---|---|---|---|---|
+> | 0 | `_build_client_from_environment` / client `__init__`, called at `:3137` — **outside the `try`** | 2 — `api.token_missing`, `api.token_invalid` | **none — raw traceback** | **1 for both — inverted for `token_missing`** | not published |
+> | 1 | `fetch_live_pull_request` `:3140` and `ensure_check_run` `:3141` | **25** — 10 `pull_request.*`, **8** `check.*`, 7 `api.*` from the shared client | correct category | correct (1 / 75) | **not published** |
+> | 2 | `verify_pull_request` `:3146` onward | the rest | correct category | correct (1 / 75) | published |
+>
+> Tier 1 was recorded here as **24** and was one short: `check.outcome_invalid`,
+> raised in `_check_run_payload` (`:2770`) and reached from `ensure_check_run` at
+> `:2866` / `:2884`, is in tier 1 — while the *same code* at `:2913` in
+> `complete_check_run` is in tier 2. It is the only code in the file that appears
+> in two functions, so it is the only one that cannot be placed by name. Corrected
+> 2026-08-12 on a report from a peer session.
 >
 > Tier 0 is the sharper one and neither party had it: the client is built on the
 > line *above* the `try`, so `except TrustError` and `except Exception` cannot see
 > it. A missing or malformed token yields a Python traceback with **no
 > `rollout_trust_anchor.*` line at all** — the job still goes red, but nothing
 > machine-readable names why.
+>
+> **And tier 0's exit code is not merely absent from the verdict — it is wrong.**
+> `TrustError` extends `RuntimeError` (`:475`) and `UndeterminedError` extends
+> `TrustError` (`:485`); `main()` (`:3259`) catches only
+> `(OSError, UnicodeError, ValueError)`, so both escape and Python exits **1** —
+> which is `UNAUTHORIZED_EXIT_CODE` (`:158`). `api.token_missing` is an
+> `UndeterminedError` that should exit **75** (`:159`) and does exit 75 anywhere
+> inside the `try`. **A missing `GITHUB_TOKEN` is therefore reported as an
+> authorization refusal**, which is precisely the failure this platform change
+> exists to abolish. `api.token_invalid` is right at 1 by accident, being a plain
+> `TrustError`, and is indistinguishable from the inverted one at the surface.
+>
+> The fix is three lines and already written: `:3169`'s `except Exception` maps the
+> unexpected to `undetermined=True` and carries the comment *"Nothing was decided,
+> so this is a broken check, not a refusal."* Moving `:3137` inside the `try` puts
+> both codes under it. **Owner-facing only — no change is made here.**
 >
 > **And the two-category split, which is what the platform change exists to
 > deliver, survives only in stderr for all 24.** `_report_failure` sets
