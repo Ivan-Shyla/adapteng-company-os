@@ -167,6 +167,35 @@ Verified from `main` and CI, not from narrative.
   so attachment was never the defect. The same run refutes the sentence above
   that made "healthy for hours" evidence of detachment.
 
+  **Why the unresolved name reported `-3`, measured 2026-08-12.** A peer put a
+  fair objection: on glibc an unknown name against a working resolver is
+  NXDOMAIN, `EAI_NONAME` (-2), whereas we observed `EAI_AGAIN` (-3), so the
+  mechanism offered did not predict the value seen. They proposed the resolver
+  itself was unreachable. Run `31602283499` (`gateway-readiness.yml`,
+  `operation=address`) measures the resolver directly and falsifies both the
+  objection's mechanism and any reading that needs embedded DNS to be absent:
+
+      position: inside a container, hostname d3d3c28cebae
+      resolver 127.0.0.11 includes Docker's embedded DNS
+      reference pgdgbwzsuuxhw55g8v5opjgn -> fde4:75c5:b9d4::7, 10.0.1.7
+      RESULT address ok resolved=1 answering=1 placement=gateway_resolves
+
+  The configured nameserver is Docker's embedded DNS and it *answered* — it
+  returned both families for the database. So the resolver is neither absent nor
+  unreachable, and `-3` is not evidence that it is.
+
+  **INFERRED, not measured, and flagged as such:** embedded DNS answers for
+  names registered on the network and forwards the rest upstream; with no
+  reachable upstream the forwarded query expires, which glibc reports as
+  `EAI_AGAIN` rather than NXDOMAIN. That is consistent with every measurement
+  here, but the forwarding path was not itself instrumented.
+
+  What this is worth, stated at its true width: it is a *suggestion* that the
+  applications' network has no working external DNS egress, which is the
+  expected shape for a private network and mildly supports the private-network
+  control. It is **not** proof that the network has no egress — a DNS timeout
+  measures one path only. Do not carry it as an isolation guarantee.
+
   **The remedy, and the proof.** `deploy/ai-gateway.json` now declares
   `network.network_aliases: ["ai-gateway"]`, mapped to the `custom_network_aliases`
   field the API reports — so it is owned and verified by read-back rather than
