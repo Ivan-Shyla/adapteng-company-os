@@ -204,8 +204,8 @@ artifacts:
    or extra members stop construction and runtime verification. The reviewed
    procedure is loaded only after the pinned manifest and every enumerated
    on-disk member byte-matches those immutable blob identities. The reviewed
-   raw Git-blob procedure manifest SHA-256 is
-   `a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4`;
+   raw-byte procedure manifest SHA-256 is
+   `c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee`;
    the transaction-probe SHA-256 is
    `0d9e668726ea70d67621ccd62d357e23b4e2d6cd4c74216365ef86c2d034d785`.
    Any mismatch is a stop condition. Maintainers must use this exact two-phase
@@ -285,7 +285,7 @@ implementation:
   runtime_compatibility_assertion_sha256: "<sha256>"
   selected_full_assertion_sha256: "<sha256>"
   migration_status_harness_sha256: "<sha256>"
-  restore_procedure_manifest_sha256: "a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4"
+  restore_procedure_manifest_sha256: "c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee"
   runner_manifest_sha256: "<sha256>"
   provider_manifest_sha256: "<sha256>"
   host_inventory_collector_sha256: "<sha256>"
@@ -1073,11 +1073,11 @@ capture_generation() {
   GEN="$1"
   python3 scripts/postgres_restore_runner.py capture-runtime \
     --generation "${GEN^^}" \
-    --procedure-manifest-sha256 "$RESTORE_PROCEDURE_MANIFEST_SHA256" \
+    --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
     >"/secure/${GEN}-runtime.json"
   python3 scripts/postgres_restore_runner.py capture-catalog \
     --generation "${GEN^^}" \
-    --procedure-manifest-sha256 "$RESTORE_PROCEDURE_MANIFEST_SHA256" \
+    --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
     >"/secure/${GEN}-catalog.json"
 }
 ```
@@ -1106,7 +1106,7 @@ scripts/postgres_restore_generation.sh \
   --approved-image-manifest-sha256 "$BACKUP_IMAGE_MANIFEST_SHA256" \
   --recovery-container-id "$RECOVERY_CONTAINER_ID" \
   --final-container-id "$FINAL_CONTAINER_ID" \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   --accepted-retention-packet-sha256 "$ACCEPTED_RETENTION_PACKET_SHA256"
 ```
 
@@ -1220,14 +1220,14 @@ For generation A:
    cmp -s /secure/source-runtime.json /secure/a-runtime.json
    cmp -s /secure/source-catalog.json /secure/a-pre-catalog.json
    python3 scripts/postgres_restore_runner.py bootstrap-role --generation A \
-     --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4
+     --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee
    scripts/postgres_restore_status_gate.sh --generation A \
-     --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+     --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
      --expect-output absent \
      --expect 007=absent --expect drive-008=absent
    sha256sum /secure/a-runtime.json /secure/a-pre-catalog.json
    python3 scripts/postgres_restore_runner.py drop-role --generation A \
-     --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4
+     --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee
    ```
 
 Any comparison or status mismatch exits nonzero. Generation A proves only the
@@ -1251,9 +1251,9 @@ mv /secure/b-catalog.json /secure/b-pre-catalog.json
 cmp -s /secure/source-runtime.json /secure/b-runtime.json
 cmp -s /secure/source-catalog.json /secure/b-pre-catalog.json
 python3 scripts/postgres_restore_runner.py bootstrap-role --generation B \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   --expect-output absent \
   --expect 007=absent --expect drive-008=absent
 ```
@@ -1263,23 +1263,23 @@ Apply only the exact fixed runners from the pinned automation tree:
 ```bash
 set -euo pipefail
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   --expect-output absent \
   --expect 007=absent --expect drive-008=absent
 python3 scripts/postgres_restore_runner.py apply-007 --generation B \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   >/dev/null
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   --expect-output exact \
   --expect 007=exact --expect drive-008=absent
 
 # Drive-008 contains its own BEGIN/COMMIT. Never wrap, edit, or reseal it.
 python3 scripts/postgres_restore_runner.py apply-drive-008 --generation B \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   >/dev/null
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   --expect-output exact \
   --expect 007=exact --expect drive-008=exact
 ```
@@ -1319,7 +1319,7 @@ to the pre-migration catalog; it is the expected migrated signature for C.
 
 ```bash
 python3 scripts/postgres_restore_runner.py capture-catalog --generation B \
-  --procedure-manifest-sha256 "$RESTORE_PROCEDURE_MANIFEST_SHA256" \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   >/secure/b-post-catalog.json
 sha256sum /secure/b-post-catalog.json
 ```
@@ -1483,7 +1483,7 @@ resolves a probe bind path:
 ```bash
 set -euo pipefail
 scripts/postgres_restore_transaction_probe.sh \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee
 ```
 
 Only a zero exit from the complete script permits
@@ -1497,11 +1497,11 @@ statuses are captured.
 
 ```bash
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   --expect-output exact \
   --expect 007=exact --expect drive-008=exact
 python3 scripts/postgres_restore_runner.py drop-role --generation B \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee
 ```
 
 ## Phase 8 - independent generation C final exact state
@@ -1535,41 +1535,41 @@ mv /secure/c-catalog.json /secure/c-pre-catalog.json
 cmp -s /secure/source-runtime.json /secure/c-runtime.json
 cmp -s /secure/source-catalog.json /secure/c-pre-catalog.json
 python3 scripts/postgres_restore_runner.py bootstrap-role --generation C \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee
 scripts/postgres_restore_status_gate.sh --generation C \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   --expect-output absent \
   --expect 007=absent --expect drive-008=absent
 python3 scripts/postgres_restore_runner.py apply-007 --generation C \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   >/dev/null
 scripts/postgres_restore_status_gate.sh --generation C \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   --expect-output exact \
   --expect 007=exact --expect drive-008=absent
 python3 scripts/postgres_restore_runner.py apply-drive-008 --generation C \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   >/dev/null
 scripts/postgres_restore_status_gate.sh --generation C \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   --expect-output exact \
   --expect 007=exact --expect drive-008=exact
 python3 scripts/postgres_restore_runner.py capture-catalog --generation C \
-  --procedure-manifest-sha256 "$RESTORE_PROCEDURE_MANIFEST_SHA256" \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   >/secure/c-final-catalog.json
 
 python3 scripts/postgres_restore_c_final_assert.py \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee
 
 cmp -s /secure/source-runtime.json /secure/c-runtime.json
 cmp -s /secure/source-catalog.json /secure/c-pre-catalog.json
 cmp -s /secure/b-post-catalog.json /secure/c-final-catalog.json
 scripts/postgres_restore_status_gate.sh --generation C \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   --expect-output exact \
   --expect 007=exact --expect drive-008=exact
 python3 scripts/postgres_restore_runner.py drop-role --generation C \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee
 sha256sum \
   /secure/c-runtime.json \
   /secure/c-pre-catalog.json \
@@ -1673,7 +1673,7 @@ implementation_artifacts:
   runtime_compatibility_assertion_sha256: "<sha256>"
   selected_full_assertion_sha256: "<sha256>"
   migration_status_harness_sha256: "<sha256>"
-  restore_procedure_manifest_sha256: "a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4"
+  restore_procedure_manifest_sha256: "c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee"
   transaction_probe_sha256: "0d9e668726ea70d67621ccd62d357e23b4e2d6cd4c74216365ef86c2d034d785"
 compatibility:
   source_image_identity_sha256: "<sha256>"
@@ -1754,7 +1754,7 @@ cost:
   quote_accessed_at_utc: "<RFC3339>"
   nonzero_costs_included: true
 isolation:
-  procedure_manifest_sha256: "a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4"
+  procedure_manifest_sha256: "c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee"
   approved_image_manifest_sha256: "<sha256>"
   measured_image_identity_sha256: "<sha256>"
   generation_a_inventory_sha256: "<sha256>"

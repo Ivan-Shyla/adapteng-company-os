@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import stat
 import subprocess
 import sys
@@ -2948,6 +2949,38 @@ class ReadinessAndManifestTests(unittest.TestCase):
             "scripts/postgres_restore_isolation_gate.py",
         ):
             self.assertIn(member, manifest["artifacts"])
+
+    def test_runbook_pins_current_restore_artifact_digests(self) -> None:
+        # Every documented restore invocation hands these digests to
+        # --procedure-manifest-sha256, and postgres_restore_c_final_assert,
+        # _generation, _runner and _transaction_probe compare them byte-for-byte
+        # and abort on mismatch. A stale pin therefore makes the whole runbook
+        # unrunnable. That already happened once: the manifest was revised and
+        # the pin was not, in the very commit that edited this runbook, and it
+        # survived two later edits because nothing recomputed it.
+        runbook = (ROOT / "runbooks/backup-and-restore.md").read_text(
+            encoding="utf-8"
+        )
+        manifest_digest = hashlib.sha256(
+            (SCRIPTS / "postgres_restore_procedure_manifest.json").read_bytes()
+        ).hexdigest()
+        probe_digest = hashlib.sha256(
+            (SCRIPTS / "postgres_restore_transaction_probe.sql").read_bytes()
+        ).hexdigest()
+        for name, digest in (
+            ("procedure manifest", manifest_digest),
+            ("transaction probe", probe_digest),
+        ):
+            self.assertTrue(
+                digest in runbook,
+                f"runbook does not pin the current {name} digest {digest}",
+            )
+        # The value must also be supplied as a literal. An unset shell variable
+        # expands to nothing, so the documented command would abort under
+        # `set -u` or submit an empty digest.
+        supplied = re.findall(r"--procedure-manifest-sha256[ \t=]+(\S+)", runbook)
+        self.assertTrue(supplied)
+        self.assertEqual(set(supplied), {manifest_digest})
 
 
 if __name__ == "__main__":
