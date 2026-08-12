@@ -65,6 +65,7 @@ OPERATIONS = (
     "peer-verify",
     "peer-tools",
     "peer-resolve",
+    "service-resolve",
     "peer-diagnose",
     "diagnose",
 )
@@ -2269,6 +2270,7 @@ def read_tool_census(message: object) -> list[str]:
 # the job exit status 0. That matters: a successful execution is the case in
 # which this instance has been observed to capture stdout.
 PEER_RESOLVE_TASK_NAME = "adapteng-peer-name-resolution"
+SERVICE_RESOLVE_TASK_NAME = "adapteng-service-name-resolution"
 PEER_RESOLVE_MARKER = "ADAPTENG_RESOLVE"
 PEER_RESOLVE_SENTINEL = "end"
 PEER_RESOLVE_CERTAIN_NAME = "localhost"
@@ -2282,18 +2284,30 @@ PEER_RESOLVE_COMMAND = (
 )
 
 
-def peer_resolve_names(spec: dict) -> list:
-    """Ascending in doubt, because the order is what carries the reading."""
+def resolve_census_names(subject_name: str, other_name: str) -> list:
+    """Ascending in doubt, because the order is what carries the reading.
 
-    return [
-        PEER_RESOLVE_CERTAIN_NAME,
-        spec["network"]["peer_probe_application"],
-        spec["target"]["resource_name"],
-    ]
+    localhost resolves from /etc/hosts with no resolver at all; the subject's
+    own name needs Docker's embedded DNS, which only exists on a user-defined
+    network; the other name needs that network to be shared. Each rung fails
+    for a different reason, so how far the list gets is the measurement.
+    """
+
+    return [PEER_RESOLVE_CERTAIN_NAME, subject_name, other_name]
+
+
+def resolve_census_command(names: list) -> str:
+    return PEER_RESOLVE_COMMAND.format(names=" ".join(names))
+
+
+def peer_resolve_names(spec: dict) -> list:
+    return resolve_census_names(
+        spec["network"]["peer_probe_application"], spec["target"]["resource_name"]
+    )
 
 
 def peer_resolve_command(spec: dict) -> str:
-    return PEER_RESOLVE_COMMAND.format(names=" ".join(peer_resolve_names(spec)))
+    return resolve_census_command(peer_resolve_names(spec))
 
 
 def read_resolution_census(message: object) -> tuple[dict, bool]:
@@ -3231,20 +3245,34 @@ def operate_peer_tools(client: Client, spec: dict, sleep=None) -> int:
     return EXIT_OK
 
 
-def operate_peer_resolve(client: Client, spec: dict, sleep=None) -> int:
-    """Separate a peer that cannot resolve anything from a name that is absent.
+def run_resolution_census(
+    client: Client,
+    spec: dict,
+    *,
+    subject_name: str,
+    subject_role: str,
+    other_name: str,
+    operation: str,
+    task_name: str,
+    sleep=None,
+) -> int:
+    """Ask one container which names it can resolve, and read how far it got.
 
-    This is the control for the reachability probe, not a second attempt at it.
+    The subject is whichever container is being asked; the other name is the
+    one whose visibility from there is in question. Both directions matter and
+    they answer different things. Asked of the peer, a failure to resolve the
+    service could still be the peer's own defect. Asked of the service, the
+    same census establishes whether the service has service discovery at all,
+    which is the property a caller needs and the only half that is ours to fix.
+
     It opens no connection: gethostbyname asks the resolver and stops there, so
     nothing is contacted and no credential is presented.
     """
 
     sleep = sleep or time.sleep
     target = spec["target"]
-    peer_name = spec["network"]["peer_probe_application"]
-    service_name = target["resource_name"]
 
-    emit(f"--- peer-resolve {service_name} from {peer_name}")
+    emit(f"--- {operation} {other_name} from {subject_name}")
 
     project = find_project(client, target["project"])
     environment = (
@@ -3254,36 +3282,36 @@ def operate_peer_resolve(client: Client, spec: dict, sleep=None) -> int:
     )
     if project is None or environment is None:
         emit("    project or environment absent; nothing to resolve")
-        emit("RESULT peer-resolve failed application=absent")
+        emit(f"RESULT {operation} failed application=absent")
         return EXIT_FAILED
 
-    peer = find_application(applications_in(client, environment), peer_name)
-    if peer is None:
-        emit(f"    peer application {peer_name}: ABSENT")
-        emit("RESULT peer-resolve failed application=absent")
+    subject = find_application(applications_in(client, environment), subject_name)
+    if subject is None:
+        emit(f"    {subject_role} application {subject_name}: ABSENT")
+        emit(f"RESULT {operation} failed application=absent")
         return EXIT_FAILED
 
-    peer_uuid = str(peer["uuid"])
-    emit(f"    peer {peer_name}: uuid={peer_uuid} state={peer.get('status')}")
+    subject_uuid = str(subject["uuid"])
+    emit(f"    {subject_role} {subject_name}: uuid={subject_uuid} state={subject.get('status')}")
 
-    names = peer_resolve_names(spec)
-    command = peer_resolve_command(spec)
+    names = resolve_census_names(subject_name, other_name)
+    command = resolve_census_command(names)
     emit(f"    asking for, in order: {' '.join(names)}")
 
     task_uuid, disposition = converge_readiness_task(
-        client, peer_uuid, command, PEER_RESOLVE_TASK_NAME
+        client, subject_uuid, command, task_name
     )
-    emit(f"    resolve task {PEER_RESOLVE_TASK_NAME}: {disposition} uuid={task_uuid}")
+    emit(f"    resolve task {task_name}: {disposition} uuid={task_uuid}")
 
-    before = executions_snapshot(list_executions(client, peer_uuid, task_uuid))
+    before = executions_snapshot(list_executions(client, subject_uuid, task_uuid))
     emit(f"    executions already recorded: {before[0]}")
 
     armed = write_readiness_task(
         client,
-        peer_uuid,
+        subject_uuid,
         task_uuid,
-        readiness_task_body(command, armed=True, name=PEER_RESOLVE_TASK_NAME),
-        PEER_RESOLVE_TASK_NAME,
+        readiness_task_body(command, armed=True, name=task_name),
+        task_name,
     )
     if not task_is_armed(armed):
         raise Abort(
@@ -3297,25 +3325,25 @@ def operate_peer_resolve(client: Client, spec: dict, sleep=None) -> int:
 
     try:
         execution, _verdict, reason = await_probe_answer(
-            client, peer_uuid, task_uuid, before, sleep, PEER_RESOLVE_MARKER
+            client, subject_uuid, task_uuid, before, sleep, PEER_RESOLVE_MARKER
         )
     finally:
         at_rest = disarm_readiness_task(
-            client, peer_uuid, task_uuid, command, PEER_RESOLVE_TASK_NAME
+            client, subject_uuid, task_uuid, command, task_name
         )
         if at_rest:
             emit("    returned to rest: disabled, and scheduled for a leap day.")
         else:
             emit(
                 f"    COULD NOT DISARM the resolve task {task_uuid} on application "
-                f"{peer_uuid}. It is still enabled and will keep running every "
+                f"{subject_uuid}. It is still enabled and will keep running every "
                 "minute until it is disabled: PATCH /applications/"
-                f"{peer_uuid}/scheduled-tasks/{task_uuid} with enabled=false, or "
+                f"{subject_uuid}/scheduled-tasks/{task_uuid} with enabled=false, or "
                 "run this operation again, which disarms before anything else."
             )
 
     if not at_rest:
-        emit("RESULT peer-resolve failed reason=task_left_armed")
+        emit(f"RESULT {operation} failed reason=task_left_armed")
         return EXIT_FAILED
 
     if execution is None:
@@ -3325,11 +3353,11 @@ def operate_peer_resolve(client: Client, spec: dict, sleep=None) -> int:
             f"armed ({reason or 'no_execution'}), so nothing was asked and "
             "nothing is concluded."
         )
-        emit(f"RESULT peer-resolve failed reason={reason or 'no_execution'}")
+        emit(f"RESULT {operation} failed reason={reason or 'no_execution'}")
         return EXIT_FAILED
 
     message = execution.get("message")
-    emit_captured_output(message, known=(peer_uuid, task_uuid))
+    emit_captured_output(message, known=(subject_uuid, task_uuid))
     resolved, finished = read_resolution_census(message)
 
     emit("")
@@ -3342,7 +3370,7 @@ def operate_peer_resolve(client: Client, spec: dict, sleep=None) -> int:
             "    the shell did not reach the marker and nothing resolved, so "
             "the census did not run. Nothing is claimed about any name."
         )
-        emit("RESULT peer-resolve failed reason=no_marker")
+        emit(f"RESULT {operation} failed reason=no_marker")
         return EXIT_FAILED
 
     emit("")
@@ -3350,44 +3378,91 @@ def operate_peer_resolve(client: Client, spec: dict, sleep=None) -> int:
         emit(
             f"    {PEER_RESOLVE_CERTAIN_NAME} did not resolve, and it resolves "
             "from /etc/hosts without any resolver at all. Name resolution is "
-            "broken outright inside this peer, so it cannot answer anything "
-            "about the service and the service is unaccused."
+            f"broken outright inside {subject_name}, so it cannot answer "
+            f"anything about {other_name}, which remains unaccused."
         )
-        emit("RESULT peer-resolve failed scope=peer reason=resolver_broken")
+        emit(f"RESULT {operation} failed scope={subject_role} reason=resolver_broken")
         return EXIT_FAILED
 
-    if peer_name not in resolved:
+    if subject_name not in resolved:
         emit(
-            f"    {PEER_RESOLVE_CERTAIN_NAME} resolved but {peer_name} did not, "
-            "so this peer cannot resolve its own container name. That is what "
+            f"    {PEER_RESOLVE_CERTAIN_NAME} resolved but {subject_name} did "
+            "not, so this container cannot resolve its own name. That is what "
             "the default Docker bridge looks like: it carries no service "
-            "discovery, so no name resolves there and the gateway would be "
-            "unreachable by name from here whatever its own network is. This "
-            "is a finding about the peer, and the service remains unaccused."
+            "discovery, so no container name resolves there at all. Whatever "
+            f"{other_name} is attached to, it could not be reached by name "
+            f"from {subject_name}. This is a finding about {subject_name}, and "
+            f"{other_name} remains unaccused."
         )
-        emit("RESULT peer-resolve failed scope=peer reason=no_service_discovery")
+        emit(
+            f"RESULT {operation} failed scope={subject_role} "
+            "reason=no_service_discovery"
+        )
         return EXIT_FAILED
 
-    if service_name not in resolved:
+    if other_name not in resolved:
         emit(
-            f"    {peer_name} resolves its own name through Docker's embedded "
-            f"DNS but cannot resolve {service_name}. The resolver works, so "
-            "this is not a peer defect: the two containers are not on a shared "
-            "user-defined network. Sharing a destination is sharing a host, "
-            "not a network, which is exactly the gap this probe existed to "
-            "measure and the reason the API's silence about "
-            "connect_to_docker_network could not be taken for a yes."
+            f"    {subject_name} resolves its own name through Docker's "
+            f"embedded DNS but cannot resolve {other_name}. The resolver "
+            "works, so this is not a defect of the container being asked: the "
+            "two are not on a shared user-defined network. Sharing a "
+            "destination is sharing a host, not a network, which is exactly "
+            "the gap this probe existed to measure and the reason the API's "
+            "silence about connect_to_docker_network could not be taken for a "
+            "yes."
         )
-        emit("RESULT peer-resolve failed scope=network reason=not_on_shared_network")
+        emit(f"RESULT {operation} failed scope=network reason=not_on_shared_network")
         return EXIT_FAILED
 
     emit(
-        f"    every name resolved, including {service_name}. The peer's "
-        "resolver works and the service name is visible to it, so any earlier "
-        "resolution failure was transient rather than structural."
+        f"    every name resolved, including {other_name}. The resolver in "
+        f"{subject_name} works and {other_name} is visible to it, so any "
+        "earlier resolution failure was transient rather than structural."
     )
-    emit(f"RESULT peer-resolve ok resolved={len(resolved)}/{len(names)}")
+    emit(f"RESULT {operation} ok resolved={len(resolved)}/{len(names)}")
     return EXIT_OK
+
+
+def operate_peer_resolve(client: Client, spec: dict, sleep=None) -> int:
+    """Ask the peer whether it can see the service."""
+
+    return run_resolution_census(
+        client,
+        spec,
+        subject_name=spec["network"]["peer_probe_application"],
+        subject_role="peer",
+        other_name=spec["target"]["resource_name"],
+        operation="peer-resolve",
+        task_name=PEER_RESOLVE_TASK_NAME,
+        sleep=sleep,
+    )
+
+
+def operate_service_resolve(client: Client, spec: dict, sleep=None) -> int:
+    """Ask the service the same question, with the roles exchanged.
+
+    peer-resolve found that ops-runner cannot resolve its own container name,
+    which disqualifies it as an instrument: on a network with no service
+    discovery, nothing resolves, so it could never have reported anything about
+    the gateway. That verdict is silent about the gateway by construction.
+
+    Running the census inside the service settles the half that is ours. If the
+    service resolves its own name it has embedded DNS, so it is on a
+    user-defined network and is reachable by name from anything else on that
+    network -- and the remaining gap is the caller's attachment, not the
+    deployment. If it cannot, the deployment itself is the thing to fix.
+    """
+
+    return run_resolution_census(
+        client,
+        spec,
+        subject_name=spec["target"]["resource_name"],
+        subject_role="service",
+        other_name=spec["network"]["peer_probe_application"],
+        operation="service-resolve",
+        task_name=SERVICE_RESOLVE_TASK_NAME,
+        sleep=sleep,
+    )
 
 
 DIAGNOSE_LOG_LINES = 200
@@ -3631,6 +3706,8 @@ def run(environ: dict) -> int:
         return operate_peer_tools(client, spec)
     if operation == "peer-resolve":
         return operate_peer_resolve(client, spec)
+    if operation == "service-resolve":
+        return operate_service_resolve(client, spec)
     if operation == "peer-diagnose":
         return operate_peer_diagnose(client, spec)
     if operation == "diagnose":

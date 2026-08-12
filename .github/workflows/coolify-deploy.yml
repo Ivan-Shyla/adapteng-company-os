@@ -44,6 +44,7 @@ on:
           - peer-verify
           - peer-tools
           - peer-resolve
+          - service-resolve
           - peer-diagnose
           - diagnose
       service:

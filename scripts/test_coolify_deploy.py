@@ -2155,6 +2155,7 @@ class EntryPointTests(unittest.TestCase):
                 "peer-verify",
                 "peer-tools",
                 "peer-resolve",
+                "service-resolve",
                 "peer-diagnose",
                 "diagnose",
             },
@@ -3825,6 +3826,137 @@ class ProbeFailureClassificationTests(unittest.TestCase):
         self.assertIn(
             "RESULT peer-verify failed reachable=undetermined reason=no_marker", output
         )
+
+
+class ServiceResolveInstance(PeerResolveInstance):
+    """The census run inside the service, with the roles exchanged."""
+
+    def __init__(self, *, census: str | None = None, **kwargs) -> None:
+        super().__init__(census=census, **kwargs)
+        self.task_name = driver.SERVICE_RESOLVE_TASK_NAME
+
+
+class ServiceResolveTests(unittest.TestCase):
+    """Asking the gateway the question its peer turned out unable to answer.
+
+    peer-resolve found ops-runner could not resolve its own container name, so
+    it is on a network with no service discovery. That disqualifies it as an
+    instrument rather than convicting the gateway: on such a network nothing
+    resolves, so no answer about ai-gateway was ever available from there. The
+    same census inside the service settles the half that belongs to this
+    deployment.
+    """
+
+    def real_spec(self):
+        return driver.load_spec(driver.spec_path(RESOURCE))
+
+    def run_service(self, instance):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_service_resolve(
+                instance, self.real_spec(), sleep=lambda _seconds: None
+            )
+        return code, buffer.getvalue()
+
+    def census(self, *names) -> str:
+        lines = [f"ADAPTENG_RESOLVE {name} 172.18.0.{index + 2}" for index, name in enumerate(names)]
+        return "\n".join(lines + ["ADAPTENG_RESOLVE end", ""])
+
+    def test_the_subject_is_the_service_and_the_order_is_exchanged(self) -> None:
+        """The two operations must not ask the same question.
+
+        If the name order did not follow the subject, service-resolve would be
+        peer-resolve under another name and the second measurement would be
+        worthless. The middle rung is what differs: each asks whether the
+        container being addressed can resolve *itself*.
+        """
+
+        self.assertEqual(
+            driver.resolve_census_names(RESOURCE, PEER_NAME),
+            ["localhost", RESOURCE, PEER_NAME],
+        )
+        self.assertEqual(
+            driver.resolve_census_names(PEER_NAME, RESOURCE),
+            ["localhost", PEER_NAME, RESOURCE],
+        )
+        self.assertNotEqual(
+            driver.resolve_census_names(RESOURCE, PEER_NAME),
+            driver.peer_resolve_names(self.real_spec()),
+        )
+
+    def test_the_exchanged_command_still_fits_and_stays_legal(self) -> None:
+        command = driver.resolve_census_command(
+            driver.resolve_census_names(RESOURCE, PEER_NAME)
+        )
+        for forbidden in ("'", "$", "`", "\n"):
+            self.assertNotIn(forbidden, command)
+        self.assertEqual(command.count('"'), 2)
+        self.assertLessEqual(len(command), driver.PEER_COMMAND_LIMIT)
+
+    def test_the_census_lands_on_the_service_not_the_peer(self) -> None:
+        """A task written to the wrong container would measure nothing new.
+
+        This is the mirror of the assertion that keeps peer-verify off the
+        gateway. Here the correct target is the opposite one, and getting it
+        wrong would silently re-run peer-resolve and re-report its verdict.
+        """
+
+        instance = ServiceResolveInstance()
+        self.run_service(instance)
+        peer = next(item for item in instance.applications if item["name"] == PEER_NAME)
+        service = next(
+            item for item in instance.applications if item["name"] == RESOURCE
+        )
+        written = {path for _method, path in instance.writes() if "scheduled-task" in path}
+        self.assertTrue(written)
+        self.assertTrue(all(service["uuid"] in path for path in written))
+        self.assertFalse(any(peer["uuid"] in path for path in written))
+
+    def test_a_service_that_resolves_itself_but_not_the_peer_clears_the_deployment(
+        self,
+    ) -> None:
+        """The outcome that puts the remaining gap on the caller.
+
+        Embedded DNS answering at all means the service is on a user-defined
+        network, so it is reachable by name from anything else on that network.
+        The peer not being on it is the peer's attachment, not this deployment.
+        """
+
+        instance = ServiceResolveInstance(census=self.census("localhost", RESOURCE))
+        code, output = self.run_service(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn(
+            "RESULT service-resolve failed scope=network reason=not_on_shared_network",
+            output,
+        )
+
+    def test_a_service_that_cannot_resolve_itself_accuses_the_deployment(self) -> None:
+        instance = ServiceResolveInstance(census=self.census("localhost"))
+        code, output = self.run_service(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn(
+            "RESULT service-resolve failed scope=service reason=no_service_discovery",
+            output,
+        )
+
+    def test_both_resolving_is_the_reachability_answer(self) -> None:
+        code, output = self.run_service(ServiceResolveInstance())
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("RESULT service-resolve ok resolved=3/3", output)
+
+    def test_the_two_operations_do_not_share_a_task(self) -> None:
+        self.assertNotEqual(
+            driver.SERVICE_RESOLVE_TASK_NAME, driver.PEER_RESOLVE_TASK_NAME
+        )
+
+    def test_the_verdict_is_never_labelled_peer_when_the_service_is_asked(self) -> None:
+        """Scope names the container that was measured, or it misdirects."""
+
+        _code, output = self.run_service(
+            ServiceResolveInstance(census=self.census("localhost"))
+        )
+        self.assertIn("scope=service", output)
+        self.assertNotIn("scope=peer", output)
 
 
 class ForeignTextRedactionTests(unittest.TestCase):
