@@ -3110,6 +3110,48 @@ that means what the finding claims. Here the misleading fields are stable
 *in appearance* — a job list and a start time are exactly what one would reach
 for — which is why three separate parties reached for them.
 
+### F-18 — the readiness gate names disk faults like contract findings — P3, backlog
+
+**Not blocking, and recorded only because of *when* it would bite.** Reported by
+a platform session, verified here against
+`scripts/validation/validate_approved_assets_rollout.py` on `main` rather than
+adopted: the module has exactly **one error class** and 85 raise sites.
+
+```
+368       class ContractError(ValueError)          ← the only error class
+444-445   except OSError                   → ContractError(f"{label}.unreadable")
+894-895   except (OSError, SubprocessError,
+                  UnicodeError)            → ContractError("repository.git_inspection_failed")
+904-905   except OSError                   → ContractError("repository.required_file_unavailable")
+1815      except OSError                   → prints and returns 2, no verdict at all
+```
+
+Three sites give a pure infrastructure fault a name in the `repository.`
+namespace — **contract-shaped, reachable only from a disk or subprocess
+failure**. Line 1815 is the tell: the author felt the gap once and solved it
+locally with an ad-hoc non-verdict exit instead of a second channel.
+
+**Why it is worth a line despite being a diagnosability defect rather than a
+safety one.** This is the validator behind the *offline rollout-readiness gate*,
+which the owner must run before any approved-assets phase is dispatched, from a
+POSIX host, in a lifecycle where a burned run is never retried. If a disk or
+`git` fault surfaces as `repository.unreadable`, the owner's reasonable reading
+is "my evidence packet is wrong" when the true cause is "the machine faulted."
+That is a misdiagnosis at the one moment it is most expensive. It fails closed
+either way, so nothing unsafe passes.
+
+**Why it is not being fixed now.** The file is itself in
+`PROTECTED_EXACT_PATHS` (line 92) *and* digest-pinned (line 405), so a fix is a
+protected-path change requiring its own pin update — a second merge past an
+advisory refusal, for a defect that blocks nothing. The remedy shape is already
+shipped next door: the trust anchor's split between `undetermined.*` (broken
+check, needs an operator) and `unauthorized.*` (refused change, needs an
+approver). Same split, same file, whenever the freeze lifts.
+
+**Shape.** Fourth sibling of F-16/F-17 and the same one as the anchor's own
+former defect: the condition was bound to the nearest *available* verdict name
+rather than to the one that means what happened.
+
 ---
 
 The condition described no longer exists. Leaving these in place actively
