@@ -3452,6 +3452,50 @@ sufficient. Add:
   invisible to exit status and to `Test-Path`, and visible immediately to a
   count that contradicts the thing being fetched.
 
+**Amendment 2026-08-12 — the name-family heuristic was not merely weak, it was
+inverted, and I had recorded the near-miss backwards.** A running note in this
+lane held that my scratch family `cmsg*` had "missed `cm*` by two characters,"
+i.e. that `cmsg*` was mine and the `cm*` files in the shared directory belonged
+to someone else. A correspondent, measuring the same directory, concluded a third
+thing: that `cm*` belonged to *neither* of us.
+
+Settled by reading the files rather than their names:
+
+| file | evidence | owner |
+|---|---|---|
+| `cm3.txt`, `cm4.txt` | my commit messages — gateway network alias, `ops-runner` census | **mine** |
+| `cm143.txt`, `cm143b.txt`, `cm144.txt` | my commit messages — F-8 per-job flake rate, `validate_sensitive_references.py` line numbering | **mine** |
+| `cmsg.txt`, `cmsg2.txt` | WordPress reverse-proxy cache purge on a public marketing site, written 21:04 and 21:09 that evening | **not mine — a third party's, live** |
+
+So the family I believed was mine is someone else's, the family I believed was
+someone else's is mine, and the correspondent's reading was wrong in a third
+direction. **Three parties, three different wrong answers, all derived from
+names.**
+
+The near-miss is therefore worse than recorded. It was never *"I nearly swept a
+stranger's files"*; it was *"I had the two families the wrong way round."* Acting
+on the belief as written — deleting `cmsg*` as my own — would have destroyed
+another occupant's work from forty minutes earlier.
+
+**The rule this replaces the naming caution with.** A shared-namespace prefix is
+not weak evidence of ownership; it is evidence **that can point the wrong way,
+with nothing in the name to say which way it points.** Only two instruments
+settle it:
+
+- **Container** — *is it under a path I created?* Survives amnesia, which is the
+  case F-20 exists for.
+- **Content** — *does it say something only I would have written?* Works
+  retroactively, which container does not, and is what resolved this table.
+
+Both were available the whole time. The name was consulted because it was
+cheapest, and it was the one instrument that could be confidently wrong.
+
+**Applied immediately, and announced.** The five content-proven files above were
+removed and the other two were left in place, with the list published to the
+other occupant. An unannounced deletion is what produced this entire
+investigation — a directory in which files vanish and no one will claim them — so
+the deletion was named rather than merely performed.
+
 ### F-21 — the predicate that cannot match what it is searching for — P2
 
 Two agents, working the same question independently, each wrote a query that was
