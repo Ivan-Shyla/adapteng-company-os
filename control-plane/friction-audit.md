@@ -412,18 +412,62 @@ cleanup path and exiting 90.~~
 
 **"Always the same case" is false, and it pointed at the wrong mechanism.**
 The test is always
-`test_production_lifecycle_cleanup_status_is_fail_closed`, but the parameter
-case varies. Read from the attempt logs rather than from a summary:
+`test_production_lifecycle_cleanup_status_is_fail_closed`, but the failing
+case varies. Read from the attempt logs rather than from a summary.
 
-| Run / attempt | Failing case | Assertion |
+**It is not a `parametrize`.** The file contains no parametrize decorator at
+all. The five cases are a list literal walked by a `for` loop *inside a single
+test function*, with a bare `assert` (`tests/test_migrate_approved_assets.py`
+lines 886–908 at `feee3166`):
+
+| # | `delete_mode` | `destroy_mode` | `watch_status` | expected |
+|---|---|---|---|---|
+| 1 | `ok` | `ok` | `0` | **0** |
+| 2 | `fail_leave` | `ok` | `0` | **90** |
+| 3 | `fail_absent` | `ok` | `0` | **90** |
+| 4 | `ok` | `fail` | `0` | **90** |
+| 5 | `fail_leave` | `ok` | `37` | **37** |
+
+That structure is load-bearing for every inference below, because **the loop
+aborts at the first failing case**. The case named in a log is therefore the
+*minimum* failing position, not a sample of which case is broken.
+
+**Every one of the five positions has now been witnessed.** Attempt-level
+census of `rollout-policy.yml`, decoded from the job logs of all 26 failed
+`root-rollout-tests` jobs:
+
+| # | Case | Expected | Failures | Sole/first witness |
+|---|---|---|---|---|
+| 1 | `ok-ok-0-0` | 0 | **8** | `31024309941` |
+| 2 | `fail_leave-ok-0-90` | 90 | **1** | `31404500180` att 1 |
+| 3 | `fail_absent-ok-0-90` | 90 | **4** | `31027935863` |
+| 4 | `ok-fail-0-90` | 90 | **4** | `31203208437` |
+| 5 | `fail_leave-ok-37-37` | 37 | **1** | `31488794144` att 1 |
+
+**18 occurrences, 8 branches.** Positions 2 and 5 are singletons, and both
+were read back from raw log context rather than a pattern match: position 2 is
+`assert 1 == 90` at 15:37:15Z on `feature/ai-gateway-owner-decisions`;
+position 5 is **`assert 1 == 37`**, an assertion that occurs nowhere else in
+the corpus and that only position 5 can produce.
+
+**The sequential loop turns each failure into a batch of passes.** A failure at
+position *k* means positions 1…*k*−1 **passed, in the same process, seconds
+earlier**. Counting only within the failing runs:
+
+| Case | Passed | Failed |
 |---|---|---|
-| `31532517315` attempt 1 | `fail_absent-ok-0-90` | `assert 1 == 90` |
-| `31532517315` attempt 2 | `ok-fail-0-90` | `assert 1 == 90` |
-| `31414049256` attempt 1 | `ok-ok-0-0` | `assert 1 == 0` |
+| 1 `ok-ok-0-0` | 10× | 8× |
+| 2 `fail_leave-ok-0-90` | 9× | 1× |
+| 3 `fail_absent-ok-0-90` | 5× | 4× |
+| 4 `ok-fail-0-90` | 1× | 4× |
+| 5 `fail_leave-ok-37-37` | 0× | 1× |
 
-Three distinct cases, and two of them on **consecutive attempts of the same
-commit, 21 minutes apart**. A defect keyed to a case's data cannot move
-between cases like that.
+**Cases 1–4 each both passed and failed inside the failing runs alone** — no
+green run is needed to make the argument. Case 5 was reached exactly once, and
+failed. A defect keyed to a case's data cannot pass and fail the same case in
+the same corpus, and cannot move between cases on **consecutive attempts of the
+same commit 21 minutes apart** (`31532517315` att 1 → position 3, att 2 →
+position 4).
 
 The invariant is on the other side of the assertion. **The observed value is
 `1` in every occurrence; only the expected value changes with the case.** That
@@ -440,6 +484,35 @@ malformed, which is a bounded, local, data-shaped problem; the truth is a
 timing window on a path shared by every case, which is neither bounded nor
 local. The wrong claim was not merely imprecise — it named the wrong class of
 defect, and a reader acting on it would have gone looking at the fixture.
+
+**The job name is not the fault, either.** Of the 26 failed
+`root-rollout-tests` jobs in the corpus, only **18** are this flake. The other
+8 are two unrelated failures that happen to share the job:
+`test_predecessor_collector_ast_transport_policy_accepts_exact_source`
+(6, `assert [...body_invalid] == []`) and
+`ApprovedAssetsRolloutReadinessTests::test_offline_constructor_writes_only_mode_0600_receipt`
+(2, `repository.git_inspection_failed`). Counting by failing *job* therefore
+overstates this flake by 44%. It is the same error as the prefix-based log
+census recorded elsewhere in this register — **a job is not an owner** — and it
+inflates rather than hides, which is the direction that gets waved through.
+
+**Three of us hid occurrences by re-running, including me.** Seven of the 18
+occurrences sit inside runs whose final conclusion reads `success`, so a
+conclusion-level census sees 11. Two of those seven are mine: I re-ran
+`31532517315` at 23:43Z to unblock #127, which converted a run carrying **two**
+failed attempts into one that reads green. I did this while holding the
+register that exists to detect exactly that. The other sessions each did the
+same on their own branches — one of them found their instance only by going
+looking for who owned the hidden set. Worth stating plainly rather than
+attributing the practice to other people's work: **the census's own authors are
+in the hidden set.**
+
+**`31488794144` is more load-bearing than anyone holding it realised.** Two
+sessions preserved that run red as evidence that the flake is real. It is also
+the **sole witness of position 5** in the entire corpus, and the only
+occurrence anywhere carrying `assert 1 == 37`. Re-running it would have
+destroyed the only proof that the last case is reachable at all — a fact none
+of the three of us knew when we agreed to preserve it.
 
 **Why a transient becomes a hard failure.** In
 `scripts/operations/authorize_approved_assets_phase.sh` the `select-queued-run`
