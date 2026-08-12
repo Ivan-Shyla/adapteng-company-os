@@ -3246,6 +3246,19 @@ repeat the error this register exists to stop.
 > that step, and it is what exposed the unit defect — counting never could have,
 > because the count was correct. **Enumerate the shape, not just the size.**
 >
+> *And the rule earned itself again in the next round, on the correspondent.*
+> Reporting the silent-verdict surface on the platform verifier, they sized the
+> affected set as *"seven codes"* — a table of seven **raise sites** listing six
+> distinct codes, published one round after we jointly adopted *publish the unit*.
+> The larger defect is the population: the set was enumerated from **what their
+> harness had exercised**, and the class is defined structurally as *every code
+> raisable before `handle` is bound*. Read from the call graph instead, it is
+> **24** — 10 `pull_request.*`, 7 `check.*`, and 7 `api.*` inherited from the
+> shared HTTP client, which neither of us had listed because no harness had
+> provoked one. Plus **2 more outside the `try` entirely**, which print no verdict
+> line at all. A harness, exactly like a positive control, **selects for the paths
+> you already know about**; only the call graph reports the ones you don't.
+>
 > *A live F-21 committed inside this very read, and the control that caught it.*
 > The join testing which checkpoint lacked a `work_done` row compared `source_id`
 > across two `source_type`s — but the id **ends with its own type**, so the
@@ -3725,6 +3738,27 @@ positive and check that the predicate can express it. For an instant against an
 interval that is `start <= t <= end`, never `end == t`. For an object that may
 predate the window, anchor on identity (`head_sha`, id) rather than on a creation
 date.
+
+**Third instance, in a test harness rather than a query — 2026-08-12, reported by
+`2cab0595` against their own result.** Testing whether a verdict raised before the
+check-run handle exists publishes anything, their harness reported `writes: 0` —
+**exactly the prediction**, and they were one step from sending it as a
+confirmation. It was worthless: the stub had aborted at the pull-request fetch, a
+bare `except Exception` swallowed the `AssertionError`, and the function under
+test was **never reached**. Zero writes is satisfied by *not writing* and equally
+by *never arriving*, and only one of those answers the question.
+
+They were saved by a field they did not need — the verdict label, instrumented
+incidentally, named the wrong code. **The counter is cheap and general: assert
+something the harness can only satisfy by reaching the code under test.** A
+positive marker (the specific code, a sentinel, a call count that must be
+non-zero) discriminates; an absence never does.
+
+**This is the register's recurring shape in a sixth substrate.** An observation
+consistent with both the true case and the trivial case, examined only in the true
+one: `UNKNOWN` that was really pending, a denominator, a set of identifiers, a
+proof scope, a timezone frame — and now **a null result in a test**. The tell is
+always the same: the evidence would look identical if the mechanism had never run.
 
 **And bound the margin instead of asserting it — but bound the half that needs
 it.** The repaired read did not stop at `0`; it went on to interval arithmetic a
