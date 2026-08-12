@@ -4480,6 +4480,43 @@ Adapter Tests rather than to the anchor's own suite. That is the mechanism: the
 mark is unowned, so re-running an unrelated workflow sweeps it up and re-emits it
 with one timestamp because nothing was executed.
 
+**Stronger still, and it does not depend on a clock.** Every argument above reads
+timestamps, so it is worth having one that cannot be defeated by a re-stamp.
+Reported by platform session `b14546cd`, re-measured here:
+
+```
+GET /actions/runs/31533947898        -> Adapter Tests, push, attempt 2, conclusion=success
+GET /actions/runs/31533947898/jobs   -> total_count 10
+     94035941636 success  drive-service-supply-chain
+     …seven more, all success…
+     94035967117 success  adapteng-baserow-schema
+     94036100476 FAILURE  Base-trusted rollout authorization
+```
+
+**A failing job fails its run. This run passed.** So the tenth entry cannot be a
+job of that run, and that follows from the object itself without reference to any
+time, name or duration. Nine genuine jobs, one passenger.
+
+**Practical consequence the owner will meet.** The Adapter Tests run now reads
+**green** while still carrying a red mark, because it was re-run and its real
+jobs passed. Two surfaces disagree and *both are correct*: the run is green
+because everything it owns succeeded, and the mark is red because it was never
+that run's to begin with. Do not reconcile them; they are answering different
+questions.
+
+**One caution if this is ever deduplicated by identifier.** The two anchor marks
+carry an **identical** `external_id`, constant per pull request, while genuine
+jobs carry UUIDs:
+
+| entry | identifier |
+|---|---|
+| both anchor marks | `adapteng-rollout-trust-v1:…:128` — the same string |
+| genuine jobs | `e74816a6-…`, `ab16fa86-…` — distinct UUIDs |
+
+So that field separates **kind, not instance**. It is the right key for making the
+POST idempotent — which is precisely the fix that would stop the duplicate — but
+counting distinct values of it reports *one* mark where there are two.
+
 **What this does and does not change.** It does **not** change the decision. The
 genuine result is still `failure`, and the anchor is still absent from the
 required set — re-read from the ruleset API at the same time, which returns
