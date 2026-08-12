@@ -36,6 +36,7 @@
     "internal_port": 8081,
     "public_fqdn": null,
     "connect_to_docker_network": true,
+    "peer_probe_application": "ops-runner",
     "note": "public_fqdn is null and must stay null: this service is reachable only from the private Docker network, exactly like adapteng-baserow-adapter. connect_to_docker_network attaches the container to the shared network so other resources can reach it by name without any public route."
   },
   "health_check": {

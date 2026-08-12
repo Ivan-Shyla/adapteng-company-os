@@ -56,7 +56,15 @@ TIMEOUT_VARIABLE = "DEPLOY_TIMEOUT_SECONDS"
 # in this process only for the length of one request.
 SUPPLY_PREFIX = "COOLIFY_SECRET_"
 
-OPERATIONS = ("inspect", "reconcile", "deploy", "status", "verify", "diagnose")
+OPERATIONS = (
+    "inspect",
+    "reconcile",
+    "deploy",
+    "status",
+    "verify",
+    "peer-verify",
+    "diagnose",
+)
 FORBIDDEN_METHODS = frozenset({"DELETE"})
 
 # Coolify reports a deployment through these states. Anything outside the two
@@ -92,7 +100,12 @@ SECTION_KEYS = {
     "target": {"project", "environment", "resource_name", "server", "destination"},
     "source": {"kind", "git_repository", "git_branch", "github_app"},
     "build": {"build_pack", "base_directory", "dockerfile_location"},
-    "network": {"internal_port", "public_fqdn", "connect_to_docker_network"},
+    "network": {
+        "internal_port",
+        "public_fqdn",
+        "connect_to_docker_network",
+        "peer_probe_application",
+    },
     "health_check": {
         "enabled",
         "container_gate",
@@ -1991,6 +2004,54 @@ READINESS_COMMAND = (
 READINESS_EXECUTION_ATTEMPTS = 24
 READINESS_EXECUTION_INTERVAL_SECONDS = 10
 
+# --- peer reachability -------------------------------------------------------
+# verify asks "is the process up, and can it reach its database", from inside
+# the gateway's own container against 127.0.0.1. That question cannot reach
+# this one: whether a *different* container on the shared Docker network can
+# resolve the service by name and open a connection to it. Loopback readiness
+# is true whether or not the container was ever attached to the shared network,
+# so the two are independent, and only this one closes the gap between "the
+# container is healthy" and "a caller can reach it".
+#
+# It is asked from a peer application rather than from the Actions runner
+# because the runner is not on the applications' network, which is why every
+# address-level probe run from there has been unable to answer.
+PEER_TASK_NAME = "adapteng-peer-reachability-probe"
+PEER_MARKER = "ADAPTENG_PEER"
+# Same construction rules as READINESS_COMMAND, for the same reason: Coolify
+# runs it as docker exec <container> sh -c '<command>' and escapes single
+# quotes, so there is no single quote, no dollar and no backtick anywhere here,
+# and it is one line.
+#
+# Three independent facts, in the order that makes a partial answer readable.
+# gethostbyname proves DNS and reports the address it resolved. create_connection
+# proves TCP to the declared internal port. The two status codes prove HTTP.
+# Both paths are requested because they differ in what they touch, and neither
+# reads the Authorization header, so no credential is presented and no model
+# call can occur.
+PEER_COMMAND = (
+    'python -c "'
+    "import socket,urllib.request as R,sys;"
+    "R.HTTPErrorProcessor.http_response=lambda s,q,r:r;"
+    "R.HTTPErrorProcessor.https_response=lambda s,q,r:r;"
+    "a=socket.gethostbyname(sys.argv[1]);"
+    "c=socket.create_connection((sys.argv[1],int(sys.argv[2])),5);"
+    "c.close();"
+    "print(sys.argv[5],a,R.urlopen(sys.argv[3],timeout=5).status,"
+    "R.urlopen(sys.argv[4],timeout=5).status)"
+    '" {host} {port} http://{host}:{port}/health http://{host}:{port}/ready '
+    + PEER_MARKER
+)
+
+
+def peer_command(spec: dict) -> str:
+    """Build the peer probe from the committed spec, not from guesses."""
+
+    return PEER_COMMAND.format(
+        host=spec["target"]["resource_name"],
+        port=spec["network"]["internal_port"],
+    )
+
 
 def readiness_command(spec: dict) -> str:
     """Build the in-container probe from the committed spec, not from guesses."""
@@ -2001,24 +2062,26 @@ def readiness_command(spec: dict) -> str:
     )
 
 
-def find_readiness_task(client: Client, uuid: str) -> dict | None:
+def find_readiness_task(
+    client: Client, uuid: str, task_name: str = READINESS_TASK_NAME
+) -> dict | None:
     tasks = call(client, "GET", f"/applications/{uuid}/scheduled-tasks")
     if not isinstance(tasks, list):
         raise Abort("the scheduled-task listing was not a JSON array")
     matches = [
         task
         for task in tasks
-        if isinstance(task, dict) and task.get("name") == READINESS_TASK_NAME
+        if isinstance(task, dict) and task.get("name") == task_name
     ]
     if len(matches) > 1:
         raise Abort(
-            f"{len(matches)} scheduled tasks are named {READINESS_TASK_NAME}; "
+            f"{len(matches)} scheduled tasks are named {task_name}; "
             "an ambiguous match is not resolved by guessing"
         )
     return matches[0] if matches else None
 
 
-def readiness_task_body(command: str, *, armed: bool) -> dict:
+def readiness_task_body(command: str, *, armed: bool, name: str = READINESS_TASK_NAME) -> dict:
     """The stored shape of the probe task, in one of its two states.
 
     Disarmed is the resting state and is what the task is left in: disabled,
@@ -2027,7 +2090,7 @@ def readiness_task_body(command: str, *, armed: bool) -> dict:
     """
 
     return {
-        "name": READINESS_TASK_NAME,
+        "name": name,
         "command": command,
         "frequency": READINESS_ARMED_FREQUENCY if armed else READINESS_TASK_FREQUENCY,
         "timeout": READINESS_TASK_TIMEOUT_SECONDS,
@@ -2039,7 +2102,13 @@ def task_is_armed(task: dict) -> bool:
     return bool(task.get("enabled")) or task.get("frequency") == READINESS_ARMED_FREQUENCY
 
 
-def write_readiness_task(client: Client, uuid: str, task_uuid: str, body: dict) -> dict:
+def write_readiness_task(
+    client: Client,
+    uuid: str,
+    task_uuid: str,
+    body: dict,
+    task_name: str = READINESS_TASK_NAME,
+) -> dict:
     """Write the task and read it back, because a write that did not hold is
     the difference between a probe and a guess."""
 
@@ -2050,13 +2119,18 @@ def write_readiness_task(client: Client, uuid: str, task_uuid: str, body: dict) 
         body=body,
         expect=(200, 201),
     )
-    after = find_readiness_task(client, uuid)
+    after = find_readiness_task(client, uuid, task_name)
     if after is None:
         raise Abort("the readiness task disappeared while it was being written")
     return after
 
 
-def converge_readiness_task(client: Client, uuid: str, command: str) -> tuple[str, str]:
+def converge_readiness_task(
+    client: Client,
+    uuid: str,
+    command: str,
+    task_name: str = READINESS_TASK_NAME,
+) -> tuple[str, str]:
     """Create the probe task disarmed, or bring an existing one back to rest.
 
     Running this first is what makes an interrupted earlier run self-healing:
@@ -2066,8 +2140,8 @@ def converge_readiness_task(client: Client, uuid: str, command: str) -> tuple[st
     application, disclosed in the output rather than hidden.
     """
 
-    existing = find_readiness_task(client, uuid)
-    body = readiness_task_body(command, armed=False)
+    existing = find_readiness_task(client, uuid, task_name)
+    body = readiness_task_body(command, armed=False, name=task_name)
     if existing is None:
         created = call(
             client,
@@ -2088,7 +2162,7 @@ def converge_readiness_task(client: Client, uuid: str, command: str) -> tuple[st
     if existing.get("command") == command and not was_armed:
         return task_uuid, "already at rest"
 
-    after = write_readiness_task(client, uuid, task_uuid, body)
+    after = write_readiness_task(client, uuid, task_uuid, body, task_name)
     if after.get("command") != command or task_is_armed(after):
         raise Abort(
             "the readiness task did not come to rest after it was written; "
@@ -2097,7 +2171,13 @@ def converge_readiness_task(client: Client, uuid: str, command: str) -> tuple[st
     return task_uuid, "disarmed and corrected" if was_armed else "converged"
 
 
-def disarm_readiness_task(client: Client, uuid: str, task_uuid: str, command: str) -> bool:
+def disarm_readiness_task(
+    client: Client,
+    uuid: str,
+    task_uuid: str,
+    command: str,
+    task_name: str = READINESS_TASK_NAME,
+) -> bool:
     """Return the task to rest, and say plainly whether it got there.
 
     This runs even when the probe failed, because the alternative is a job
@@ -2105,10 +2185,10 @@ def disarm_readiness_task(client: Client, uuid: str, task_uuid: str, command: st
     write, and it reports its own failure rather than swallowing it.
     """
 
-    body = readiness_task_body(command, armed=False)
+    body = readiness_task_body(command, armed=False, name=task_name)
     for attempt in range(1, READINESS_DISARM_ATTEMPTS + 1):
         try:
-            after = write_readiness_task(client, uuid, task_uuid, body)
+            after = write_readiness_task(client, uuid, task_uuid, body, task_name)
         except Abort as failure:
             emit(f"    disarm attempt {attempt} failed: {failure}")
             continue
@@ -2168,7 +2248,7 @@ def newest_execution(rows: list[dict]) -> dict | None:
     return max(rows, key=execution_sort_key)
 
 
-def read_marker(message: object) -> str | None:
+def read_marker(message: object, marker: str = READINESS_MARKER) -> str | None:
     """Pull the probe's own word out of the captured container output.
 
     The marker exists so that an empty message, a shell error, or any other
@@ -2179,8 +2259,8 @@ def read_marker(message: object) -> str | None:
         return None
     for line in message.splitlines():
         stripped = line.strip()
-        if stripped.startswith(READINESS_MARKER):
-            remainder = stripped[len(READINESS_MARKER) :].strip()
+        if stripped.startswith(marker):
+            remainder = stripped[len(marker) :].strip()
             return remainder or None
     return None
 
@@ -2191,6 +2271,7 @@ def await_probe_answer(
     task_uuid: str,
     before: tuple[int, set[tuple[str, str]]],
     sleep,
+    marker: str = READINESS_MARKER,
 ) -> tuple[dict | None, str | None, str]:
     """Wait for the scheduler to run the probe once, and read what it said.
 
@@ -2223,7 +2304,7 @@ def await_probe_answer(
             f"    execution at {execution.get('created_at')!r} finished after "
             f"{attempt} polls: status={status}"
         )
-        return execution, read_marker(execution.get("message")), ""
+        return execution, read_marker(execution.get("message"), marker), ""
     return None, None, "no_execution"
 
 
@@ -2394,6 +2475,166 @@ def operate_verify(client: Client, spec: dict, sleep=None) -> int:
         "endpoints answer before the Authorization header is read."
     )
     emit("RESULT verify ok ready=yes answer=200")
+    return EXIT_OK
+
+
+def operate_peer_verify(client: Client, spec: dict, sleep=None) -> int:
+    """Ask a peer container whether it can reach this service by name.
+
+    This is the question ``verify`` cannot ask. ``verify`` runs inside the
+    gateway and talks to 127.0.0.1, which answers the same way whether or not
+    the container is attached to the shared Docker network. A caller lives in a
+    different container, so the only faithful vantage point is a different
+    container, and the probe is run from the peer named in the spec.
+
+    Nothing is created and nothing is exposed: the peer already exists, no FQDN
+    is assigned, and the probe is one disabled scheduled task that is armed for
+    as long as it takes the scheduler to run it once and is then returned to
+    rest, exactly like the readiness probe.
+    """
+
+    sleep = sleep or time.sleep
+    target = spec["target"]
+    peer_name = spec["network"]["peer_probe_application"]
+    service_name = target["resource_name"]
+
+    emit(f"--- peer-verify {service_name} from {peer_name}")
+
+    project = find_project(client, target["project"])
+    environment = (
+        find_environment(client, project["uuid"], target["environment"])
+        if project
+        else None
+    )
+    if project is None or environment is None:
+        emit("    project or environment absent; nothing to verify")
+        emit("RESULT peer-verify failed application=absent")
+        return EXIT_FAILED
+
+    present = applications_in(client, environment)
+    service = find_application(present, service_name)
+    peer = find_application(present, peer_name)
+    if service is None:
+        emit(f"    application {service_name}: ABSENT")
+        emit("RESULT peer-verify failed application=absent")
+        return EXIT_FAILED
+    if peer is None:
+        emit(
+            f"    peer application {peer_name}: ABSENT. The probe has nowhere "
+            "to run from, which says nothing about reachability either way."
+        )
+        emit("RESULT peer-verify failed reachable=undetermined reason=peer_absent")
+        return EXIT_FAILED
+
+    peer_uuid = str(peer["uuid"])
+    emit(f"    service {service_name}: state={service.get('status')}")
+    emit(f"    peer {peer_name}: uuid={peer_uuid} state={peer.get('status')}")
+    emit(
+        f"    placement: service destination={destination_uuid_of(service)} "
+        f"peer destination={destination_uuid_of(peer)}"
+    )
+
+    command = peer_command(spec)
+    task_uuid, disposition = converge_readiness_task(
+        client, peer_uuid, command, PEER_TASK_NAME
+    )
+    emit(f"    peer probe task {PEER_TASK_NAME}: {disposition} uuid={task_uuid}")
+
+    before = executions_snapshot(list_executions(client, peer_uuid, task_uuid))
+    emit(f"    executions already recorded: {before[0]}")
+
+    armed = write_readiness_task(
+        client,
+        peer_uuid,
+        task_uuid,
+        readiness_task_body(command, armed=True, name=PEER_TASK_NAME),
+        PEER_TASK_NAME,
+    )
+    if not task_is_armed(armed):
+        raise Abort(
+            "the peer probe task did not arm; refusing to wait for an execution "
+            "that cannot happen"
+        )
+    emit(
+        f"    armed at {READINESS_ARMED_FREQUENCY} and waiting for Coolify's "
+        "scheduler; it will be returned to rest either way"
+    )
+
+    try:
+        execution, verdict, reason = await_probe_answer(
+            client, peer_uuid, task_uuid, before, sleep, PEER_MARKER
+        )
+    finally:
+        at_rest = disarm_readiness_task(
+            client, peer_uuid, task_uuid, command, PEER_TASK_NAME
+        )
+        if at_rest:
+            emit("    returned to rest: disabled, and scheduled for a leap day.")
+        else:
+            emit(
+                f"    COULD NOT DISARM the peer probe task {task_uuid} on "
+                f"application {peer_uuid}. It is still enabled and will keep "
+                "running every minute until it is disabled: PATCH /applications/"
+                f"{peer_uuid}/scheduled-tasks/{task_uuid} with enabled=false, or "
+                "run this operation again, which disarms before anything else."
+            )
+
+    if not at_rest:
+        emit("RESULT peer-verify failed reachable=undetermined reason=task_left_armed")
+        return EXIT_FAILED
+
+    if execution is None:
+        emit("")
+        emit(
+            "    no identifiable new execution was recorded while the task was "
+            f"armed ({reason or 'no_execution'}). The probe did not demonstrably "
+            "run, so this says nothing about reachability either way."
+        )
+        emit(
+            "RESULT peer-verify failed reachable=undetermined "
+            f"reason={reason or 'no_execution'}"
+        )
+        return EXIT_FAILED
+
+    if verdict is None:
+        emit("")
+        emit(
+            f"    the execution finished but carries no {PEER_MARKER} marker, so "
+            "the probe did not run to completion inside the peer. Reporting "
+            "undetermined rather than unreachable: a missing answer is not a "
+            "negative answer, and a peer image without python would look exactly "
+            "like this."
+        )
+        emit(f"    captured output: {str(execution.get('message'))[:600]!r}")
+        emit("RESULT peer-verify failed reachable=undetermined reason=no_marker")
+        return EXIT_FAILED
+
+    fields = verdict.split()
+    if len(fields) != 3 or fields[1] != "200" or fields[2] != "200":
+        emit("")
+        emit(
+            f"    the peer answered {PEER_MARKER} {verdict}, which is not the "
+            "shape of a fully successful probe (address, /health 200, /ready 200)."
+        )
+        emit(f"RESULT peer-verify failed reachable=no answer={verdict!r}")
+        return EXIT_FAILED
+
+    address, health_status, ready_status = fields
+    emit("")
+    emit(f"    DNS: {service_name} resolved from inside {peer_name} to {address}")
+    emit(f"    TCP: connected to {service_name}:{spec['network']['internal_port']}")
+    emit(f"    HTTP: /health {health_status}, /ready {ready_status}")
+    emit(
+        "    Peer reachability confirmed. A different container on the shared "
+        "network resolved this service by name, opened a TCP connection to its "
+        "internal port, and got an answer from both endpoints. No public route "
+        "was used or created, no credential was presented, and no model was "
+        "called: both paths answer before the Authorization header is read."
+    )
+    emit(
+        f"RESULT peer-verify ok reachable=yes address={address} "
+        f"health={health_status} ready={ready_status}"
+    )
     return EXIT_OK
 
 
@@ -2632,6 +2873,8 @@ def run(environ: dict) -> int:
         return operate_status(client, spec)
     if operation == "verify":
         return operate_verify(client, spec)
+    if operation == "peer-verify":
+        return operate_peer_verify(client, spec)
     if operation == "diagnose":
         return operate_diagnose(client, spec)
     return operate_deploy(
