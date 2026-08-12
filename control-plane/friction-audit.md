@@ -3612,6 +3612,69 @@ about a mechanism the observation cannot see. `unauthorized` is true; "therefore
 supply authorization" does not follow, and the code is the only place that shows
 why.
 
+### F-23 — the remedy aimed at a path the fault did not take — P2
+
+**First instance, and it was mine, merged, and in the owner's execution path.**
+Having measured two anchor check-runs against one verification, I filed the
+remedy *"make the POST idempotent on `external_id`"* and wrote that idempotency
+"closes the defect under every hypothesis." Platform session `2cab0595` read the
+function I was proposing to change:
+
+```
+ensure_check_run  :2829  lists by check_name + filter=all
+                  :2855  if check_runs:  -> PATCH existing
+                  :2880  else:           -> POST new
+                  :2856  external_id already validated before the PATCH
+```
+
+**The remedy was already implemented, on a broader key** — `CHECK_NAME` is a
+module constant matching every anchor mark on the head, where `external_id` is
+only per-pull-request. They put a positive control under it on two heads neither
+party had measured, each with two anchor runs that both executed the verifier
+step: one check-run each, no duplicate. It could have come out the other way.
+
+**The part that generalises is not the redundancy.** Redundancy alone would make
+it merely wasted work. The duplicate on `36cdc765` **exists in the presence of
+that guard**, so whatever created it never entered the POST branch — that branch
+is reached only on an empty list, and it would have PATCHed. A stronger key
+inside a function the fault provably did not pass through cannot prevent it.
+
+- **Before proposing a fix to a code path, confirm the fault went through that
+  path.** "This would have prevented it" is a claim about the route, and a route
+  is checkable — usually by reading the branch condition. I checked neither.
+- **A fix that is already present is worse than no fix filed**, because it
+  consumes the reader's belief that the defect is addressed while the real one
+  stays armed. The owner would have found it implemented and moved on.
+- **Prefer the remedy that survives not knowing the cause.** I had already
+  written that the cause was unmeasured; the correct response to an unmeasured
+  cause is a remedy that does not name a mechanism, and mine named one.
+
+**And what the real defect turned out to be — the category, not the count.**
+`total_count > 1` raises a plain `TrustError` at `:2854`, which `_verify_command`
+classifies at `:3167` as **`unauthorized`, exit 1** rather than `undetermined`,
+exit 75. So a platform duplication is announced as an attempted forgery. It fires
+at `:3141`, before any verification, and leaves `handle` at `None`, so
+`_report_failure` at `:3118` publishes nothing at all.
+
+**Why it survived a suite that tests exactly this case.**
+`tests/test_rollout_trust_anchor.py:3305`–`3333` builds the two-check-run fixture
+and asserts:
+
+```python
+with self.assertRaises(anchor.TrustError) as raised:   # 3327
+self.assertEqual(raised.exception.code, code)          # 3333
+```
+
+`UndeterminedError` **subclasses** `TrustError` (`:485`). The assertion therefore
+passes identically whichever category is raised — **converting it or leaving it
+makes zero test difference.** That is F-10 exactly: the assertion, not the
+fixture, is what classifies. *Assert the category, not only the code.*
+
+**Not mine to fix.** The verifier is in the platform repository, which this
+control plane holds read-only. What is mine is step 0 of §16.5, which now
+requires confirming the head carries exactly one anchor check-run before the
+ceremony — measured 2026-08-12 as 1 on #121, so the owner is not blocked today.
+
 ---
 
 The condition described no longer exists. Leaving these in place actively

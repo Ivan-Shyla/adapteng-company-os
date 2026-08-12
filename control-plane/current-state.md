@@ -4450,9 +4450,11 @@ files at the head of this chain — `authorize_approved_assets_phase.sh` and
 
 **Correct order, and it is not the obvious one:**
 
-0. **Confirm platform #121's base is exactly `main`'s head, and settle every
-   other PR open onto `main` first.** This step was missing until 2026-08-12.
-   Without it, steps 1–2 spend the ceremony for nothing.
+0. **Confirm platform #121's base is exactly `main`'s head; settle every other
+   PR open onto `main` first; and confirm #121's head carries exactly *one*
+   check-run named `Base-trusted rollout authorization`.** This step was missing
+   until 2026-08-12, and its third clause was added later that day. Without it,
+   steps 1–2 spend the ceremony for nothing.
 1. Owner issues the base-trusted rollout authorization / trust receipt.
 2. #121's two trust-anchor checks go green; **merge #121**, with nothing else
    landing on `main` in between.
@@ -4498,6 +4500,53 @@ Running **phase 1** first is the trap: if run-selection fails, the operator gets
 > issuance and #121's merge, `main` advances, `live.base_sha` advances with it,
 > and the receipt is void on line 2404 with nothing recoverable. Either land #124
 > first and re-confirm step 0, or hold it until #121 is merged.
+
+> **Third precondition, and it fires earlier than either of the two above.** Two
+> anchor check-runs on one head is not a cosmetic double-report — it is a refusal
+> condition. `ensure_check_run` (`:2822`–`:2902`) lists by `check_name` with
+> `filter=all` and then:
+>
+> ```
+> 2847   if ... or total_count > 1:
+> 2854       raise TrustError("check.list_ambiguous")
+> ```
+>
+> Three consequences, each read from source rather than reasoned:
+>
+> 1. **It is categorised as an attack.** `TrustError` is raised plain.
+>    `_verify_command` classifies at `:3167` with
+>    `undetermined=isinstance(exc, UndeterminedError)`, so the verdict prints
+>    `rollout_trust_anchor.unauthorized.check.list_ambiguous` and exits **1**
+>    (`UNAUTHORIZED_EXIT_CODE`), not **75** (`UNDETERMINED_EXIT_CODE`). A platform
+>    duplication is reported in the vocabulary of "someone tried something they
+>    should not."
+> 2. **It fires before anything is verified.** `ensure_check_run` is called at
+>    `:3141`, ahead of `verify_pull_request` at `:3146` — so it precedes the
+>    closure audit at `:2669` *and* the receipt read at `:2705`. It is strictly
+>    earlier than the F-22 trap, and no signature reaches it either.
+> 3. **Nothing is published, so the surface can lie.** `handle` is still `None`
+>    when the raise happens, and `_report_failure` at `:3118` only publishes
+>    `if handle is not None`. **No anchor check-run is created or updated.** The
+>    pre-existing marks keep whatever conclusion they already carried. On a head
+>    whose surviving marks are red this is merely confusing; on a head carrying a
+>    stale *green* mark the published surface would read green while the
+>    verification refused. *That last case is reachable by construction but has
+>    not been observed — flagged INFERRED, not measured.*
+>
+> **Measured 2026-08-12, every open PR head plus the known-duplicated one:**
+>
+> | head | PR | anchor check-runs | ambiguous? |
+> |---|---|---|---|
+> | `bda389d2` | #126 | 0 | no |
+> | `8be4edab` | #125 | 0 | no |
+> | `0ded056d` | #124 | 1 | no |
+> | **`d4c942e6`** | **#121** | **1** | **no — the ceremony is safe today** |
+> | `36cdc765` | (worked example) | **2** | **yes — live right now** |
+>
+> So this does not block the owner today, and step 0 exists to keep it that way:
+> **re-run the count immediately before issuing.** If it ever reads 2, the fix is
+> to remove the surplus check-run, not to sign harder — and the red verdict will
+> name an authorization failure while the actual fault is infrastructure.
 
 **What the owner will actually see, and it is misleading.** The anchor's red mark
 appears **twice** on the head. That is one verification and one display artifact,
@@ -4574,11 +4623,44 @@ token from a workstation, which the API cannot see at all. The correction was
 pressed by the correspondent whose own thesis it weakens, which is the reason to
 take it.
 
-**The remedy does not depend on the cause, which is why it should be done
-anyway.** Two red marks against one verification is sufficient on its own to
-justify making the POST idempotent on `external_id`, or associating it with its
-own run. Idempotency closes the defect under every hypothesis, including the
-manual one that cannot be ruled out.
+**The remedy I filed here was already implemented, and it was aimed at the wrong
+code path. Withdrawn 2026-08-12.** This paragraph previously argued that two red
+marks against one verification justify *making the POST idempotent on
+`external_id`*, and that idempotency closes the defect under every hypothesis.
+Both halves are false, measured:
+
+```
+ensure_check_run  :2829  lists by check_name + filter=all
+                  :2855  if check_runs:  -> PATCH the existing one
+                  :2880  else:           -> POST a new one
+                  :2856  _validate_check_run(...) already checks external_id
+```
+
+**The POST is already unreachable when a mark exists.** The dedupe key is
+`CHECK_NAME`, a module constant, so it matches *every* anchor check-run on the
+head — at least as broad as `external_id`, which is only per-pull-request. And
+the existing run's `external_id` is already validated before the PATCH.
+
+Reported by platform session `2cab0595`, who put a positive control under it on
+two heads neither of us had measured, each carrying **two** anchor runs that both
+reached and executed the verifier step:
+
+```
+d4c942e6   2 anchor runs (17:33:58Z, 17:39:01Z)  ->  1 check-run, 0 zero-duration
+6197a1ef   2 anchor runs (13:44:04Z, 13:44:45Z)  ->  1 check-run, 0 zero-duration
+```
+
+Two invocations, one check-run. **Had the mechanism I proposed been the missing
+one, those heads would carry two.** The control could have come out the other
+way, which is what makes it evidence.
+
+**And the decisive point is stronger than redundancy.** The duplicate on
+`36cdc765` exists *anyway*, in the presence of that guard. So whatever created it
+did not travel the POST branch — that branch is reached only when the list comes
+back empty, and it would have PATCHed. **A stronger key inside a function the
+fault demonstrably did not pass through cannot prevent it.** That is F-21 for the
+third time: a remedy whose predicate cannot reach its subject. The real defect is
+the *category* of the refusal, recorded two blocks above and as F-23.
 
 **Stronger still, and it does not depend on a clock.** Every argument above reads
 timestamps, so it is worth having one that cannot be defeated by a re-stamp.
@@ -4613,9 +4695,13 @@ jobs carry UUIDs:
 | both anchor marks | `adapteng-rollout-trust-v1:…:128` — the same string |
 | genuine jobs | `e74816a6-…`, `ab16fa86-…` — distinct UUIDs |
 
-So that field separates **kind, not instance**. It is the right key for making the
-POST idempotent — which is precisely the fix that would stop the duplicate — but
-counting distinct values of it reports *one* mark where there are two.
+So that field separates **kind, not instance**. Counting distinct values of it
+reports *one* mark where there are two — which is the hazard worth recording.
+~~It is the right key for making the POST idempotent — which is precisely the fix
+that would stop the duplicate~~ — **struck 2026-08-12.** The POST already
+dedupes, on the broader `check_name`, and the duplicate arose regardless; see the
+withdrawal above. `external_id` remains the wrong key for *counting*, which is
+the only claim in this table that survives.
 
 **What this does and does not change.** It does **not** change the decision. The
 genuine result is still `failure`, and the anchor is still absent from the
