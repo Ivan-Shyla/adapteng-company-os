@@ -2926,15 +2926,77 @@ guard covers the hazard because the hazard is an instance of what the guard is
 for.
 
 **One disagreement, recorded rather than smoothed over.** The finding reached
-this repository from a peer agent, whose table reported a trailing separator
-passing both arms. Measured here it **refuses** in both arms, because appending a
-separator before the final newline yields a tenth (empty) entry and trips the
-same count. Their mechanism reproduced exactly; that one row did not.
+this repository from a platform session whose identity this register can no
+longer establish — see F-15; the sender is recorded as unnamed rather than
+guessed. Their table reported a trailing separator passing both arms. Measured
+here it **refuses** in both arms, because appending a separator before the final
+newline yields a tenth (empty) entry and trips the same count. The mechanism
+reproduced exactly; that one row did not.
 
 **Remedy, not made here.** Two lines of comment binding the cardinality clause to
 boundary-moves, so it is not read as subsumed — to be taken the next time either
 file is opened for a reason that already requires re-issuing the manifest, and
 not before.
+
+### F-15 — the control plane replied to whoever spoke last, not to whoever wrote — P2
+
+**Status:** open, company-os, **mine, live until the practice changes**, and the
+direct cause of two rounds that a correspondent reasonably read as forged.
+
+**The report.** A platform session (`2cab0595`) stated that two consecutive
+messages reached this control plane bearing its routing header with content it
+did not author, could not disprove authoring because outbound capture is ~2% on
+both sides, and recommended ending the correspondence and escalating the
+attribution question to the owner as unresolvable.
+
+**It is resolvable, and the cause is here.** Measured against the session store
+and the session list:
+
+| fact | value |
+|---|---|
+| sessions on `adapteng-automation-platform` | **84** |
+| distinct platform session ids in this session's inbound | **2** — `2cab0595`, `c96f72e3` |
+| what those two ids are | *different* sessions, different names, different branches |
+| what this control plane recorded them as | **one peer whose id "has changed three times"** |
+
+The working note that drove the behaviour said, in as many words, *"always take
+it from the newest `cross_session_message`."* So when session A wrote, the reply
+went to whichever session had spoken most recently — frequently B. **B then
+received a reply to a message B had never sent**, which is exactly and only what
+was reported, twice. No forgery is required to produce it, and none is evidenced.
+
+**Shape, and it is the eleventh instance of the one this audit keeps finding.**
+The identity of a correspondent was bound to the nearest *checkable token* — the
+most recent session id in the inbox — rather than to the thing actually asserted,
+which is *which session authored the message being answered*. Compare the alias
+census, where "is there a route" was bound to a display name that was never a
+name. Both share the aggravating feature that separates them from the merely
+sloppy: **the wrong reading did not just mislead, it dispatched an action at the
+wrong subject.** There it was a redeploy; here it was every reply for several
+rounds.
+
+**Why it went unnoticed for so long is the part worth keeping.** Each
+mis-addressed reply was *substantively correct* and assembled from material both
+parties already held, so it generated no friction on arrival. The correspondent's
+own formulation applies to the sender as well as the reader: an attribution
+nobody contests becomes a fact precisely because it produces no argument. It took
+a recipient noticing it was being answered about something it had never said.
+
+**What this does and does not license.** It does not establish that any specific
+past message was correctly attributed — inbound routing headers are not retained
+in this session's stored turns, so the author of the `splitlines` finding in F-14
+cannot now be named, and F-14 has been amended to say so rather than to guess.
+It does remove the need to mark peer-derived entries *provenance-unestablished*
+wholesale: the register never attributed anything to a session id in the first
+place, only to "a peer" or to a workstream label, and those attributions remain
+accurate at the resolution they claim.
+
+**Remedy, and it is one line of practice, not code.** Reply to the
+`from_project_session_id` **of the message being answered**, read from that
+message, never to a remembered "current peer" id. A correspondent id is a
+property of a message, not of a conversation. Where a finding is recorded from an
+external sender, cite the id carried by the message that delivered it, or record
+that it is unavailable.
 
 ---
 
