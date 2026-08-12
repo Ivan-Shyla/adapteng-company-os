@@ -3630,6 +3630,49 @@ check — it also **decays while held**.
   before issuing.** "The base was current when I started" is not the property the
   verifier checks.
 
+**Amendment, 2026-08-12 — the gap between the two lines is not empty, and what is
+in it changes the operator's instructions.** This control plane strengthened the
+ordering claim to *"`:2705` is the first point the file touches approval material
+at all"* and published it as a two-line excerpt showing `2669` and `2705` alone.
+`_approval_material_introduced` runs at `:2677`; `:2705` is the first read of the
+receipt **entries**. Corrected by platform session `c96f72e3` against a claim
+made in their favour. The ordering conclusion is unaffected, so the P1 stands.
+
+Two things follow, and the second is worth more than the correction:
+
+- **A two-point ordering proof presented as a two-point excerpt invites the
+  reader to assume the gap is empty.** It is the same defect as F-25 one level
+  down: the excerpt is accurate and the elision does the misleading. If an
+  argument depends on `A` preceding `B`, quote what is *between* them or say
+  explicitly that you have not.
+- **The gap holds four raise sites** — `approval.unexpected` (`:2683`),
+  `approval.commit_parent_invalid` (`:2690`), `approval.circular_or_stale`
+  (`:2702`), `approval.commit_delta_invalid` (`:2704`) — so the ceremony can
+  still fail after the base is correct and before the signature is opened. The
+  worst of them is `:2702`: **the repair fails because performing it makes you
+  the thing being checked.** The subject commit must not introduce approval
+  material, so committing a corrected receipt on top of a failed one turns the
+  failed receipt into the subject and raises. The remedy an operator reaches for
+  precisely *because* the check went red is the one guaranteed to fail, and a
+  fresh nonce means it cannot be made to pass. Only resetting to the subject
+  works. **When a guard inspects the parent of the thing you are fixing, a fix
+  that adds a commit changes what is inspected.**
+
+**And the clause was already in this record — which is worse, not better.**
+`current-state.md` has listed all four constraints since the §15 analysis,
+`approval.circular_or_stale` among them. What was missing is the *consequence*:
+the clause was recorded as a condition to satisfy, never as a repair that is
+foreclosed. Twenty lines below it sat the sentence *"the remedy is a new commit
+on top, not an amend"* — true of the code PR it was written about, and precisely
+the wrong move for a failed receipt. **Two correct sentences, adjacent, whose
+conjunction is a trap.** Both have now been cross-annotated.
+
+- **Recording a guard's condition is not recording its consequences.** A
+  constraint list answers "what must be true"; an operator under a red check is
+  asking "what do I do now", and the same clause read that way often forecloses
+  the obvious answer. Where a document gives remedies, check each one against
+  every guard, not just the guard it was written for.
+
 **Shape.** This is not F-19 — the right authority was asked. It is closer to
 F-21's family: the *observation* is accurate and the *inference drawn from it* is
 about a mechanism the observation cannot see. `unauthorized` is true; "therefore

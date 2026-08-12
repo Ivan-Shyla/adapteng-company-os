@@ -3217,6 +3217,16 @@ This also explains #128's current verdict without reading a log: its head change
 four code files, so the delta cannot equal `APPROVAL_PATHS`, and **amending
 `36cdc765` fails identically**. The remedy is a new commit on top, not an amend.
 
+> **Do not carry that last sentence into the receipt case — there it is exactly
+> inverted.** It applies to a head whose delta is ordinary code. If a *receipt*
+> has been issued and fails verification, a new commit on top makes the failed
+> receipt the subject and constraint 4 above raises `approval.circular_or_stale`;
+> a fresh nonce guarantees the two receipts differ, so the guard cannot be
+> satisfied by matching them. **The only repair for a failed receipt is to reset
+> the branch to the subject commit and re-issue against a re-confirmed base.**
+> Recorded because the two remedies are opposites and sit twenty lines apart. See
+> §16.5 for the full post-issuance table.
+
 **The reading under which #122 is right.** The anchor checks are advisory
 *precisely because* the required signature cannot be produced inside a pull
 request — the platform's own governance checklist says so, and says an
@@ -4471,19 +4481,50 @@ Running **phase 1** first is the trap: if run-selection fails, the operator gets
 > (3274 lines) rather than accepting the account:
 >
 > ```
-> 2669   assert_base_trust_closure(client, base_tree)     <- audits the BASE tree
-> 2705   _require_regular_approval_entries(head_tree)     <- receipt first read here
+> 2669   assert_base_trust_closure(client, base_tree)      <- audits the BASE tree
+> 2672   protected_change_records(base_tree, head_tree)
+> 2677   _approval_material_introduced(base_tree, head_tree)
+> 2683   raise approval.unexpected            (protected set empty, approval present)
+> 2690   raise approval.commit_parent_invalid (head commit has != 1 parent)
+> 2702   raise approval.circular_or_stale     (SUBJECT introduces approval material)
+> 2704   raise approval.commit_delta_invalid  (delta != exactly the two approval paths)
+> 2705   _require_regular_approval_entries(head_tree)      <- receipt ENTRIES first read
 > ```
 >
-> The closure audit runs **36 lines before the receipt is opened**. While #121's
-> base was pre-#128, that audit raised `closure.dynamic_import` and the verifier
-> never reached the receipt at all — so **no owner signature could have made the
-> check pass.** Issuing first would have consumed a one-shot out-of-band ceremony
-> against a head that provably could not go green.
+> **The gap is not empty, corrected 2026-08-12.** An earlier version of this block
+> showed only `2669` and `2705` and described the latter as the first point the
+> file touches approval material. That is wrong: `_approval_material_introduced`
+> at `2672`/`2677` handles approval paths 28 lines earlier. `2705` is the first
+> read of the **receipt entries**, not the first touch of approval material.
+> Raised by platform session `c96f72e3` against their own claim that this control
+> plane had strengthened. **The ordering conclusion is unaffected** — `2669`
+> precedes all of it — so step 0 stands exactly as written.
+>
+> While #121's base was pre-#128, the closure audit raised
+> `closure.dynamic_import` and the verifier never reached the receipt at all — so
+> **no owner signature could have made the check pass.** Issuing first would have
+> consumed a one-shot out-of-band ceremony against a head that provably could not
+> go green.
 >
 > After the rebase onto `6ecdd5fb` the verdict advanced to
 > `approval.commit_delta_invalid` (`:2704`) — the genuine awaiting-signature
 > state, and the first time it has been reachable.
+>
+> **What the four intervening gates require of the receipt commit.** They are not
+> incidental; they constrain how the owner must construct it. `APPROVAL_PATHS`
+> (`:53`–`:60`) is exactly:
+>
+> ```
+> .github/trust/rollout-policy/approval.json
+> .github/trust/rollout-policy/approval.sig
+> ```
+>
+> and `:2703` tests `_changed_leaf_paths(subject_tree, head_tree) != APPROVAL_PATHS`
+> — **set equality, not containment.** So the receipt must be **one commit, with
+> exactly one parent, adding exactly those two files and nothing else.** Both
+> files in the *same* commit: committing `approval.json` first and the signature
+> second fails twice, because the second commit's delta is a strict subset and its
+> parent is itself a receipt commit.
 
 > **And the receipt dies the moment `main` moves.** The binding is enforced at
 > `:2394`–`:2409`:
@@ -4500,6 +4541,45 @@ Running **phase 1** first is the trap: if run-selection fails, the operator gets
 > issuance and #121's merge, `main` advances, `live.base_sha` advances with it,
 > and the receipt is void on line 2404 with nothing recoverable. Either land #124
 > first and re-confirm step 0, or hold it until #121 is merged.
+
+> **After issuance there is no repair — every instinctive fix is fatal.** This is
+> the operationally decisive part, and each row is read from a clause rather than
+> reasoned about. Three of the four are reflexes an operator reaches for *because*
+> the check went red.
+>
+> | what the owner does next | clause | verdict |
+> |---|---|---|
+> | anything merges to `main` | `:2404` | `receipt.binding_invalid` |
+> | **"Update branch" button** (merge mode) | `:2690` | `approval.commit_parent_invalid` |
+> | **"Update branch" button** (rebase mode) | `:2406` | `receipt.binding_invalid` |
+> | **commits a corrected receipt on top** | `:2702` | `approval.circular_or_stale` |
+> | receipt commit carries any extra file | `:2704` | `approval.commit_delta_invalid` |
+> | any protected file changes | `:2411` | `receipt.binding_invalid` |
+>
+> **The third row is the trap most likely to be sprung.** After a failed
+> verification the obvious move is to fix the receipt and commit it on top. But
+> `:2701` tests `_approval_material_introduced(base_tree, subject_tree)` — the
+> **subject**, the parent of the receipt commit, must not itself introduce
+> approval material. A second receipt commit makes the first one the subject, so
+> it raises `approval.circular_or_stale`. And a fresh receipt carries a fresh
+> nonce, so the two can never be byte-identical and the guard cannot be dodged.
+>
+> **Therefore the only repair is to reset the branch back to the subject commit
+> and issue again from a re-confirmed base** — never to add a commit. Inheriting
+> approval material is fine and introducing it is not: the merged receipts already
+> on `main` are inert by design (`_approval_material_introduced`, `:1038`–`:1049`),
+> which is exactly why the guard tests introduction rather than presence.
+>
+> Both "Update branch" modes being fatal is worth stating twice: **the standard
+> GitHub remedy for a stale base must be applied before issuance, never after.**
+> Reported by platform session `c96f72e3`, who rebased #121 themselves rather than
+> leave it for the owner to update from the UI. The rows above are read from the
+> clauses, **not executed** — confirming them costs the resource they protect.
+>
+> The four constraints on the commit's *shape* were already recorded in §15's
+> analysis of #128 and are unchanged; what is new here is the post-issuance
+> repair path, and the correction to a sentence in that section which recommends
+> "a new commit on top" for a case where it is the one thing that cannot work.
 
 > **Third precondition, and it fires earlier than either of the two above.** Two
 > anchor check-runs on one head is not a cosmetic double-report — it is a refusal
