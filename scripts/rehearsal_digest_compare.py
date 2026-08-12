@@ -49,9 +49,35 @@ def canonical_json(value: Any) -> bytes:
     )
 
 
+def lf_delimited_lines(text: str) -> list[str]:
+    """Split into LF-delimited records, matching editor and ``git diff`` numbering.
+
+    ``str.splitlines()`` breaks on eleven separators. Nine of them — CR, VT, FF,
+    FS, GS, RS, NEL, LS and PS — split where this function does not, so a digest
+    file containing any of them would make ``parse_digest`` report a line number
+    higher than the one an operator sees when they open the file at that line.
+    The remaining two, LF and the CRLF pair, agree with this function.
+
+    A stray separator is rejected either way: the fragment it produces fails
+    ``ENTRY.fullmatch`` and raises, so this changes the position reported in the
+    error and nothing else. That is the whole point — the number is the only
+    part of the message an operator can act on.
+
+    Deliberately duplicated from ``validate_sensitive_references.py`` rather than
+    imported: every script under ``scripts/`` is a standalone entry point and
+    none of them import each other, so importing an 1800-line validator to reach
+    a four-line helper would be the larger coupling. The two copies are pinned
+    against drift by a parity test rather than by an import.
+    """
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def parse_digest(text: str, *, label: str) -> dict[str, TableDigest]:
     entries: dict[str, TableDigest] = {}
-    for number, line in enumerate(text.splitlines(), 1):
+    for number, line in enumerate(lf_delimited_lines(text), 1):
         if not line.strip():
             continue
         match = ENTRY.fullmatch(line.strip())
