@@ -64,6 +64,7 @@ OPERATIONS = (
     "verify",
     "peer-verify",
     "peer-tools",
+    "peer-resolve",
     "peer-diagnose",
     "diagnose",
 )
@@ -2238,6 +2239,133 @@ def read_tool_census(message: object) -> list[str]:
     return [tool for tool in PEER_TOOLS_CANDIDATES if tool in printed]
 
 
+# The first probe that reached its interpreter failed with
+# socket.gaierror: [Errno -3] Temporary failure in name resolution.
+#
+# That is EAI_AGAIN -- the resolver did not answer -- and not EAI_NONAME, which
+# is what an unknown name returns. The difference matters more than the failure
+# does. If this peer has no working resolver at all, the result is a fact about
+# ops-runner and says nothing whatever about the gateway, and reporting it as a
+# reachability verdict would be the same infrastructure-as-policy confusion this
+# tool refuses everywhere else.
+#
+# So the confound gets its own instrument. The names are resolved in ascending
+# order of certainty: localhost must resolve through /etc/hosts without any
+# resolver at all, the peer's own name must resolve if Docker's embedded DNS is
+# reachable, and the service name is the open question. How far the list gets is
+# the measurement:
+#
+#   all three            the earlier failure was transient, not structural
+#   through the peer     resolver works, service name absent -- different
+#                        networks, which is the finding
+#   localhost only       no Docker DNS at all; the peer is on the default
+#                        bridge, which has no service discovery, so the peer is
+#                        the wrong vantage point and the gateway is unaccused
+#   none                 the resolver is broken outright
+#
+# Nothing is caught inside the program on purpose. Each result is printed and
+# flushed before the next name is tried, so every success survives the failure,
+# and the shell continues past python to the marker regardless -- which keeps
+# the job exit status 0. That matters: a successful execution is the case in
+# which this instance has been observed to capture stdout.
+PEER_RESOLVE_TASK_NAME = "adapteng-peer-name-resolution"
+PEER_RESOLVE_MARKER = "ADAPTENG_RESOLVE"
+PEER_RESOLVE_SENTINEL = "end"
+PEER_RESOLVE_CERTAIN_NAME = "localhost"
+PEER_RESOLVE_COMMAND = (
+    'python3 -c "import socket,sys;'
+    "[print(sys.argv[1],n,socket.gethostbyname(n),flush=True) for n in sys.argv[2:]]"
+    '" ' + PEER_RESOLVE_MARKER + " {names}; echo "
+    + PEER_RESOLVE_MARKER
+    + " "
+    + PEER_RESOLVE_SENTINEL
+)
+
+
+def peer_resolve_names(spec: dict) -> list:
+    """Ascending in doubt, because the order is what carries the reading."""
+
+    return [
+        PEER_RESOLVE_CERTAIN_NAME,
+        spec["network"]["peer_probe_application"],
+        spec["target"]["resource_name"],
+    ]
+
+
+def peer_resolve_command(spec: dict) -> str:
+    return PEER_RESOLVE_COMMAND.format(names=" ".join(peer_resolve_names(spec)))
+
+
+def read_resolution_census(message: object) -> tuple[dict, bool]:
+    """Which names resolved to what, and whether the shell reached the end.
+
+    Both halves are needed. The resolutions alone cannot say whether the list
+    stopped early or simply had nothing more to report, and the sentinel alone
+    cannot say how far the resolver got.
+    """
+
+    resolved: dict = {}
+    finished = False
+    if not isinstance(message, str):
+        return resolved, finished
+    for line in message.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(PEER_RESOLVE_MARKER):
+            continue
+        fields = stripped[len(PEER_RESOLVE_MARKER) :].split()
+        if fields == [PEER_RESOLVE_SENTINEL]:
+            finished = True
+        elif len(fields) == 2:
+            resolved[fields[0]] = fields[1]
+    return resolved, finished
+
+
+# A probe that ran and raised is not a probe that failed to run, and the two
+# have been reported identically until now: any missing marker read as
+# "undetermined". The exception on the last line of the traceback is a real
+# answer and is treated as one.
+#
+# It is matched as an exception line -- a dotted name, a colon, a space, at the
+# start of the line -- and only at the end of the output, never as a substring
+# anywhere in it. A traceback frame for /usr/lib/python3.12/socket.py contains
+# the word socket while saying nothing about what failed, and a signature that
+# matched it would manufacture a verdict out of context. Unrecognised
+# exceptions stay undetermined rather than being forced into the nearest
+# category.
+PROBE_EXCEPTION_REASONS = {
+    "socket.gaierror": "name_not_resolved",
+    "ConnectionRefusedError": "connection_refused",
+    "TimeoutError": "timed_out",
+    "socket.timeout": "timed_out",
+    "ConnectionResetError": "connection_reset",
+}
+EXCEPTION_LINE = re.compile(
+    r"^((?:[A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*): \S"
+)
+
+
+def classify_probe_failure(message: object) -> tuple[str, str] | None:
+    """Name the exception the probe raised, or decline to name anything.
+
+    Column 0 is load-bearing. Python writes the exception line flush left and
+    indents every frame and every line of printed source context beneath it,
+    so the indentation is the only thing separating "this is what was raised"
+    from "this is a line of source that happens to mention it". An earlier
+    draft stripped each line before matching, which threw that signal away and
+    would have read a fixture entry as a verdict.
+    """
+
+    if not isinstance(message, str):
+        return None
+    for line in reversed(message.splitlines()):
+        match = EXCEPTION_LINE.match(line.rstrip())
+        if not match:
+            continue
+        reason = PROBE_EXCEPTION_REASONS.get(match.group(1))
+        return (match.group(1), reason) if reason else None
+    return None
+
+
 def operate_peer_diagnose(client: Client, spec: dict) -> int:
     """Find what the scheduled-task endpoint will accept on the peer.
 
@@ -2901,6 +3029,27 @@ def operate_peer_verify(client: Client, spec: dict, sleep=None) -> int:
 
     if verdict is None:
         emit("")
+        emit_captured_output(execution.get("message"), known=(peer_uuid, task_uuid))
+        failure = classify_probe_failure(execution.get("message"))
+        if failure is not None:
+            raised, reason = failure
+            emit("")
+            emit(
+                f"    the probe ran and raised {raised}. That is an answer, not "
+                "a missing measurement, so this is reported as a real negative: "
+                f"from {peer_name}, {service_name} could not be reached."
+            )
+            if reason == "name_not_resolved":
+                emit(
+                    "    The verdict is scoped to this peer. A name that does "
+                    "not resolve here could mean the two containers are not on "
+                    "a shared network, or that this peer has no working "
+                    "resolver at all -- and those have different remedies. "
+                    "peer-resolve separates them by asking the peer for names "
+                    "of ascending doubt."
+                )
+            emit(f"RESULT peer-verify failed reachable=no reason={reason}")
+            return EXIT_FAILED
         emit(
             f"    the execution finished but carries no {PEER_MARKER} marker, so "
             "the probe did not run to completion inside the peer. Reporting "
@@ -2909,7 +3058,6 @@ def operate_peer_verify(client: Client, spec: dict, sleep=None) -> int:
             "look exactly like this. peer-tools is the operation that tells "
             "those two apart, by asking the peer what it has."
         )
-        emit_captured_output(execution.get("message"), known=(peer_uuid, task_uuid))
         emit("RESULT peer-verify failed reachable=undetermined reason=no_marker")
         return EXIT_FAILED
 
@@ -3080,6 +3228,165 @@ def operate_peer_tools(client: Client, spec: dict, sleep=None) -> int:
         "operation only asked what is on PATH."
     )
     emit(f"RESULT peer-tools ok tools={','.join(found)}")
+    return EXIT_OK
+
+
+def operate_peer_resolve(client: Client, spec: dict, sleep=None) -> int:
+    """Separate a peer that cannot resolve anything from a name that is absent.
+
+    This is the control for the reachability probe, not a second attempt at it.
+    It opens no connection: gethostbyname asks the resolver and stops there, so
+    nothing is contacted and no credential is presented.
+    """
+
+    sleep = sleep or time.sleep
+    target = spec["target"]
+    peer_name = spec["network"]["peer_probe_application"]
+    service_name = target["resource_name"]
+
+    emit(f"--- peer-resolve {service_name} from {peer_name}")
+
+    project = find_project(client, target["project"])
+    environment = (
+        find_environment(client, project["uuid"], target["environment"])
+        if project
+        else None
+    )
+    if project is None or environment is None:
+        emit("    project or environment absent; nothing to resolve")
+        emit("RESULT peer-resolve failed application=absent")
+        return EXIT_FAILED
+
+    peer = find_application(applications_in(client, environment), peer_name)
+    if peer is None:
+        emit(f"    peer application {peer_name}: ABSENT")
+        emit("RESULT peer-resolve failed application=absent")
+        return EXIT_FAILED
+
+    peer_uuid = str(peer["uuid"])
+    emit(f"    peer {peer_name}: uuid={peer_uuid} state={peer.get('status')}")
+
+    names = peer_resolve_names(spec)
+    command = peer_resolve_command(spec)
+    emit(f"    asking for, in order: {' '.join(names)}")
+
+    task_uuid, disposition = converge_readiness_task(
+        client, peer_uuid, command, PEER_RESOLVE_TASK_NAME
+    )
+    emit(f"    resolve task {PEER_RESOLVE_TASK_NAME}: {disposition} uuid={task_uuid}")
+
+    before = executions_snapshot(list_executions(client, peer_uuid, task_uuid))
+    emit(f"    executions already recorded: {before[0]}")
+
+    armed = write_readiness_task(
+        client,
+        peer_uuid,
+        task_uuid,
+        readiness_task_body(command, armed=True, name=PEER_RESOLVE_TASK_NAME),
+        PEER_RESOLVE_TASK_NAME,
+    )
+    if not task_is_armed(armed):
+        raise Abort(
+            "the resolve task did not arm; refusing to wait for an execution "
+            "that cannot happen"
+        )
+    emit(
+        f"    armed at {READINESS_ARMED_FREQUENCY} and waiting for Coolify's "
+        "scheduler; it will be returned to rest either way"
+    )
+
+    try:
+        execution, _verdict, reason = await_probe_answer(
+            client, peer_uuid, task_uuid, before, sleep, PEER_RESOLVE_MARKER
+        )
+    finally:
+        at_rest = disarm_readiness_task(
+            client, peer_uuid, task_uuid, command, PEER_RESOLVE_TASK_NAME
+        )
+        if at_rest:
+            emit("    returned to rest: disabled, and scheduled for a leap day.")
+        else:
+            emit(
+                f"    COULD NOT DISARM the resolve task {task_uuid} on application "
+                f"{peer_uuid}. It is still enabled and will keep running every "
+                "minute until it is disabled: PATCH /applications/"
+                f"{peer_uuid}/scheduled-tasks/{task_uuid} with enabled=false, or "
+                "run this operation again, which disarms before anything else."
+            )
+
+    if not at_rest:
+        emit("RESULT peer-resolve failed reason=task_left_armed")
+        return EXIT_FAILED
+
+    if execution is None:
+        emit("")
+        emit(
+            "    no identifiable new execution was recorded while the task was "
+            f"armed ({reason or 'no_execution'}), so nothing was asked and "
+            "nothing is concluded."
+        )
+        emit(f"RESULT peer-resolve failed reason={reason or 'no_execution'}")
+        return EXIT_FAILED
+
+    message = execution.get("message")
+    emit_captured_output(message, known=(peer_uuid, task_uuid))
+    resolved, finished = read_resolution_census(message)
+
+    emit("")
+    for name in names:
+        address = resolved.get(name)
+        emit(f"    {name}: {address if address else 'DID NOT RESOLVE'}")
+
+    if not finished and not resolved:
+        emit(
+            "    the shell did not reach the marker and nothing resolved, so "
+            "the census did not run. Nothing is claimed about any name."
+        )
+        emit("RESULT peer-resolve failed reason=no_marker")
+        return EXIT_FAILED
+
+    emit("")
+    if PEER_RESOLVE_CERTAIN_NAME not in resolved:
+        emit(
+            f"    {PEER_RESOLVE_CERTAIN_NAME} did not resolve, and it resolves "
+            "from /etc/hosts without any resolver at all. Name resolution is "
+            "broken outright inside this peer, so it cannot answer anything "
+            "about the service and the service is unaccused."
+        )
+        emit("RESULT peer-resolve failed scope=peer reason=resolver_broken")
+        return EXIT_FAILED
+
+    if peer_name not in resolved:
+        emit(
+            f"    {PEER_RESOLVE_CERTAIN_NAME} resolved but {peer_name} did not, "
+            "so this peer cannot resolve its own container name. That is what "
+            "the default Docker bridge looks like: it carries no service "
+            "discovery, so no name resolves there and the gateway would be "
+            "unreachable by name from here whatever its own network is. This "
+            "is a finding about the peer, and the service remains unaccused."
+        )
+        emit("RESULT peer-resolve failed scope=peer reason=no_service_discovery")
+        return EXIT_FAILED
+
+    if service_name not in resolved:
+        emit(
+            f"    {peer_name} resolves its own name through Docker's embedded "
+            f"DNS but cannot resolve {service_name}. The resolver works, so "
+            "this is not a peer defect: the two containers are not on a shared "
+            "user-defined network. Sharing a destination is sharing a host, "
+            "not a network, which is exactly the gap this probe existed to "
+            "measure and the reason the API's silence about "
+            "connect_to_docker_network could not be taken for a yes."
+        )
+        emit("RESULT peer-resolve failed scope=network reason=not_on_shared_network")
+        return EXIT_FAILED
+
+    emit(
+        f"    every name resolved, including {service_name}. The peer's "
+        "resolver works and the service name is visible to it, so any earlier "
+        "resolution failure was transient rather than structural."
+    )
+    emit(f"RESULT peer-resolve ok resolved={len(resolved)}/{len(names)}")
     return EXIT_OK
 
 
@@ -3322,6 +3629,8 @@ def run(environ: dict) -> int:
         return operate_peer_verify(client, spec)
     if operation == "peer-tools":
         return operate_peer_tools(client, spec)
+    if operation == "peer-resolve":
+        return operate_peer_resolve(client, spec)
     if operation == "peer-diagnose":
         return operate_peer_diagnose(client, spec)
     if operation == "diagnose":

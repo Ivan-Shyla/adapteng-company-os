@@ -43,6 +43,7 @@ on:
           - verify
           - peer-verify
           - peer-tools
+          - peer-resolve
           - peer-diagnose
           - diagnose
       service:
