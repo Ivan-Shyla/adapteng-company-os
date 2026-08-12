@@ -33,6 +33,12 @@ ACCESS_VALUE = "example-access-value-0123456789"
 PROJECT = "adapteng-ops"
 ENVIRONMENT = "production"
 RESOURCE = "ai-gateway"
+# Read from the committed spec rather than repeated here, so a change to the
+# declared peer moves the fixture with it instead of silently making every peer
+# test probe an application that no longer exists.
+PEER_NAME = driver.load_spec(driver.spec_path(RESOURCE))["network"][
+    "peer_probe_application"
+]
 
 
 def minimal_spec() -> dict:
@@ -61,7 +67,12 @@ def minimal_spec() -> dict:
             "base_directory": "/services/widget",
             "dockerfile_location": "/Dockerfile",
         },
-        "network": {"internal_port": 8081, "public_fqdn": None, "connect_to_docker_network": True},
+        "network": {
+            "internal_port": 8081,
+            "public_fqdn": None,
+            "connect_to_docker_network": True,
+            "peer_probe_application": "ops-runner",
+        },
         "health_check": {
             "enabled": True,
             "container_gate": "coolify_http",
@@ -2134,7 +2145,15 @@ class EntryPointTests(unittest.TestCase):
 
         self.assertEqual(
             set(driver.OPERATIONS),
-            {"inspect", "reconcile", "deploy", "status", "verify", "diagnose"},
+            {
+                "inspect",
+                "reconcile",
+                "deploy",
+                "status",
+                "verify",
+                "peer-verify",
+                "diagnose",
+            },
         )
         workflow = (
             Path(driver.ROOT) / ".github" / "workflows" / "coolify-deploy.yml"
@@ -2188,6 +2207,10 @@ class ReadinessInstance(FakeInstance):
         # available so both shapes are covered.
         self.mint_execution_ids = False
         self.execution_clock = 0
+        # Which task the modelled scheduler will run. The peer probe uses a
+        # different name in the same machinery, and a fake hard-wired to the
+        # readiness name would report "no execution" for a correct peer run.
+        self.task_name = driver.READINESS_TASK_NAME
         # Extra rows revealed in the same poll as next_execution.
         self.also_reveal: list[dict] = []
         # None models the 400 "Application is not running." the endpoint returns
@@ -2204,7 +2227,7 @@ class ReadinessInstance(FakeInstance):
         """
 
         for task in self.tasks:
-            if task.get("name") != driver.READINESS_TASK_NAME:
+            if task.get("name") != self.task_name:
                 continue
             if task.get("enabled") and task.get("frequency") == driver.READINESS_ARMED_FREQUENCY:
                 return task
@@ -2905,6 +2928,219 @@ class VerifyTests(unittest.TestCase):
         self.assertIsNone(driver.read_marker(""))
         self.assertIsNone(driver.read_marker(None))
         self.assertIsNone(driver.read_marker({"status": 200}))
+
+
+class PeerInstance(ReadinessInstance):
+    """A Coolify instance holding the service *and* a peer to probe from.
+
+    The peer is what makes this fixture different from ReadinessInstance in the
+    way that matters: the probe must be written to the peer's application, not
+    the service's. A single-application fake could not tell a driver that
+    probes the right container from one that probes itself, which is precisely
+    the confusion this operation exists to remove.
+    """
+
+    def __init__(self, *, with_peer: bool = True, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.task_name = driver.PEER_TASK_NAME
+        self.next_execution = {
+            "status": "success",
+            "message": "ADAPTENG_PEER 10.0.1.7 200 200\n",
+        }
+        if with_peer:
+            self.add_application(name=PEER_NAME, status="running:unknown")
+
+
+class PeerVerifyTests(unittest.TestCase):
+    """Reachability asked from a different container.
+
+    verify answers "is this process up", from inside the gateway against
+    127.0.0.1. That answer is identical whether or not the container was ever
+    attached to the shared Docker network, so it cannot close the gap between
+    "the container is healthy" and "a caller can reach it". Only a probe run
+    from another container can, and these tests cover that instrument.
+    """
+
+    def real_spec(self):
+        return driver.load_spec(driver.spec_path(RESOURCE))
+
+    def run_peer(self, instance, spec=None):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_peer_verify(
+                instance, spec or self.real_spec(), sleep=lambda _seconds: None
+            )
+        return code, buffer.getvalue()
+
+    def test_dns_tcp_and_both_endpoints_together_are_the_reachability_proof(self) -> None:
+        instance = PeerInstance()
+        code, output = self.run_peer(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn(
+            "RESULT peer-verify ok reachable=yes address=10.0.1.7 health=200 ready=200",
+            output,
+        )
+
+    def test_the_probe_is_written_to_the_peer_not_to_the_service(self) -> None:
+        """The whole point is the vantage point.
+
+        A probe written to the gateway's own container would pass this suite on
+        every other assertion and answer the loopback question again.
+        """
+
+        instance = PeerInstance()
+        code, _ = self.run_peer(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        peer = next(item for item in instance.applications if item["name"] == PEER_NAME)
+        service = next(
+            item for item in instance.applications if item["name"] == RESOURCE
+        )
+        written = {path for _method, path in instance.writes() if "scheduled-task" in path}
+        self.assertTrue(written)
+        self.assertTrue(all(peer["uuid"] in path for path in written))
+        self.assertFalse(any(service["uuid"] in path for path in written))
+
+    def test_the_probe_addresses_the_service_by_name_on_its_declared_port(self) -> None:
+        """The command must come from the spec, so it cannot drift from it."""
+
+        command = driver.peer_command(self.real_spec())
+        self.assertIn(f"http://{RESOURCE}:8081/health", command)
+        self.assertIn(f"http://{RESOURCE}:8081/ready", command)
+        self.assertNotIn("127.0.0.1", command)
+        self.assertNotIn("localhost", command)
+
+    def test_the_command_survives_coolifys_shell_wrapper(self) -> None:
+        """Coolify runs this as docker exec <c> sh -c '<command>'.
+
+        A single quote would terminate the wrapper's own quoting, and a dollar
+        or a backtick would be expanded by that shell before the probe ever
+        ran. A multi-line command made the API answer 500. Each of those was
+        found the expensive way; this keeps them found.
+        """
+
+        command = driver.peer_command(self.real_spec())
+        self.assertNotIn("'", command)
+        self.assertNotIn("$", command)
+        self.assertNotIn("`", command)
+        self.assertNotIn("\n", command)
+
+    def test_the_probe_presents_no_credential_and_calls_no_model(self) -> None:
+        """A reachability check that spent a model call would be a bug.
+
+        /health and /ready both answer before the Authorization header is read,
+        so requesting them cannot reach inference. Naming an inference path
+        here would silently make a probe billable.
+        """
+
+        command = driver.peer_command(self.real_spec())
+        self.assertNotIn("Authorization", command)
+        self.assertNotIn("/v1", command)
+        self.assertNotIn("generate", command)
+
+    def test_an_absent_peer_is_undetermined_not_unreachable(self) -> None:
+        """No vantage point is not the same as no route.
+
+        Reporting unreachable here would be a false negative about the
+        gateway, produced entirely by a missing probe container.
+        """
+
+        instance = PeerInstance(with_peer=False)
+        code, output = self.run_peer(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reachable=undetermined reason=peer_absent", output)
+        self.assertNotIn("reachable=no", output)
+
+    def test_a_missing_marker_is_undetermined_and_prints_what_came_back(self) -> None:
+        """A peer image without python looks exactly like this.
+
+        That is an unusable probe, not an unreachable service, so the captured
+        output is printed: it is the only thing that tells the two apart.
+        """
+
+        instance = PeerInstance()
+        instance.next_execution = {
+            "status": "failed",
+            "message": "sh: python: not found\n",
+        }
+        code, output = self.run_peer(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reachable=undetermined reason=no_marker", output)
+        self.assertIn("python: not found", output)
+        self.assertNotIn("reachable=no", output)
+
+    def test_a_resolvable_name_that_answers_five_hundred_is_reachable_no(self) -> None:
+        """Here the probe did run and did get an answer, so it is a real no."""
+
+        instance = PeerInstance()
+        instance.next_execution = {
+            "status": "success",
+            "message": "ADAPTENG_PEER 10.0.1.7 200 503\n",
+        }
+        code, output = self.run_peer(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reachable=no", output)
+        self.assertNotIn("undetermined", output)
+
+    def test_the_peer_task_is_returned_to_rest_on_success_and_on_failure(self) -> None:
+        for message, expected in (
+            ("ADAPTENG_PEER 10.0.1.7 200 200\n", driver.EXIT_OK),
+            ("ADAPTENG_PEER 10.0.1.7 200 503\n", driver.EXIT_FAILED),
+        ):
+            with self.subTest(message=message):
+                instance = PeerInstance()
+                instance.next_execution = {"status": "success", "message": message}
+                code, _ = self.run_peer(instance)
+                self.assertEqual(code, expected)
+                task = next(
+                    item
+                    for item in instance.tasks
+                    if item["name"] == driver.PEER_TASK_NAME
+                )
+                self.assertIs(task["enabled"], False)
+                self.assertEqual(task["frequency"], driver.READINESS_TASK_FREQUENCY)
+
+    def test_a_peer_task_that_will_not_disarm_fails_and_says_where(self) -> None:
+        instance = PeerInstance()
+        instance.refuse_disarm_times = -1
+        code, output = self.run_peer(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("COULD NOT DISARM", output)
+        self.assertIn("reachable=undetermined reason=task_left_armed", output)
+        self.assertNotIn("RESULT peer-verify ok", output)
+
+    def test_the_peer_probe_never_touches_the_readiness_task(self) -> None:
+        """Two probes, two tasks. Sharing one would make each disarm the other.
+
+        They differ in vantage point and in command, so a shared name would
+        also mean whichever ran last silently redefined what the other
+        measured.
+        """
+
+        self.assertNotEqual(driver.PEER_TASK_NAME, driver.READINESS_TASK_NAME)
+        self.assertNotEqual(driver.PEER_MARKER, driver.READINESS_MARKER)
+        instance = PeerInstance()
+        code, _ = self.run_peer(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertEqual(
+            [item["name"] for item in instance.tasks], [driver.PEER_TASK_NAME]
+        )
+
+    def test_no_delete_is_issued_anywhere_in_a_peer_run(self) -> None:
+        """The probe is disclosed and left in place, never removed."""
+
+        instance = PeerInstance()
+        self.run_peer(instance)
+        self.assertEqual(
+            [method for method, _path in instance.writes() if method == "DELETE"], []
+        )
+
+    def test_the_committed_spec_names_a_peer_that_is_not_the_service(self) -> None:
+        """Probing the service from itself is the loopback question again."""
+
+        spec = self.real_spec()
+        peer = spec["network"]["peer_probe_application"]
+        self.assertTrue(peer)
+        self.assertNotEqual(peer, spec["target"]["resource_name"])
 
 
 class ForeignTextRedactionTests(unittest.TestCase):
