@@ -4186,4 +4186,76 @@ on the new name into credential-aware Adapter Tests. That makes the constant thi
 document already scored as the most dangerous candidate **also** a silent-drift
 site — two independent defects in one enumeration.
 
+## 16. FIRST MODEL PROOF — the verified go-live path, 2026-08-12
+
+Owner has lifted the inference prohibition and asked for the shortest route to a
+working platform. This section is the measured answer: **what is already proven,
+what is genuinely left, and why the control plane cannot execute the remainder.**
+Everything below was read from the platform repository and the Actions API this
+round; nothing is carried forward from an earlier reconciliation.
+
+### 16.1 Already proven — do not redo these
+
+| Gate | Evidence |
+|---|---|
+| Vertex IAM + model metadata readiness | **PASS**, run `31182480526`, 2026-08-07, 32 s |
+| Inference permission + EU endpoint | `endpoint=https://aiplatform.eu.rep.googleapis.com` |
+| Model reachable | `publisher_model=gemini-3.1-flash-lite` |
+| Auth environment integrity | 11 exact hash-locked distributions |
+| `VERTEX_SERVICE_ACCOUNT_JSON` | present, env `company-os-vertex-runtime-readiness` |
+| `VERTEX_EXPECTED_SERVICE_ACCOUNT_EMAIL` / `_ID` | both present, same environment |
+| `GOOGLE_CLOUD_PROJECT_ID` | repo **variable** = `adapteng-workspace-automation` |
+| Environment branch policy | `main` only; platform `main` protected at `6ecdd5fb` |
+
+**The readiness workflow has already succeeded.** It is not a pending owner
+action and re-dispatching it proves nothing new. Its own header states it never
+calls `generateContent`, so it is a precondition proof, not the model proof.
+
+### 16.2 The actual blocking chain, in order
+
+`docs/runbooks/company-os-first-model-proof.md` declares its own state:
+**"repository-ready, not authorized, not run."** The chain is:
+
+1. **Approved-assets phase authorization.**
+   `scripts/operations/authorize_approved_assets_phase.sh` produces two
+   repository secrets. **Both measured ABSENT this round:**
+   `APPROVED_ASSETS_PHASE_AUTHORIZATION_JSON` and
+   `APPROVED_ASSETS_REVIEWED_EVIDENCE_JSON`.
+2. **Approved-source import.** `migrate-approved-assets.yml` — **never run**;
+   the Actions API returns no run history for it at all.
+3. **First model proof.** `scripts/company_os_first_model_proof.py preflight`,
+   then `run` with `COMPANY_OS_FIRST_MODEL_PROOF_AUTHORIZED=YES_AFTER_MERGE_AND_OWNER_APPROVAL`.
+
+The proof is pinned to manifest `bfca73ee…` and source identity `4b4893e8…`,
+package `ART-2026-001/SRC-2026-001`, capped at EUR 0.10 per call and EUR 1.00 per
+UTC day, writing a **pending** draft only. It has no approval, publish, send or
+delete authority. The contract is exact: a prepared input that does not hash to
+the pinned digests is refused before any provider call.
+
+### 16.3 Why the control plane cannot execute any of it
+
+Not policy — four independent hard stops, each measured:
+
+- **Non-admin.** `repos/…/actions/runners` returns **404**; repository
+  permissions read `admin:false`. Creating the two secrets requires admin.
+- **Windows.** The authorization script is POSIX shell.
+- **Two human roles.** The evidence packet requires a preparer and a distinct
+  reviewer; one identity cannot satisfy both.
+- **No private network.** The runbook requires a host that can reach canonical
+  Postgres, the internal Baserow adapter and Drive. The gateway is deployed with
+  `public_fqdn: null` and is unreachable from any workstation.
+
+**Do not pre-create the two secrets to "help".** Their absence is a verified
+precondition of step 1; pre-creating them fails the step closed and consumes a
+non-retryable attempt. This was established by complete enumeration (6/6) and is
+re-confirmed above.
+
+### 16.4 What is usable today, without the proof
+
+The AI path is the only thing gated. Already deployed and running in Coolify:
+`adapteng-baserow-adapter` (running, healthy) and `n8n-selfhosted` (running).
+Platform CI is green at `6ecdd5fb` — 14 check-runs, 14 success, identical under
+`filter=latest` and `filter=all`, so the count is not subject to F-16.
+
+
 
