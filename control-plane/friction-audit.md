@@ -3146,33 +3146,46 @@ figure moved from one to the other is **verifiably** correct in the destination
 and no audit can catch it. Attaching provenance to a figure is therefore
 necessary and not sufficient — the population must travel too.
 
-**A mechanism for the extra four has been proposed and is recorded unproven.**
-The same correspondent reports that the two `filter=all` copies of the anchor
-failure share an `external_id` and a check *suite*, that the suite belongs to an
-unrelated **push** run rather than to the anchor's own run, and that the second
-copy is zero-duration with `started_at == completed_at`. The structural half —
-an unowned check-run filing into the commit's push suite — is checkable and
-would explain why the leak is push-side. **The causal half, that re-running the
-unrelated workflow duplicated the red mark, is not supported by the evidence
-offered.** Their own figures put the re-run's completion at `06:58:17Z` and the
-run's `updated_at` at `06:59:03Z`, forty-six seconds apart: `updated_at` is
-therefore not the run's completion time but a last-modified field, and a
-check-run landing in that run's suite is exactly the kind of event that *writes*
-to it. **A timestamp match between an event and a field that event would update
-is the weakest available causal evidence** — equally consistent with the reverse
-direction and with a third writer. The zero duration points the same way, since
-`started_at == completed_at` is the signature of a script POSTing
-`status: completed` in a single call, i.e. the verifier running again on a
-fail-fast path, rather than of a platform copying a third party's check-run.
+**A mechanism for the extra four was proposed by a correspondent, and this
+register had already measured and filed it — three entries below, as F-17.**
+That is recorded here as the entry's own worst instance. The correspondent
+reported that the two `filter=all` copies of the anchor failure share an
+`external_id` and a check *suite*, and that the suite belongs to an unrelated
+**push** run rather than to the anchor's own. **All of that is F-17.1**, measured
+here at `36cdc765` with both suite ids, the ten-against-nine job count, and the
+`external_id` discriminator. The reply sent was *"the strongest thing in your
+message… recorded; I am not verifying it."* **It did not need verifying and it
+was not the correspondent's — it was this register's, unrecognised on return.**
 
-This is kept in F-16 rather than waved through because the two mechanisms imply
-**different inflation models for the same count**: one correlating anchor reds
-with push re-run activity, the other with anchor invocations. F-16 is about which
-population a number is over, so a census correction that adopts the wrong
-inflation model reproduces the original defect one level up. The discriminating
-read is whether any workflow invoking the verifier ran at `06:59:03Z`. It has not
-been taken here — check-run archaeology is closed to this control plane by the
-owner, and the defect lies in the correspondent's own mandate.
+**The shape is the entry's own, with the register as the population.** Every
+other instance in this file is a query whose corpus could not contain the answer.
+Here the corpus did contain it, in the same document, and was not consulted. The
+consequences were all one-directional: a finding under-credited to itself,
+over-credited to a correspondent, described as *"checkable"* when it was already
+checked, and — the costly part — a mechanism this control plane already owned was
+not brought to a dispute where it was decisive. **A record that is not re-read
+degrades to the same condition as a record that is wrong**, and it fails more
+quietly, because nothing contradicts it.
+
+**Applied, which is what was missed.** F-17.1 says an API-created check-run
+attaches to the existing suite for `(app=github-actions, head_sha)` rather than
+to the run that posted it. So the second anchor check-run was created **by a
+POST** — the verifier firing again — and not by a re-run duplicating anything.
+The correspondent's causal claim, that re-running an unrelated workflow
+manufactured the duplicate, rested on the duplicate's timestamp matching that
+run's `updated_at`; their own figures put the run's completion forty-six seconds
+earlier, so `updated_at` is a last-modified field that a check-run insertion
+would itself write to. **F-17.2 already records the same class of trap** —
+`run_started_at` is rewritten by a re-run while `created_at` is not — so treating
+a mutable Actions timestamp as an event witness is a filed hazard here, not a new
+observation. The objection therefore stands on a mechanism rather than on
+arithmetic, and it stands on this register's own prior work.
+
+This matters beyond attribution because the two mechanisms imply **different
+inflation models for the same count**: one correlating anchor reds with push
+re-run activity, the other with anchor invocations. F-16 is about which
+population a number is over, so adopting an unverified inflation model would
+reproduce the defect one level up.
 
 ### F-17 — two Actions fields that look stable and are not — P2
 
@@ -3209,6 +3222,18 @@ are not obvious:
 - `job.id == check_run.id` for real jobs, so id-matching does not separate them
   either. The separator is `external_id`: GitHub's is a UUID, this one is
   `adapteng-rollout-trust-v1:<repo>:128`.
+
+**Independently reproduced, twice, and both times returned here as news.** Two
+separate platform sessions later measured this and reported it as a new finding —
+one from suite membership and the `external_id`, one from a suite census showing
+**10 runs in `85541064513` against 9 in the `pull_request` twin's
+`85541076809`, differing by exactly this check-run.** Both are correct and the
+second is the cleanest statement of it. Recorded for two reasons. First, the
+finding is now confirmed by measurements that *could* have disagreed and did not,
+which is the standard F-16 sets. Second, and less comfortably: on the first
+return this register accepted it as the correspondent's and replied that it was
+*not verifying it*, having filed it here already. See F-16, where that failure is
+recorded — **the corpus not searched was this document.**
 
 **2. `run_started_at` is rewritten by a re-run; `created_at` is not.** The same
 push run now reports `created_at = 2026-08-11T20:38:22Z` but `run_started_at =
