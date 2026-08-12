@@ -4362,7 +4362,66 @@ class NetworkPlacementTests(unittest.TestCase):
     def test_an_absent_alias_field_is_unreported_not_a_denial(self) -> None:
         verdict, why = driver.alias_verdict({}, "ai-gateway")
         self.assertIsNone(verdict)
-        self.assertIn("not reported", why)
+        self.assertIn("not a key", why)
+
+    def test_a_null_alias_field_is_a_denial_and_not_unreported(self) -> None:
+        """The distinction the first version of this function did not make.
+
+        It read a null value as "the API does not report this field", and so
+        reported UNREPORTED for ai-gateway while a neighbour on the same
+        instance carried a populated value in the very same field. Reported and
+        null is a measurement; the key being absent is not.
+        """
+
+        verdict, why = driver.alias_verdict(
+            {"custom_network_aliases": None}, "ai-gateway"
+        )
+        self.assertIs(verdict, False)
+        self.assertIn("reported and empty", why)
+
+    def test_the_control_is_chosen_by_the_property_and_not_by_name(self) -> None:
+        applications = [
+            {"name": "ai-gateway", "custom_network_aliases": None},
+            {"name": "n8n-selfhosted", "custom_network_aliases": None},
+            {"name": "adapteng-baserow-adapter", "custom_network_aliases": "adapteng-baserow-adapter"},
+        ]
+        name, why = driver.alias_control_name(applications, {"ai-gateway"})
+        self.assertEqual(name, "adapteng-baserow-adapter")
+        self.assertIn("alias", why)
+
+    def test_a_neighbour_aliased_to_some_other_name_is_not_a_control(self) -> None:
+        # The control has to answer to its own name, because that is the name
+        # the census will ask for. An alias pointing elsewhere would make the
+        # control rung fail on a working network.
+        name, _ = driver.alias_control_name(
+            [{"name": "other", "custom_network_aliases": "something-else"}], set()
+        )
+        self.assertIsNone(name)
+
+    def test_the_subject_and_the_other_name_cannot_be_the_control(self) -> None:
+        applications = [{"name": "ai-gateway", "custom_network_aliases": "ai-gateway"}]
+        name, why = driver.alias_control_name(applications, {"ai-gateway"})
+        self.assertIsNone(name)
+        self.assertIn("no control name", why)
+
+    def test_the_census_puts_the_control_before_the_names_in_doubt(self) -> None:
+        names = driver.resolve_census_names("ai-gateway", "ops-runner", "control-app")
+        self.assertEqual(names, ["localhost", "control-app", "ai-gateway", "ops-runner"])
+
+    def test_the_census_without_a_control_keeps_its_previous_shape(self) -> None:
+        names = driver.resolve_census_names("ai-gateway", "ops-runner")
+        self.assertEqual(names, ["localhost", "ai-gateway", "ops-runner"])
+
+    def test_the_census_command_with_a_control_still_fits_the_task_field(self) -> None:
+        command = driver.resolve_census_command(
+            driver.resolve_census_names(
+                "ai-gateway", "ops-runner", "adapteng-baserow-adapter"
+            )
+        )
+        self.assertLessEqual(len(command), driver.PEER_COMMAND_LIMIT)
+        self.assertEqual(command.count("'"), 0)
+        self.assertEqual(command.count('"'), 2)
+        self.assertEqual(len(command.splitlines()), 1)
 
     def test_an_empty_alias_field_is_a_denial(self) -> None:
         # Reported and empty is a measurement; absent is not. They must not

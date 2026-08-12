@@ -2285,16 +2285,27 @@ PEER_RESOLVE_COMMAND = (
 )
 
 
-def resolve_census_names(subject_name: str, other_name: str) -> list:
+def resolve_census_names(subject_name: str, other_name: str, control_name: str | None = None) -> list:
     """Ascending in doubt, because the order is what carries the reading.
 
-    localhost resolves from /etc/hosts with no resolver at all; the subject's
-    own name needs Docker's embedded DNS, which only exists on a user-defined
-    network; the other name needs that network to be shared. Each rung fails
-    for a different reason, so how far the list gets is the measurement.
+    localhost resolves from /etc/hosts with no resolver at all; the control is a
+    neighbour that declares its own name as a network alias, so it is the rung
+    that decides whether embedded DNS answers at all; the subject's own name and
+    the other name then need that name to be an alias too.
+
+    The control was not here originally, and its absence produced a wrong
+    reading. Without it the subject's own name was the rung carrying the weight,
+    and a failure there was read as "no embedded DNS on this network". But the
+    subject declares no alias, so that name could not have resolved on a
+    perfectly working network either. The rung tested two things at once and was
+    reported as testing one.
     """
 
-    return [PEER_RESOLVE_CERTAIN_NAME, subject_name, other_name]
+    names = [PEER_RESOLVE_CERTAIN_NAME]
+    if control_name:
+        names.append(control_name)
+    names.extend([subject_name, other_name])
+    return names
 
 
 def resolve_census_command(names: list) -> str:
@@ -3295,7 +3306,24 @@ def run_resolution_census(
     subject_uuid = str(subject["uuid"])
     emit(f"    {subject_role} {subject_name}: uuid={subject_uuid} state={subject.get('status')}")
 
-    names = resolve_census_names(subject_name, other_name)
+    neighbours = [
+        call(client, "GET", f"/applications/{item['uuid']}")
+        for item in applications_in(client, environment)
+        if isinstance(item.get("uuid"), str)
+    ]
+    control_name, control_why = alias_control_name(
+        [item for item in neighbours if isinstance(item, dict)],
+        {subject_name, other_name},
+    )
+    emit(f"    control name: {control_name or 'none'} -- {control_why}")
+    if control_name is None:
+        emit(
+            "    without a control the census cannot separate 'this network has "
+            "no embedded DNS' from 'this name is not an alias', and the second "
+            "reading was taken for the first once already."
+        )
+
+    names = resolve_census_names(subject_name, other_name, control_name)
     command = resolve_census_command(names)
     emit(f"    asking for, in order: {' '.join(names)}")
 
@@ -3661,18 +3689,50 @@ def alias_verdict(application: dict, wanted: str) -> tuple[bool | None, str]:
     caller dialling http://ai-gateway:8081 needs ``ai-gateway`` to be an alias.
     Reporting the aliases separately from the network keeps two independent
     reasons for the same symptom from being read as one.
+
+    Absent and null are held apart deliberately, and the first version of this
+    function did not hold them apart: it read ``None`` as "not reported", and so
+    reported UNREPORTED for an application whose neighbour on the same instance
+    carried a populated value in the very same field. Whether the API reports a
+    field is answered by the key being present; what it reports is answered by
+    the value. Binding the first question to the second is the same mistake this
+    whole operation exists to expose.
     """
 
+    if "custom_network_aliases" not in application:
+        return None, "custom_network_aliases is not a key this API returns"
     raw = application.get("custom_network_aliases")
-    if raw is None:
-        return None, "custom_network_aliases is not reported by this API"
-    text = raw if isinstance(raw, str) else str(raw)
+    text = "" if raw is None else raw if isinstance(raw, str) else str(raw)
     aliases = [item.strip() for item in text.replace(",", " ").split() if item.strip()]
     if not aliases:
-        return False, f"no aliases are declared, so the name {wanted!r} is not one"
+        return False, f"the field is reported and empty, so the name {wanted!r} is not an alias"
     if wanted in aliases:
         return True, f"{wanted!r} is among the declared aliases {aliases}"
     return False, f"the declared aliases are {aliases}, which do not include {wanted!r}"
+
+
+def alias_control_name(applications: list, exclude: set) -> tuple[str | None, str]:
+    """A neighbour that demonstrably carries an alias, to be used as a control.
+
+    The resolution census asks for the subject's own name and reads a failure as
+    absence of embedded DNS. That inference is only sound if the subject's own
+    name is one the resolver could ever have answered -- that is, if it is an
+    alias. It was not, so the rung was broken and the reading taken from it was
+    wrong.
+
+    The control is discovered by the property it has to have rather than typed
+    in as a name, because a hard-coded control would silently stop being a
+    control the day its alias was removed.
+    """
+
+    for item in sorted(applications, key=lambda entry: entry.get("name") or ""):
+        name = item.get("name")
+        if not isinstance(name, str) or name in exclude:
+            continue
+        verdict, _ = alias_verdict(item, name)
+        if verdict is True:
+            return name, f"{name} declares its own name as a network alias"
+    return None, "no neighbour declares an alias, so no control name is available"
 
 
 def operate_networks(client: Client, spec: dict) -> int:
