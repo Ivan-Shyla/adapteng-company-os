@@ -4758,16 +4758,55 @@ has no run behind it at all.
 > ```
 >
 > Restated: an anchor run could only have been executing at that instant if it
-> had lasted **117 times longer than any anchor run in the corpus**. The workflow
-> also declares `timeout-minutes: 5` on its single job, so that is a configured
-> ceiling and not merely an observed one. As first published, a future run
-> starting 100 s after the instant would have appeared to break the argument
-> while changing nothing; restated, nothing short of a four-hundred-fold outlier
-> touches it.
+> had lasted **117 times longer than any anchor run in the corpus**. As first
+> published, a future run starting 100 s after the instant would have appeared to
+> break the argument while changing nothing; restated, nothing short of a
+> four-hundred-fold outlier touches it.
 >
-> **The corpus also moved while this was being written** — 92 runs at the first
-> measurement, **93** now. The spanning count is 0 under both, which is the point
-> of preferring a re-derived census to a preserved number.
+> **The declared `timeout-minutes: 5` was offered here as a configured ceiling
+> rather than a merely observed one. Struck 2026-08-12 — it does not bound the
+> quantity this argument uses.** Raised by platform session `2cab0595` and
+> re-measured here:
+>
+> ```
+> the containment predicate uses   the RUN WINDOW  run_started_at .. updated_at
+> timeout-minutes governs          JOB execution time, and nothing else
+> ungoverned inside the window     runner dispatch + post-run bookkeeping
+>
+> windows exceeding the 300 s cap   1 of 94   -> 31116200705, 318 s, conclusion success
+>   attempt 2   window 318 s = job 263 s + dispatch 54 s + bookkeeping 1 s
+>   attempt 1   window 307 s = job 303 s, conclusion CANCELLED
+> ```
+>
+> **The one run supplying the 318 s maximum is the one run that breaches the cap.**
+> So substituting the declared figure would replace a bound satisfied by all 94
+> observations with one the data already falsifies — and *lower* it, 318 to 300.
+> Attempt 1 is the sharper exhibit: that is the cap observed firing, and the job it
+> cancelled is recorded at **303 s**. The cap therefore does not bound the window,
+> and is not exact even on the job seconds it does govern. Dispatch is not merely
+> ungoverned but unbounded in principle — a saturated runner pool extends the window
+> with no configured limit — so no total bound on the window follows from it at all.
+> The 117× margin never needed it and is unchanged without it.
+>
+> **A second defect, mine, found while checking the first: the census could not see
+> what it was scanning for.** Run-level `run_started_at` is the *latest* attempt's
+> start, so on this same run attempt 1 (`15:31:00Z`–`15:36:04Z`) ends **21 s before
+> its own run's window begins** and lies wholly outside it. A census over run windows
+> is structurally blind to every non-latest attempt. Re-run at attempt scope:
+>
+> ```
+> run-level intervals ......  94    containing 06:59:03Z -> 0
+> attempt-level intervals ..  95    containing 06:59:03Z -> 0
+> ```
+>
+> Zero either way — but it was zero **by population, not by method**: this corpus
+> holds exactly one re-run, and its hidden attempt sits **5.64 days** from the
+> instant. That is the run-level-versus-attempt-level error this document recorded
+> for F-8 earlier the same day, committed in my own evidence while writing it up.
+>
+> **The corpus moved twice while this was being written** — 92 runs, then 93, now
+> **94**. The spanning count is 0 under all three, which is the point of preferring
+> a re-derived census to a preserved number.
 
 **The population was also narrower than the question.** The earlier revision
 searched runs of `rollout-trust-anchor.yml` alone, while the question is whether

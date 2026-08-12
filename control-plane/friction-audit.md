@@ -3842,9 +3842,15 @@ it bounded the runs beginning *after* the instant — 328 s after, against a 318
 longest-ever — where ordering alone already excludes them and the duration does no
 work at all. The comparison that actually carries the conclusion is on the
 before-side: nearest prior anchor run `31533952257` at `2026-08-11T20:38:25Z`, a
-gap of **37,238 s** against a longest-ever **318 s** and a declared
-`timeout-minutes: 5` — a margin of **117×**. Same conclusion, no longer fragile.
-See F-25 for the general form.
+gap of **37,238 s** against a longest-ever **318 s** — a margin of **117×**. Same
+conclusion, no longer fragile. See F-25 for the general form.
+
+> **Two later corrections to this census, both recorded in full under F-25.** A
+> declared `timeout-minutes: 5` was cited alongside the 318 s and is **struck**: it
+> bounds job seconds, not the run window the predicate uses, and **1 of 94** windows
+> exceeds it. And the census has been re-scoped from runs to **attempts**, because a
+> run-level window covers only the *latest* attempt and can exclude an earlier one
+> entirely — 95 intervals, still 0.
 
 ### F-22 — spending an irreversible resource on a check that never executes — P1
 
@@ -4076,8 +4082,55 @@ duration argument:
 
 Re-measured with every timestamp normalised to UTC: nearest before-side run
 `31533952257` starts `2026-08-11T20:38:25Z`, a gap of **37,238 s**, against a
-longest-ever window of **318 s** — a **117×** margin, plus a declared
-`timeout-minutes: 5` ceiling on the job.
+longest-ever window of **318 s** — a **117×** margin.
+
+**Second instance, mine, in the repair of the first — and it is worse than the
+defect it was repairing.** Having been shown the before-side was unbounded, I
+attached a *second* bound to it: *"plus a declared `timeout-minutes: 5` ceiling on
+the job."* The appeal was to firmness — a configured ceiling sounds stronger than an
+observed maximum. It is not a bound on this quantity at all:
+
+```
+containment predicate uses   the RUN WINDOW  run_started_at .. updated_at
+timeout-minutes governs      JOB execution time, and nothing else
+ungoverned in between        runner dispatch + post-run bookkeeping
+
+windows over the 300 s cap   1 of 94  -> 31116200705, 318 s, success
+  attempt 2  window 318 s = job 263 s + dispatch 54 s + bookkeeping 1 s
+  attempt 1  window 307 s = job 303 s, CANCELLED
+```
+
+**The run supplying the 318 s maximum is the run that breaches the cap.** So the
+substitution swaps a bound all 94 observations satisfy for one they falsify, and
+lowers it by 18 s while doing so. Attempt 1 is the sharper exhibit: the cap observed
+*firing*, and the job it cancelled recorded at **303 s** — so the declared figure is
+not exact even on the seconds it does govern. Dispatch is unbounded in principle, so
+no total bound on the window follows from it. Raised by `2cab0595`.
+
+- **A declared limit and an observed maximum are not two arguments for one claim.**
+  They bound different quantities, and only one of them was ever measured against
+  the predicate in use. Check what the number governs before reading it as support.
+- **Reaching for the firmer-sounding figure is the failure mode, not the fix.** The
+  observed 318 s was already doing the work. The addition was pure downside: it
+  could only be redundant, and turned out to be false.
+
+**Third instance, mine, found while checking the second — and it is the census
+rather than the bound.** Run-level `run_started_at` is the **latest** attempt's
+start. On this same run, attempt 1 (`15:31:00Z`–`15:36:04Z`) ends **21 s before its
+own run's window begins** and lies wholly outside it, so a census over run windows
+cannot see any non-latest attempt. Re-scoped to attempts: **95** intervals against
+94, containing the instant **0** either way.
+
+The zero survives — **by population, not by method.** This corpus holds exactly one
+re-run and its hidden attempt is 5.64 days from the instant. Had the re-run been
+near it, the census would have returned the same reassuring `0` and been wrong.
+
+- **A run window is not the union of its attempts' windows; it is the latest one.**
+  Enumerate attempts whenever the question is "was anything executing at T."
+- Same shape as F-8's structural invisibility, filed earlier the same day: I wrote
+  that entry and then made the identical level error inside my own evidence. **A
+  rule recorded is not a rule applied** — the register does not defend the document
+  that holds it.
 
 **The published exclusion was correct and its published argument did not cover
 the case that could have broken it.** Nothing before the instant was bounded at
