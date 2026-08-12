@@ -42,6 +42,7 @@ from scripts.postgres_restore_generation import (
     validate_restore_acceptance,
 )
 from scripts.postgres_restore_guard import (
+    ARTIFACT_PATHS,
     GuardError,
     REPOSITORY_SETTING_ALLOWED as GUARD_SETTING_ALLOWED,
     REPOSITORY_SETTING_DEFAULTS,
@@ -60,7 +61,12 @@ from scripts.postgres_restore_host_inventory import (
     validate_host_inventory,
     validate_sealed_target,
 )
-from scripts.postgres_restore_git_seal import MEMBERS, SealError, validate_member
+from scripts.postgres_restore_git_seal import (
+    MEMBERS,
+    SealError,
+    canonical_json,
+    validate_member,
+)
 from scripts.postgres_restore_image_identity import IdentityError, measure_container
 from scripts.postgres_restore_inventory_exporter import (
     ExporterError,
@@ -2981,6 +2987,72 @@ class ReadinessAndManifestTests(unittest.TestCase):
         supplied = re.findall(r"--procedure-manifest-sha256[ \t=]+(\S+)", runbook)
         self.assertTrue(supplied)
         self.assertEqual(set(supplied), {manifest_digest})
+
+    def test_procedure_manifest_seals_the_current_artifact_tree(self) -> None:
+        # postgres_restore_guard.verify_procedure_manifest re-derives every one
+        # of these bindings and aborts the restore if any disagrees. That check
+        # runs as root on a POSIX host during recovery, so nothing was stopping
+        # a commit from editing a sealed script without regenerating the
+        # manifest: it would pass CI, land on main, and surface the break only
+        # when somebody actually attempted a disaster restore. This moves the
+        # same bindings to commit time. The root and ownership requirements of
+        # the runtime path are deliberately not reproduced here — they harden
+        # the host and cannot go stale in a commit.
+        manifest_path = SCRIPTS / "postgres_restore_procedure_manifest.json"
+        manifest_raw = manifest_path.read_bytes()
+        manifest = json.loads(manifest_raw.decode("utf-8"))
+
+        self.assertEqual(manifest["schema_version"], 2)
+        self.assertEqual(manifest["docker_inspect_schema_version"], 1)
+        self.assertTrue(b"\r" not in manifest_raw, "procedure manifest carries CR")
+        self.assertTrue(
+            manifest_raw.endswith(b"\n"), "procedure manifest lacks a final newline"
+        )
+
+        for key in ("artifacts", "git_blobs", "git_modes"):
+            self.assertEqual(
+                set(manifest[key]),
+                ARTIFACT_PATHS,
+                f"procedure manifest {key} does not cover the sealed member set",
+            )
+
+        self.assertEqual(
+            hashlib.sha256(
+                canonical_json(
+                    {
+                        "git_blobs": manifest["git_blobs"],
+                        "git_modes": manifest["git_modes"],
+                    }
+                )
+            ).hexdigest(),
+            manifest["member_tree_sha256"],
+            "member_tree_sha256 does not roll up the recorded Git member set",
+        )
+
+        for relative_path in sorted(ARTIFACT_PATHS):
+            payload = (ROOT / relative_path).read_bytes()
+            git_oid = hashlib.sha1(
+                f"blob {len(payload)}\0".encode("ascii") + payload
+            ).hexdigest()
+            self.assertEqual(
+                manifest["artifacts"][relative_path],
+                hashlib.sha256(payload).hexdigest(),
+                f"{relative_path} content digest is stale in the procedure manifest",
+            )
+            self.assertEqual(
+                manifest["git_blobs"][relative_path],
+                git_oid,
+                f"{relative_path} Git blob binding is stale in the procedure manifest",
+            )
+            self.assertIn(
+                manifest["git_modes"][relative_path],
+                {"100644", "100755"},
+                f"{relative_path} has an unsealable Git mode",
+            )
+            self.assertTrue(b"\r" not in payload, f"{relative_path} carries CR")
+            self.assertTrue(
+                payload.endswith(b"\n"), f"{relative_path} lacks a final newline"
+            )
 
 
 if __name__ == "__main__":
