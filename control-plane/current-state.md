@@ -4432,6 +4432,11 @@ before the first invocation** — the three runner lifecycle scripts and the
 dispatch template. This is on the critical path and is easy to miss, because
 every other input is either in the repository or already provisioned.
 
+**What those three scripts must do** is fixed by the workflow, not open to
+choice: register, start and destroy an ephemeral self-hosted runner carrying the
+five labels at §16.7, including one built from the workflow run's own ID. They
+run *after* dispatch, because that label does not exist until the run does.
+
 What the repository *does* provide for the evidence packet:
 
 ```
@@ -4462,6 +4467,54 @@ environment: `COMPANY_OS_FIRST_MODEL_PROOF_AUTHORIZED=YES_AFTER_MERGE_AND_OWNER_
 `GOOGLE_APPLICATION_CREDENTIALS` pointing at a credentials file on disk. Those
 last two are the private-network stop in §16.3, stated as the variables that
 carry it.
+
+### 16.7 The two values the owner cannot guess
+
+Both are compared for **exact string equality** and neither can be derived from
+the runbook. Read from `.github/workflows/migrate-approved-assets.yml` at
+platform `main`.
+
+**1. The phase acknowledgement.** Five phases, five distinct literals, four jobs
+(import and replay share a job and branch inside it):
+
+| Phase | `acknowledgement` input | Job | Compared at |
+|---|---|---|---|
+| `db_status` | `ACK_READ_ONLY_DB_STATUS` | `db-status` (80) | 135 |
+| `preflight` | `ACK_EXACT_3_PUBLIC_GIT_SOURCES` | `preflight` (267) | 322 |
+| `apply_required_migrations` | `ACK_APPLY_EXACT_007_AND_DRIVE_008` | `apply-required-migrations` (565) | 623 |
+| `import` | `ACK_EXACT_EXPECTED_WRITES` | `import-or-replay` (798) | 860 |
+| `replay_verify` | `ACK_ZERO_DUPLICATES` | `import-or-replay` (798) | 864 |
+
+These are contract constants, not credentials — they appear in the workflow's own
+step names. Each phase's literal states what that phase asserts, so supplying the
+wrong one is a governance failure, not a typo.
+
+**2. The runner label set, which includes the run's own ID.** Every job declares:
+
+```
+runs-on:
+  - self-hosted
+  - linux
+  - x64
+  - adapteng-approved-assets-rollout
+  - ${{ format('adapteng-approved-assets-run-{0}', github.run_id) }}
+```
+
+**The last label is computed from the workflow run's own ID.** The runner
+therefore cannot be registered in advance — it does not exist until the run does.
+This is the reason for the whole architecture and for the three operator-supplied
+scripts in §16.6: the script asserts no runner is registered, dispatches the
+workflow, selects the run it just created, and only then can `runner_register`
+register a runner carrying `adapteng-approved-assets-run-<run_id>`.
+
+**This makes the §16.5 hazard materially worse than recorded there.** Run
+selection is not merely the step whose error code was being discarded — it is the
+step that produces the run ID the runner label is built from. If selection fails,
+no runner can ever carry the required label, so the dispatched run waits for a
+runner that will never appear, on a spent one-shot attempt, reporting only a bare
+`lifecycle.run_not_found`. **Merge platform #121 before the first phase.** That
+instruction was already correct; this is why it matters.
+
 
 
 
