@@ -3488,6 +3488,51 @@ That converts "nothing was near it" from a claim into interval arithmetic nobody
 has to take on trust — and it is the part a reader can check without re-running
 anything.
 
+### F-22 — spending an irreversible resource on a check that never executes — P1
+
+**P1 because the resource is one-shot and the loss is unrecoverable.** Everything
+else in this register costs time.
+
+The rollout verifier audits base-tree closure at
+`verify_rollout_trust_anchor.py:2669` and does not open the approval receipt
+until `:2705`. With a stale base the closure audit raises and **the receipt is
+never read at all**. The natural operator response to a check named
+*Base-trusted rollout authorization* reading `unauthorized` is to go and obtain
+the authorization — an out-of-band ceremony that can be performed once. Against a
+stale base that ceremony is spent on a code path the verifier does not reach.
+
+**The verdict names the guard that fired, not the condition you must change.**
+The string was `rollout_trust_anchor.unauthorized.closure.dynamic_import`. It
+names the closure mechanism. The actual defect was that the PR's base predated
+another merge. Both agents working this initially read it as *the trust root is
+broken*, and one of them checked and refuted that on `main` — all 15 pinned
+digests matched there. The mismatch existed **only** against the stale base, and
+nothing in the verdict said so.
+
+**The compounding half: once reachable, the receipt is bound to a moving
+target.** `:2394`–`:2409` binds `base_sha`, `base_tree_sha`, `subject_sha`,
+`subject_tree_sha` and the exact protected-change set. Any commit landing on the
+base branch between issuance and merge advances `live.base_sha` and voids the
+receipt on line 2404. So the resource is not only spendable on an unreachable
+check — it also **decays while held**.
+
+**Two rules.**
+
+- **Before spending an irreversible resource to satisfy a failing check, find the
+  line that raises the *current* verdict and confirm the resource is consumed
+  *after* it.** A red check tells you which guard fired, not which of the guards
+  downstream of it would have. Reading 36 lines of source is cheap; the ceremony
+  is not.
+- **Freeze the base between issuance and merge, and re-confirm immediately
+  before issuing.** "The base was current when I started" is not the property the
+  verifier checks.
+
+**Shape.** This is not F-19 — the right authority was asked. It is closer to
+F-21's family: the *observation* is accurate and the *inference drawn from it* is
+about a mechanism the observation cannot see. `unauthorized` is true; "therefore
+supply authorization" does not follow, and the code is the only place that shows
+why.
+
 ---
 
 The condition described no longer exists. Leaving these in place actively

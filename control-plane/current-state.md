@@ -4450,12 +4450,53 @@ files at the head of this chain — `authorize_approved_assets_phase.sh` and
 
 **Correct order, and it is not the obvious one:**
 
+0. **Confirm platform #121's base is exactly `main`'s head, and settle every
+   other PR open onto `main` first.** This step was missing until 2026-08-12.
+   Without it, steps 1–2 spend the ceremony for nothing.
 1. Owner issues the base-trusted rollout authorization / trust receipt.
-2. #121's two trust-anchor checks go green; **merge #121.**
+2. #121's two trust-anchor checks go green; **merge #121**, with nothing else
+   landing on `main` in between.
 3. *Then* run step 1.
 
 Running step 1 first is the trap: if run-selection fails, the operator gets
 `lifecycle.run_not_found` and nothing else, having already spent the attempt.
+
+> **Step 0 exists because a receipt issued against a stale base cannot be
+> rescued by any signature.** Reported by platform session `c96f72e3` after it
+> rebased #121; verified here by reading
+> `scripts/validation/verify_rollout_trust_anchor.py` at platform `main`
+> (3274 lines) rather than accepting the account:
+>
+> ```
+> 2669   assert_base_trust_closure(client, base_tree)     <- audits the BASE tree
+> 2705   _require_regular_approval_entries(head_tree)     <- receipt first read here
+> ```
+>
+> The closure audit runs **36 lines before the receipt is opened**. While #121's
+> base was pre-#128, that audit raised `closure.dynamic_import` and the verifier
+> never reached the receipt at all — so **no owner signature could have made the
+> check pass.** Issuing first would have consumed a one-shot out-of-band ceremony
+> against a head that provably could not go green.
+>
+> After the rebase onto `6ecdd5fb` the verdict advanced to
+> `approval.commit_delta_invalid` (`:2704`) — the genuine awaiting-signature
+> state, and the first time it has been reachable.
+
+> **And the receipt dies the moment `main` moves.** The binding is enforced at
+> `:2394`–`:2409`:
+>
+> ```
+> receipt["base_sha"]      != live.base_sha         -> receipt.binding_invalid
+> receipt["base_tree_sha"] != base_commit.tree_sha  -> receipt.binding_invalid
+> receipt["subject_sha"], receipt["subject_tree_sha"]  -> same clause
+> ```
+>
+> Measured 2026-08-12: platform `main` = `6ecdd5fb`, and **#121's base =
+> `6ecdd5fb`. They are equal, so the receipt is issuable now.** But **#124 is
+> also open onto `main`**, on a stale base (`824b4238`). If #124 lands between
+> issuance and #121's merge, `main` advances, `live.base_sha` advances with it,
+> and the receipt is void on line 2404 with nothing recoverable. Either land #124
+> first and re-confirm step 0, or hold it until #121 is merged.
 
 **What the owner will actually see, and it is misleading.** The anchor's red mark
 appears **twice** on the head. That is one verification and one display artifact,
