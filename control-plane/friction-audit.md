@@ -3053,6 +3053,63 @@ Any disagreement about CI state should first ask *when* the other party looked.
 and quote the observation time. Where a census contradicts an external report,
 re-read before publishing the contradiction.
 
+**A third party proposed the better generalisation and it is adopted here.** The
+coordinates a CI figure needs are **owner + population + rule + as-of**; drop any
+one and the number remains quotable and still wrong. Their worked case is sharper
+than this entry's: two of their populations have *identical* cardinality, so a
+figure moved from one to the other is **verifiably** correct in the destination
+and no audit can catch it. Attaching provenance to a figure is therefore
+necessary and not sufficient — the population must travel too.
+
+### F-17 — two Actions fields that look stable and are not — P2
+
+**Status:** open, measurement practice, **mine and at least two correspondents'**;
+each of the two has already produced a published error about platform #128.
+
+Both were found while checking a third party's report, and neither is a defect in
+the platform — they are properties of the Actions API that make a careful census
+wrong.
+
+**1. A check-run created via the Checks API is filed under another workflow's
+check suite, and then reports as that workflow's job.** Measured at `36cdc765`:
+
+| object | id | check suite |
+|---|---|---|
+| `Adapter Tests` run, event `push` | `31533947898` | **85541064513** |
+| `Base-Trusted Rollout Authorization` run, event `pull_request_target` | `31533952257` | 85541077280 |
+| check-run `Base-trusted rollout authorization` | `93920483971` | **85541064513** |
+
+The anchor's check-run lands in the **push run's** suite, because GitHub attaches
+an API-created check-run to the existing suite for `(app=github-actions,
+head_sha)` rather than to the suite of the run that posted it. The consequences
+are not obvious:
+
+- `GET /actions/runs/31533947898/jobs` returns **10 jobs** against the pull
+  twin's 9, and the tenth is `Base-trusted rollout authorization`. **There is no
+  such job.** `adapter-tests.yml` contains no anchor step and is byte-identical
+  on `main` and at `36cdc765` — verified, not assumed.
+- A reader therefore concludes the twins are structurally asymmetric and that a
+  push-only job could manufacture a false divergence. **The evidence at hand
+  falsifies that**: the anchor check-run is `failure` on both attempts while run
+  `31533947898` attempt 2 concludes **`success`**. An API-created check-run does
+  not enter the run conclusion, so it cannot move a conclusion-level comparison.
+- `job.id == check_run.id` for real jobs, so id-matching does not separate them
+  either. The separator is `external_id`: GitHub's is a UUID, this one is
+  `adapteng-rollout-trust-v1:<repo>:128`.
+
+**2. `run_started_at` is rewritten by a re-run; `created_at` is not.** The same
+push run now reports `created_at = 2026-08-11T20:38:22Z` but `run_started_at =
+2026-08-12T06:58:13Z`, because it is on `run_attempt = 2`. Any run-level census
+keyed on `run_started_at` silently moves when someone re-runs a job, and a census
+taken before a re-run cannot be reconciled with one taken after unless the
+attempt is recorded. **Use `created_at`, and record `run_attempt`.**
+
+**Shape.** Both are the same failure as F-16 seen from a different side: a
+quantity was bound to the nearest *stable-looking* field rather than to the one
+that means what the finding claims. Here the misleading fields are stable
+*in appearance* — a job list and a start time are exactly what one would reach
+for — which is why three separate parties reached for them.
+
 ---
 
 The condition described no longer exists. Leaving these in place actively

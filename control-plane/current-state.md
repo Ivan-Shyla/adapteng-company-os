@@ -2995,6 +2995,16 @@ line 9 is the grant this POST requires, so it is load-bearing rather than
 incidental. Both check-runs report `app.slug = github-actions`, which is why the
 workflow-level reading survived as long as it did.
 
+*And there is a third trap behind the second.* The anchor's check-run is filed
+under the **`Adapter Tests` push run's check suite** (`85541064513`), not under
+the suite of the `pull_request_target` run that posted it (`85541077280`), because
+GitHub attaches an API-created check-run to the existing suite for
+`(app, head_sha)`. So `GET /actions/runs/<push>/jobs` lists it as a tenth job
+against the pull twin's nine, and `adapter-tests.yml` — byte-identical on `main`
+and at `36cdc765` — defines no such job. It is not a job, and it does not enter
+the run conclusion: it is `failure` on both attempts while that run's attempt 2
+concludes `success`. Recorded in full as F-17.
+
 *`drive-service-supply-chain`.* This section first called it **green, twice**,
 and used that to reject a correspondent's report that it was the failing mark on
 a transient PyPI `BrokenPipeError`. **The correspondent was right and this record
