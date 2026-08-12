@@ -3914,10 +3914,37 @@ Two things follow, and the second is worth more than the correction:
   the thing being checked.** The subject commit must not introduce approval
   material, so committing a corrected receipt on top of a failed one turns the
   failed receipt into the subject and raises. The remedy an operator reaches for
-  precisely *because* the check went red is the one guaranteed to fail, and a
-  fresh nonce means it cannot be made to pass. Only resetting to the subject
-  works. **When a guard inspects the parent of the thing you are fixing, a fix
-  that adds a commit changes what is inspected.**
+  precisely *because* the check went red is the one guaranteed to fail. Reset to
+  the subject is the route to use. **When a guard inspects the parent of the thing
+  you are fixing, a fix that adds a commit changes what is inspected.**
+
+> **Two corrections to this bullet, 2026-08-12, both from `c96f72e3`.** As first
+> published it read *"a fresh nonce means it cannot be made to pass. Only resetting
+> to the subject works."*
+>
+> **The nonce clause was a wrong mechanism under a correct conclusion — the F-3
+> shape, at P1.** `_approval_material_introduced(base, candidate)` intersects
+> `APPROVAL_PATHS` with paths changed between base and candidate; the call passes
+> the *subject* tree, and the receipt's own tree is never an argument. So the guard
+> never opens either receipt and matching them was never an available repair. The
+> nonce forecloses nothing — repo-wide it is format-checked and generated, with no
+> ledger or replay store. The conclusion is stronger without it: **nothing about the
+> second receipt can pass, because nothing about it is read.**
+>
+> **And "only" was over-strong.** A revert commit followed by a fresh receipt leaves
+> a subject that introduces nothing, and `require_linear_history` rejects only cycles
+> and merge commits — a spent receipt in the ancestry is not fatal. INFERRED, not
+> executed. Reset stays the recommendation; "only" would strand an operator who
+> cannot force-push.
+>
+> - **A conclusion that survives the loss of its stated reason was resting on
+>   something else the whole time.** Both defects here are that: the guard is
+>   *stricter* than the nonce story implied, and the repair space is *wider* than
+>   "only" implied. Neither error was detectable by checking whether the advice
+>   worked — it did.
+> - **State the mechanism at the granularity of the arguments actually passed.** I
+>   named the right function and the right call site and still described it reading
+>   a value it is never given. Naming a symbol is not the same as reading it.
 
 **And the clause was already in this record — which is worse, not better.**
 `current-state.md` has listed all four constraints since the §15 analysis,
