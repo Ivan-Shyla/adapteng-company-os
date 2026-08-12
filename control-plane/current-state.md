@@ -144,6 +144,25 @@ Verified from `main` and CI, not from narrative.
   managed database over the shared network. That, rather than the address probe,
   is what establishes the gateway's attachment.
 
+  **Update, 2026-08-12: that probe is no longer the only thing asking.** The
+  readiness above was a scheduled task run on demand — a measurement, not a
+  control. Platform PR #127 merged as `feee3166` and put a `HEALTHCHECK` in
+  `services/ai-gateway/Dockerfile` that probes `/ready`, and
+  `deploy/ai-gateway.json` moved from `container_gate: "absent"` to `"image"`.
+  Coolify now reports `application_state=running:healthy` rather than
+  `running:unknown` — deployment `r71zy5b1cxed8o3tqvn38cji`, confirmed by a
+  status read four minutes later, past the full 30s start period plus five 15s
+  retries in which an unhealthy container would have been marked.
+
+  The difference is not cosmetic. `running:unknown` was the honest reading of a
+  gate that did not exist: with `health_check.enabled` false and no `HEALTHCHECK`
+  in the image, `ApplicationDeploymentJob::health_check` set `newVersionIsHealthy`
+  and returned without testing anything, which is how this service was once
+  reported healthy for hours while detached from the network. Now the probe asks
+  `/ready`, `/ready` opens a database connection, and a container that cannot
+  reach Postgres is rolled back instead of promoted. **The readiness proof became
+  a readiness gate.**
+
   `/ready` opens a database connection where `/health` does not (§5b), so this
   is also the database proof: the runtime DSN is in place and usable. It says
   nothing about the other two credentials and nothing about model access —
