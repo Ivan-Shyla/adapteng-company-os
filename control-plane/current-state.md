@@ -4421,6 +4421,24 @@ necessary context, not a substitute for the run-scoped registration.
 
 ### 16.5 Sequencing hazard — merge platform #121 *before* running phase 1
 
+> **How to read every line number in this section.** All citations below were
+> read against specific platform blobs and are recorded as
+> `symbol` (`:line`) wherever the symbol exists. **The symbol is the citation;
+> the line number is a convenience that expires.**
+>
+> | file | blob pinned here | read |
+> |---|---|---|
+> | `scripts/validation/verify_rollout_trust_anchor.py` | `77a2f790` (3273 lines) | platform `main`, 2026-08-12 |
+> | `.github/workflows/rollout-trust-anchor.yml` | `main`, 120 lines | 2026-08-12 |
+>
+> This is not bookkeeping. A correspondent working the same file on a branch
+> found every citation displaced by exactly **22 lines** — their blob `761bd411`
+> carries two hunks above `ensure_check_run` (+16 and +6) that do not touch it,
+> so the guard region is byte-identical while every line number differs. **A
+> displaced line number resolves to real code and raises no error**, so it
+> misleads silently rather than failing. If a number here does not land on the
+> named symbol, trust the symbol and re-read the blob.
+
 **Phase 1 (`db_status`) is a one-shot with a non-retryable attempt, and in its
 shipped form a run-selection failure is undiagnosable.** Verified from
 `scripts/operations/authorize_approved_assets_phase.sh` on platform `main`, not
@@ -4604,14 +4622,60 @@ Running **phase 1** first is the trap: if run-selection fails, the operator gets
 >    `:3141`, ahead of `verify_pull_request` at `:3146` — so it precedes the
 >    closure audit at `:2669` *and* the receipt read at `:2705`. It is strictly
 >    earlier than the F-22 trap, and no signature reaches it either.
-> 3. **Nothing is published, so the surface can lie.** `handle` is still `None`
->    when the raise happens, and `_report_failure` at `:3118` only publishes
->    `if handle is not None`. **No anchor check-run is created or updated.** The
->    pre-existing marks keep whatever conclusion they already carried. On a head
->    whose surviving marks are red this is merely confusing; on a head carrying a
->    stale *green* mark the published surface would read green while the
->    verification refused. *That last case is reachable by construction but has
->    not been observed — flagged INFERRED, not measured.*
+> 3. **Nothing is published on the authorization mark — and the true signature is
+>    two surfaces disagreeing, not silence.** `handle` is still `None` when the
+>    raise happens (bound at `_verify_command`, `:3141`), and `_report_failure`
+>    (`:3118`) publishes only `if handle is not None`. **No anchor check-run is
+>    created or updated**; pre-existing marks keep whatever conclusion they
+>    already carried.
+>
+>    The job itself still fails. The workflow runs the verifier as the step's
+>    **final** command — `exec /usr/bin/env -i … python3 -I "$verifier" verify` —
+>    under `set -euo pipefail`, so the verifier's exit status is the step's and
+>    the job-backed check-run **`Verify exact current head from merged base`**
+>    goes red with the code in its log. So the owner is not left with nothing to
+>    inspect, and an earlier phrasing here that implied so was too strong.
+>
+>    **What to look for instead:** a red `Verify exact current head from merged
+>    base` beside an *untouched* `Rollout trust anchor` mark — stale, and on the
+>    wrong head possibly still **green**. Disagreement between the two is
+>    diagnostic where absence would merely confuse: **nothing else produces that
+>    pair.** Correction supplied by `2cab0595`, verified here against the
+>    workflow.
+>
+>    **Observed, no longer inferred.** `2cab0595` executed the stale-green case
+>    against the real module with a stubbed client: duplicate marks with one
+>    `success` → exit **1**, `unauthorized.check.list_ambiguous`, **zero** write
+>    calls, pre-existing conclusions left as `['success', 'failure']`. Real code
+>    path, synthetic API response — the head itself was not manufactured on
+>    GitHub.
+>
+> **The silent class is 24 codes, not one — and 2 more are worse.** `list_ambiguous`
+> is not a special case; *every* verdict raisable before `:3141` binds `handle`
+> lands on the same silent surface. Enumerated from the call graph rather than
+> from a harness, against blob `77a2f790`:
+>
+> | tier | where | codes | verdict line | authorization mark |
+> |---|---|---|---|---|
+> | 0 | `_build_client_from_environment` / client `__init__`, called at `:3137` — **outside the `try`** | 2 — `api.token_missing`, `api.token_invalid` | **none — raw traceback** | not published |
+> | 1 | `fetch_live_pull_request` `:3140` and `ensure_check_run` `:3141` | **24** — 10 `pull_request.*`, 7 `check.*`, 7 `api.*` from the shared client | correct category | **not published** |
+> | 2 | `verify_pull_request` `:3146` onward | the rest | correct category | published |
+>
+> Tier 0 is the sharper one and neither party had it: the client is built on the
+> line *above* the `try`, so `except TrustError` and `except Exception` cannot see
+> it. A missing or malformed token yields a Python traceback with **no
+> `rollout_trust_anchor.*` line at all** — the job still goes red, but nothing
+> machine-readable names why.
+>
+> **And the two-category split, which is what the platform change exists to
+> deliver, survives only in stderr for all 24.** `_report_failure` sets
+> `outcome="undetermined" if undetermined else "failure"` (`:3124`) — but that
+> call sits inside `if handle is not None`. The exit code (1 vs 75) and the
+> stderr line carry the distinction correctly; the check-run, which is the
+> surface the whole change was motivated by, carries nothing. Reported by
+> `2cab0595` against their own deliverable, including that their flagship
+> regression test asserts the code and never asserts publication, so it passes
+> while the surface stays silent.
 >
 > **Measured 2026-08-12, every open PR head plus the known-duplicated one:**
 >
