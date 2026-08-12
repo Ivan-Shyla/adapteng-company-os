@@ -4662,22 +4662,54 @@ fault demonstrably did not pass through cannot prevent it.** That is F-21 for th
 third time: a remedy whose predicate cannot reach its subject. The real defect is
 the *category* of the refusal, recorded two blocks above and as F-23.
 
-**Stronger still, and it does not depend on a clock.** Every argument above reads
-timestamps, so it is worth having one that cannot be defeated by a re-stamp.
-Reported by platform session `b14546cd`, re-measured here:
+**Stronger still, and it does not depend on a clock — but it does depend on the
+scope of one query, which the first published version of this paragraph failed to
+state.** Every argument above reads timestamps, so it is worth having one that
+cannot be defeated by a re-stamp. Reported by platform session `b14546cd`,
+corrected by them, and re-measured here in the corrected form:
 
 ```
-GET /actions/runs/31533947898        -> Adapter Tests, push, attempt 2, conclusion=success
-GET /actions/runs/31533947898/jobs   -> total_count 10
-     94035941636 success  drive-service-supply-chain
-     …seven more, all success…
-     94035967117 success  adapteng-baserow-schema
-     94036100476 FAILURE  Base-trusted rollout authorization
+GET /actions/runs/31533947898/attempts/2        -> conclusion = success
+GET /actions/runs/31533947898/attempts/2/jobs   -> total_count 10, exactly one failure:
+     94036100476  FAILURE  Base-trusted rollout authorization   (run_attempt 2)
 ```
 
-**A failing job fails its run. This run passed.** So the tenth entry cannot be a
-job of that run, and that follows from the object itself without reference to any
-time, name or duration. Nine genuine jobs, one passenger.
+**A failing job fails its attempt. This attempt passed.** So the tenth entry
+cannot be a job of it, and that follows from the object itself without reference
+to any time, name or duration. Nine genuine jobs, one passenger — and **no
+earlier attempt is in scope to explain the failure away.**
+
+**What was wrong with the earlier form, and it was a premise rather than a
+number.** The version merged in #191 cited `GET /actions/runs/<id>/jobs` — the
+default endpoint — without saying that the default is scoped to the *latest
+attempt only*. The claim it supported was true, because latest happens to be
+attempt 2. But the premise was unstated, and **the very habit recorded two blocks
+above — widen with `filter=all` so the reader's defaults cannot hide rows — is
+what destroys it.** Measured across all four scopings:
+
+| query | entries | failures | does the proof hold? |
+|---|---|---|---|
+| `/jobs` (default = latest) | 10 | 1 — the anchor | yes, but only by luck of the default |
+| **`/jobs?filter=all`** | 20 | 3 — anchor ×2 **plus `drive-service-supply-chain`** | **no** |
+| `/attempts/1/jobs` | 10 | 2 | no — attempt 1's own conclusion is `failure` |
+| **`/attempts/2/jobs`** | 10 | 1 — the anchor | **yes, and immune to widening** |
+
+Under `filter=all` the listing carries attempt 1's genuine
+`drive-service-supply-chain` failure, which coexists with a green run entirely
+legitimately. The surface reading is unchanged — *"run green, listing red"* — but
+an innocent explanation becomes available, so it stops being a proof. The
+contradiction only exists inside **one** attempt; widening the listing to two
+dissolves it.
+
+**The rule, and it is theirs.** A number's query is *provenance* — it tells the
+reader where the figure came from. A **proof's** query is a *premise* — change it
+and the proof stops being true. So "publish the query" is necessary and not
+sufficient: for anything argued rather than merely counted, the scope has to be
+stated as a condition, not as a citation. This is the level-mixing hazard for the
+third time in three substrates — first a denominator, then a set of identifiers,
+now a proof: **both sides of a comparison must be read at the same level.** Here
+the two sides are a conclusion and a listing, and the fix is to read both at
+attempt scope.
 
 **Practical consequence the owner will meet.** The Adapter Tests run now reads
 **green** while still carrying a red mark, because it was re-run and its real
