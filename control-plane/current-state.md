@@ -241,9 +241,9 @@ Verified from `main` and CI, not from narrative.
   phase-specific acknowledgement and the dedicated
   `adapteng-approved-assets-rollout` runner; and it should not run before
   platform #128, which removes a manufactured pagination race in that very path.
-  #128 edits `scripts/validation/approved_assets_github_metadata.py`, which
-  `verify_rollout_trust_anchor.py` lists in `PROTECTED_EXACT_PATHS`, so it needs
-  a signed rollout trust receipt. The trust root is armed with a real Ed25519 key
+  **All four files #128 edits are in `PROTECTED_EXACT_PATHS`** — lines 85, 99,
+  111 and 112 — so the anchor refused the entire diff and it needed a signed
+  rollout trust receipt. The trust root is armed with a real Ed25519 key
   for `rollout-approval@adapteng.com`; the private half is not on the control
   plane's host, which is what makes this owner-only rather than merely pending.
   **RESOLVED 2026-08-12 under the owner's sole-authority directive: #128 is
@@ -3007,13 +3007,29 @@ the two anchor checks are advisory, so GitHub permits the merge.
 
 | | Platform #122 | Platform #121 | Platform #128 |
 |---|---|---|---|
-| Protected paths touched | `verify_rollout_trust_anchor.py`, `authorize-rollout-policy-change.md` | `authorize_approved_assets_phase.sh`, `migrate-approved-assets.md` | `approved_assets_github_metadata.py` |
+| Protected paths touched | `verify_rollout_trust_anchor.py`, `authorize-rollout-policy-change.md` | `authorize_approved_assets_phase.sh`, `migrate-approved-assets.md` | **all four files it touches** — `approved_assets_github_metadata.py` (85), `verify_rollout_trust_anchor.py` (99), `tests/test_approved_assets_rollout_readiness.py` (111), `tests/test_migrate_approved_assets.py` (112) |
 | Anchor verdict | `unauthorized.approval.commit_delta_invalid` | `unauthorized.approval.commit_delta_invalid` | refusal, both anchor check-runs red |
 | Required checks | all green | all green | **all five green, on both twins** |
-| Outcome | **merged** 20:44:08Z | **left open** | **left open** |
+| Outcome | **merged** 20:44:08Z | **left open** | **MERGED** 2026-08-12 as `6ecdd5fb`, classification **C** |
 
 All four paths verified present in `PROTECTED_EXACT_PATHS`, read from
 `verify_rollout_trust_anchor.py` on `main` rather than from either report.
+
+**Correction to the #128 column, and it sharpens the disposition question rather
+than changing the classification.** An earlier version of this row named only
+`approved_assets_github_metadata.py`, which understated the scope by a factor of
+four. Re-read from `PROTECTED_EXACT_PATHS` on `main` after the merge: **all four
+of #128's files are protected** — lines 85, 99, 111 and 112 of a 44-entry set.
+So the honest statement of the third instance is not "a PR touching a protected
+path was merged past an advisory refusal" but **"a PR whose every touched path is
+protected — the trust verifier, the metadata collector, and two of the
+verifier's own test files — was refused by the anchor on the whole diff and was
+mergeable anyway."** The refusal was unanimous across the change and still
+advisory. This does not alter classification **C**, which rests on
+`authorize-rollout-policy-change.md` 320-339 and on ruleset `20236725` not
+requiring the check, neither of which counts paths. It does mean the owner's
+disposition choice in §4 should be priced against a worked example in which the
+anchor objected to everything in the diff and nothing stopped the merge.
 
 **#128 is the third instance, and it was measured rather than inferred.** At head
 `36cdc765`: `gh pr view` reports `mergeable: MERGEABLE`, `mergeStateStatus:
