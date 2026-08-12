@@ -19,6 +19,7 @@ from scripts.validate_sensitive_references import (
     inspect_url,
     is_identifier_continuation,
     is_malformed_candidate_token,
+    lf_delimited_lines,
     match_multiword_continuation,
     normalize_ascii_linker_word,
     read_context_word,
@@ -26,6 +27,48 @@ from scripts.validate_sensitive_references import (
 )
 
 STATUS_ROOT = Path(__file__).resolve().parents[1]
+
+
+class LfDelimitedLineSplitTests(unittest.TestCase):
+    """Reported line numbers must match what the reader sees at ``path:number:``.
+
+    ``str.splitlines()`` breaks on eleven separators. Any of the eight that are
+    not LF or CR would shift every subsequent reported line number up by one
+    relative to an editor or ``git diff``.
+    """
+
+    def test_matches_terminator_semantics(self) -> None:
+        cases = (
+            ("", []),
+            ("\n", [""]),
+            ("abc", ["abc"]),
+            ("abc\n", ["abc"]),
+            ("a\nb", ["a", "b"]),
+            ("a\nb\n", ["a", "b"]),
+            ("a\n\n", ["a", ""]),
+        )
+        for text, expected in cases:
+            with self.subTest(text=text):
+                self.assertEqual(lf_delimited_lines(text), expected)
+
+    def test_does_not_split_on_non_lf_separators(self) -> None:
+        for separator in ("\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"):
+            with self.subTest(separator=repr(separator)):
+                text = f"alpha{separator}beta\ngamma\n"
+                self.assertEqual(lf_delimited_lines(text), [f"alpha{separator}beta", "gamma"])
+                self.assertGreater(len(text.splitlines()), len(lf_delimited_lines(text)))
+
+    def test_carriage_return_is_not_a_record_boundary(self) -> None:
+        self.assertEqual(lf_delimited_lines("alpha\rbeta\n"), ["alpha\rbeta"])
+
+    def test_line_numbers_survive_an_embedded_separator(self) -> None:
+        text = "alpha\nbeta\fgamma\ndelta\n"
+        self.assertEqual(len(lf_delimited_lines(text)), 3)
+        self.assertEqual(lf_delimited_lines(text).index("delta") + 1, 3)
+
+    def test_agrees_with_splitlines_on_lf_only_text(self) -> None:
+        text = "alpha\nbeta\ngamma\n"
+        self.assertEqual(lf_delimited_lines(text), text.splitlines())
 
 
 class SensitiveReferenceValidatorTests(unittest.TestCase):

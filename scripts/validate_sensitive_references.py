@@ -1770,11 +1770,26 @@ def inspect_line(
     return list(dict.fromkeys(violations))
 
 
+def lf_delimited_lines(text: str) -> list[str]:
+    """Split into LF-delimited records, matching editor and ``git diff`` numbering.
+
+    ``str.splitlines()`` breaks on eleven separators — CR, VT, FF, FS, GS, RS,
+    NEL, LS and PS as well as LF — so a tracked file containing any of them
+    would make this validator report a line number higher than the one the
+    reader sees when they open the file at ``path:number:``. Detection is
+    unaffected either way; the reported position is not.
+    """
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def main() -> int:
     violations: list[tuple[Path, int, str]] = []
     for path in tracked_files():
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            lines = lf_delimited_lines(path.read_text(encoding="utf-8"))
         except UnicodeDecodeError:
             continue
 
