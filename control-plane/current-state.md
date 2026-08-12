@@ -4235,17 +4235,43 @@ calls `generateContent`, so it is a precondition proof, not the model proof.
 ### 16.2 The actual blocking chain, in order
 
 `docs/runbooks/company-os-first-model-proof.md` declares its own state:
-**"repository-ready, not authorized, not run."** The chain is:
+**"repository-ready, not authorized, not run."**
 
-1. **Approved-assets phase authorization.**
-   `scripts/operations/authorize_approved_assets_phase.sh` produces two
-   repository secrets. **Both measured ABSENT this round:**
-   `APPROVED_ASSETS_PHASE_AUTHORIZATION_JSON` and
-   `APPROVED_ASSETS_REVIEWED_EVIDENCE_JSON`.
-2. **Approved-source import.** `migrate-approved-assets.yml` — **never run**;
-   the Actions API returns no run history for it at all.
-3. **First model proof.** `scripts/company_os_first_model_proof.py preflight`,
-   then `run` with `COMPANY_OS_FIRST_MODEL_PROOF_AUTHORIZED=YES_AFTER_MERGE_AND_OWNER_APPROVAL`.
+> **Corrected 2026-08-12 against the script's own source.** An earlier revision
+> of this section described a three-step chain in which the operator ran the
+> authorization script once and then dispatched `migrate-approved-assets.yml` by
+> hand. **Both halves of that were wrong.** It is *five* governed phases, and the
+> operator never dispatches the workflow — `authorize_approved_assets_phase.sh`
+> line 237 does it (`gh workflow run … --ref main`). Planning from the old text
+> would have under-scoped the work roughly fivefold and produced a manual
+> dispatch that the authorization design does not expect. Corrected below from
+> `authorize_approved_assets_phase.sh` and `.github/workflows/migrate-approved-assets.yml`
+> at platform `main` = `6ecdd5fb`.
+
+**Five phases, each a separate invocation of the script**, selected by its first
+positional argument. The phase also selects which environment is written:
+
+| # | Phase | Environment | Gated on |
+|---|---|---|---|
+| 1 | `db_status` | `approved-assets-migrations` | — |
+| 2 | `apply_required_migrations` | `approved-assets-migrations` | `approved_db_status_run` |
+| 3 | `preflight` | `approved-assets-preflight` | `approved_migration_run` |
+| 4 | `import` | `approved-assets-import` | `approved_preflight_run` |
+| 5 | `replay_verify` | `approved-assets-import` | `approved_import_run` |
+
+**Each phase consumes the successful run ID of the phase before it**, as a
+required workflow input. They cannot be batched, reordered or run in parallel —
+`concurrency.group: migrate-approved-assets` with `cancel-in-progress: false`
+serialises them, and a missing predecessor run ID fails the phase.
+
+Then, and only then:
+
+- **First model proof.** `scripts/company_os_first_model_proof.py`, phase
+  `preflight` then `run`, with
+  `COMPANY_OS_FIRST_MODEL_PROOF_AUTHORIZED=YES_AFTER_MERGE_AND_OWNER_APPROVAL`.
+
+`migrate-approved-assets.yml` has **never run** — the Actions API returns no run
+history for it at all, consistent with all five phases being outstanding.
 
 The proof is pinned to manifest `bfca73ee…` and source identity `4b4893e8…`,
 package `ART-2026-001/SRC-2026-001`, capped at EUR 0.10 per call and EUR 1.00 per
@@ -4255,25 +4281,63 @@ the pinned digests is refused before any provider call.
 
 ### 16.3 Why the control plane cannot execute any of it
 
-Not policy — four independent hard stops, each measured:
+Not policy — the script enforces each of these itself, with a named exit code.
+Line numbers are from `authorize_approved_assets_phase.sh` at platform `main`:
 
-- **Non-admin.** `repos/…/actions/runners` returns **404**; repository
-  permissions read `admin:false`. Creating the two secrets requires admin.
-- **Windows.** The authorization script is POSIX shell.
-- **Two human roles.** The evidence packet requires a preparer and a distinct
-  reviewer; one identity cannot satisfy both.
-- **No private network.** The runbook requires a host that can reach canonical
-  Postgres, the internal Baserow adapter and Drive. The gateway is deployed with
-  `public_fqdn: null` and is unreachable from any workstation.
+| Guard | Line | Failure code |
+|---|---|---|
+| Repository **admin** required | 151–155 | `lifecycle.repository_admin_required` |
+| **Non-Windows** POSIX host required | 113–118 | `lifecycle.trusted_posix_required` |
+| **No self-hosted runner** registered | 156–160 | `lifecycle.release_runner_registration_present` |
+| Authorization value **absent** in phase env | 161–167 | `lifecycle.authorization_secret_present` |
+| Evidence value **absent** in phase env | 168–174 | `lifecycle.reviewed_evidence_secret_present` |
+| All 6 positional args present/executable | 119–130 | `lifecycle.input_invalid` |
+| Dispatch template mode exactly `600` | 131–134 | `lifecycle.dispatch_permissions_not_restricted` |
+| Evidence file mode exactly `600` | 135–138 | `lifecycle.reviewed_evidence_permissions_not_restricted` |
+| 9 tools on PATH | 107–112 | `lifecycle.tool_missing` |
+
+Measured against this control plane: repository permissions are
+`admin:false, maintain:false, push:true` — **the admin guard fails outright.**
+
+**Git Bash does not work around the POSIX guard.** `bash` *is* present on this
+host, and an earlier draft of this section came close to recording the POSIX stop
+as "soft" on that basis. It is not: lines 113–118 `case "$(uname -s)"` match
+`MINGW*|MSYS*|CYGWIN*` and exit **before** any work. The script detects and
+refuses exactly the workaround. Presence of an interpreter is not permission to
+use it, and the check is in the code rather than in the prose.
+
+The two remaining stops are unchanged and are not the script's to enforce: the
+evidence packet needs a preparer and a **distinct** reviewer, and the proof host
+needs a private-network route to canonical Postgres, the Baserow adapter
+(`COMPANY_OS_BASEROW_ADAPTER_URL`) and Drive. The gateway is deployed with
+`public_fqdn: null` and is unreachable from any workstation.
 
 **Do not pre-create the two secrets to "help".** Their absence is a verified
-precondition of step 1; pre-creating them fails the step closed and consumes a
-non-retryable attempt. This was established by complete enumeration (6/6) and is
-re-confirmed above. The enumeration behind it is **independently verified by two
-readings** — see §4's `environment_secret_absent` analysis: every page fetched
-and cross-checked on `total_count`, duplicates rejected, each page re-read and
-compared by SHA-256, and no error path capable of returning exit 0. Absence there
-is a proven complete enumeration, not an API call that merely did not object.
+precondition; pre-creating them trips the guard at 161–174 and spends the
+attempt. Verified **2026-08-12 across all three phase environments**, which is
+stronger than the single-environment reading this section previously carried:
+
+```
+approved-assets-migrations   1 secret   [APPROVED_ASSETS_DATABASE_URL]
+approved-assets-preflight    6 secrets  [APPROVED_ASSETS_BASE_IDEMPOTENCY_KEY,
+                                         APPROVED_ASSETS_DATABASE_URL,
+                                         CANONICAL_40_CONTENT_FOLDER_ID,
+                                         COMPANY_OS_CONTENTS_READ_TOKEN,
+                                         GOOGLE_SERVICE_ACCOUNT_JSON_B64,
+                                         MARKETING_CONTENTS_READ_TOKEN]
+approved-assets-import       6 secrets  [same six]
+```
+
+`APPROVED_ASSETS_PHASE_AUTHORIZATION_JSON` and
+`APPROVED_ASSETS_REVIEWED_EVIDENCE_JSON` appear in **none** of the three.
+The enumeration behind that negative is independently verified by two readings —
+see §4's `environment_secret_absent` analysis: every page fetched and
+cross-checked on `total_count`, duplicates rejected, each page re-read and
+compared by SHA-256, and no error path capable of returning exit 0.
+
+**Good news in the same reading:** every *supporting* secret the phases need is
+already provisioned. Nothing in the owner's configuration work is outstanding —
+only the authorization pair, which by design must not exist beforehand.
 
 ### 16.4 What is usable today, without the proof
 
@@ -4330,6 +4394,68 @@ first-model-proof runbook forecloses it anyway: *"A designated owner must issue
 the trust receipt through the documented out-of-band process; do not bypass or
 weaken the failing trust checks."* This is the live instance of the open question
 in §15, and it resolves against merging.
+
+### 16.6 Owner execution sheet — exact invocations
+
+Read from the script's own argument parsing, not reconstructed from prose. The
+script takes **six positional arguments, in this order**:
+
+```
+authorize_approved_assets_phase.sh \
+  <phase> <dispatch_template> <runner_register> <runner_start> \
+  <runner_destroy> <reviewed_evidence_file>
+```
+
+- `<phase>` — one of `db_status`, `apply_required_migrations`, `preflight`,
+  `import`, `replay_verify`. Run in that order; each needs the previous phase's
+  successful run ID (§16.2).
+- `<dispatch_template>` — JSON, mode **0600**. Keys the script requires:
+  `phase`, `expected_executable_sha`, `expected_executable_tree_sha`,
+  `expected_manifest_sha256`, `expected_evidence_subject_sha256`,
+  `acknowledgement`, `backup_evidence_sha256`.
+- `<runner_register>`, `<runner_start>`, `<runner_destroy>` — must each pass
+  `[ -x ]`.
+- `<reviewed_evidence_file>` — mode **0600**.
+
+**Three of those six do not exist in the repository.** A tree listing of platform
+`main` returns no runner register/start/destroy scripts and no dispatch template;
+the only `runner`-named files are two n8n workflow JSONs and
+`tests/test_release_runner_policy.py`. **The operator must author four artefacts
+before the first invocation** — the three runner lifecycle scripts and the
+dispatch template. This is on the critical path and is easy to miss, because
+every other input is either in the repository or already provisioned.
+
+What the repository *does* provide for the evidence packet:
+
+```
+schemas/approved-assets-rollout-evidence.schema.json    <- authoritative shape
+tests/fixtures/approved-assets-rollout/synthetic-ready-evidence.json
+tests/fixtures/approved-assets-rollout/incomplete-evidence.json
+```
+
+Model the evidence file on the schema; the two fixtures show an accepted and a
+rejected instance. `chmod 600` both it and the dispatch template — the script
+compares `stat -c '%a'` to the literal string `600`, so `640` or `400` fail.
+
+Do **not** run `gh workflow run migrate-approved-assets.yml` by hand. The script
+dispatches it at line 237 with a locator it generates itself
+(`secrets.token_hex(16)`) and a `--created-after` window it computes at dispatch
+time. A hand dispatch will not carry a locator the script can then select on.
+
+Finally, the proof itself:
+
+```
+python scripts/company_os_first_model_proof.py preflight \
+  --source-repository <path> --company-os-repository <path> --work-dir <path>
+```
+
+then the same line with `run`. Optional `--call-id`, `--run-id`. Required
+environment: `COMPANY_OS_FIRST_MODEL_PROOF_AUTHORIZED=YES_AFTER_MERGE_AND_OWNER_APPROVAL`
+(compared for exact equality), `COMPANY_OS_BASEROW_ADAPTER_URL`, and
+`GOOGLE_APPLICATION_CREDENTIALS` pointing at a credentials file on disk. Those
+last two are the private-network stop in §16.3, stated as the variables that
+carry it.
+
 
 
 
