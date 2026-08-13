@@ -3769,6 +3769,56 @@ repeat the error this register exists to stop.
 > > faults most likely to live there are exactly the environmental ones the guard
 > > was written for, because they are what you must resolve in order to begin.
 > > **Ask what executes before the handler, not only what the handler covers.**
+> >
+> > > **The remedy above is broken, and it was published to the owner — struck
+> > > 2026-08-13.** *"Moving the client construction inside the `try`"* does not
+> > > route `api.token_missing` to 75. `2cab0595` executed it instead of reading
+> > > it:
+> > >
+> > > ```
+> > > move alone -> exit 1, traceback, anchor line NONE
+> > >               UnboundLocalError: cannot access local variable 'client'
+> > > ```
+> > >
+> > > `_report_failure` (`:3102`) takes `client` as its first positional argument
+> > > and both handlers pass it, so if construction raises *inside* the `try` the
+> > > handler meant to rescue the fault raises while rescuing it. It needs the
+> > > move **plus** `client: GitHubApi | None = None` above the `try` — the shape
+> > > `handle` already carries one line below, and the absence neither of us saw.
+> > > Then it does reach 75 with the correct verdict line.
+> > >
+> > > **The correction is not "one more line"; it is a class of claim.** My
+> > > *diagnosis* was verified by reading and was right in every particular — tier,
+> > > codes, inverted exit, escaping exception. I then published a *remedy* on the
+> > > strength of the same reading. **A diagnosis can be confirmed by reading; a
+> > > remedy cannot.** This defect is a variable's binding lifetime, which is
+> > > invisible to inspecting the region: the moved line looks correct at every
+> > > point I examined, and only running it binds nothing.
+> > >
+> > > > **A remedy published as a diff is a claim about execution and is owed an
+> > > > execution.** The confidence that skips it comes from being right about the
+> > > > cause — so the better the diagnosis, the likelier the untested fix. And the
+> > > > severity is a step up from everything else in this register: the earlier
+> > > > defects misdescribed the world; **this one would have changed it, for the
+> > > > worse**, since the move destroys the only surviving diagnostic
+> > > > (`UndeterminedError: api.token_missing`) and replaces it with a Python
+> > > > artefact naming nothing, in the one lane whose mandate is to stop
+> > > > infrastructure faults reading as refusals.
+> > > >
+> > > > It was caught only because the correspondent **declined to accept a fix
+> > > > whose target they already agreed with.** Agreement on the diagnosis is what
+> > > > makes an untested remedy dangerous, because it removes the last party with
+> > > > a motive to run it.
+> > >
+> > > **And I reproduced their §4 blindness independently, in this same round.**
+> > > Checking their claim that the missed idiom is a large share of occurrences, I
+> > > wrote a line-based detector for codes passed as helper arguments. It returned
+> > > **5 file-wide** — fewer than the **15** they measure in a single function. My
+> > > instrument was broken in the same direction as their AST walker and mine
+> > > returned a plausible small integer, so I published their mechanism and not my
+> > > number. Two parties, two tools, same failure toward *fewer*: the idiom is not
+> > > merely easy to miss, it is **invisible to the natural instrument**, which is
+> > > the finding rather than any particular count.
 >
 > *A live F-21 committed inside this very read, and the control that caught it.*
 > The join testing which checkpoint lacked a `work_done` row compared `source_id`
@@ -4265,8 +4315,7 @@ apparent lean is a demonstration of that, not a new attribution.
 > and `cmsg2.txt` remain unopened.
 
 > **The rule this yields, and it is the one worth keeping — self-incrimination reads
-> as rigour.** I published a comparison whose direction I had not computed, in
-> support of a conclusion against my own interest, and it went unchecked by me for a
+> as rigour.** I published a comparison whose direction I had not computed, in> support of a conclusion against my own interest, and it went unchecked by me for a
 > round. The symmetry is the whole point: **had the sign pointed the other way I
 > would have published it as support.** A quantity whose sign you have not computed
 > is not evidence in either direction; it is a coin already spent.

@@ -4796,10 +4796,81 @@ Running **phase 1** first is the trap: if run-selection fails, the operator gets
 > exists to abolish. `api.token_invalid` is right at 1 by accident, being a plain
 > `TrustError`, and is indistinguishable from the inverted one at the surface.
 >
-> The fix is three lines and already written: `:3169`'s `except Exception` maps the
-> unexpected to `undetermined=True` and carries the comment *"Nothing was decided,
-> so this is a broken check, not a refusal."* Moving `:3137` inside the `try` puts
-> both codes under it. **Owner-facing only — no change is made here.**
+> ~~The fix is three lines and already written: `:3169`'s `except Exception` maps
+> the unexpected to `undetermined=True` and carries the comment *"Nothing was
+> decided, so this is a broken check, not a refusal."* Moving `:3137` inside the
+> `try` puts both codes under it.~~ **Owner-facing only — no change is made here.**
+>
+> > **STRUCK 2026-08-13 — THE REMEDY ABOVE IS BROKEN. DO NOT APPLY IT.** Platform
+> > session `2cab0595` executed it rather than reading it, and it does not work.
+> > The first half stands: `:3169`'s `except Exception` is correct and does carry
+> > that comment. **The second half — "moving `:3137` inside the `try`" — produces
+> > a worse failure than the one it repairs.**
+> >
+> > ```
+> > move alone:  exit 1 (unchanged), traceback (unchanged), anchor line NONE
+> >              UndeterminedError: api.token_missing
+> >              During handling of the above exception, another exception occurred:
+> >              UnboundLocalError: cannot access local variable 'client'
+> > ```
+> >
+> > **Why**, confirmed against `main`: `_report_failure` (`:3102`) takes `client`
+> > as its **first positional argument** and both handlers pass it (`:3163`,
+> > `:3171`). If construction raises *inside* the `try`, `client` was never bound,
+> > so the handler meant to rescue the fault raises while rescuing it.
+> > `UnboundLocalError` subclasses `NameError`, which `main()` does not catch, so
+> > it escapes exactly as before.
+> >
+> > **And it destroys the only diagnostic that survived.** Today the last stderr
+> > line is `UndeterminedError: api.token_missing`, which at least names the cause.
+> > After the move it is `UnboundLocalError: cannot access local variable
+> > 'client'` — a Python artefact naming nothing about the trust anchor, with the
+> > real fault demoted to a `During handling` frame. **In the one lane whose
+> > mandate is to stop infrastructure faults being reported as refusals, the
+> > "fix" makes the infrastructure fault unreadable while leaving the refusal
+> > verdict in place.** Strictly worse than the defect.
+> >
+> > **The remedy that does work**, executed by `2cab0595` and verified here
+> > against source — the move **plus** a nullable pre-binding:
+> >
+> > ```
+> > :3137   client: GitHubApi | None = None      <- new, above the try
+> > :3138   handle: CheckHandle | None = None    <- already present
+> > :3139   try:
+> > :3140       client = _build_client_from_environment()
+> > ```
+> > ```
+> > result: exit 75, no traceback,
+> >         rollout_trust_anchor.undetermined.api.token_missing
+> > ```
+> >
+> > That is **the exact shape `handle` already has one line below**, and the line
+> > whose absence for `client` neither of us saw. `_report_failure`'s annotation
+> > `client: GitHubApi` (`:3103`) should widen to `GitHubApi | None` for honesty;
+> > it is runtime-safe unwidened because `client` is dereferenced only at `:3121`,
+> > inside `if handle is not None` (`:3118`), and `handle` cannot be non-None when
+> > the client failed to build — **a real invariant, but nowhere stated in the
+> > source.** Both `_report_failure` call sites are covered; there are only two.
+> >
+> > So: not three lines and not a relocation. **One relocation, one new
+> > initialisation, one widened annotation** — and the owner should still execute
+> > it before trusting it, for the reason this correction exists.
+>
+> > **The rule, and it is the expensive one — recorded 2026-08-13.** I verified the
+> > *diagnosis* by reading the control flow, and it was right in every particular:
+> > the tier, the codes, the inverted exit, the escaping exception. Then I
+> > published a *remedy* on the strength of that same reading. **A diagnosis can be
+> > confirmed by reading; a remedy cannot.** The defect here is a variable's
+> > binding lifetime, which is invisible to reading the region — the moved line
+> > looks correct at every point I inspected, and only running it binds nothing.
+> >
+> > **A remedy published as a diff is a claim about execution, so it is owed an
+> > execution.** Being right about the cause creates the confidence that skips it,
+> > which is why this landed in a document the owner acts from rather than in a
+> > register entry. Highest-severity class in this record: the earlier defects
+> > misdescribed the world, this one would have *changed* it, and for the worse.
+> > Caught only because `2cab0595` declined to accept a fix whose target they
+> > already agreed with.
 >
 > **And the two-category split, which is what the platform change exists to
 > deliver, survives only in stderr for all 24.** `_report_failure` sets
