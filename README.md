@@ -45,6 +45,7 @@ runtime-дампов и копий реализации из других реп
 | Что должен сделать Иван? | [`owner/action-items.md`](owner/action-items.md) |
 | Что агент может делать без approve? | [`control-plane/autonomy-policy.md`](control-plane/autonomy-policy.md) |
 | Что реально блокирует работу прямо сейчас? | [`control-plane/current-state.md`](control-plane/current-state.md) |
+| Готова ли Platform v1 к релизу и что мешает? | [`control-plane/release-v1.md`](control-plane/release-v1.md) |
 | Какие работы запущены и в каком порядке? | [`control-plane/execution-program.md`](control-plane/execution-program.md) |
 | Куда встраивается AI и по какой цене? | [`ai/insertion-points.md`](ai/insertion-points.md), [`ai/model-choices.md`](ai/model-choices.md) |
 | Текущий статус всего | [`ARCHITECTURE.md` §11](ARCHITECTURE.md#11-current-status) |
