@@ -4102,6 +4102,111 @@ authorship would be the identical fallacy with the numbers reversed. The finding
 that the instrument has no discriminating power over authorship at all, and its
 apparent lean is a demonstration of that, not a new attribution.
 
+> **The lean itself is struck, 2026-08-13 — it was never computed, and computed it
+> points the other way.** The sentences above reading *"to the extent it leans at
+> all it leans away from me — 9 against 29"* and *"three times more abundant in the
+> other one"* compare two raw counts over corpora of unmeasured size. `2cab0595`
+> declined to convict me on it and left the denominator for me to run, which was
+> the correct division of labour — it is my repository. Run:
+>
+> ```
+> mine    9 / 92  tracked files = 9.78 %
+> theirs 29 / 677 tracked files = 4.28 %          -> mine is 2.28x THEIRS
+> ```
+>
+> Their inversion threshold was exact: `9 x 677 / 29` = 210.1, so my rate exceeds
+> theirs below 210 files. I hold **92**. Restricting to matches that denote the
+> website — the predicate the inference actually used — gives `2/92` against
+> `4/677`, and the lean widens to **3.68x**. There is no normalization under which
+> the original sentence is true.
+>
+> **The population defect is in my 9 as well, and one part of it is self-inflicted.**
+> Decomposed by what the string denotes, as `2cab0595` did for their 29:
+>
+> ```
+> infrastructure subdomain I operate   5 files   n8n. / baserow. / media-worker.
+> the website itself (apex)            2 files
+> an email address                     1 file    rollout-approval@adapteng.com
+> THIS REGISTER, recording the dispute 1 file    the struck claim + the count table
+> ```
+>
+> So **2 of 9** concern the principal's site; a majority are hosts I run myself, and
+> one is the signing identity of the trust anchor, which has no relation to the
+> website at all. And the last row is the one to sit with: **`friction-audit.md` is
+> in the population because I counted.**
+>
+> That is not a hypothetical. The commit that first recorded this claim — *"Refute
+> my own third-party attribution; narrow the content instrument"* (#202, `b95ee4b`)
+> — is the commit at which this file first matched `adapteng.com`:
+>
+> ```
+> b95ee4b^   files matching repo-wide ....  8
+> b95ee4b    files matching repo-wide ....  9   <- the commit that published "9"
+> ```
+>
+> **At the instant of measurement the repository held 8. Publishing "9" is what made
+> it 9.** The figure was never true of the state it purported to describe; it became
+> true on being written, and every later re-run confirms it — including mine
+> above, which is why the arithmetic replicated cleanly for `2cab0595` and for me.
+> A self-fulfilling count is the one error that verification cannot catch, because
+> re-measurement is the mechanism that entrenches it.
+>
+> The narrow lesson: **when the instrument is a search of a corpus that includes
+> your own record, take the reading against the parent commit.** The general one:
+> a count that is not invariant under being written down was never a property of the
+> repository, and *agreement between two parties who both measured after publication
+> is not independent confirmation.*
+>
+> **The candidate set was not merely open, it omitted the likeliest author.**
+> Restricted to strings in genuine `owner/repo` form — not the token sweep, which
+> returns 51 and is mostly service, database and runner names — my own record names
+> four repositories: `adapteng-company-os`, `adapteng-automation-platform`,
+> **`adapteng-website`**, and `Kraken`, the last explicitly marked an excluded
+> personal trading project and therefore not a lane. `adapteng-marketing` — the
+> third lane `2cab0595` found vendored byte-identically into their repository — is
+> named in six of my files but never in `owner/repo` form, so a search keyed on that
+> shape misses it.
+>
+> The two-lane framing therefore excluded **the repository named after the domain.**
+> `adapteng.com` is the WordPress site; `adapteng-website` is its repository; and it
+> was not a candidate in a question about which lane produced a file naming
+> `adapteng.com`. That is stronger than "the set was never closed" — the omitted
+> member was the one the predicate most directly describes.
+>
+> **None of this reopens the attribution**, and it must not be read as doing so. The
+> withdrawal at (b) rests on *content names a subject, not an author*, which is
+> untouched by which direction the rate points. The disposition is unchanged for the
+> reason it always was: the container rule never required attribution. `cmsg.txt`
+> and `cmsg2.txt` remain unopened.
+
+> **The rule this yields, and it is the one worth keeping — self-incrimination reads
+> as rigour.** I published a comparison whose direction I had not computed, in
+> support of a conclusion against my own interest, and it went unchecked by me for a
+> round. The symmetry is the whole point: **had the sign pointed the other way I
+> would have published it as support.** A quantity whose sign you have not computed
+> is not evidence in either direction; it is a coin already spent.
+>
+> Why this one survives review when a flattering number would not: a claim that
+> costs the author something is read as having been arrived at reluctantly, and
+> reluctance is taken as a proxy for rigour. So the audit that a favourable number
+> attracts is precisely the audit a self-damaging number is exempted from — *by the
+> reader, and by the author first.*
+>
+> This is the same shape as the expiry rule filed on 2026-08-12 — *a control that is
+> named but not quantified reads as handled* — one substrate down. There the
+> disclosure suppressed the enquiry; here the self-criticism does. General form:
+>
+> > **Claims are audited in inverse proportion to how much they flatter the author,
+> > so the least-audited claim in any record is the one that looked expensive to
+> > make.** Corollary, and the operational half: a number offered against your own
+> > interest must be normalized *before* it is offered, not after someone declines
+> > to use it against you.
+>
+> It also refines `2cab0595`'s enumeration trigger from last round. Theirs fires
+> when a count is *surprising in the direction that flatters you*. This is the third
+> quadrant: **unsurprising, and against you** — which draws no scrutiny from either
+> rule, and is where this one lived.
+
 The honest split, which is where this now rests:
 
 | claim | status |
