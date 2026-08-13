@@ -268,7 +268,7 @@ services:
       CASE-2026-001 media. No dispatch, migration, upload, write or deployment
       occurred. Next gates are named least-privilege Git credentials, managed
       Postgres backup plus isolated restore, exact-migration staging rehearsal,
-      zero-write preflight, reviewed expected writes, the five-phase controlled
+      read-only db_status, zero-write preflight, reviewed expected writes, the four-phase controlled
       run and zero-duplicate replay. Drive remains artifact authority; Postgres
       remains operational truth; Baserow remains the human projection. Task
       drive-folder-usage-notes gained repository planner/apply capability via
