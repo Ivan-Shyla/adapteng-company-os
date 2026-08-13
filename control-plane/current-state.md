@@ -266,7 +266,7 @@ Verified from `main` and CI, not from narrative.
   platform) calls the drive adapter's `prepare`, which runs
   `_verify_completed_replay` against live Postgres and Drive. Those replay
   records exist only after the approved-assets import has run. That import is
-  `migrate-approved-assets.yml`, whose five phases each require an exact
+  `migrate-approved-assets.yml`, whose four safe phases each require an exact
   phase-specific acknowledgement and the dedicated
   `adapteng-approved-assets-rollout` runner; and it should not run before
   platform #128, which removes a manufactured pagination race in that very path.
@@ -4246,27 +4246,26 @@ calls `generateContent`, so it is a precondition proof, not the model proof.
 `docs/runbooks/company-os-first-model-proof.md` declares its own state:
 **"repository-ready, not authorized, not run."**
 
-> **Corrected 2026-08-12 against the script's own source.** An earlier revision
-> of this section described a three-step chain in which the operator ran the
-> authorization script once and then dispatched `migrate-approved-assets.yml` by
-> hand. **Both halves of that were wrong.** It is *five* governed phases, and the
-> operator never dispatches the workflow — `authorize_approved_assets_phase.sh`
-> line 237 does it (`gh workflow run … --ref main`). Planning from the old text
-> would have under-scoped the work roughly fivefold and produced a manual
-> dispatch that the authorization design does not expect. Corrected below from
-> `authorize_approved_assets_phase.sh` and `.github/workflows/migrate-approved-assets.yml`
-> at platform `main` = `6ecdd5fb`.
+> **Execution correction 2026-08-13.** The owner's production check found all
+> nine migration units exact. `apply_required_migrations` is therefore forbidden:
+> it is not a cautious replay and must not be used as a no-op transition. The
+> executable platform path now being landed makes a successful exact `db_status`
+> run the direct predecessor of `preflight`. Until that change is on platform
+> `main`, stop after `db_status`; never fall back to the legacy migration phase.
+>
+> The operator still never dispatches `migrate-approved-assets.yml` by hand.
+> `authorize_approved_assets_phase.sh` dispatches it with the run-bound locator
+> required to select the resulting run.
 
-**Five phases, each a separate invocation of the script**, selected by its first
+**Four phases, each a separate invocation of the script**, selected by its first
 positional argument. The phase also selects which environment is written:
 
 | # | Phase | Environment | Gated on |
 |---|---|---|---|
 | 1 | `db_status` | `approved-assets-migrations` | — |
-| 2 | `apply_required_migrations` | `approved-assets-migrations` | `approved_db_status_run` |
-| 3 | `preflight` | `approved-assets-preflight` | `approved_migration_run` |
-| 4 | `import` | `approved-assets-import` | `approved_preflight_run` |
-| 5 | `replay_verify` | `approved-assets-import` | `approved_import_run` |
+| 2 | `preflight` | `approved-assets-preflight` | successful exact `approved_db_status_run` |
+| 3 | `import` | `approved-assets-import` | `approved_preflight_run` |
+| 4 | `replay_verify` | `approved-assets-import` | `approved_import_run` |
 
 **Each phase consumes the successful run ID of the phase before it**, as a
 required workflow input. They cannot be batched, reordered or run in parallel —
@@ -4280,7 +4279,7 @@ Then, and only then:
   `COMPANY_OS_FIRST_MODEL_PROOF_AUTHORIZED=YES_AFTER_MERGE_AND_OWNER_APPROVAL`.
 
 `migrate-approved-assets.yml` has **never run** — the Actions API returns no run
-history for it at all, consistent with all five phases being outstanding.
+history for it at all, consistent with all four safe phases being outstanding.
 
 The proof is pinned to manifest `bfca73ee…` and source identity `4b4893e8…`,
 package `ART-2026-001/SRC-2026-001`, capped at EUR 0.10 per call and EUR 1.00 per
@@ -4485,7 +4484,7 @@ files at the head of this chain — `authorize_approved_assets_phase.sh` and
 1. Owner issues the base-trusted rollout authorization / trust receipt.
 2. #121's two trust-anchor checks go green; **merge #121**, with nothing else
    landing on `main` in between.
-3. *Then* run **phase 1** (`db_status`) — the first of the five governed phases,
+3. *Then* run **phase 1** (`db_status`) — the first of the four safe governed phases,
    not item 1 of this list.
 
 Running **phase 1** first is the trap: if run-selection fails, the operator gets
@@ -5286,9 +5285,10 @@ authorize_approved_assets_phase.sh \
   <runner_destroy> <reviewed_evidence_file>
 ```
 
-- `<phase>` — one of `db_status`, `apply_required_migrations`, `preflight`,
-  `import`, `replay_verify`. Run in that order; each needs the previous phase's
-  successful run ID (§16.2).
+- `<phase>` — one of `db_status`, `preflight`, `import`, `replay_verify`. Run in
+  that order; each needs the previous phase's successful run ID (§16.2).
+  `apply_required_migrations` is a legacy phase and is forbidden for this
+  rollout because the migrations are already exact in production.
 - `<dispatch_template>` — JSON, mode **0600**. Keys the script requires:
   `phase`, `expected_executable_sha`, `expected_executable_tree_sha`,
   `expected_manifest_sha256`, `expected_evidence_subject_sha256`,
@@ -5347,20 +5347,21 @@ Both are compared for **exact string equality** and neither can be derived from
 the runbook. Read from `.github/workflows/migrate-approved-assets.yml` at
 platform `main`.
 
-**1. The phase acknowledgement.** Five phases, five distinct literals, four jobs
-(import and replay share a job and branch inside it):
+**1. The phase acknowledgement.** Four safe phases, four distinct literals, three
+jobs (import and replay share a job and branch inside it):
 
 | Phase | `acknowledgement` input | Job | Compared at |
 |---|---|---|---|
 | `db_status` | `ACK_READ_ONLY_DB_STATUS` | `db-status` (80) | 135 |
 | `preflight` | `ACK_EXACT_3_PUBLIC_GIT_SOURCES` | `preflight` (267) | 322 |
-| `apply_required_migrations` | `ACK_APPLY_EXACT_007_AND_DRIVE_008` | `apply-required-migrations` (565) | 623 |
 | `import` | `ACK_EXACT_EXPECTED_WRITES` | `import-or-replay` (798) | 860 |
 | `replay_verify` | `ACK_ZERO_DUPLICATES` | `import-or-replay` (798) | 864 |
 
 These are contract constants, not credentials — they appear in the workflow's own
 step names. Each phase's literal states what that phase asserts, so supplying the
-wrong one is a governance failure, not a typo.
+wrong one is a governance failure, not a typo. In particular, do not supply the
+legacy `ACK_APPLY_EXACT_007_AND_DRIVE_008` acknowledgement: doing so would assert
+an operation that production state forbids.
 
 **2. The runner label set, which includes the run's own ID.** Every job declares:
 
@@ -5387,9 +5388,6 @@ no runner can ever carry the required label, so the dispatched run waits for a
 runner that will never appear, on a spent one-shot attempt, reporting only a bare
 `lifecycle.run_not_found`. **Merge platform #121 before the first phase.** That
 instruction was already correct; this is why it matters.
-
-
-
 
 
 
