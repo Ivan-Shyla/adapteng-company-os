@@ -3495,6 +3495,34 @@ repeat the error this register exists to stop.
 > > per-session-and-per-instant with a shared trend on top; there is no trend to
 > > extrapolate at all, only a value to re-run. Falsified by `2cab0595` at the
 > > fourth sample; the fifth and the opposing pair are this read.
+> >
+> > > **The "RISING" series reversed at the next read, and that retires the
+> > > contrast rather than adding to it — 2026-08-13.** Same query, same store:
+> > >
+> > > ```
+> > > this session   13/132  9.848%  ->  15/150 10.000%  ->  15/156  9.615%
+> > > theirs          2/79   2.532%  ->   2/82   2.439%  ->   2/83  2.410%  ->  2/86 2.326%
+> > > ```
+> > >
+> > > My numerator stalled at 15 while the denominator took six more turns, so the
+> > > series labelled RISING is now falling. **Both series now fall, for one
+> > > mechanism: a step-function numerator against a monotonically growing
+> > > denominator.** Between numerator moves such a ratio *must* fall; at a move it
+> > > jumps. Its sign is therefore fixed by whether the numerator happened to move
+> > > between the two reads chosen.
+> > >
+> > > So the opposite-direction pair was never a property of the two sessions.
+> > > **It was a property of sampling phase** — two clocks read at different points
+> > > in their own cycles. The single-instant framing above fixed the *instant* and
+> > > still let phase vary, which is the residue the fix did not remove: taking both
+> > > readings at one moment equalises when you looked, not where each series was in
+> > > its own step cycle.
+> > >
+> > > > **A direction is not a measurement unless the numerator's movement is
+> > > > reported with it.** For any ratio over a growing denominator, publish
+> > > > whether the numerator changed between the two reads; without it "rising" and
+> > > > "falling" are statements about sampling, not about the process. Which is
+> > > > *publish the retrieval alongside the number*, arriving in the time dimension.
 >
 > *The unit fix does not generalise, which is the same defect one level down.*
 > 114 = 6 × 19 holds because that session's checkpoints each indexed six rows.
@@ -3514,6 +3542,27 @@ repeat the error this register exists to stop.
 > > checkpoints 1,818   naive 6x 10,908   predicted 10,885   actual 10,885   residual 0
 > > empty-section distribution:  0 -> 1,805    1 -> 11    6 -> 2
 > > ```
+> >
+> > > **These are my instant's figures, and I certified them as the
+> > > correspondent's — corrected 2026-08-13.** Alongside this I wrote that their
+> > > distribution *"replicates exactly — 0→1,805, 1→11, 6→2"* and, two paragraphs
+> > > later, that *"their distribution sums to 1,815"*. Both cannot hold:
+> > > `1,805 + 11 + 2 = 1,818`. Their read was taken at table 1,815, so their
+> > > 0-bucket was **1,802**; the 1- and 6-buckets replicate and the 0-bucket does
+> > > not, differing by precisely the **+3** drift I identified in the same message.
+> > > **A drifted figure certifying exact replication, inside the passage that
+> > > established the drift.** Caught by `2cab0595`.
+> > >
+> > > The rule: *"replicates exactly"* is a claim about two readings at two
+> > > instants, so it is only sayable if both instants are stated. Where a corpus
+> > > grows monotonically, agreement on a total is the **weakest** evidence of
+> > > replication and disagreement is the expected case — the buckets that actually
+> > > replicated here are the two that could not move.
+> > >
+> > > This is the third consecutive round in which a defect landed in the sentence
+> > > announcing the very distinction it violates. That is no longer a coincidence
+> > > to note; it is the predicted place to look. **Audit the paragraph that states
+> > > a rule before auditing the ones that apply it.**
 > >
 > > **Tested per section rather than in aggregate**, because `source_type` carries
 > > the section name and an aggregate sum can balance through compensating errors
@@ -3548,6 +3597,42 @@ repeat the error this register exists to stop.
 > > of its own subject. So the count comes from `checkpoints`, never from the
 > > index, and *"publish the unit"* is now paired with *"count from the table that
 > > holds the artefact, not from a projection of it."* Found by `2cab0595`.
+> >
+> > > **The two blocks above do not connect, and that is the finding — added
+> > > 2026-08-13.** Eleven lines apart in one entry, this register records (a) the
+> > > six-way per-section test as the hardened instrument, because *"an aggregate
+> > > sum can balance through compensating errors where six independent equalities
+> > > cannot"*, and (b) two checkpoints that contribute zero index rows. **The
+> > > six-way test cannot detect (b).** Both all-empty checkpoints are absent from
+> > > all six sections at once, so every section under-counts by the same 2 and the
+> > > six equalities stay perfect. Re-measured on the store:
+> > >
+> > > ```
+> > > six-way sum 10,909   predicted 10,909   residual 0     <- balances
+> > > indexed checkpoints 1,820   checkpoints table 1,822
+> > > invisible to all six sections .......... 2             <- undetected
+> > > ```
+> > >
+> > > Residual zero and two artefacts missing, simultaneously, from the same
+> > > numbers. The improvement is real against error *inside* the projection and
+> > > **exactly as blind as the aggregate** to an artefact outside it — because a
+> > > six-way partition is still a projection, merely a better-partitioned one.
+> > > That is this entry's own rule, *count from the table that holds the artefact*,
+> > > applied to the remedy the entry proposes. Raised by `2cab0595`.
+> > >
+> > > > **The general form, and it is worth more than the instance.** A consistency
+> > > > check is **closed under the population it ranges over.** Cross-checking
+> > > > present members against each other can never surface an absent one, however
+> > > > many independent ways it is done — six equalities, or six hundred. Only
+> > > > comparison against an *independently constituted* population detects
+> > > > omission. So partition tests and membership tests are different instruments,
+> > > > and hardening one buys nothing at all in the other.
+> > > >
+> > > > The trap in how it was presented: **a remedy offered in a message about a
+> > > > defect reads as a remedy for that defect.** I proposed the six-way test in
+> > > > the entry reporting the omission, and it addresses only compensating errors —
+> > > > which nobody had reported. Naming what a fix does *not* cover belongs beside
+> > > > the fix, or its adjacency does the arguing.
 > >
 > > Attributed by **record field, not by content** — `sessions.repository` says
 > > `adapteng-company-os`, branch `palinaruban-company-operating-architecture`,
