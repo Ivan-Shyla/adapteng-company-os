@@ -4892,6 +4892,52 @@ Running **phase 1** first is the trap: if run-selection fails, the operator gets
 > | **`d4c942e6`** | **#121** | **1** | **no — the ceremony is safe today** |
 > | `36cdc765` | #128 — **merged** | **2** | guard would fire, but see below |
 >
+> > **Re-measured 2026-08-13 and the row still reads 1 — but I misreported it to
+> > the owner in between, and the trap is one this table invites.** A checkpoint
+> > report issued at `09:00Z` stated *"#121's head carries 6 anchor check-runs, not
+> > the one step 0 expects."* **That is false.** Counted by name at the same head:
+> >
+> > ```
+> > d4c942e6   40 check-runs total, 7 non-success
+> >
+> > Verify exact current head from merged base   x6    <- the ACTIONS JOB check-run
+> > Base-trusted rollout authorization           x1    <- THE ANCHOR check-run
+> > ```
+> >
+> > Six workflow runs of the anchor workflow have executed on that head, so Actions
+> > has posted six job check-runs bearing the **job** name. The verifier's own mark
+> > — `CHECK_NAME`, the only one `unauthorized.check.list_ambiguous` counts —
+> > appears **once**. `Base-trusted rollout authorization`, id `94203154972`,
+> > conclusion `failure`, which is the expected pre-receipt state. **The row above
+> > was right, the ceremony is safe, and my correction of it was the error.**
+> >
+> > **The instruction defect this exposes, which is the part worth keeping.** Step 0
+> > says *confirm exactly one anchor check-run*. It never says **which name to
+> > count**, and the head carries two plausible candidates — one of which is red six
+> > times over. An owner counting red marks in the GitHub UI sees **seven**
+> > non-success and concludes the head is ambiguous and unsafe. That is precisely
+> > the wrong conclusion, and it is the conclusion this control plane itself reached
+> > from the same data.
+> >
+> > **Step 0 is therefore restated exactly:**
+> >
+> > ```
+> > gh api repos/<owner>/<repo>/commits/<head>/check-runs --paginate \
+> >   --jq '[.check_runs[] | select(.name == "Base-trusted rollout authorization")] | length'
+> > ```
+> >
+> > **Count that name and no other. Expect exactly `1`.** Red marks bearing the job
+> > name `Verify exact current head from merged base` are workflow-run artifacts,
+> > are expected to be numerous, and are not what the ambiguity guard reads.
+> >
+> > **Recorded against myself.** This is the failure mode the register has been
+> > cataloguing all week — a count taken over the wrong population, reported with
+> > confidence, in the direction that felt like diligence. It reached the owner in a
+> > status report rather than a document, which is *worse*: a report is read once,
+> > acted on, and never re-audited. The measurement that would have caught it is the
+> > one I had already written down as the standing rule — **enumerate what the
+> > instrument matched, do not trust its cardinality.**
+>
 > **Exposure is narrower than "live", corrected 2026-08-12.** The one head that
 > satisfies `total_count > 1` belongs to a **merged** pull request (#128, merged
 > `12:57:14Z`). The anchor workflow declares:
@@ -5101,6 +5147,94 @@ has no run behind it at all.
 > > > instructs the operator to spend the only resource that is actually gone. A
 > > > remedy that is correct in one regime and futile in the other, where the two
 > > > regimes present identically, must carry its discriminator or it is a trap.
+> > >
+> > > > **CORRECTED 2026-08-13 — the instruction is aimed at a cause that has never
+> > > > occurred, and its unstated default is wrong for the only cause that has.**
+> > > > Reported by `2cab0595`, re-measured here against the live API before
+> > > > recording. Every cancellation the workflow has ever produced, attributed:
+> > > >
+> > > > ```
+> > > > 96 runs total   78 failure   13 success   5 cancelled
+> > > >
+> > > > 31024344525  backup-evidence-lifecycle   steps=0   6 later runs, 5 newer SHAs
+> > > > 31024344278  backup-evidence-lifecycle   steps=0   6 later runs, 5 newer SHAs
+> > > > 31022658416  single-owner-rollout-auth   steps=0   1 later run,  1 newer SHA
+> > > > 30996672474  single-owner-rollout-auth   steps=5   9 later runs, 8 newer SHAs
+> > > > 30987177179  single-owner-rollout-auth   steps=5  11 later runs,10 newer SHAs
+> > > >
+> > > > annotations retrieved: 9 across all 5
+> > > > carrying "maximum execution time" : 0
+> > > > carrying "Canceling since a higher priority waiting request" : 5 of 5
+> > > > ```
+> > > >
+> > > > **All five are `cancel-in-progress` firing. None is the cap.** The base rate
+> > > > runs 5-to-0 against the case the instruction addresses.
+> > > >
+> > > > **And the default is not merely unhelpful — it manufactures the fault the
+> > > > check is named after.** A superseded run was cancelled *because a newer
+> > > > commit arrived*. Re-running it verifies a head that is no longer current,
+> > > > which is precisely what `Verify exact current head from merged base` exists
+> > > > to detect. An operator who reads the table above, finds no timeout string,
+> > > > and falls through to "re-run, do not re-sign" is instructed to re-verify a
+> > > > stale head during the ceremony.
+> > > >
+> > > > **The repair, and it is one row.** The discriminator table is extended and
+> > > > the default is closed:
+> > > >
+> > > > | verdict line / annotation | meaning | correct action |
+> > > > |---|---|---|
+> > > > | `exceeded the maximum execution time` | provisioning stall | **re-run** |
+> > > > | `Canceling since a higher priority waiting request` | **superseded — a newer commit arrived** | **read the newer run; do not re-run this one** |
+> > > > | `receipt.stale_or_future` | window expired | **re-construct**, drop the old approval commit |
+> > > >
+> > > > **Re-run only when the annotation affirmatively carries the timeout string.**
+> > > > Absence of that string is not permission to re-run.
+> > > >
+> > > > **One correction against the report, in the owner's favour.** `2cab0595`
+> > > > noted that three of the five ran **zero steps** and inferred there is
+> > > > therefore no annotation to read, so "read the annotation" returns empty and
+> > > > falls through to the default. Measured: **all five carry the supersession
+> > > > annotation** — counts 1, 1, 1, 3, 3. The zero-step runs still annotate,
+> > > > because the cancellation notice is posted by Actions itself and not by any
+> > > > step. So the repair is *cheaper* than reported: the discriminator is always
+> > > > readable, and there is no empty-annotation case to handle.
+> > > >
+> > > > **A second discriminator, cheaper still and available before any annotation
+> > > > fetch.** The verifier emits a conclusion at exactly one place in 3,274 lines:
+> > > >
+> > > > ```
+> > > > :2921   conclusion="success" if success else "failure",
+> > > > ```
+> > > >
+> > > > It is **structurally incapable of emitting `cancelled`.** So a `cancelled`
+> > > > conclusion on the anchor is *provably not a verdict* — one field already on
+> > > > the object being read settles it, with no second API call. Read the
+> > > > conclusion first; consult annotations only to choose between stall and
+> > > > supersession.
+> > >
+> > > > **A third surface, which neither instruction covers — reported by
+> > > > `2cab0595`, source-verified here, and NOT observed in the population.**
+> > > > `_verify_command` has no cleanup path at all: `finally` **0**, `atexit`
+> > > > **0**, `signal` **0**, `SIGTERM` **0**, across the whole 3,274-line file.
+> > > > The ordering is:
+> > > >
+> > > > ```
+> > > > :3141   handle = ensure_check_run(...)     -> status="in_progress" (:2869, :2887)
+> > > > :3146   result = verify_pull_request(...)  <- the slow git + signature work
+> > > > :3156   complete_check_run(...)            -> the only thing that sets a conclusion
+> > > > ```
+> > > >
+> > > > A runner kill anywhere in that window leaves the check run **`in_progress`
+> > > > permanently**. That surface is neither red nor green, so **no instruction in
+> > > > this section fires — there is no mark to read.** A permanently-pending
+> > > > anchor is worse in a ceremony than a red one, because pending reads as
+> > > > "still working" and the two-hour clock keeps running.
+> > > >
+> > > > **Observed instances: 0.** Both anchor check runs on the open PR heads are
+> > > > `completed`. Recorded as a reachable-by-construction gap, **not** as a
+> > > > finding, and the owner's handling is the same either way: *a check run that
+> > > > has been `in_progress` longer than the verify step can plausibly take is an
+> > > > infrastructure fault, not a pending verdict.*
 
 **The population was also narrower than the question.** The earlier revision
 searched runs of `rollout-trust-anchor.yml` alone, while the question is whether
