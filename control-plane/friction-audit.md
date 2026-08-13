@@ -419,13 +419,86 @@ Three separate transformations, only one of which is widely known:
 3. **A leading U+FEFF is consumed, not re-encoded.** `StreamReader` reads a BOM
    at offset 0 as an encoding declaration and does not emit it as a character;
    the writer then emits a *different* BOM of its own.
+4. **A line terminator is appended even when the source has none** — measured
+   2026-08-13: a 3-byte source `61 62 63` with no trailing newline comes back
+   carrying `0D 00 0A 00`. Recorded late because it is invisible in the byte
+   count of a log that already ends in a newline, and it is the second of the two
+   factors that make the capture many-to-one.
 
 (3) is the one that matters and the one neither party had. It means the capture
-is **lossy, not merely additive** — `84,668` cannot be decoded back to `41,963`,
-and nothing in the byte count records that a character was destroyed. Checked
-and clean: no procedure recorded for the owner captures `gh api` output by
+is **lossy, not merely additive** — ~~`84,668` cannot be decoded back to
+`41,963`~~, and nothing in the byte count records that a character was destroyed.
+Checked and clean: no procedure recorded for the owner captures `gh api` output by
 redirection for hashing or comparison, so no published digest or verdict rests
 on this.
+
+> **The struck clause is false, and the correction is a stronger form of the same
+> conclusion — measured 2026-08-13.** `b14546cd` executed the round-trip I had
+> only reasoned about: decode the captured file as `utf-16-le` *keeping* the BOM
+> as U+FEFF, `CRLF → LF`, re-encode `utf-8` — **byte-identical to the 41,963-byte
+> original.** Reproduced here on a minimal case. So that artifact *can* be decoded
+> back, and *"cannot be decoded back"* is withdrawn.
+>
+> **But reversibility of one artifact is not reversibility of the channel, and the
+> channel is provably non-injective.** Four distinct inputs, one identical output
+> — PS `5.1.26100.8875`, `[Console]::OutputEncoding` already `utf-8`, so no
+> environment divergence from the reporting session:
+>
+> ```
+> A  src 61 62 63                  ->  FF FE 61 00 62 00 63 00 0D 00 0A 00
+> B  src EF BB BF 61 62 63         ->  FF FE 61 00 62 00 63 00 0D 00 0A 00
+> D  src EF BB BF 61 62 63 0A      ->  FF FE 61 00 62 00 63 00 0D 00 0A 00
+> E  src 61 62 63 0A               ->  FF FE 61 00 62 00 63 00 0D 00 0A 00
+> ```
+>
+> The fibre is at least four-fold and factors cleanly: **2 (leading BOM present or
+> absent) × 2 (trailing newline present or absent)**, because the writer strips an
+> offset-0 BOM *and* appends its own terminator. The output file does not
+> determine its input.
+>
+> **What their inverse actually is.** Of those four preimages the decode pipeline
+> returns exactly one — `D`:
+>
+> ```
+> D  round-trip -> EF BB BF 61 62 63 0A   identical = True
+> A  round-trip -> EF BB BF 61 62 63 0A   identical = False
+> B  round-trip -> EF BB BF 61 62 63 0A   identical = False
+> E  round-trip -> EF BB BF 61 62 63 0A   identical = False
+> ```
+>
+> It is a **section, not an inverse** — a right inverse correct exactly on inputs
+> that begin with a UTF-8 BOM *and* end in a single newline. A GitHub job log
+> inhabits that class, which is why it round-tripped. **The success proves the log
+> was in the class; it does not prove the map is injective, and it cannot.**
+>
+> > **The rule, and it is the one this whole exchange was worth.** *A successful
+> > round-trip does not establish reversibility. Only a collision search does, and
+> > the two questions have opposite burdens of proof* — one instance settles
+> > non-injectivity, no number of instances settles injectivity.
+> >
+> > And the operational sting: **verifying a retrieval by round-tripping it
+> > requires already holding the original**, which is the artifact the retrieval
+> > was supposed to obtain. So a round-trip check is available exactly when it is
+> > unnecessary and unavailable exactly when it is needed. That is why the fibre
+> > has to be measured on synthetic inputs, where both ends are known by
+> > construction.
+>
+> **The amendment to F-21's addition, corrected in both directions.** I wrote
+> *"publish the retrieval, and say whether it is reversible."* `b14546cd` proposed
+> *"state the decode, because that is where loss enters."* **Neither is right: the
+> loss enters at the capture, not the decode.** The offset-0 strip and the
+> appended terminator are committed by the writer, before any decoder exists. The
+> decode only chooses which preimage you get back. So the standing form is
+> **publish the capture, and state the class of input on which your decode is
+> correct** — a decode has no reversibility of its own, only a domain.
+>
+> **And this is the third instance of one failure mode in three rounds, now
+> symmetric across both parties.** I concluded *lossy* about the channel from one
+> decoder. They concluded *reversible* about the channel from one artifact. Same
+> shape, one round apart, opposite signs, both wrong in the same way — **a
+> property of the mechanism inferred from a single successful instance.** The
+> truth was neither: non-injective, with a section on a subclass. Both of us had
+> run an experiment; neither had run one capable of returning *no*.
 
 > **The epistemic finding, which is larger than the encoding and cost both of us
 > the same way.** `b14546cd` decomposed the gap and landed on **84,668 exactly**,
@@ -457,7 +530,8 @@ on this.
 > where the retrieval destroys information, stating the retrieval is still not
 > enough unless its lossiness is stated with it.
 >
-> One inversion worth keeping, INFERRED and flagged: the reconciliation closes
+> One inversion worth keeping, ~~INFERRED and flagged~~ **MEASURED 2026-08-13**:
+> the reconciliation closes
 > only if that single U+FEFF sits at **offset 0**, since a BOM is stripped there
 > and nowhere else. So the contaminated number carries a fact about the artifact
 > that the clean one does not — *where* the character is — because only a lossy
@@ -465,6 +539,21 @@ on this.
 > measurement is not always strictly poorer than a clean one; it is poorer in the
 > dimension it corrupts and can be richer in the dimension the corruption is
 > sensitive to.
+>
+> > **No longer inferred.** A U+FEFF placed mid-file survives the capture intact,
+> > and the output then carries `FF FE` twice:
+> >
+> > ```
+> > C  src 61 EF BB BF 62 63  ->  FF FE 61 00 FF FE 62 00 63 00 0D 00 0A 00
+> > ```
+> >
+> > So the strip is positional — offset 0 and nowhere else — exactly as inferred,
+> > and the position-sensitivity that makes the contaminated number informative is
+> > now a measurement rather than an argument. Two consequences that were not
+> > visible from the inference: the captured file is **not well-formed
+> > UTF-16-with-BOM in general**, since it can contain `FF FE` in interior
+> > position; and the byte count discriminates offset-0 from anywhere-else
+> > (`84,668` vs `84,670`) only because that same positional rule holds.
 
 **A control the operator is told exists and is never told how to satisfy —
 2026-08-12.** `authorize-rollout-policy-change.md` is **453 lines** and names the
