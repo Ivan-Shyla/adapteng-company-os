@@ -6,6 +6,7 @@
 #   infra-live-not-cutover   - infrastructure runs, but not yet the authority
 #   live-partial-authority   - production workload runs here, but other domains remain on a legacy authority
 #   live-legacy-binding      - production service is up but still uses a credential/data binding scheduled for cutover
+#   deployed-live-unverified - a deployment operation is GitHub-verified, but the current serving/runtime state is not live-verified
 #   implemented-tested-not-deployed - code merged AND its suite is green in CI, but nothing runs in production yet
 #   repo-merged-not-live     - code merged to main, no live deploy/wiring yet
 #   planned                  - designed, not built
@@ -189,13 +190,13 @@ services:
     repo: adapteng-automation-platform
     path: services/ai-gateway
     role: Provider-pluggable model adapter (EU Vertex canonical). First op is a schema-valid, side-effect-free draft.
-    runtime: Coolify (target); NOT deployed — no container, no endpoint
+    runtime: Coolify. A deploy operation succeeded from company-os main (run 31584649767); current serving state is not established by repository evidence.
     source_of_truth_for: none
     depends_on: [postgres-adapteng-ops (migration 005 ai_gateway), approval-outbox]
-    status: implemented-tested-not-deployed
+    status: deployed-live-unverified
     implemented: true
     tested: true
-    deployed: false
+    deployed: true                       # a deploy operation succeeded; see deployment_evidence. NOT a claim about current health
     schema_applied_in_production: true   # migrations 005 + 008_ai_gateway_runtime_hardening.sql; owner's post-rollout production check; DO NOT REPLAY
     test_evidence:
       run: 31214858400
@@ -207,8 +208,35 @@ services:
       jobs_green: [ai-gateway unit tests (ubuntu-latest), ai-gateway unit tests (windows-latest), ai-gateway postgres semantics, ai-gateway supply-chain gates, repo validation]
       verified: 2026-08-10
     not_blocked_by: [cost, model pricing, FX configuration]
-    blocked_by: ["deployment: no ai-gateway container runs in Coolify, so the tested durable cost authority is not the live authority; the real EU Vertex client, Drive adapters, orchestration and canonical approval composition are unproven against a running service"]
-    deployment_evidence: UNVERIFIED — GitHub shows no deploy; a recorded deploy plus a no-business-data smoke result against the running service would settle it
+    blocked_by: ["live verification: a deploy operation succeeded (run 31584649767), but no repository evidence establishes that the service is answering now, so the tested durable cost authority is still not proven to be the live authority; the real EU Vertex client, Drive adapters, orchestration and canonical approval composition are unproven against a running service"]
+    deployment_evidence:
+      verdict: GITHUB-VERIFIED
+      means: a deploy operation for this service completed successfully; this records what the deploy workflow did, not what the service is doing now
+      repo: adapteng-company-os
+      workflow: "Coolify deploy (.github/workflows/coolify-deploy.yml)"
+      operation: deploy
+      service: ai-gateway
+      run: 31584649767
+      branch: main
+      completed: "2026-08-12T09:50:59Z"
+      conclusion: success
+      prior_deploy_run: 31548398998    # main, 2026-08-11T23:58:35Z, success
+      reconcile_run: 31593110595       # main, 2026-08-12T11:43:27Z, success - configuration written and re-read after the deploy above
+    live_verification:
+      verdict: UNVERIFIED
+      why: >-
+        No repository evidence establishes that a container is serving now. The
+        Coolify deploy workflow does record read operations for this service -
+        most recent status run 31678106671 on main, 2026-08-13T07:31:35Z,
+        success; most recent verify run 31628416902 on main,
+        2026-08-12T18:36:18Z, success - but a successful workflow conclusion
+        means the workflow ran, not that /ready answered. That workflow states
+        Coolify skips a scheduled probe silently when the application is not
+        running, which is why a separate diagnose operation exists at all, so a
+        green verify run is not by itself a health result. Probe findings are
+        deliberately not transcribed into this registry. Settling this needs a
+        current dated readiness result plus a no-business-data smoke result
+        against the running service, and neither is inferable from GitHub.
     owner: Ivan
     notes: >-
       PR #71 merged. Corrected 2026-08-10: this entry previously read
@@ -220,11 +248,34 @@ services:
       supply-chain gates), and migrations 005 and
       008_ai_gateway_runtime_hardening.sql are among the nine logical units the
       owner's post-rollout manual production check found exact in production —
-      so they must NOT be re-applied. The single open item is deployment. FX is a
+      so they must NOT be re-applied. The single open item is live verification.
+      FX is a
       deploy-time configuration value, not a blocker; the code fails closed
       without it. No live model call has occurred. Never use the in-memory
       ModelGateway as production budget authority. See ai/model-choices.md,
       ai/insertion-points.md, owner/action-items.md and ADR-0010.
+
+
+      Corrected 2026-08-13 (evidence conflict C-1). This entry previously
+      recorded deployed false with deployment_evidence "UNVERIFIED — GitHub
+      shows no deploy", and blocked_by asserted that no ai-gateway container
+      runs in Coolify. Both were stale, and the second was a runtime claim
+      GitHub cannot support in either direction. The Coolify deploy workflow in
+      adapteng-company-os has 74 recorded runs for this service; run
+      31584649767 on main (2026-08-12T09:50:59Z) is a successful deploy
+      operation, preceded by deploy run 31548398998 and followed by reconcile
+      run 31593110595. So GitHub does show a deploy.
+
+
+      What has not changed is the live state. A successful deploy operation is
+      a record of the deploy workflow reaching a terminal state, not evidence
+      that the service is answering now, so live_verification stays UNVERIFIED
+      and no /ready health is asserted anywhere in this entry. Run 31542579590,
+      cited when this conflict was raised, is a verify operation on branch
+      feat/in-container-readiness-probe rather than a deploy, and its green
+      conclusion is likewise not a health result. Nothing here was obtained
+      from Coolify, Hetzner or any other provider; the whole correction comes
+      from GitHub workflow-run metadata.
 
   - id: integrity-reconciler
     repo: adapteng-automation-platform
