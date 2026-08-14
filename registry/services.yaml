@@ -6,6 +6,7 @@
 #   infra-live-not-cutover   - infrastructure runs, but not yet the authority
 #   live-partial-authority   - production workload runs here, but other domains remain on a legacy authority
 #   live-legacy-binding      - production service is up but still uses a credential/data binding scheduled for cutover
+#   deployed-live-unverified - a deployment operation is GitHub-verified, but the current serving/runtime state is not live-verified
 #   implemented-tested-not-deployed - code merged AND its suite is green in CI, but nothing runs in production yet
 #   repo-merged-not-live     - code merged to main, no live deploy/wiring yet
 #   planned                  - designed, not built
