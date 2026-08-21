@@ -1,0 +1,51 @@
+name: AdaptEng L1 platform status
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 6 * * 1-5"
+
+permissions:
+  contents: read
+
+jobs:
+  collect-status:
+    name: Collect L1 platform status
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - name: Collect sanitized status reports
+        id: snapshot
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.ADAPTENG_GITHUB_READ_TOKEN }}
+        run: >-
+          python scripts/l1_github_status_snapshot.py
+          --output "$RUNNER_TEMP/l1-platform-status.json"
+          --markdown-output "$RUNNER_TEMP/l1-platform-status.md"
+      - name: Publish status summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/l1-platform-status.md" ]; then
+            cat "$RUNNER_TEMP/l1-platform-status.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '%s\n' '# AdaptEng L1 platform status' '' '**Overall:** RED' '' 'Unable to create sanitized status reports.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload status reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: l1-platform-status
+          path: |
+            ${{ runner.temp }}/l1-platform-status.json
+            ${{ runner.temp }}/l1-platform-status.md
+          if-no-files-found: error
+          retention-days: 14
+      - name: Fail for unreliable or failed platform status
+        if: steps.snapshot.outcome == 'failure'
+        run: exit 1

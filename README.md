@@ -103,14 +103,24 @@ variables, or makes GitHub mutations. Select an existing directory outside this
 repository; repository-local outputs are rejected so snapshots cannot be tracked.
 
 ```bash
-python scripts/l1_github_status_snapshot.py --output C:/Temp/adapteng-l1-status.json
+python scripts/l1_github_status_snapshot.py --output C:/Temp/adapteng-l1-status.json --markdown-output C:/Temp/adapteng-l1-status.md
 ```
 
-The JSON has only a schema version and timestamp plus the five allowlisted
-repositories' default-branch SHA, open-PR metadata, and selected latest CI
-conclusion. It refuses to replace an existing file unless `--overwrite` is
-provided. A partial query writes only the same sanitized schema and returns a
-generic non-zero result.
+The JSON and Markdown contain only a schema version, collection timestamp,
+overall `GREEN`/`YELLOW`/`RED` status, and the five allowlisted repositories'
+default-branch SHA, open-PR metadata, and selected latest CI conclusion. It
+refuses to replace either existing file unless `--overwrite` is provided. A
+partial query writes only the same sanitized data and returns a generic non-zero
+result.
+
+The trusted-code-only workflow
+[`l1-platform-status.yml`](.github/workflows/l1-platform-status.yml) runs on
+weekday mornings at 06:15 UTC (08:15 Prague summer time) and can also be started
+manually from `main`. It writes the Markdown report to the Actions run summary
+and uploads both reports as the 14-day `l1-platform-status` artifact. Open or
+draft PRs make the status `YELLOW`, not `RED`; `RED` is reserved for a failed
+metadata query or a confirmed failed latest CI result on an active repository
+default branch.
 
 Третья команда работает только на POSIX и на Windows не запустится: её предмет —
 `scheduler_file_record`, который открывает файлы с `os.O_NOFOLLOW` (на Windows
