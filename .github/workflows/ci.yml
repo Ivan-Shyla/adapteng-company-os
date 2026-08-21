@@ -66,4 +66,5 @@ jobs:
           scripts.test_ops_runner
           scripts.test_ai_gateway_credentials
           scripts.test_gateway_readiness
+          scripts.test_l1_github_status_snapshot
           scripts.test_pre_pr_commands_match_ci

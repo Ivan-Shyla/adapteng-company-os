@@ -43,7 +43,7 @@ runtime-дампов и копий реализации из других реп
 | Как безопасно поменять workflow / применить миграцию? | [`runbooks/`](runbooks/) |
 | Как ротировать токен (и почему старый ещё живой)? | [`runbooks/secret-rotation.md`](runbooks/secret-rotation.md) |
 | Что должен сделать Иван? | [`owner/action-items.md`](owner/action-items.md) |
-| Что агент может делать без approve? | [`control-plane/autonomy-policy.md`](control-plane/autonomy-policy.md) |
+| Что агент может делать без approve? | [`control-plane/owner-ai-runtime-policy.md`](control-plane/owner-ai-runtime-policy.md) |
 | Что реально блокирует работу прямо сейчас? | [`control-plane/current-state.md`](control-plane/current-state.md) |
 | Готова ли Platform v1 к релизу и что мешает? | [`control-plane/release-v1.md`](control-plane/release-v1.md) |
 | Какие работы запущены и в каком порядке? | [`control-plane/execution-program.md`](control-plane/execution-program.md) |
@@ -77,7 +77,7 @@ runtime-дампов и копий реализации из других реп
 
 ```bash
 python scripts/validate_sensitive_references.py
-python -m unittest scripts.test_validate_sensitive_references scripts.test_postgres_restore_rehearsal scripts.test_rehearsal_contour scripts.test_rehearsal_effective_repository scripts.test_coolify_deploy scripts.test_postgres_runtime_role scripts.test_ops_runner scripts.test_ai_gateway_credentials scripts.test_gateway_readiness scripts.test_pre_pr_commands_match_ci
+python -m unittest scripts.test_validate_sensitive_references scripts.test_postgres_restore_rehearsal scripts.test_rehearsal_contour scripts.test_rehearsal_effective_repository scripts.test_coolify_deploy scripts.test_postgres_runtime_role scripts.test_ops_runner scripts.test_ai_gateway_credentials scripts.test_gateway_readiness scripts.test_l1_github_status_snapshot scripts.test_pre_pr_commands_match_ci
 python -m unittest scripts.test_postgres_restore_scheduler_surface  # только POSIX
 ```
 
@@ -94,6 +94,23 @@ python -m unittest scripts.test_postgres_restore_scheduler_surface  # тольк
 пропускает то, что CI обязательно поймает. Это не просьба: набор
 `test_pre_pr_commands_match_ci` разбирает оба файла и падает при расхождении в
 любую сторону. Добавляя модуль в CI, добавьте его и сюда.
+
+## L1 GitHub status snapshot
+
+Read-only L1 status is collected solely through the authenticated `gh api`
+client. The command never requests an authentication token, reads environment
+variables, or makes GitHub mutations. Select an existing directory outside this
+repository; repository-local outputs are rejected so snapshots cannot be tracked.
+
+```bash
+python scripts/l1_github_status_snapshot.py --output C:/Temp/adapteng-l1-status.json
+```
+
+The JSON has only a schema version and timestamp plus the five allowlisted
+repositories' default-branch SHA, open-PR metadata, and selected latest CI
+conclusion. It refuses to replace an existing file unless `--overwrite` is
+provided. A partial query writes only the same sanitized schema and returns a
+generic non-zero result.
 
 Третья команда работает только на POSIX и на Windows не запустится: её предмет —
 `scheduler_file_record`, который открывает файлы с `os.O_NOFOLLOW` (на Windows
