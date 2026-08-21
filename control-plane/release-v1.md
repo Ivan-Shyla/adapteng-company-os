@@ -1,5 +1,12 @@
 # Platform v1 — release command center
 
+**Owner decision — 2026-08-21.**
+[Owner-authoritative AI runtime policy](owner-ai-runtime-policy.md) authorizes
+L1 internal AI operation now. Its approval of existing Baserow access and the
+current instance-level n8n MCP state controls over older L1 prerequisites; B-2
+and B-7 remain historical evidence and later operational considerations, not L1
+blockers.
+
 **observed_at:** 2026-08-13T11:40Z (UTC). **Corrected 2026-08-13T19:20Z** after an
 independent review; §7 records the withdrawn finding.
 
@@ -32,20 +39,14 @@ action does not automatically forbid an internal read-only pilot.
 | Level | Verdict | Scope | Controlling reason |
 |---|---|---|---|
 | **L0 — Repository development** | **GO** | Code, tests, CI, draft PRs. No provider or production access. | All five active repositories green on `main`; `main-protected` rulesets active. |
-| **L1 — Internal read-only AI pilot** | **CONDITIONAL GO** | Owner-approved internal documents, AI model calls, internal drafts and recommendations. **Forbidden:** production writes, deployment, email sending, public publishing, deletion, autonomous external actions. | Not blocked by PR #121, production backup, a second administrator, a separate POSIX host, or full G1–G5 closure. Gated only on its own minimum conditions below. |
+| **L1 — Internal read-only AI pilot** | **GO** | Owner-approved internal documents, AI model calls, internal drafts and recommendations. **Forbidden:** production writes, deployment, email sending, public publishing, deletion, autonomous external actions. | Authorized by the 2026-08-21 owner runtime policy. B-2 and B-7 do not block L1; neither do PR #121, production backup, a second administrator, a separate POSIX host, or full G1–G5 closure. |
 | **L2 — Controlled production actions** | **NO-GO** | Human-approved writes and deployments with rollback. | B-3 (deploy source not `main`), B-4 (no evidenced backup), B-5 (restore fails closed). |
 | **L3 — Autonomous external actions** | **NO-GO** | Requires L2 controls, credential closure, proven end-to-end control and an owner-approved external-action policy. | B-1, B-2, B-7, plus all of L2. |
 
-**Minimum conditions before L1 can start** — all owner/provider verification:
-
-1. Confirm the historically exposed Baserow primary API token is rotated and the old value fails, **if L1 will read Baserow** (B-2).
-2. Disable instance-level n8n **Available in MCP**, or confirm a strict explicit allowlist, **before L1 reads or touches n8n** (B-7).
-3. Set a hard monthly AI-provider spend cap.
-4. Keep L1 draft-only and human-reviewed.
-
-**L1 has not started.** It can start once its applicable minimum conditions are
-confirmed. PR #121 authorization is a separate, later owner decision and does not
-sit ahead of the L1 pilot.
+**L1 operating boundary.** L1 is internal, draft-only, and human-reviewed. The
+owner runtime policy authorizes continued use of approved existing access; B-2
+and B-7 are not L1 prerequisites. PR #121 authorization remains a separate,
+later owner decision.
 
 ---
 
@@ -111,11 +112,11 @@ Six blockers. Each names the operating level it actually blocks.
 | ID | Sev | Evidence state | Blocks | Exact evidence | Owner repo/service | Executable by | Acceptance criterion | Rollback | Recommended next action |
 |---|---|---|---|---|---|---|---|---|---|
 | **B-1** | P0 | `GITHUB-VERIFIED` | **Not L0/L1.** Full-rollout / L3 authorization; G5 | PR #121 head `4c4a2f00`: `Base-trusted rollout authorization` → **FAILURE**, "The exact current head is not externally authorized"; `Verify exact current head from merged base` → **FAILURE** (2×). 29 other checks green. `migrate-approved-assets.yml` has zero runs. | `adapteng-automation-platform` | **owner-only** (repo admin + phase-env authorization secret) | The exact head carries valid external authorization, both trust-anchor checks pass, then `db_status → preflight → import → replay_verify` each record a successful run | Do not merge; PR #121 stays open at its current head | Owner authorizes exact head `4c4a2f00` **as a separate later decision**. Do not rebase, retitle, rerun or weaken the mechanism. |
-| **B-2** | P0 | `RECORDED`; provider-side rotation state `UNKNOWN` from GitHub | Baserow-connected **L1** until rotation is verified; **L3** credential closure; G1, G3 | `owner/action-items.md` 🔴: Baserow primary API token literal committed to history, "rotation is not complete or evidenced"; legacy `credential_rotations_complete: false`; shared deploy key not isolated; `ISO-1` waiver expired 2026-08-08 | provider consoles / `PalinaRuban/adapteng` | **owner-only / provider verification** | Token revoked at the provider, replacement installed, and the **old value verified to fail** | n/a — rotation is forward-only | Owner rotates or confirms rotation and records old-value failure. **Do not rewrite Git history solely to remove an already-rotated historical token.** |
+| **B-2** | P0 | `RECORDED`; provider-side rotation state `UNKNOWN` from GitHub | **Not L1 under the 2026-08-21 owner policy.** L3 credential closure; G1, G3 | `owner/action-items.md` 🔴: Baserow primary API token literal committed to history, "rotation is not complete or evidenced"; legacy `credential_rotations_complete: false`; shared deploy key not isolated; `ISO-1` waiver expired 2026-08-08 | provider consoles / `PalinaRuban/adapteng` | **owner-only / provider verification** | Token revoked at the provider, replacement installed, and the **old value verified to fail** | n/a — rotation is forward-only | Later operational consideration: owner may rotate or confirm rotation and record old-value failure. **Do not rewrite Git history solely to remove an already-rotated historical token.** |
 | **B-3** | P0 | `RECORDED`; branch divergence `GITHUB-VERIFIED` | **L2** deploy-source integrity; G2 | `registry/services.yaml`: "Coolify still deploys from branch `palinaruban-repo-status-review`". That branch exists at `4b67fa4704ea05e6e63de3e22d69f66779f84499`; `main` is `6ecdd5fb`. Provably different commits. | `n8n-self-hosted` / Coolify | **owner-only** (Coolify console) | Coolify source is `main`; an auto-deploy from `main` is observed and recorded | Repoint to the prior branch; it is retained | Owner verifies and repoints the Coolify source to `main`. |
 | **B-4** | P0 | `RECORDED`; provider-side absence `UNKNOWN` | **L2/L3** production writes; G4 | `owner/action-items.md` ⚪: "the backup itself is still not configured"; automation literal `BLOCKED_ON_UNCONFIGURED_PRODUCTION_BACKUP`; restore manifests `NOT_CONFIGURED`, which stops execution by design | `adapteng-company-os` + provider | **owner-only** for provider steps; manifest population is agent-executable | One production pgBackRest backup of `adapteng_ops` exists, post-backup `check` passes, parsed selected-set `verify` passes, and one isolated restore completes on a disposable host | Delete the disposable restore host/volumes; revoke the read-only key | Owner takes one production backup and completes one isolated restore proof before L2 writes. No provider-side absence is claimed without provider inspection. |
 | **B-5** | P1 | `GITHUB-VERIFIED` | A real restore attempt; **L2**; G4 | `validate_repository` in `scripts/postgres_restore_guard.py` (currently near line 472 on this branch) compares `config["repo_path"]` against the hardcoded literal `"/adapteng-ops"` and raises `GuardError("repository stanza/repo is not exact")`. The configured `PGBACKREST_REPO1_PATH` does not match, so a wired restore fails closed before it starts. Tracked as issue [#32](https://github.com/Ivan-Shyla/adapteng-company-os/issues/32). | `adapteng-company-os` | **agent-executable, in a separate bounded PR** | Guard and configured variable agree; a test asserts they cannot diverge; issue #32 closable by evidence | Revert the single commit; the guard is fail-closed either way | Fix in the separate PR sketched in §10. **Not fixed here**; B-5 stays open until that code mismatch is fixed. |
-| **B-7** | P1 | `RECORDED BUT NOT LIVE-VERIFIED; STALE — owner audit dated 2026-07-27` | n8n-connected **L1** until current MCP state is verified safe; G3 | `owner/action-items.md` 🔴: audited n8n workflows still have **Available in MCP** enabled because the update API rejected that unsupported field. The 89 non-archived / 31 active / 58 inactive counts come from an owner audit dated **2026-07-27** and are **not current live GitHub-verifiable state**. Merged containment (platform PR #85, `99f4d88e`) changed no live availability. | `n8n-cloud` + `n8n-self-hosted` | **owner-only / provider verification** | Instance-level MCP disabled, or effective exposure proven to be an explicit strict allowlist, verified against an authenticated session | Re-enable per-workflow availability; normal triggers are unaffected either way | **Current n8n MCP configuration requires provider verification.** Before an L1 pilot reads or interacts with n8n, instance-level **Available in MCP** must be disabled or a strict explicit allowlist confirmed. Do not treat the 2026-07-27 counts as current. |
+| **B-7** | P1 | `RECORDED BUT NOT LIVE-VERIFIED; STALE — owner audit dated 2026-07-27` | **Not L1 under the 2026-08-21 owner policy.** G3 | `owner/action-items.md` 🔴: audited n8n workflows still have **Available in MCP** enabled because the update API rejected that unsupported field. The 89 non-archived / 31 active / 58 inactive counts come from an owner audit dated **2026-07-27** and are **not current live GitHub-verifiable state**. Merged containment (platform PR #85, `99f4d88e`) changed no live availability. | `n8n-cloud` + `n8n-self-hosted` | **owner-only / provider verification** | Instance-level MCP disabled, or effective exposure proven to be an explicit strict allowlist, verified against an authenticated session | Re-enable per-workflow availability; normal triggers are unaffected either way | Later operational consideration: current n8n MCP configuration may be verified for G3, but it does not block L1. Do not treat the 2026-07-27 counts as current. |
 
 **B-6 was withdrawn** on independent re-verification — see §7. No new blockers
 were created.
@@ -225,8 +226,8 @@ not weaken, bypass, rerun, rebase, retitle, authorize or merge PR #121.
 Exactly five, in order.
 
 1. **AGENT-EXECUTABLE** — re-verify B-6 against the current complete GitHub Actions history and correct PR #221. ✅ **Done in this revision** (§7).
-2. **OWNER ACTION / PROVIDER VERIFICATION** — rotate or confirm rotation of the Baserow primary token and verify the old value fails (B-2).
-3. **OWNER ACTION / PROVIDER VERIFICATION** — verify current n8n MCP state and disable instance-level availability or establish a strict allowlist (B-7).
+2. **LATER OWNER OPERATIONAL CONSIDERATION** — rotate or confirm rotation of the Baserow primary token and verify the old value fails (B-2); this does not block L1.
+3. **LATER OWNER OPERATIONAL CONSIDERATION** — verify current n8n MCP state for G3 (B-7); this does not block L1.
 4. **OWNER ACTION** — set a hard monthly AI-provider spend cap.
 5. **OWNER ACTION / PROVIDER VERIFICATION, with later agent support** — verify the Coolify source, take one production pgBackRest backup and complete one isolated restore proof before L2 production writes (B-3, B-4, B-5).
 
