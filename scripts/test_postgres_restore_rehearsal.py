@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import stat
 import subprocess
 import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -40,7 +42,10 @@ from scripts.postgres_restore_generation import (
     validate_restore_acceptance,
 )
 from scripts.postgres_restore_guard import (
+    ARTIFACT_PATHS,
     GuardError,
+    REPOSITORY_SETTING_ALLOWED as GUARD_SETTING_ALLOWED,
+    REPOSITORY_SETTING_DEFAULTS,
     parse_selected_info_value,
     scan_forbidden_identifiers,
     stable_image_identity,
@@ -56,7 +61,12 @@ from scripts.postgres_restore_host_inventory import (
     validate_host_inventory,
     validate_sealed_target,
 )
-from scripts.postgres_restore_git_seal import MEMBERS, SealError, validate_member
+from scripts.postgres_restore_git_seal import (
+    MEMBERS,
+    SealError,
+    canonical_json,
+    validate_member,
+)
 from scripts.postgres_restore_image_identity import IdentityError, measure_container
 from scripts.postgres_restore_inventory_exporter import (
     ExporterError,
@@ -297,6 +307,10 @@ def generation_state() -> GenerationState:
         repository_bucket="rehearsal",
         repository_region="eu-central-003",
         repository_path="/adapteng-ops",
+        repository_type="s3",
+        repository_s3_key_type="shared",
+        repository_s3_uri_style="host",
+        repository_cipher_type="aes-256-cbc",
         restore_key_attestation_sha256="7" * 64,
         stanza="adapteng-ops",
         repo="1",
@@ -652,8 +666,52 @@ class RestoreConfigurationTests(unittest.TestCase):
         self.assertIn("repo1-type=s3", config)
         self.assertIn("repo1-path=/adapteng-ops", config)
         self.assertIn("repo1-cipher-type=aes-256-cbc", config)
+        self.assertIn("repo1-s3-key-type=shared", config)
+        self.assertIn("repo1-s3-uri-style=host", config)
         self.assertIn("[adapteng-ops]", config)
         self.assertNotIn("PGBACKREST_", config)
+
+    def test_configured_uri_style_reaches_the_generated_config(self) -> None:
+        for style in ("host", "path"):
+            with self.subTest(style=style):
+                config = build_pgbackrest_config(
+                    replace(self.state, repository_s3_uri_style=style)
+                ).decode("ascii")
+                self.assertIn(f"repo1-s3-uri-style={style}", config)
+
+    def test_repository_settings_are_consumed_not_hardcoded(self) -> None:
+        # A hardcoded setting ignores the state, so a value the restore cannot
+        # honour would be silently overridden and a config still produced.
+        for field, rejected in (
+            ("repository_type", "posix"),
+            ("repository_s3_key_type", "auto"),
+            ("repository_s3_uri_style", "vhost"),
+            ("repository_cipher_type", "none"),
+        ):
+            with self.subTest(field=field):
+                with self.assertRaises(GenerationError):
+                    build_pgbackrest_config(replace(self.state, **{field: rejected}))
+
+    def test_guard_repository_setting_defaults_match_pgbackrest_defaults(self) -> None:
+        # An unset repository variable must fall back to what pgBackRest itself
+        # defaults to, so it cannot disagree with the backup side in silence.
+        # https://pgbackrest.org/configuration.html
+        self.assertEqual(REPOSITORY_SETTING_DEFAULTS["s3_uri_style"], "host")
+        self.assertEqual(REPOSITORY_SETTING_DEFAULTS["s3_key_type"], "shared")
+        self.assertEqual(REPOSITORY_SETTING_DEFAULTS["type"], "s3")
+        self.assertEqual(
+            {f"repository_{key}" for key in REPOSITORY_SETTING_DEFAULTS},
+            set(restore_generation.REPOSITORY_SETTING_ALLOWED),
+        )
+        for key, default in REPOSITORY_SETTING_DEFAULTS.items():
+            with self.subTest(key=key):
+                self.assertEqual(
+                    GUARD_SETTING_ALLOWED[key],
+                    restore_generation.REPOSITORY_SETTING_ALLOWED[
+                        f"repository_{key}"
+                    ],
+                )
+                self.assertIn(default, GUARD_SETTING_ALLOWED[key])
 
     def test_secret_capability_accepts_only_exact_json_map(self) -> None:
         values = validate_repository_secret(
@@ -2862,7 +2920,17 @@ class GitObjectSealTests(unittest.TestCase):
 
 class ReadinessAndManifestTests(unittest.TestCase):
     def test_literal_not_ready_enum_is_on_all_status_surfaces(self) -> None:
-        enum = "NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR"
+        # The rollout-authorization status literal must stay synchronized across
+        # every status surface, so that no surface can quietly disagree about
+        # what is blocking the rollout. The automation evidence-lifecycle
+        # dependency merged on 2026-08-05 (adapteng-automation-platform PRs #93,
+        # #94 and #98), so the current literal is
+        # BLOCKED_ON_UNCONFIGURED_PRODUCTION_BACKUP. The superseded literal is
+        # kept only where the record is corrected in place, and every surface
+        # that still names it must also carry the closure evidence, so it can
+        # never be read as the current status.
+        enum = "BLOCKED_ON_UNCONFIGURED_PRODUCTION_BACKUP"
+        superseded = "NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR"
         paths = (
             ROOT / "ARCHITECTURE.md",
             ROOT / "owner/action-items.md",
@@ -2871,7 +2939,10 @@ class ReadinessAndManifestTests(unittest.TestCase):
             ROOT / "registry/services.yaml",
         )
         for path in paths:
-            self.assertIn(enum, path.read_text(encoding="utf-8"), str(path))
+            text = path.read_text(encoding="utf-8")
+            self.assertIn(enum, text, str(path))
+            if superseded in text:
+                self.assertIn("#94", text, str(path))
 
     def test_new_isolation_members_are_in_procedure_manifest(self) -> None:
         manifest = json.loads(
@@ -2884,6 +2955,104 @@ class ReadinessAndManifestTests(unittest.TestCase):
             "scripts/postgres_restore_isolation_gate.py",
         ):
             self.assertIn(member, manifest["artifacts"])
+
+    def test_runbook_pins_current_restore_artifact_digests(self) -> None:
+        # Every documented restore invocation hands these digests to
+        # --procedure-manifest-sha256, and postgres_restore_c_final_assert,
+        # _generation, _runner and _transaction_probe compare them byte-for-byte
+        # and abort on mismatch. A stale pin therefore makes the whole runbook
+        # unrunnable. That already happened once: the manifest was revised and
+        # the pin was not, in the very commit that edited this runbook, and it
+        # survived two later edits because nothing recomputed it.
+        runbook = (ROOT / "runbooks/backup-and-restore.md").read_text(
+            encoding="utf-8"
+        )
+        manifest_digest = hashlib.sha256(
+            (SCRIPTS / "postgres_restore_procedure_manifest.json").read_bytes()
+        ).hexdigest()
+        probe_digest = hashlib.sha256(
+            (SCRIPTS / "postgres_restore_transaction_probe.sql").read_bytes()
+        ).hexdigest()
+        for name, digest in (
+            ("procedure manifest", manifest_digest),
+            ("transaction probe", probe_digest),
+        ):
+            self.assertTrue(
+                digest in runbook,
+                f"runbook does not pin the current {name} digest {digest}",
+            )
+        # The value must also be supplied as a literal. An unset shell variable
+        # expands to nothing, so the documented command would abort under
+        # `set -u` or submit an empty digest.
+        supplied = re.findall(r"--procedure-manifest-sha256[ \t=]+(\S+)", runbook)
+        self.assertTrue(supplied)
+        self.assertEqual(set(supplied), {manifest_digest})
+
+    def test_procedure_manifest_seals_the_current_artifact_tree(self) -> None:
+        # postgres_restore_guard.verify_procedure_manifest re-derives every one
+        # of these bindings and aborts the restore if any disagrees. That check
+        # runs as root on a POSIX host during recovery, so nothing was stopping
+        # a commit from editing a sealed script without regenerating the
+        # manifest: it would pass CI, land on main, and surface the break only
+        # when somebody actually attempted a disaster restore. This moves the
+        # same bindings to commit time. The root and ownership requirements of
+        # the runtime path are deliberately not reproduced here — they harden
+        # the host and cannot go stale in a commit.
+        manifest_path = SCRIPTS / "postgres_restore_procedure_manifest.json"
+        manifest_raw = manifest_path.read_bytes()
+        manifest = json.loads(manifest_raw.decode("utf-8"))
+
+        self.assertEqual(manifest["schema_version"], 2)
+        self.assertEqual(manifest["docker_inspect_schema_version"], 1)
+        self.assertTrue(b"\r" not in manifest_raw, "procedure manifest carries CR")
+        self.assertTrue(
+            manifest_raw.endswith(b"\n"), "procedure manifest lacks a final newline"
+        )
+
+        for key in ("artifacts", "git_blobs", "git_modes"):
+            self.assertEqual(
+                set(manifest[key]),
+                ARTIFACT_PATHS,
+                f"procedure manifest {key} does not cover the sealed member set",
+            )
+
+        self.assertEqual(
+            hashlib.sha256(
+                canonical_json(
+                    {
+                        "git_blobs": manifest["git_blobs"],
+                        "git_modes": manifest["git_modes"],
+                    }
+                )
+            ).hexdigest(),
+            manifest["member_tree_sha256"],
+            "member_tree_sha256 does not roll up the recorded Git member set",
+        )
+
+        for relative_path in sorted(ARTIFACT_PATHS):
+            payload = (ROOT / relative_path).read_bytes()
+            git_oid = hashlib.sha1(
+                f"blob {len(payload)}\0".encode("ascii") + payload
+            ).hexdigest()
+            self.assertEqual(
+                manifest["artifacts"][relative_path],
+                hashlib.sha256(payload).hexdigest(),
+                f"{relative_path} content digest is stale in the procedure manifest",
+            )
+            self.assertEqual(
+                manifest["git_blobs"][relative_path],
+                git_oid,
+                f"{relative_path} Git blob binding is stale in the procedure manifest",
+            )
+            self.assertIn(
+                manifest["git_modes"][relative_path],
+                {"100644", "100755"},
+                f"{relative_path} has an unsealable Git mode",
+            )
+            self.assertTrue(b"\r" not in payload, f"{relative_path} carries CR")
+            self.assertTrue(
+                payload.endswith(b"\n"), f"{relative_path} lacks a final newline"
+            )
 
 
 if __name__ == "__main__":

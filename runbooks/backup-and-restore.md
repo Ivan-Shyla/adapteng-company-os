@@ -15,10 +15,23 @@ Docker storage, internal network only, and no public database port.
 > Docker or a provider. The
 > 2026-07-25 Coolify logical backup does not satisfy this contract. Do not run
 > approved-assets migrations until every gate below has a reviewed sanitized
-> `PASS`. Current rollout-authorization status:
-> `NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR`. The separate automation
-> consumer dependency has not merged; no schema version, compatibility,
-> configuration, execution, or readiness is claimed.
+> `PASS` — and note that as of 2026-08-10 there is nothing left to migrate: the
+> owner's post-rollout manual production check found all nine logical migration
+> units exact in production, so approved-assets migrations must **never be
+> replayed** (see [`owner/action-items.md`](../owner/action-items.md)). Current
+> rollout-authorization status:
+> `BLOCKED_ON_UNCONFIGURED_PRODUCTION_BACKUP`. The superseded literal
+> `NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR` no longer describes
+> reality: that separate automation consumer dependency **merged** on 2026-08-05
+> as `adapteng-automation-platform` PRs #93
+> (`1f420dc0f1cc7cfc88fa8037e00b982c0514cc08`), #94
+> (`0fa357d0baebc362b5bea0afba78e6233d91b7c8`) and #98
+> (`d06bdd41964e57d9fc7f1b2490d6dcde64b0143d`), PR #94 being the
+> evidence-lifecycle unit covering exactly `completed_at`,
+> `selected_set_info_sha256`, `scheduler_inventory_sha256`,
+> `scheduler_inventory_observed_at` and `retention_valid_until`. What blocks this
+> runbook is the unconfigured production backup itself. `UNVERIFIED`: whether a
+> reviewed sanitized `PASS` has been produced against a real evidence packet.
 
 > **Verified 2026-08-02 - the object store, and only the object store.** The
 > private Backblaze B2 EU Central bucket this design targets is reachable and
@@ -191,8 +204,8 @@ artifacts:
    or extra members stop construction and runtime verification. The reviewed
    procedure is loaded only after the pinned manifest and every enumerated
    on-disk member byte-matches those immutable blob identities. The reviewed
-   raw Git-blob procedure manifest SHA-256 is
-   `a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4`;
+   raw-byte procedure manifest SHA-256 is
+   `c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee`;
    the transaction-probe SHA-256 is
    `0d9e668726ea70d67621ccd62d357e23b4e2d6cd4c74216365ef86c2d034d785`.
    Any mismatch is a stop condition. Maintainers must use this exact two-phase
@@ -272,7 +285,7 @@ implementation:
   runtime_compatibility_assertion_sha256: "<sha256>"
   selected_full_assertion_sha256: "<sha256>"
   migration_status_harness_sha256: "<sha256>"
-  restore_procedure_manifest_sha256: "a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4"
+  restore_procedure_manifest_sha256: "c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee"
   runner_manifest_sha256: "<sha256>"
   provider_manifest_sha256: "<sha256>"
   host_inventory_collector_sha256: "<sha256>"
@@ -408,9 +421,10 @@ not restate a competing literal:
 | `<PGBACKREST_REPO1_PATH>` | `PGBACKREST_REPO1_PATH` |
 | `repo1-cipher-type` | `PGBACKREST_REPO1_CIPHER_TYPE` |
 
-That is all eight non-secret variables; `repo1-s3-key-type` selects how the
-credentials are presented and so has no line of its own in the config block
-below.
+That is all eight non-secret variables. `repo1-s3-key-type` selects how the
+credentials are presented and has no line of its own in the config block below,
+because the block states only what an operator types; the generated restore
+config emits it explicitly so the variable cannot be set and then ignored.
 
 The three credentials are repository secrets, named in
 `.github/workflows/verify-b2-connectivity.yml` and never printed.
@@ -479,33 +493,56 @@ the next reader does not re-open the question:
   ([AWS CLI S3 configuration](https://docs.aws.amazon.com/cli/latest/topic/s3-config.html)).
   Host style is therefore both the pgBackRest default and the style already
   exercised successfully against this bucket.
-- **`repo1-path` is a placeholder, not a literal.** For an S3 repository this is
-  simply the prefix inside the bucket under which pgBackRest keeps its
-  repository; pgBackRest only requires that it start with `/`, contain no `//`
-  and have no trailing `/`. Nothing depends on the specific string: at
-  `7f5f3585588da8b330e4ae9779f0b6343e1156eb`,
-  `scripts/postgres_restore_generation.py` emits `repo1-path` from the guard
-  packet field `repository_path` (which `scripts/postgres_restore_guard.py`
-  takes from `repository["repo_path"]`), the only literal anywhere in `scripts/`
-  is a unit-test fixture, and `.github/workflows/verify-b2-connectivity.yml`
-  asserts only that `PGBACKREST_REPO1_PATH` is absolute. The value is free to
-  choose, so the configured variable wins and this runbook stops asserting a
-  competing one - which also matches this runbook's own evidence policy, where
-  repository paths are on the forbidden list rather than the recorded list. What
-  is **not** free is consistency: the same prefix must be
-  used for backup and for every restore, and it must match the B2 lifecycle-rule
-  scope and the application key prefix restriction from Phase 2.
+- **`repo1-path` is a placeholder, not a literal — but one literal does depend on
+  it.** For an S3 repository this is simply the prefix inside the bucket under
+  which pgBackRest keeps its repository; pgBackRest only requires that it start
+  with `/`, contain no `//` and have no trailing `/`. So B2 does not constrain
+  the choice, and this runbook stops asserting a competing value - which also
+  matches this runbook's own evidence policy, where repository paths are on the
+  forbidden list rather than the recorded list.
 
-**Known open defect, recorded rather than papered over.** At
+  **Correction.** An earlier revision of this section claimed that "the only
+  literal anywhere in `scripts/` is a unit-test fixture". That was wrong.
+  `scripts/postgres_restore_generation.py` does emit `repo1-path` from the guard
+  packet field `repository_path`, and `.github/workflows/verify-b2-connectivity.yml`
+  does assert only that `PGBACKREST_REPO1_PATH` is absolute — but
+  `validate_repository` in `scripts/postgres_restore_guard.py` compares the
+  prefix against a hardcoded literal and fails closed when it differs. That
+  comparison was added on 2026-08-01 in
+  [#15](https://github.com/Ivan-Shyla/adapteng-company-os/pull/15) (`e30da31`);
+  the original trace followed the generator and stopped before reaching the
+  guard. Treat the prefix as free to choose in B2 and **pinned inside this
+  repository** until the mismatch recorded in
+  [`owner/action-items.md`](../owner/action-items.md) is resolved.
+
+  What is **not** free is consistency: the same prefix must be used for backup
+  and for every restore, and it must match the B2 lifecycle-rule scope and the
+  application key prefix restriction from Phase 2.
+
+**Restore-side consumption of these variables.** At
 `7f5f3585588da8b330e4ae9779f0b6343e1156eb` the tracked restore generator
-`scripts/postgres_restore_generation.py` writes `repo1-s3-uri-style=path` as a
-hardcoded value and never reads `PGBACKREST_REPO1_S3_URI_STYLE`. Because B2
-accepts both styles this does not by itself break a restore, but the
-restore-side configuration will not match the backup-side configuration and the
-configured variable has no effect on restore. That fix is a code change in
-`scripts/` and is tracked in
-[`owner/action-items.md`](../owner/action-items.md); until it lands, treat the
-generated restore config as divergent from this runbook on that one line.
+`scripts/postgres_restore_generation.py` hardcoded `repo1-s3-uri-style=path`,
+`repo1-type` and `repo1-cipher-type`, and never emitted `repo1-s3-key-type` at
+all, so four of the eight non-secret variables had no effect on restore and the
+restore-side URI style disagreed with the backup side. That is now fixed: the
+generator emits all eight from the guard packet, an omitted setting falls back to
+pgBackRest's own default rather than to a copied one — `repo1-s3-uri-style`
+defaults to `host` — and a value this procedure cannot honour stops the run
+instead of being silently overridden. `test_configured_uri_style_reaches_the_generated_config`
+and `test_repository_settings_are_consumed_not_hardcoded` in
+`scripts/test_postgres_restore_rehearsal.py` fail if any of them is hardcoded
+again.
+
+Ambient `PGBACKREST_*` environment is scrubbed on purpose, so these values reach
+the generator through the guard config rather than the environment. Wiring the
+repository variables into that guard config is a change under
+`.github/workflows/`; until it lands the guard's defaults apply, and those
+defaults match pgBackRest's, not the old copied value.
+
+**Still open, and owner-only:** the guard pins the repository prefix to a literal
+that the configured `PGBACKREST_REPO1_PATH` does not match, so a wired restore
+would fail closed. Tracked in
+[`owner/action-items.md`](../owner/action-items.md).
 
 The reviewed PostgreSQL settings are:
 
@@ -1036,11 +1073,11 @@ capture_generation() {
   GEN="$1"
   python3 scripts/postgres_restore_runner.py capture-runtime \
     --generation "${GEN^^}" \
-    --procedure-manifest-sha256 "$RESTORE_PROCEDURE_MANIFEST_SHA256" \
+    --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
     >"/secure/${GEN}-runtime.json"
   python3 scripts/postgres_restore_runner.py capture-catalog \
     --generation "${GEN^^}" \
-    --procedure-manifest-sha256 "$RESTORE_PROCEDURE_MANIFEST_SHA256" \
+    --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
     >"/secure/${GEN}-catalog.json"
 }
 ```
@@ -1069,7 +1106,7 @@ scripts/postgres_restore_generation.sh \
   --approved-image-manifest-sha256 "$BACKUP_IMAGE_MANIFEST_SHA256" \
   --recovery-container-id "$RECOVERY_CONTAINER_ID" \
   --final-container-id "$FINAL_CONTAINER_ID" \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   --accepted-retention-packet-sha256 "$ACCEPTED_RETENTION_PACKET_SHA256"
 ```
 
@@ -1183,14 +1220,14 @@ For generation A:
    cmp -s /secure/source-runtime.json /secure/a-runtime.json
    cmp -s /secure/source-catalog.json /secure/a-pre-catalog.json
    python3 scripts/postgres_restore_runner.py bootstrap-role --generation A \
-     --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4
+     --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee
    scripts/postgres_restore_status_gate.sh --generation A \
-     --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+     --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
      --expect-output absent \
      --expect 007=absent --expect drive-008=absent
    sha256sum /secure/a-runtime.json /secure/a-pre-catalog.json
    python3 scripts/postgres_restore_runner.py drop-role --generation A \
-     --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4
+     --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee
    ```
 
 Any comparison or status mismatch exits nonzero. Generation A proves only the
@@ -1214,9 +1251,9 @@ mv /secure/b-catalog.json /secure/b-pre-catalog.json
 cmp -s /secure/source-runtime.json /secure/b-runtime.json
 cmp -s /secure/source-catalog.json /secure/b-pre-catalog.json
 python3 scripts/postgres_restore_runner.py bootstrap-role --generation B \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   --expect-output absent \
   --expect 007=absent --expect drive-008=absent
 ```
@@ -1226,23 +1263,23 @@ Apply only the exact fixed runners from the pinned automation tree:
 ```bash
 set -euo pipefail
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   --expect-output absent \
   --expect 007=absent --expect drive-008=absent
 python3 scripts/postgres_restore_runner.py apply-007 --generation B \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   >/dev/null
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   --expect-output exact \
   --expect 007=exact --expect drive-008=absent
 
 # Drive-008 contains its own BEGIN/COMMIT. Never wrap, edit, or reseal it.
 python3 scripts/postgres_restore_runner.py apply-drive-008 --generation B \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   >/dev/null
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   --expect-output exact \
   --expect 007=exact --expect drive-008=exact
 ```
@@ -1251,6 +1288,13 @@ The runner pins raw migration bytes, the PostgreSQL 16 `psql` path, and exact
 post-apply state. Migration 007 may use the runner's single transaction.
 Drive-008 uses its embedded transaction and must not be wrapped or rewritten.
 Do not apply migration 006, AI Gateway 008, or any other migration.
+
+> **This invocation is historical. Verified 2026-08-10 — do not run it.** 007
+> and Drive-008 are already applied in production, as are all nine logical
+> units, per the owner's post-rollout manual production check. This block
+> records the procedure that was used, not an operation still to perform.
+> Replaying it is forbidden. See the status banner at the top of this runbook
+> and [`owner/action-items.md`](../owner/action-items.md).
 
 `bootstrap-role` creates, measures and executes the same sealed runner container
 against the current locked target using the disposable-admin capability; it does
@@ -1275,7 +1319,7 @@ to the pre-migration catalog; it is the expected migrated signature for C.
 
 ```bash
 python3 scripts/postgres_restore_runner.py capture-catalog --generation B \
-  --procedure-manifest-sha256 "$RESTORE_PROCEDURE_MANIFEST_SHA256" \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   >/secure/b-post-catalog.json
 sha256sum /secure/b-post-catalog.json
 ```
@@ -1439,7 +1483,7 @@ resolves a probe bind path:
 ```bash
 set -euo pipefail
 scripts/postgres_restore_transaction_probe.sh \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee
 ```
 
 Only a zero exit from the complete script permits
@@ -1453,11 +1497,11 @@ statuses are captured.
 
 ```bash
 scripts/postgres_restore_status_gate.sh --generation B \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   --expect-output exact \
   --expect 007=exact --expect drive-008=exact
 python3 scripts/postgres_restore_runner.py drop-role --generation B \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee
 ```
 
 ## Phase 8 - independent generation C final exact state
@@ -1491,41 +1535,41 @@ mv /secure/c-catalog.json /secure/c-pre-catalog.json
 cmp -s /secure/source-runtime.json /secure/c-runtime.json
 cmp -s /secure/source-catalog.json /secure/c-pre-catalog.json
 python3 scripts/postgres_restore_runner.py bootstrap-role --generation C \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee
 scripts/postgres_restore_status_gate.sh --generation C \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   --expect-output absent \
   --expect 007=absent --expect drive-008=absent
 python3 scripts/postgres_restore_runner.py apply-007 --generation C \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   >/dev/null
 scripts/postgres_restore_status_gate.sh --generation C \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   --expect-output exact \
   --expect 007=exact --expect drive-008=absent
 python3 scripts/postgres_restore_runner.py apply-drive-008 --generation C \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   >/dev/null
 scripts/postgres_restore_status_gate.sh --generation C \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   --expect-output exact \
   --expect 007=exact --expect drive-008=exact
 python3 scripts/postgres_restore_runner.py capture-catalog --generation C \
-  --procedure-manifest-sha256 "$RESTORE_PROCEDURE_MANIFEST_SHA256" \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   >/secure/c-final-catalog.json
 
 python3 scripts/postgres_restore_c_final_assert.py \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee
 
 cmp -s /secure/source-runtime.json /secure/c-runtime.json
 cmp -s /secure/source-catalog.json /secure/c-pre-catalog.json
 cmp -s /secure/b-post-catalog.json /secure/c-final-catalog.json
 scripts/postgres_restore_status_gate.sh --generation C \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4 \
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee \
   --expect-output exact \
   --expect 007=exact --expect drive-008=exact
 python3 scripts/postgres_restore_runner.py drop-role --generation C \
-  --procedure-manifest-sha256 a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4
+  --procedure-manifest-sha256 c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee
 sha256sum \
   /secure/c-runtime.json \
   /secure/c-pre-catalog.json \
@@ -1629,7 +1673,7 @@ implementation_artifacts:
   runtime_compatibility_assertion_sha256: "<sha256>"
   selected_full_assertion_sha256: "<sha256>"
   migration_status_harness_sha256: "<sha256>"
-  restore_procedure_manifest_sha256: "a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4"
+  restore_procedure_manifest_sha256: "c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee"
   transaction_probe_sha256: "0d9e668726ea70d67621ccd62d357e23b4e2d6cd4c74216365ef86c2d034d785"
 compatibility:
   source_image_identity_sha256: "<sha256>"
@@ -1710,7 +1754,7 @@ cost:
   quote_accessed_at_utc: "<RFC3339>"
   nonzero_costs_included: true
 isolation:
-  procedure_manifest_sha256: "a1735a3624bf7a565a9a991a0830e3826a2b0948c4b6fe2debe8f0b16888eff4"
+  procedure_manifest_sha256: "c919a4090f8faac023be61aab7f7fc72cb3112f0a13aa6331259137e9a1f0bee"
   approved_image_manifest_sha256: "<sha256>"
   measured_image_identity_sha256: "<sha256>"
   generation_a_inventory_sha256: "<sha256>"
@@ -1754,8 +1798,8 @@ isolation:
   repository_credentials_present_during_sql: false
   raw_business_rows_in_evidence: 0
 rollout_evidence_contract:
-  authorization_status: "NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR"
-  automation_schema_sha256: "<absent until separate reviewed PR merges>"
+  authorization_status: "BLOCKED_ON_UNCONFIGURED_PRODUCTION_BACKUP"
+  automation_schema_sha256: "<UNVERIFIED: the consumer contract merged as automation PR #94 / 0fa357d0baebc362b5bea0afba78e6233d91b7c8; the accepted schema digest is not recorded here>"
   required_fields_accepted: false
 repository_controls:
   bucket_visibility: "private"

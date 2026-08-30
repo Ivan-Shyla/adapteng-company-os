@@ -1,0 +1,961 @@
+"""Tests for scripts/postgres_runtime_role.py.
+
+The subject runs on the production host and handles the one value in this system
+that must never be seen: the runtime role's password. So the tests are weighted
+towards two things that cannot be checked by reading the code later — that the
+password never reaches an output stream, and that a write nobody could confirm
+is reported as a failure rather than a success.
+
+Everything that talks to Postgres or to Coolify is injected. No test runs docker,
+opens a socket, or needs a database.
+"""
+
+from __future__ import annotations
+
+import io
+import os
+import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
+from unittest import mock
+
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts import postgres_runtime_role as driver  # noqa: E402
+
+
+ROLE_CREDENTIAL = "an-example-value-standing-in-for-a-real-one"
+
+
+class ContainerDiscoveryTests(unittest.TestCase):
+    """The database is found by what it runs, not by what it is called."""
+
+    def test_a_name_and_image_pair_is_parsed(self) -> None:
+        rows = driver.parse_container_table("db\tpostgres:16\nweb\tnginx:1.27\n")
+        self.assertEqual(rows, [("db", "postgres:16"), ("web", "nginx:1.27")])
+
+    def test_blank_and_malformed_lines_are_ignored(self) -> None:
+        rows = driver.parse_container_table("\ndb\tpostgres:16\nbroken\n\t\n")
+        self.assertEqual(rows, [("db", "postgres:16")])
+
+    def test_the_image_decides_and_the_name_does_not(self) -> None:
+        """A container called db-something may be a backup sidecar, not a server."""
+
+        rows = [
+            ("adapteng-ops-db-backup", "pgbackrest/pgbackrest:2.51"),
+            ("some-container", "postgres:16.4"),
+        ]
+        self.assertEqual(driver.postgres_containers(rows), ["some-container"])
+
+    def test_a_registry_prefix_and_a_digest_do_not_hide_the_image(self) -> None:
+        rows = [("db", "ghcr.io/library/postgres:16@sha256:" + "0" * 64)]
+        self.assertEqual(driver.postgres_containers(rows), ["db"])
+
+    def test_no_postgres_container_aborts(self) -> None:
+        with self.assertRaises(driver.Abort) as raised:
+            driver.choose_container([])
+        self.assertIn("no running container", str(raised.exception))
+
+    def test_two_postgres_containers_abort_rather_than_pick(self) -> None:
+        """Which one holds canonical production is a decision, not a lookup."""
+
+        with self.assertRaises(driver.Abort) as raised:
+            driver.choose_container(["one", "two"])
+        self.assertIn("--container", str(raised.exception))
+
+    def test_exactly_one_is_returned(self) -> None:
+        self.assertEqual(driver.choose_container(["only"]), "only")
+
+
+class SqlBuildingTests(unittest.TestCase):
+    def test_a_quote_in_a_literal_is_doubled(self) -> None:
+        self.assertEqual(driver.sql_literal("it's"), "'it''s'")
+
+    def test_a_generated_password_needs_no_escaping_anywhere(self) -> None:
+        """A password with a quote or a slash would break the SQL or the DSN.
+
+        This is asserted over many draws rather than one, because the failure
+        would be intermittent and would first appear in production.
+        """
+
+        allowed = set(
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        )
+        for _ in range(200):
+            role_credential = driver.generate_credential()
+            self.assertTrue(set(role_credential) <= allowed)
+            self.assertGreaterEqual(len(role_credential), 43)
+
+    def test_two_passwords_are_not_the_same(self) -> None:
+        self.assertNotEqual(driver.generate_credential(), driver.generate_credential())
+
+    def test_an_absent_role_is_created_with_every_attribute_denied(self) -> None:
+        statement = driver.role_sql(ROLE_CREDENTIAL, role_exists=False)
+        self.assertIn("CREATE ROLE ai_gateway_runtime", statement)
+        for attribute in (
+            "NOSUPERUSER",
+            "NOCREATEDB",
+            "NOCREATEROLE",
+            "NOREPLICATION",
+            "NOBYPASSRLS",
+        ):
+            self.assertIn(attribute, statement)
+        self.assertIn("CONNECTION LIMIT 20", statement)
+
+    def test_an_existing_role_is_rotated_rather_than_recreated(self) -> None:
+        statement = driver.role_sql(ROLE_CREDENTIAL, role_exists=True)
+        self.assertNotIn("CREATE ROLE", statement)
+        self.assertIn("ALTER ROLE ai_gateway_runtime WITH LOGIN PASSWORD", statement)
+
+    def test_the_attributes_are_reset_even_for_a_role_that_already_existed(self) -> None:
+        """A role with a different history must not keep a privilege from it."""
+
+        statement = driver.role_sql(ROLE_CREDENTIAL, role_exists=True)
+        self.assertIn(
+            "ALTER ROLE ai_gateway_runtime NOSUPERUSER NOCREATEDB NOCREATEROLE",
+            statement,
+        )
+
+    def test_the_grants_cover_the_six_functions_and_nothing_else(self) -> None:
+        statement = driver.grant_sql()
+        granted = [line for line in statement.splitlines() if line.startswith("GRANT EXECUTE")]
+        self.assertEqual(len(granted), 6)
+        self.assertEqual(len(driver.GRANTED_FUNCTIONS), 6)
+        for name, _ in driver.GRANTED_FUNCTIONS:
+            self.assertIn(f"GRANT EXECUTE ON FUNCTION {name}(", statement)
+
+    def test_table_access_is_revoked_and_never_granted_back(self) -> None:
+        statement = driver.grant_sql()
+        self.assertIn("REVOKE ALL ON TABLE ai_gateway_call FROM ai_gateway_runtime;", statement)
+        self.assertNotIn("GRANT SELECT", statement)
+        self.assertNotIn("GRANT INSERT", statement)
+        self.assertNotIn("GRANT ALL", statement)
+
+    def test_only_usage_is_granted_on_the_schema(self) -> None:
+        statement = driver.grant_sql()
+        self.assertIn("REVOKE ALL ON SCHEMA public FROM ai_gateway_runtime;", statement)
+        self.assertIn("GRANT USAGE ON SCHEMA public TO ai_gateway_runtime;", statement)
+
+    def test_a_missing_function_reads_as_absent_rather_than_raising(self) -> None:
+        """to_regprocedure returns NULL for an unknown identity, so a drifted
+        signature is a survey result instead of an aborted survey."""
+
+        statement = driver.function_exists_sql("f", "TEXT")
+        self.assertIn("to_regprocedure('f(TEXT)')", statement)
+        self.assertIn("IS NOT NULL", statement)
+
+    def test_the_verifications_assert_all_four_and_give_the_role_back(self) -> None:
+        statement = driver.verification_sql()
+        for marker in ("4a", "4b", "4c", "4d"):
+            self.assertIn(marker, statement)
+        self.assertIn("insufficient_privilege", statement)
+        self.assertIn("sqlstate '22023'", statement)
+        self.assertTrue(statement.rstrip().endswith("RESET ROLE;"))
+
+    def test_the_positive_control_treats_a_denied_execute_as_a_failure(self) -> None:
+        """4d is the only check that proves the grant took effect at all."""
+
+        statement = driver.verification_sql()
+        self.assertIn(
+            "RAISE EXCEPTION '4d FAILED: EXECUTE denied, the grant did not take effect'",
+            statement,
+        )
+
+
+class DsnTests(unittest.TestCase):
+    def test_the_dsn_matches_the_declared_shape(self) -> None:
+        dsn = driver.build_dsn(ROLE_CREDENTIAL, "db.internal", 5432, "verify-full")
+        self.assertEqual(
+            dsn,
+            f"postgresql://ai_gateway_runtime:{ROLE_CREDENTIAL}@db.internal:5432/"
+            "adapteng_ops?sslmode=verify-full",
+        )
+
+    def test_the_ssl_mode_is_carried_through_rather_than_assumed(self) -> None:
+        dsn = driver.build_dsn(ROLE_CREDENTIAL, "h", 6543, "require")
+        self.assertIn("sslmode=require", dsn)
+        self.assertIn(":6543/", dsn)
+
+
+class FakeCoolify:
+    """A stand-in for the Coolify API that records calls and stores values."""
+
+    def __init__(self, existing: dict | None = None) -> None:
+        self.entries = [{"key": key, "value": value} for key, value in (existing or {}).items()]
+        self.calls: list[tuple[str, str]] = []
+        self.patch_status = 200
+        self.post_status = 201
+        self.store_writes = True
+        self.get_status = 200
+
+    def __call__(self, base_url, credential, method, path, payload):
+        self.calls.append((method, path))
+        if method == "GET":
+            return self.get_status, [dict(entry) for entry in self.entries]
+        status = self.patch_status if method == "PATCH" else self.post_status
+        if 200 <= status < 300 and self.store_writes:
+            for entry in self.entries:
+                if entry["key"] == payload["key"]:
+                    entry["value"] = payload["value"]
+                    break
+            else:
+                self.entries.append(dict(payload))
+        return status, None
+
+
+class PublishTests(unittest.TestCase):
+    """A value that could not be re-read has not been set, whatever the API said."""
+
+    def setUp(self) -> None:
+        self.real = driver.coolify_request
+        self.addCleanup(setattr, driver, "coolify_request", self.real)
+
+    def use(self, fake: FakeCoolify) -> FakeCoolify:
+        driver.coolify_request = fake
+        return fake
+
+    def test_an_existing_key_is_updated(self) -> None:
+        fake = self.use(FakeCoolify({"AI_GATEWAY_DATABASE_URL": "old"}))
+        outcome = driver.publish_environment_value(
+            "https://c.example", "t", "app-1", "AI_GATEWAY_DATABASE_URL", "new"
+        )
+        self.assertEqual(outcome, "updated")
+        self.assertEqual(fake.entries[0]["value"], "new")
+
+    def test_a_missing_key_falls_through_to_creation(self) -> None:
+        fake = self.use(FakeCoolify())
+        fake.patch_status = 404
+        outcome = driver.publish_environment_value(
+            "https://c.example", "t", "app-1", "AI_GATEWAY_DATABASE_URL", "new"
+        )
+        self.assertEqual(outcome, "created")
+        self.assertEqual([method for method, _ in fake.calls], ["PATCH", "POST", "GET"])
+
+    def test_an_accepted_write_that_stored_nothing_is_a_failure(self) -> None:
+        """The defect this exists to catch: HTTP 200 and no stored value."""
+
+        fake = self.use(FakeCoolify())
+        fake.store_writes = False
+        with self.assertRaises(driver.Abort) as raised:
+            driver.publish_environment_value(
+                "https://c.example", "t", "app-1", "AI_GATEWAY_DATABASE_URL", "new"
+            )
+        self.assertIn("not present on re-read", str(raised.exception))
+
+    def test_a_stored_value_that_differs_is_a_failure(self) -> None:
+        fake = self.use(FakeCoolify({"AI_GATEWAY_DATABASE_URL": "old"}))
+        fake.store_writes = False
+        with self.assertRaises(driver.Abort) as raised:
+            driver.publish_environment_value(
+                "https://c.example", "t", "app-1", "AI_GATEWAY_DATABASE_URL", "new"
+            )
+        self.assertIn("does not hold what was sent", str(raised.exception))
+
+    def test_an_unreadable_environment_is_a_failure_not_a_success(self) -> None:
+        fake = self.use(FakeCoolify())
+        fake.get_status = 500
+        with self.assertRaises(driver.Abort) as raised:
+            driver.publish_environment_value(
+                "https://c.example", "t", "app-1", "AI_GATEWAY_DATABASE_URL", "new"
+            )
+        self.assertIn("refusing to report success", str(raised.exception))
+
+    def test_an_unexpected_status_aborts_immediately(self) -> None:
+        fake = self.use(FakeCoolify())
+        fake.patch_status = 403
+        with self.assertRaises(driver.Abort) as raised:
+            driver.publish_environment_value(
+                "https://c.example", "t", "app-1", "AI_GATEWAY_DATABASE_URL", "new"
+            )
+        self.assertIn("HTTP 403", str(raised.exception))
+        self.assertEqual([method for method, _ in fake.calls], ["PATCH"])
+
+    def test_a_plaintext_base_address_is_refused(self) -> None:
+        with self.assertRaises(driver.Abort) as raised:
+            driver.coolify_request("http://c.example", "t", "GET", "/x", None)
+        self.assertIn("must be https", str(raised.exception))
+
+
+class FakePostgres:
+    """Answers the queries the driver asks, and records the SQL it was given."""
+
+    def __init__(
+        self,
+        role_exists: bool = False,
+        functions_present: bool = True,
+        ssl_answer: str = "false none none\n",
+    ) -> None:
+        self.role_exists = role_exists
+        self.functions_present = functions_present
+        self.ssl_answer = ssl_answer
+        self.statements: list[str] = []
+        self.notices = (
+            "NOTICE:  4a OK: INSERT denied\nNOTICE:  4b OK: SELECT denied\n"
+            "NOTICE:  4d OK: EXECUTE succeeded and the function validated its own input\n"
+        )
+
+    def __call__(self, container, sql, database=driver.DATABASE, check=True):
+        self.statements.append(sql)
+        if "pg_stat_ssl" in sql:
+            return 0, self.ssl_answer, ""
+        if "to_regprocedure" in sql:
+            return 0, "t\n" if self.functions_present else "f\n", ""
+        if "pg_roles WHERE rolname" in sql:
+            return 0, ("1\n" if self.role_exists else "0\n"), ""
+        if "pg_database" in sql:
+            return 0, "1\n", ""
+        if "to_regclass" in sql:
+            return 0, "t\n", ""
+        if "SET ROLE" in sql:
+            return 0, "", self.notices
+        return 0, "value\n", ""
+
+
+class ProvisionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.real_psql = driver.psql
+        self.real_run = driver.run
+        self.real_credential = driver.generate_credential
+        self.real_request = driver.coolify_request
+        self.addCleanup(setattr, driver, "psql", self.real_psql)
+        self.addCleanup(setattr, driver, "run", self.real_run)
+        self.addCleanup(setattr, driver, "generate_credential", self.real_credential)
+        self.addCleanup(setattr, driver, "coolify_request", self.real_request)
+        driver.generate_credential = lambda: ROLE_CREDENTIAL
+        driver.run = lambda command, stdin=None, check=True, environment=None: (0, "host\n", "")
+
+    def provision(self, postgres: FakePostgres, coolify: FakeCoolify, **overrides):
+        driver.psql = postgres
+        driver.coolify_request = coolify
+        arguments = {
+            "target": driver.DockerTarget("db"),
+            "application_uuid": "app-1",
+            "base_url": "https://c.example",
+            "credential": "an-example-credential",
+            "dsn_host": "db.internal",
+            "dsn_port": 5432,
+            "sslmode": "prefer",
+        }
+        arguments.update(overrides)
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_provision(**arguments)
+        return code, buffer.getvalue()
+
+    def test_a_dsn_the_server_cannot_honour_is_refused_before_anything_is_written(self) -> None:
+        """An unsatisfiable mode does not degrade - libpq refuses to connect at all.
+
+        Publishing it would leave a correct role and a gateway that cannot
+        start, which is the most expensive shape of failure here: everything
+        reports success except the thing that matters.
+        """
+
+        postgres = FakePostgres(ssl_answer="false none none\n")
+        with self.assertRaises(driver.Abort) as raised:
+            self.provision(postgres, FakeCoolify(), sslmode="verify-full")
+        self.assertIn("not using TLS", str(raised.exception))
+        joined = " ".join(postgres.statements).upper()
+        self.assertNotIn("CREATE ROLE", joined)
+        self.assertNotIn("GRANT ", joined)
+
+    def test_a_demanding_mode_is_refused_when_the_transport_cannot_be_measured(self) -> None:
+        """Undetermined is not permission to assume the stronger reading."""
+
+        with self.assertRaises(driver.Abort) as raised:
+            self.provision(FakePostgres(ssl_answer="\n"), FakeCoolify(), sslmode="require")
+        self.assertIn("could not be asked", str(raised.exception))
+
+    def test_a_demanding_mode_is_allowed_when_the_server_proves_it(self) -> None:
+        code, report = self.provision(
+            FakePostgres(ssl_answer="true TLSv1.3 AES\n"), FakeCoolify(), sslmode="verify-full"
+        )
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("ENCRYPTED", report)
+
+    def test_the_measured_transport_is_reported_next_to_the_declared_mode(self) -> None:
+        """A plaintext link is a fact the record must carry, not one it may omit."""
+
+        _, report = self.provision(FakePostgres(), FakeCoolify())
+        self.assertIn("NOT ENCRYPTED", report)
+        self.assertIn("sslmode=prefer", report)
+
+    def test_the_password_never_reaches_the_output(self) -> None:
+
+        postgres = FakePostgres()
+        code, report = self.provision(postgres, FakeCoolify())
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertNotIn(ROLE_CREDENTIAL, report)
+        self.assertIn("RESULT provision ok", report)
+
+    def test_the_password_reaches_postgres_and_the_dsn(self) -> None:
+        """The other half: it must be absent from the log and present where used."""
+
+        postgres = FakePostgres()
+        coolify = FakeCoolify()
+        self.provision(postgres, coolify)
+        self.assertTrue(any(ROLE_CREDENTIAL in statement for statement in postgres.statements))
+        stored = [item for item in coolify.entries if item["key"] == "AI_GATEWAY_DATABASE_URL"]
+        self.assertEqual(len(stored), 1)
+        self.assertIn(ROLE_CREDENTIAL, stored[0]["value"])
+        self.assertTrue(stored[0]["value"].startswith("postgresql://ai_gateway_runtime:"))
+
+    def test_a_missing_function_stops_the_run_before_anything_is_written(self) -> None:
+        """The grants would bind to nothing, and the role would look provisioned."""
+
+        postgres = FakePostgres(functions_present=False)
+        driver.psql = postgres
+        driver.coolify_request = FakeCoolify()
+        with self.assertRaises(driver.Abort) as raised:
+            driver.operate_provision(
+                driver.DockerTarget("db"), "app-1", "https://c.example", "t",
+                "db.internal", 5432, "prefer",
+            )
+        self.assertIn("008a", str(raised.exception))
+        self.assertFalse(any("CREATE ROLE" in s for s in postgres.statements))
+        self.assertFalse(any("GRANT" in s for s in postgres.statements))
+
+    def test_an_existing_role_is_rotated_and_said_so(self) -> None:
+        postgres = FakePostgres(role_exists=True)
+        _, report = self.provision(postgres, FakeCoolify())
+        self.assertIn("rotated", report)
+        self.assertTrue(any("ALTER ROLE ai_gateway_runtime WITH LOGIN" in s for s in postgres.statements))
+
+    def test_the_verifications_are_run_and_their_notices_reported(self) -> None:
+        postgres = FakePostgres()
+        _, report = self.provision(postgres, FakeCoolify())
+        self.assertIn("4a OK", report)
+        self.assertIn("4d OK", report)
+        self.assertIn("verifications 4a-4d passed", report)
+
+    def test_a_missing_dsn_host_is_refused_rather_than_guessed(self) -> None:
+        driver.psql = FakePostgres()
+        driver.coolify_request = FakeCoolify()
+        with self.assertRaises(driver.Abort) as raised:
+            driver.operate_provision(
+                driver.DockerTarget("db"), "app-1", "https://c.example", "t", "", 5432,
+                "verify-full",
+            )
+        self.assertIn("placement fact", str(raised.exception))
+
+    def test_a_missing_token_is_refused_before_the_role_is_touched(self) -> None:
+        postgres = FakePostgres()
+        driver.psql = postgres
+        with self.assertRaises(driver.Abort):
+            driver.operate_provision(
+                driver.DockerTarget("db"), "app-1", "https://c.example", "", "db.internal",
+                5432, "verify-full",
+            )
+        self.assertEqual(postgres.statements, [])
+
+
+class TransportTests(unittest.TestCase):
+    """The route to the database decides how much authority the operator needs."""
+
+    def test_a_credential_never_appears_in_the_command_line(self) -> None:
+        """argv is readable by every other process on the machine; an environment is not.
+
+        This is the whole reason the network route passes connection settings
+        through the environment rather than assembling a connection string.
+        """
+
+        target = driver.NetworkTarget("db.internal", 5432, "postgres", ROLE_CREDENTIAL, "require")
+        for part in target.command("adapteng_ops"):
+            self.assertNotIn(ROLE_CREDENTIAL, part)
+        self.assertEqual(target.environment()["PGPASSWORD"], ROLE_CREDENTIAL)
+
+    def test_the_network_route_invokes_no_docker_at_all(self) -> None:
+        """The runner holds no Docker socket, so a stray docker call is a hard failure."""
+
+        target = driver.NetworkTarget("db.internal", 5432, "postgres", ROLE_CREDENTIAL, "require")
+        self.assertNotIn("docker", target.command("adapteng_ops"))
+        self.assertEqual(target.command("adapteng_ops")[0], "psql")
+
+    def test_the_docker_route_is_unchanged(self) -> None:
+        """The route a human with a shell uses must keep behaving exactly as before."""
+
+        self.assertEqual(
+            driver.DockerTarget("db").command("adapteng_ops"),
+            [
+                "docker", "exec", "-i", "-u", "postgres", "db",
+                "psql", "-v", "ON_ERROR_STOP=1", "-At", "-d", "adapteng_ops", "-f", "-",
+            ],
+        )
+        self.assertIsNone(driver.DockerTarget("db").environment())
+
+    def test_a_network_route_without_a_host_is_refused_rather_than_defaulted(self) -> None:
+        with self.assertRaises(driver.Abort) as raised:
+            driver.NetworkTarget("", 5432, "postgres", ROLE_CREDENTIAL, "require")
+        self.assertIn("host", str(raised.exception))
+
+    def test_a_network_route_without_a_credential_is_refused(self) -> None:
+        with self.assertRaises(driver.Abort) as raised:
+            driver.NetworkTarget("db.internal", 5432, "postgres", "", "require")
+        self.assertIn("credential", str(raised.exception))
+
+    def test_the_default_transport_is_the_one_that_needs_no_host_access(self) -> None:
+        """A default that quietly needs the Docker socket would undo the whole design."""
+
+        self.assertEqual(driver.parse_arguments(["recon"]).transport, "network")
+
+    def test_the_survey_connects_with_a_mode_that_can_answer_the_question(self) -> None:
+        """A survey that refuses to connect unencrypted cannot report that it is unencrypted.
+
+        The published DSN's mode and this script's own connection mode are
+        separate facts. They now happen to coincide, because the server answered
+        that it offers no TLS, but they remain independently settable: the
+        survey's mode must never be derived from the DSN's, or the contradiction
+        it exists to settle becomes undiscoverable.
+        """
+
+        arguments = driver.parse_arguments(["recon"])
+        self.assertEqual(arguments.admin_sslmode, "prefer")
+        self.assertNotIn(arguments.admin_sslmode, driver.DEMANDING_SSL_MODES)
+        overridden = driver.parse_arguments(["recon", "--sslmode", "verify-full"])
+        self.assertEqual(overridden.admin_sslmode, "prefer")
+
+    def test_the_published_mode_defaults_to_one_this_server_can_honour(self) -> None:
+        """Measured, not assumed: pg_stat_ssl reported this server as not encrypted."""
+
+        self.assertNotIn(driver.parse_arguments(["provision"]).sslmode, driver.DEMANDING_SSL_MODES)
+
+    def test_the_declared_ssl_mode_reaches_the_connection(self) -> None:
+        """The mode is the question being settled empirically, so it must not be hard-coded."""
+
+        for mode in ("require", "disable", "verify-full"):
+            target = driver.NetworkTarget("db.internal", 5432, "postgres", ROLE_CREDENTIAL, mode)
+            self.assertEqual(target.environment()["PGSSLMODE"], mode)
+
+    def test_the_route_is_described_without_disclosing_the_credential(self) -> None:
+        target = driver.NetworkTarget("db.internal", 5432, "postgres", ROLE_CREDENTIAL, "require")
+        self.assertNotIn(ROLE_CREDENTIAL, target.describe())
+        self.assertIn("db.internal:5432", target.describe())
+
+
+class EncryptionProbeTests(unittest.TestCase):
+    """The one query that settles enable_ssl=false against ssl_mode=require."""
+
+    def setUp(self) -> None:
+        self.real_psql = driver.psql
+        self.addCleanup(setattr, driver, "psql", self.real_psql)
+
+    def probe(self, answer: str) -> tuple[str, str]:
+        driver.psql = lambda target, sql, database=driver.DATABASE, check=True: (0, answer, "")
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            state = driver.report_transport_encryption(driver.DockerTarget("db"))
+        return state, buffer.getvalue()
+
+    def test_an_encrypted_connection_is_reported_as_encrypted(self) -> None:
+        state, report = self.probe("t TLSv1.3 TLS_AES_256_GCM_SHA384\n")
+        self.assertEqual(state, driver.ENCRYPTED)
+        self.assertIn("ENCRYPTED", report)
+        self.assertIn("TLSv1.3", report)
+
+    def test_both_spellings_of_the_server_answer_are_understood(self) -> None:
+        """A boolean cast to text is 'true'; the same column read bare is 't'.
+
+        Matching one spelling turned a determinate server answer into
+        "undetermined" on the first live run: the probe reported about its own
+        expectations rather than about the thing it measured.
+        """
+
+        self.assertEqual(self.probe("true TLSv1.3 AES\n")[0], driver.ENCRYPTED)
+        self.assertEqual(self.probe("t TLSv1.3 AES\n")[0], driver.ENCRYPTED)
+        self.assertEqual(self.probe("false none none\n")[0], driver.PLAINTEXT)
+        self.assertEqual(self.probe("f none none\n")[0], driver.PLAINTEXT)
+
+    def test_an_unencrypted_connection_is_named_plainly_and_not_repaired(self) -> None:
+        """Saying so is the deliverable; changing production transport is not."""
+
+        state, report = self.probe("false none none\n")
+        self.assertEqual(state, driver.PLAINTEXT)
+        self.assertIn("NOT ENCRYPTED", report)
+        self.assertIn("owner decision", report)
+
+    def test_an_unreadable_answer_is_undetermined_rather_than_assumed_safe(self) -> None:
+        """The failure this whole workstream exists to fix is a silent collapse to a wrong verdict."""
+
+        state, report = self.probe("\n")
+        self.assertEqual(state, driver.UNDETERMINED)
+        self.assertIn("undetermined", report)
+        self.assertNotIn("ENCRYPTED (", report)
+
+    def test_an_unexpected_answer_is_not_read_as_encrypted(self) -> None:
+        state, _ = self.probe("maybe none none\n")
+        self.assertEqual(state, driver.UNDETERMINED)
+
+
+class DiscoveryTests(unittest.TestCase):
+    """Finding the database with the credential we already hold, not a new one."""
+
+    def setUp(self) -> None:
+        self.real_request = driver.coolify_request
+        self.addCleanup(setattr, driver, "coolify_request", self.real_request)
+
+    def respond(self, status: int, payload):
+        driver.coolify_request = lambda base, cred, method, path, body: (status, payload)
+
+    def discover(self):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            found = driver.discover_admin_connection("https://c.example", "a-credential")
+        return found, buffer.getvalue()
+
+    def test_the_connection_is_taken_from_the_recorded_internal_address(self) -> None:
+        self.respond(200, [{
+            "name": "adapteng-postgres",
+            "type": "standalone-postgresql",
+            "internal_db_url": f"postgres://postgres:{ROLE_CREDENTIAL}@db-abc:5432/postgres",
+        }])
+        found, report = self.discover()
+        self.assertEqual(found["host"], "db-abc")
+        self.assertEqual(found["port"], "5432")
+        self.assertEqual(found["user"], "postgres")
+        self.assertEqual(found["credential"], ROLE_CREDENTIAL)
+        self.assertNotIn(ROLE_CREDENTIAL, report)
+
+    def test_two_databases_are_refused_rather_than_guessed_between(self) -> None:
+        """Guessing which database is production is the one error this must never make."""
+
+        self.respond(200, [
+            {"name": "a", "type": "standalone-postgresql", "internal_db_url": "postgres://u:p@a:5432/x"},
+            {"name": "b", "type": "standalone-postgresql", "internal_db_url": "postgres://u:p@b:5432/x"},
+        ])
+        with self.assertRaises(driver.Abort) as raised:
+            self.discover()
+        self.assertIn("2 Postgres databases", str(raised.exception))
+
+    def test_a_database_without_an_internal_address_is_refused(self) -> None:
+        self.respond(200, [{"name": "a", "type": "standalone-postgresql", "internal_db_url": ""}])
+        with self.assertRaises(driver.Abort) as raised:
+            self.discover()
+        self.assertIn("neither an internal address nor the parts", str(raised.exception))
+
+    def test_the_parts_are_used_when_the_assembled_address_is_absent(self) -> None:
+        """Not every version reports the assembled URL; the parts are enough."""
+
+        self.respond(200, [{
+            "name": "a",
+            "type": "standalone-postgresql",
+            "uuid": "pgdgbwzsuuxhw55g8v5opjgn",
+            "postgres_user": "postgres",
+            "postgres_password": ROLE_CREDENTIAL,
+        }])
+        found, report = self.discover()
+        self.assertEqual(found["host"], "pgdgbwzsuuxhw55g8v5opjgn")
+        self.assertEqual(found["credential"], ROLE_CREDENTIAL)
+        self.assertNotIn(ROLE_CREDENTIAL, report)
+
+    def test_a_record_is_recognised_by_more_than_one_spelling(self) -> None:
+        """A filter on one field reports an empty instance when the field is named differently."""
+
+        self.assertTrue(driver.looks_like_postgres({"type": "standalone-postgresql"}))
+        self.assertTrue(driver.looks_like_postgres({"image": "postgres:16-alpine"}))
+        self.assertTrue(driver.looks_like_postgres({"database_type": "PostgreSQL"}))
+        self.assertTrue(driver.looks_like_postgres({"postgres_user": "postgres"}))
+        self.assertFalse(driver.looks_like_postgres({"type": "standalone-redis"}))
+
+    def test_an_empty_result_reports_what_was_actually_there(self) -> None:
+        """A wrong filter and an empty instance read identically unless it says."""
+
+        self.respond(200, [{"name": "cache", "type": "standalone-redis"}])
+        with self.assertRaises(driver.Abort) as raised:
+            self.discover()
+        self.assertIn("cache", str(raised.exception))
+        self.assertIn("standalone-redis", str(raised.exception))
+
+    def test_a_non_postgres_instance_is_not_mistaken_for_one(self) -> None:
+        self.respond(200, [{"name": "cache", "type": "standalone-redis", "internal_db_url": "redis://r:6379"}])
+        with self.assertRaises(driver.Abort):
+            self.discover()
+
+    def test_a_refused_listing_aborts_instead_of_connecting_somewhere_else(self) -> None:
+        self.respond(403, None)
+        with self.assertRaises(driver.Abort) as raised:
+            self.discover()
+        self.assertIn("403", str(raised.exception))
+
+    def build_target(self, argv: list[str], **environment_overrides):
+        environment = {k: v for k, v in os.environ.items() if k != "PGPASSWORD_ADMIN"}
+        environment["COOLIFY_URL"] = "https://c.example"
+        environment["COOLIFY_API_TOKEN"] = "a-credential"
+        environment.update(environment_overrides)
+        with mock.patch.dict(os.environ, environment, clear=True):
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                return driver.choose_target(driver.parse_arguments(argv))
+
+    def test_the_recorded_administrative_user_is_used_not_a_default(self) -> None:
+        """A default that cannot be told apart from a choice will win over the truth.
+
+        The live database records its administrative user as adapteng_ops. A
+        default of "postgres" is indistinguishable from someone asking for
+        postgres, so it replaced the recorded value and the server rejected the
+        login with a message that named only the password.
+        """
+
+        self.respond(200, [{
+            "name": "adapteng-ops-db",
+            "type": "standalone-postgresql",
+            "internal_db_url": f"postgres://adapteng_ops:{ROLE_CREDENTIAL}@db-uuid:5432/adapteng_ops",
+        }])
+        target = self.build_target(["recon"])
+        self.assertEqual(target.user, "adapteng_ops")
+
+    def test_an_explicitly_named_user_still_wins(self) -> None:
+        self.respond(200, [{
+            "name": "adapteng-ops-db",
+            "type": "standalone-postgresql",
+            "internal_db_url": f"postgres://adapteng_ops:{ROLE_CREDENTIAL}@db-uuid:5432/adapteng_ops",
+        }])
+        target = self.build_target(["recon", "--db-user", "someone_else"])
+        self.assertEqual(target.user, "someone_else")
+
+    def test_naming_a_host_overrides_the_address_and_not_the_login(self) -> None:
+        """An address someone knows should not cost them a credential they do not."""
+
+        self.respond(200, [{
+            "name": "adapteng-ops-db",
+            "type": "standalone-postgresql",
+            "internal_db_url": f"postgres://adapteng_ops:{ROLE_CREDENTIAL}@db-uuid:5432/adapteng_ops",
+        }])
+        target = self.build_target(["recon", "--db-host", "10.0.0.9"])
+        self.assertEqual(target.host, "10.0.0.9")
+        self.assertEqual(target.user, "adapteng_ops")
+        self.assertEqual(target.environment()["PGPASSWORD"], ROLE_CREDENTIAL)
+
+    def test_a_fully_specified_connection_asks_coolify_nothing(self) -> None:
+        """Discovery is a fallback, not a toll on every run."""
+
+        def refuse(*args, **kwargs):
+            raise AssertionError("discovery was called when nothing needed discovering")
+
+        driver.coolify_request = refuse
+        target = self.build_target(
+            ["recon", "--db-host", "10.0.0.9", "--db-user", "someone"],
+            PGPASSWORD_ADMIN="a-supplied-credential",
+        )
+        self.assertEqual(target.host, "10.0.0.9")
+
+    def test_discovery_needs_no_database_credential_of_its_own(self) -> None:
+        """The whole point: no new secret is created, stored or rotated for this."""
+
+        self.respond(200, [{
+            "name": "adapteng-postgres",
+            "type": "standalone-postgresql",
+            "internal_db_url": f"postgres://postgres:{ROLE_CREDENTIAL}@db-abc:5432/postgres",
+        }])
+        environment = {k: v for k, v in os.environ.items() if k != "PGPASSWORD_ADMIN"}
+        environment["COOLIFY_URL"] = "https://c.example"
+        environment["COOLIFY_API_TOKEN"] = "a-credential"
+        with mock.patch.dict(os.environ, environment, clear=True):
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                target = driver.choose_target(driver.parse_arguments(["recon"]))
+        self.assertEqual(target.host, "db-abc")
+        self.assertEqual(target.environment()["PGPASSWORD"], ROLE_CREDENTIAL)
+
+
+class ReconTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.real_psql = driver.psql
+        self.real_run = driver.run
+        self.addCleanup(setattr, driver, "psql", self.real_psql)
+        self.addCleanup(setattr, driver, "run", self.real_run)
+        driver.run = lambda command, stdin=None, check=True, environment=None: (0, "host\n", "")
+
+    def recon(self, postgres: FakePostgres) -> tuple[int, str]:
+        driver.psql = postgres
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_recon(driver.DockerTarget("db"))
+        return code, buffer.getvalue()
+
+    def test_recon_writes_nothing(self) -> None:
+        """A survey that changes state is not a survey."""
+
+        postgres = FakePostgres()
+        self.recon(postgres)
+        joined = " ".join(postgres.statements).upper()
+        for verb in ("CREATE ", "ALTER ", "GRANT ", "REVOKE ", "INSERT ", "UPDATE ", "DROP "):
+            self.assertNotIn(verb, joined)
+
+    def test_recon_reports_a_ready_database(self) -> None:
+        code, report = self.recon(FakePostgres())
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("ready_to_provision=yes", report)
+        self.assertIn("role ai_gateway_runtime: ABSENT", report)
+
+    def test_recon_reports_missing_functions_without_failing(self) -> None:
+        """An incomplete database is a finding to read, not an error to debug."""
+
+        code, report = self.recon(FakePostgres(functions_present=False))
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("ready_to_provision=no", report)
+        self.assertIn("missing_functions=6", report)
+
+
+class CredentialProbeTests(unittest.TestCase):
+    """Reporting which recorded login works, without disclosing any of them."""
+
+    URL_CREDENTIAL = "url-side-cred-1234567890"
+    PART_CREDENTIAL = "part-side-cred-0987654321"
+
+    def setUp(self) -> None:
+        self.real_request = driver.coolify_request
+        self.real_psql = driver.psql
+        self.addCleanup(setattr, driver, "coolify_request", self.real_request)
+        self.addCleanup(setattr, driver, "psql", self.real_psql)
+        self.attempted: list[dict] = []
+
+    def record(self, **overrides) -> dict:
+        base = {
+            "name": "adapteng-ops-db",
+            "uuid": "db-uuid",
+            "type": "standalone-postgresql",
+            "postgres_user": "postgres",
+            "postgres_db": "adapteng_ops",
+            "postgres_password": self.PART_CREDENTIAL,
+            "internal_db_url": (
+                f"postgres://postgres:{self.URL_CREDENTIAL}@db-uuid:5432/postgres"
+            ),
+        }
+        base.update(overrides)
+        return base
+
+    def respond(self, record) -> None:
+        payload = [record] if isinstance(record, dict) else record
+        driver.coolify_request = lambda base, cred, method, path, body: (200, payload)
+
+    def accept(self, *working: str) -> None:
+        def fake(target, sql, database=driver.DATABASE, check=True):
+            environment = target.environment()
+            self.attempted.append(environment)
+            if environment["PGPASSWORD"] in working:
+                return 0, "1\n", ""
+            # psql writes connection failures to stderr, which is where the
+            # reason has to be read from; a report that reads stdout finds an
+            # empty string and says only "exit 2".
+            return 2, "", 'psql: error: FATAL:  password authentication failed for user "postgres"\n'
+
+        driver.psql = fake
+
+    def probe(self) -> tuple[int, str]:
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_credentials("https://c.example", "a-credential", "prefer")
+        return code, buffer.getvalue()
+
+    def test_the_working_login_is_identified_by_source(self) -> None:
+        self.respond(self.record())
+        self.accept(self.PART_CREDENTIAL)
+        code, report = self.probe()
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("postgres_user/postgres_password", report)
+        self.assertIn("AUTHENTICATED", report)
+        self.assertIn("working=1 of 2", report)
+
+    def test_no_credential_is_ever_printed(self) -> None:
+        """The whole point of a shape report is that it is not the value."""
+
+        self.respond(self.record())
+        self.accept(self.URL_CREDENTIAL)
+        _, report = self.probe()
+        self.assertNotIn(self.URL_CREDENTIAL, report)
+        self.assertNotIn(self.PART_CREDENTIAL, report)
+        self.assertIn("len=24", report)
+        self.assertIn("fingerprint=", report)
+
+    def test_both_recorded_copies_are_tried_not_only_the_first(self) -> None:
+        """A rejected first copy must not stop the second from being tested."""
+
+        self.respond(self.record())
+        self.accept(self.PART_CREDENTIAL)
+        self.probe()
+        used = [environment["PGPASSWORD"] for environment in self.attempted]
+        self.assertEqual(used, [self.URL_CREDENTIAL, self.PART_CREDENTIAL])
+
+    def test_two_copies_that_agree_share_a_fingerprint(self) -> None:
+        """Disagreement between the record's two copies is itself the finding."""
+
+        agreed = self.record(postgres_password=self.URL_CREDENTIAL)
+        self.respond(agreed)
+        self.accept()
+        _, report = self.probe()
+        fingerprints = {line.split("fingerprint=")[1].strip()
+                        for line in report.splitlines() if "fingerprint=" in line}
+        self.assertEqual(len(fingerprints), 1)
+
+    def test_every_copy_being_rejected_names_the_owner_action(self) -> None:
+        """A password fixed at initialisation is not recoverable by reading harder."""
+
+        self.respond(self.record())
+        self.accept()
+        code, report = self.probe()
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("none-authenticate", report)
+        self.assertIn("reset the password", report)
+        self.assertIn("password authentication failed", report)
+
+    def test_a_record_with_no_login_at_all_reports_what_it_had(self) -> None:
+        self.respond({"name": "x", "uuid": "u", "type": "standalone-postgresql"})
+        self.accept()
+        with self.assertRaises(driver.Abort) as raised:
+            self.probe()
+        self.assertIn("no usable login", str(raised.exception))
+        self.assertIn("uuid", str(raised.exception))
+
+    def test_the_probe_reads_and_writes_nothing_in_the_database(self) -> None:
+        statements: list[str] = []
+
+        def fake(target, sql, database=driver.DATABASE, check=True):
+            statements.append(sql)
+            return 0, "1\n", ""
+
+        self.respond(self.record())
+        driver.psql = fake
+        self.probe()
+        joined = " ".join(statements).upper()
+        for verb in ("CREATE ", "ALTER ", "GRANT ", "REVOKE ", "INSERT ", "UPDATE ", "DROP "):
+            self.assertNotIn(verb, joined)
+
+    def test_ambiguity_is_refused_here_too(self) -> None:
+        """The probe must not pick a database the other operations would refuse to."""
+
+        self.respond([self.record(), self.record(name="second", uuid="db-two")])
+        self.accept()
+        with self.assertRaises(driver.Abort) as raised:
+            self.probe()
+        self.assertIn("2 Postgres databases", str(raised.exception))
+
+    def test_an_absent_credential_is_described_as_absent_not_as_empty(self) -> None:
+        self.assertEqual(driver.describe_secret(""), "absent")
+
+    def test_punctuation_in_a_credential_is_reported_by_class(self) -> None:
+        """Mangling in transit shows up as a changed character set, not a changed length."""
+
+        described = driver.describe_secret("aB3%/x")
+        self.assertIn("lower", described)
+        self.assertIn("upper", described)
+        self.assertIn("digit", described)
+        self.assertIn("other[%/]", described)
+
+
+class EntryPointTests(unittest.TestCase):
+    def test_an_abort_is_reported_and_exits_non_zero(self) -> None:
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.main(["provision"])
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("ABORT", buffer.getvalue())
+
+    def test_an_unknown_operation_is_refused(self) -> None:
+        with self.assertRaises(SystemExit) as raised:
+            driver.parse_arguments(["destroy"])
+        self.assertEqual(raised.exception.code, driver.EXIT_USAGE)
+
+
+if __name__ == "__main__":
+    unittest.main()

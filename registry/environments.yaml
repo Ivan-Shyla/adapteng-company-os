@@ -1,13 +1,81 @@
 # AdaptEng Company OS — Environment Registry
 # Production hosts, domains, platform and budgets. NO secrets — names/hostnames/ids only.
 version: 1
-updated: 2026-07-28
+updated: 2026-08-11
 
 platform:
   compute: Hetzner (EU region) — single self-hosted host
   orchestrator: Coolify (self-hosted PaaS on Hetzner)
   container_network: coolify (internal; services reach each other by alias, no public exposure)
   policy: upgrade the existing host only after 7 days of measured CPU/RAM/disk pressure (ARCHITECTURE.md §9)
+
+operator_access:
+  production_host: 37.27.213.220
+  ssh_user: adapteng-ai
+  ssh_port: 22
+  private_key_ref: PROD_SSH_PRIVATE_KEY
+  host_verification_ref: PROD_SSH_KNOWN_HOSTS
+  coolify_url_ref: COOLIFY_URL
+  coolify_api_ref: COOLIFY_API_TOKEN
+  verified: 2026-08-06
+  note: "The production host accepted the managed adapteng-ai identity. Local owner-key filenames are not an authority; use the managed GitHub SSH identity or its verified local counterpart."
+  reachable_from:
+    # Measured 2026-08-11, both directions of the same question.
+    github_hosted_runner:
+      ssh_22: false
+      https_443: true
+      evidence: "run 31500471689 - ssh: connect to host 37.27.213.220 port 22: Connection timed out, twice, on a runner whose Coolify API calls over 443 succeed from the same job"
+    operator_workstation:
+      ssh_22: true
+      https_443: true
+      evidence: "TCP connect succeeded to both ports from a permitted workstation on the same date"
+    reading: >-
+      The daemon is up and the address is right, so the difference is the source.
+      Port 22 does not accept GitHub-hosted runners. No workflow in this
+      repository had ever opened an SSH connection to this host before
+      postgres-runtime-role.yml, so nothing regressed; the path had simply never
+      been exercised.
+    blocked: >-
+      ~~scripts/postgres_runtime_role.py, and any future host-side workflow~~
+      Lifted 2026-08-11. The block was real - run 31500471689 failed on the SSH
+      timeout recorded above - but it is no longer a standing condition.
+    resolved: >-
+      The first option was taken, and implemented holding less authority than
+      that option described. The operations runner is not installed on the
+      host: it is a container deployed through Coolify onto the predefined
+      Docker network, so it reaches the managed database at its internal
+      address with no shell on the host, no Docker socket and no root. It
+      cannot touch the host at all. Port 22 stays shut to the published runner
+      ranges, and no credential moved onto a personal machine - which is what
+      the three options were being weighed against.
+    resolved_by: >-
+      reconcile run 31514155983 (uuid o145rw7urft00qoj3y9vnrma) and deploy run
+      31514210128 (deployment kd6zpavgo9j8624lddy3q39k), 2026-08-11
+    runner:
+      label: adapteng-ops
+      registered_to: this repository alone
+      status: online
+      status_verified: >-
+        run 31543437220, 2026-08-11T22:41Z, RESULT status ok runner=online,
+        labels [Linux, X64, adapteng-ops, self-hosted]
+      consumed_by: ".github/workflows/postgres-runtime-role.yml, runs-on: [self-hosted, adapteng-ops]"
+    proof_the_block_lifted: >-
+      postgres_runtime_role.py failed at 14:14Z on the SSH timeout, the runner
+      came online at 16:47Z, and the same script has succeeded three times
+      since - most recently run 31518891559, RESULT provision ok
+      role=ai_gateway_runtime dsn_published=yes. That published DSN is what the
+      gateway connects with, so this runner sits upstream of the readiness
+      proof recorded further down this file.
+    scope_limit: >-
+      This unblocked host-network work, and nothing else. It was not needed for
+      the readiness probe, which runs inside the application container through
+      the Coolify scheduled-task API and needs no host access at all. Do not
+      read this runner as a prerequisite for deploying or verifying the
+      gateway; it is a prerequisite for reaching the database directly. Its
+      reach is narrower than "on the coolify network" suggests: run 31531842811
+      reports placement=runner_off_application_network, so it resolves the
+      managed database and none of the running applications. That is why
+      readiness is asked from inside the container rather than from here.
 
 excluded_personal_projects:
   status: excluded-from-company-os
@@ -32,6 +100,188 @@ domains:
   - host: adapteng-baserow-adapter:8080
     service: adapteng-baserow-adapter
     exposure: INTERNAL ONLY (coolify network alias; no public URL — verified 503 externally)
+
+created_not_yet_deployed:
+  # Production resources whose Coolify application EXISTS and whose configuration
+  # has been converged and re-read, but which have never been released. Presence
+  # here is evidence of a configured resource, never of a running service.
+  - resource: ai-gateway
+    service: ai-gateway            # registry/services.yaml
+    repo: adapteng-automation-platform
+    path: services/ai-gateway
+    target_runtime: Coolify (Hetzner), internal-only on the coolify network
+    intended_exposure: INTERNAL ONLY — no public URL, reached by container alias like the Baserow adapter
+    exists_in_production: true
+    coolify_app_uuid: e13v7c6zjof7dmcpywqbyas3
+    coolify_project: adapteng-ops (phhk1euleikwkegtr97hexi6)
+    coolify_environment: production
+    coolify_destination: c3dnc3udkoenz9zhw148mbu0   # the destination adapteng-baserow-adapter and n8n-selfhosted use
+    source: GitHub App adapteng-coolify (the platform repository is private, so the public-repo source cannot read it)
+    endpoint: internal only — no public URL; reached on the coolify network as the container alias
+    application_status: "running:healthy — a real verdict as of deployment r71zy5b1cxed8o3tqvn38cji, not the reported-healthy-while-detached kind. It was 'running:unknown' until 2026-08-12, and the reason was worth keeping: enabled is false so Coolify's generated curl/wget probe cannot run, which is deliberate because that probe is what failed every earlier deployment on 'curl: not found' at n12qiqlkjcb74u0bakmhtwqz, and with no HEALTHCHECK in the image ApplicationDeploymentJob::health_check simply set newVersionIsHealthy and returned without testing anything. Nothing ran, so 'unknown' was the honest reading of an absent gate. Platform PR #127 merged as feee3166 and put the HEALTHCHECK in the image, deploy/ai-gateway.json moved to container_gate 'image', and Coolify now logs that it found a custom healthcheck and waits for it. What makes the verdict meaningful is what the probe asks: /ready opens a database connection, so a healthy container is one that is both serving and reaching Postgres, and a future deployment that cannot reach the database is now rolled back instead of promoted. Confirmed by a status read four minutes after the deploy, past the full 30s start period plus five 15s retries in which an unhealthy container would have been marked."
+    state: created, configured, deployed and answering /ready
+    creation_evidence:
+      run: 31496735683
+      created: "2026-08-11T13:33Z"
+      declared_by: deploy/ai-gateway.json
+      note: "The run that created it then failed, because this Coolify version reports no delivery-flag settings and the driver refused to claim an unverifiable write. The application was created before that abort; nothing was deployed."
+    configuration_evidence:
+      run: 31497863819
+      completed: "2026-08-11T13:45Z"
+      result: "reconcile ok changed=yes pending_owner_env=3 unreported_settings=4"
+      declared_keys_written_and_reread: 14
+      verified: 2026-08-11
+    pending_owner_held_values:
+      # Empty by measurement, not by assumption. See owner_held_values_bound.
+      []
+    owner_held_values_bound:
+      # All three are bound on the application. Each moved here on evidence and
+      # the evidence differs, so what each one proves is recorded with it.
+      #
+      # AI_GATEWAY_DATABASE_URL: proved working, not merely present. /ready
+      # opens a database connection where /health does not (see
+      # known_deployment_requirements below, read from platform main), and
+      # /ready answered 200 from inside the container. A wrong or absent DSN
+      # cannot produce that answer.
+      #
+      # AI_GATEWAY_BEARER_TOKENS and GOOGLE_APPLICATION_CREDENTIALS: reported
+      # present on the resource by ai_gateway_credentials.py status, run
+      # 31543126097, "RESULT status ok credentials=bound" - the storage
+      # /secrets/vertex-service-account.json is present and both environment
+      # keys are set. Present is not the same as correct: a secret cannot be
+      # read back from either store, by design, so this is binding confirmed
+      # and not value verified. The first live model call is what would prove
+      # the Vertex key, and it is held for the owner's GO.
+      #
+      # The caller credential was generated by automation rather than handed
+      # over: ai_gateway_credentials.py mint-caller mints it, writes it to the
+      # Coolify environment and to a repository secret from one value in
+      # memory so the two cannot disagree, and never prints, returns or logs
+      # it.
+      - AI_GATEWAY_DATABASE_URL
+      - AI_GATEWAY_BEARER_TOKENS
+      - GOOGLE_APPLICATION_CREDENTIALS
+    managed_database:
+      # Read from the instance on 2026-08-11, not assumed. The address half of
+      # internal_db_url is recorded; the credential half of that same string is
+      # not, and is never read into this repository.
+      uuid: pgdgbwzsuuxhw55g8v5opjgn
+      name: adapteng-ops-db
+      image: postgres:16
+      status: running:healthy
+      internal_address: pgdgbwzsuuxhw55g8v5opjgn:5432/adapteng_ops
+      database: adapteng_ops
+      owner_role: adapteng_ops
+      is_public: false
+      reachable_by: >-
+        Not from the public internet and not from a GitHub-hosted runner. The
+        dedicated operations runner reaches it, resolving it to 10.0.1.7, which
+        is the whole reason that runner was deployed as a container rather than
+        installed on the host. Note the limit measured in run 31531842811: the
+        runner shares this database's network but not the network the
+        applications are placed on, and resolves none of them - not even
+        itself. A database is placed by a different code path from an
+        application, so reaching this address says nothing about reaching the
+        gateway.
+      enable_ssl: false
+      ssl_mode_reported: require
+      dsn_host_variable: AI_GATEWAY_PG_DSN_HOST
+      resolved: >-
+        Settled from the network contract, not from either document. recon
+        connected to production Postgres and read pg_stat_ssl, and the server
+        answered 'false none none': the connection is not encrypted and no TLS
+        is on offer. enable_ssl=false is the true one; ssl_mode=require is the
+        name that does not mean what it suggests.
+      resolved_by: PR #120 (b6423fe), 2026-08-11
+      acted_on: >-
+        Recording the answer was not enough. libpq does not degrade a DSN
+        declaring require or verify-full against a server without TLS, it
+        refuses to connect, so publishing a demanding mode would have produced a
+        correct role, a successful provision and a gateway that cannot start -
+        everything reporting success except the thing that matters. The
+        published mode is prefer, which this server can honour and which
+        upgrades by itself if TLS is ever enabled. provision re-measures the
+        transport on every run and refuses to publish any demanding mode it has
+        not observed being satisfied, including when the measurement is
+        unreadable - undetermined is not permission to assume.
+    pending_owner_ui_settings:
+      # This Coolify version reports these nowhere on the application resource, so
+      # a write to them could not be verified and the driver does not attempt one.
+      # deploy/ai-gateway.json records why leaving each unset is safe.
+      - is_auto_deploy_enabled
+      - is_preview_deployments_enabled
+      - is_force_https_enabled
+      - connect_to_docker_network
+    test_evidence:
+      run: 31214858400
+      workflow: "AI Gateway Tests"
+      branch: main
+      head: d6ab6322983af42e355dedea4de6d0d21752de59
+      completed: "2026-08-07T20:12:40Z"
+      conclusion: success
+      jobs_green: [ai-gateway unit tests (ubuntu-latest), ai-gateway unit tests (windows-latest), ai-gateway postgres semantics, ai-gateway supply-chain gates, repo validation]
+      verified: 2026-08-10
+    database_dependency: postgres-adapteng-ops — migrations 005 and 008_ai_gateway_runtime_hardening.sql are ALREADY APPLIED in production per the owner's post-rollout manual production check; DO NOT REPLAY them at deploy time
+    not_blocked_by: [cost, model pricing, FX configuration, Coolify application creation]
+    known_deployment_requirements:
+      # Both found by reading platform main; recorded in control-plane/current-state.md section 5.
+      # Neither is a defect: the defaults are safe, they simply must be overridden or
+      # supplemented at deploy time, and that was previously written down nowhere.
+      - must set AI_GATEWAY_HTTP_HOST=0.0.0.0 — the Dockerfile defaults to 127.0.0.1, which is unreachable from the container network, so the health check cannot pass
+      - /health is liveness only — it returns ok without touching PostgreSQL, so a green health check does not prove database or budget accounting readiness; a separate readiness check is required
+    blocking: "nothing in this repository, and for the first time nothing in the platform repository either. The service is running, answering /ready, and now gated on it: platform PR #127 merged as feee3166, the image carries the HEALTHCHECK, and Coolify reports running:healthy rather than running:unknown. What remains is the owner's GO for the first live model call, then proving the EU Vertex client, Drive adapters, orchestration and canonical approval composition against the running service. One correction is kept here deliberately: an earlier version of this field said the health verdict was held by platform #128 pending the owner's signed approval. #128 does fix the flaky test that was blocking #127, and it is still the right fix for that defect, but #127 was never stacked on it and a re-run cleared the flake, so the gate landed without it. The lesson worth keeping is that the note before that one said #127 did not depend on #128 at all, which was true about git and false about the outcome."
+    budget_binding: budgets.ai_runtime_cap_eur_month (fail-closed cap, not evidenced spend)
+    model_binding: external_saas "Google Cloud (Vertex AI + Drive API)" — gemini-3.1-flash-lite, location eu
+    deployment_evidence:
+      deployed: true
+      readiness: "/ready answered 200 from inside the container"
+      how: >-
+        Not asked from outside, because nothing outside can reach it: the
+        application is internal-only on the coolify network and the database
+        refuses every route a runner has. The probe runs as a Coolify scheduled
+        task inside the container itself, and its recorded execution message is
+        the answer. The task is armed for the run and returned to rest
+        afterwards - disabled, and scheduled for a leap day.
+      proof_runs:
+        - run: 31542579590
+          operation: verify
+          completed: "2026-08-11T22:29Z"
+          result: "verify ok ready=yes answer=200"
+          execution: "2026-08-11T22:29:01Z status=success message=ADAPTENG_READY 200"
+        - run: 31540027132
+          operation: diagnose
+          completed: "2026-08-11T21:54Z"
+          result: >-
+            four executions recorded, every one status=success with
+            ADAPTENG_READY 200, corroborated independently by four
+            "GET /ready HTTP/1.1" 200 lines in the container's own access log
+      what_it_does_and_does_not_prove: >-
+        /ready opens a database connection where /health does not, so a 200 is
+        the database proof and the runtime DSN is in place and usable. It says
+        nothing about the other two credentials and nothing about model access:
+        both endpoints answer before the Authorization header is read, and no
+        model is called. Those two are confirmed bound separately, by
+        ai_gateway_credentials.py status, which reports presence and shape
+        because a secret cannot be read back from either store. Bound is not
+        the same as correct - the first live model call is what would prove the
+        Vertex key, and it is held for the owner's GO. Vertex inference calls
+        remain 0.
+      earlier_claim_was_wrong: >-
+        This field read "NONE - the application has never been deployed" while
+        four successful readiness executions were already recorded against it.
+        The mistake was in the instrument, not the deployment: verify ranked
+        executions by an id that this Coolify instance always returns as null,
+        so no row ever counted as new and the tool reported
+        ready=undetermined reason=no_execution. Fixed and pinned by a
+        regression test in PR #132.
+    declared: 2026-08-10
+    created: 2026-08-11
+    deployed: 2026-08-11
+
+declared_not_yet_created:
+  # Production resources that are designed and named here but DO NOT EXIST yet.
+  # Presence in this block is a declaration, never evidence of a running resource.
+  []
 
 external_saas:
   - name: n8n Cloud

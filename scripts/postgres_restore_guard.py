@@ -100,6 +100,28 @@ REPOSITORY_POLICY_KEYS = {
     "stanza",
     "repo",
 }
+# Non-secret pgBackRest repository settings the owner configures as repository
+# variables. They are optional in the guard config so an existing config stays
+# valid, and each one defaults to the value pgBackRest itself defaults to, so an
+# unset variable cannot silently substitute a different value than the backup
+# side used. Values are carried through to the generated restore config rather
+# than being hardcoded there.
+REPOSITORY_SETTING_DEFAULTS = {
+    "type": "s3",
+    "s3_key_type": "shared",
+    "s3_uri_style": "host",
+    "cipher_type": "aes-256-cbc",
+}
+# The generated restore procedure can only honour one value for three of these:
+# it writes an S3-shaped config, supplies a fixed key/secret pair, and supplies a
+# cipher passphrase. A configured value outside these sets is a real disagreement
+# with the backup side, so it stops the run instead of being overridden.
+REPOSITORY_SETTING_ALLOWED = {
+    "type": {"s3"},
+    "s3_key_type": {"shared"},
+    "s3_uri_style": {"host", "path"},
+    "cipher_type": {"aes-256-cbc"},
+}
 
 
 class GuardError(RuntimeError):
@@ -431,10 +453,19 @@ def parse_selected_info_value(
 
 
 def validate_repository(config: dict[str, Any]) -> dict[str, str]:
-    require_keys(config, REPOSITORY_POLICY_KEYS, "repository config")
+    if set(config) - set(REPOSITORY_SETTING_DEFAULTS) != REPOSITORY_POLICY_KEYS:
+        raise GuardError("repository config has missing or unknown fields")
     for field in ("endpoint", "bucket", "region"):
         if not SAFE_NAME.fullmatch(str(config[field])):
             raise GuardError(f"repository {field} is malformed")
+    settings = {}
+    for field, fallback in REPOSITORY_SETTING_DEFAULTS.items():
+        value = str(config.get(field, fallback))
+        if value not in REPOSITORY_SETTING_ALLOWED[field]:
+            raise GuardError(
+                f"repository {field} is not a value this restore can honour"
+            )
+        settings[field] = value
     if (
         config["stanza"] != "adapteng-ops"
         or config["repo"] != 1
@@ -486,6 +517,10 @@ def validate_repository(config: dict[str, Any]) -> dict[str, str]:
         ),
         "stanza": str(config["stanza"]),
         "repo": "1",
+        "type": settings["type"],
+        "s3_key_type": settings["s3_key_type"],
+        "s3_uri_style": settings["s3_uri_style"],
+        "cipher_type": settings["cipher_type"],
         "_key_text": key_raw.decode("utf-8"),
     }
 
@@ -1018,6 +1053,10 @@ def main() -> int:
             "repository_bucket": repository["bucket"],
             "repository_region": repository["region"],
             "repository_path": repository["repo_path"],
+            "repository_type": repository["type"],
+            "repository_s3_key_type": repository["s3_key_type"],
+            "repository_s3_uri_style": repository["s3_uri_style"],
+            "repository_cipher_type": repository["cipher_type"],
             "restore_key_attestation_sha256": repository[
                 "restore_key_attestation_sha256"
             ],

@@ -8,7 +8,22 @@ scripts/rehearsal_*.sh text eol=lf
 scripts/rehearsal_*.sql text eol=lf
 scripts/test_rehearsal_contour.py text eol=lf
 .github/workflows/postgres-backup-rehearsal.yml text eol=lf
+.github/workflows/verify-b2-connectivity.yml text eol=lf
 scripts/test_postgres_restore_rehearsal.py text eol=lf
 scripts/test_postgres_restore_scheduler_surface.py text eol=lf
 runbooks/backup-and-restore.md text eol=lf
 .gitattributes text eol=lf
+
+# The rehearsal-contour test asserts every tracked workflow is LF-only, so the
+# guarantee is pinned for all of them rather than for the two that happened to
+# need it first. A file already stored as LF is unchanged by this.
+.github/workflows/*.yml text eol=lf
+
+# Pinned as a class rather than by name. Every entry above this line was added
+# after a specific file was authored on Windows and reached the index as CRLF,
+# which is a rule that only ever covers the files someone remembered to list.
+# The next script added would have repeated it, and did. A file already stored
+# as LF is unchanged by this.
+scripts/*.py text eol=lf
+scripts/*.sh text eol=lf
+scripts/*.sql text eol=lf

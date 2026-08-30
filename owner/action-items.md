@@ -118,19 +118,8 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   deleted it, then asserted with `head-object` that it was gone. Credentials
   authenticate and deletes really delete, so bucket Object Lock is not silently
   making retention unenforceable. **No backup exists** — nothing in that run
-  touched PostgreSQL. **A real rehearsal was dispatched repeatedly on
-  2026-08-03** (`PostgreSQL backup and restore rehearsal`, e.g. run
-  `30785005169`), and every run so far fails the same way: the workflow's own
-  preflight/isolation guards pass, but `pgbackrest ... stanza-create` fails
-  with `ERROR: [039]: HTTP request failed with 403` against
-  `s3.eu-central-003.backblazeb2.com`. This is a narrower permission gap than
-  the proven read/write/delete connectivity above — the application key that
-  can write/read/delete an object apparently cannot complete pgBackRest's
-  stanza-create call. **Owner check:** confirm in the B2 console whether the
-  application key has the bucket-level permissions pgBackRest's protocol needs
-  for stanza creation (as distinct from plain object PUT/GET/DELETE), and
-  reconcile with item 3 below before re-dispatching. Three further follow-ups
-  remain, and none of them can be done from a pull request:
+  touched PostgreSQL. Four follow-ups remain, and only the code fix can be done
+  from a pull request:
   1. **`PGBACKREST_REPO1_S3_URI_STYLE` — keep the configured value `host`; no
      variable change needed.** The runbook previously specified `path`; that was
      the error and it is now corrected in
@@ -147,35 +136,67 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
      `30752237109` used the AWS CLI with only `--endpoint-url`, whose
      `addressing_style` default is `auto` and prefers virtual-hosted
      (<https://docs.aws.amazon.com/cli/latest/topic/s3-config.html>).
-  2. **`PGBACKREST_REPO1_PATH` — keep the configured value; verify the B2
-     scopes match it.** The value is only a prefix inside the bucket and is free
-     to choose: at `7f5f3585588da8b330e4ae9779f0b6343e1156eb` nothing reads a
-     literal — `scripts/postgres_restore_generation.py` takes it from the guard
-     packet, and `.github/workflows/verify-b2-connectivity.yml` only asserts it
-     is absolute. The runbook's stale literal has been replaced by a
-     placeholder, and the exact value is deliberately not written into Git
-     because the runbook's own evidence policy lists repository paths as
-     forbidden. **Owner check in the B2 console:** the hidden-version deletion
-     (35 days) and unfinished-large-file cancellation (7 days) lifecycle rules,
-     and the application key's prefix restriction, must be scoped to the value
-     the variable actually holds. A lifecycle rule left on the runbook's old
-     prefix would silently stop expiring hidden versions — a retention and cost
-     defect that no pgBackRest command reports.
+  2. **`PGBACKREST_REPO1_PATH` — the value is a prefix inside the bucket, but it
+     is not unconstrained; see item 5 before changing anything.** **Correction
+     to what this item said when it was first written:** it claimed that at
+     `7f5f3585588da8b330e4ae9779f0b6343e1156eb` "nothing reads a literal". That
+     was wrong, and the error was mine. `scripts/postgres_restore_generation.py`
+     does take the value from the guard packet and
+     `.github/workflows/verify-b2-connectivity.yml` does only assert it is
+     absolute — but `validate_repository` in `scripts/postgres_restore_guard.py`
+     compares it against a hardcoded literal and fails closed on mismatch. That
+     comparison was introduced on 2026-08-01 in
+     [#15](https://github.com/Ivan-Shyla/adapteng-company-os/pull/15) (`e30da31`),
+     a day before the claim was written, so it was present and simply not
+     checked: the trace followed the generator and stopped there. The prefix is
+     therefore free to choose only in B2; inside this repository one literal
+     depends on it. Item 5 has the detail and the recommendation. The exact value
+     remains deliberately unwritten in Git because the runbook's own evidence
+     policy lists repository paths as forbidden. **Owner check in the B2
+     console:** the hidden-version deletion (35 days) and unfinished-large-file
+     cancellation (7 days) lifecycle rules, and the application key's prefix
+     restriction, must be scoped to whichever value item 5 settles on. A
+     lifecycle rule left on a stale prefix would silently stop expiring hidden
+     versions — a retention and cost defect that no pgBackRest command reports.
   3. **The application key is broader than the runbook prescribes.** Phase 2
      step 3 requires a key restricted to the bucket *and the pgBackRest
      repository prefix*, but run `30752237109` wrote and deleted under a
      `connectivity-check/` prefix outside it and succeeded. Decide explicitly:
      either accept a bucket-scoped key and record that decision, or narrow the
      key to the repository prefix and accept that the connectivity workflow then
-     needs its own allowed prefix. Do not leave it undecided.
-  4. **Separate code fix, not an owner console action:**
-     `scripts/postgres_restore_generation.py` hardcodes
-     `repo1-s3-uri-style=path` and never reads
-     `PGBACKREST_REPO1_S3_URI_STYLE`, so the generated restore configuration
-     will disagree with the backup-side configuration and the variable has no
-     effect on restore. B2 accepts both styles, so this is a consistency defect
-     rather than an outage, but it should be fixed in a pull request that owns
-     `scripts/`.
+     needs its own allowed prefix. Do not leave it undecided. This also bears on
+     the `403` the restore rehearsal is currently failing on: because run
+     `30752237109` succeeded under a prefix *outside* the pgBackRest repository
+     prefix, the key in use is demonstrably not narrowly prefix-restricted,
+     which is evidence against "the key cannot see that prefix" as the
+     explanation for the `403`.
+  4. **Code fix — done, no owner action.**
+     `scripts/postgres_restore_generation.py` hardcoded
+     `repo1-s3-uri-style=path` and never consumed
+     `PGBACKREST_REPO1_S3_URI_STYLE`, so that variable had no effect on
+     restore and the restore side disagreed with the backup side. Three of its
+     neighbours were the same shape: `repo1-type` and `repo1-cipher-type` were
+     also hardcoded, and `repo1-s3-key-type` was never emitted at all — four of
+     the eight non-secret variables were set but ignored. All four now flow
+     from the guard packet, an unset setting falls back to pgBackRest's own
+     default rather than to the copied `path`, and a value the procedure cannot
+     honour stops the run instead of being silently overridden.
+  5. **`PGBACKREST_REPO1_PATH` does not match the value the restore guard
+     pins, and only you can change the variable.** `validate_repository` in
+     `scripts/postgres_restore_guard.py` fails closed unless the repository
+     prefix is exactly `/adapteng-ops` — hyphen-separated, matching the stanza
+     name `adapteng-ops` that the same check pins and that the runbook, the
+     generated config and the unit tests all use. The configured variable uses
+     an underscore instead, so a restore wired to it would stop at the guard
+     with `repository stanza/repo is not exact`. **Recommendation: change the
+     variable to `/adapteng-ops`, not the guard.** Three reasons: the guard's
+     literal is the value every other surface in the repository already agrees
+     on; the pin is a deliberate fail-closed control and relaxing it would
+     remove a check rather than fix a mismatch; and no backup has ever been
+     written under either prefix, so there is nothing to migrate and this is the
+     cheapest moment it will ever be to correct. Whichever way you decide, the
+     lifecycle rules and key scope in item 2 must be scoped to the value you
+     settle on.
 
 - [x] **Provide Google service-account credentials.** ✅ **DONE 2026-07-26** — SA
   `adapteng-ai-operator@adapteng-workspace-automation.iam.gserviceaccount.com`
@@ -212,7 +233,14 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
 - [ ] **INT-001 (integrity) — approve the deferred wiring, one PR at a time.**
   ADR-0011 defers each of these to a *future approved PR*: live schedule, the
   Finding→Action adapter, the n8n workflow, live manifest wiring, and deployed
-  credentials. Keep **migration 006 unapplied** until backup/restore planning.
+  credentials. **Correction, verified 2026-08-10: migration 006 is already
+  applied in production** — the owner's post-rollout manual production check
+  found all nine logical migration units exact. The former instruction here to
+  "keep migration 006 unapplied until backup/restore planning" described a state
+  that no longer exists, and reading it as current invites an agent to apply an
+  already-applied unit. **Do not replay migration 006.** What remains deferred
+  is the *wiring* listed above, not the schema. See the migration item below for
+  the full record and its `UNVERIFIED` caveat.
   Nothing here should be forced by an agent.
 - [ ] **AI runtime readiness — REJECT_LIVE, but AG-008 is repository-merged.**
   Control-plane main advanced to `edadb09125f7fb5d173d5f595181d1384050b6b5` via
@@ -226,9 +254,19 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   gap in the general JSON validator. `agent/NEXT_TASK.md` self-declares
   `status: done` and CI is green, but no independent third-party review of this
   exact head is recorded — get one before relying on it. Separately,
-  automation-platform must still deploy and wire persistent Postgres cost
-  reservation/reconciliation, the EU Vertex adapter, Drive adapters,
-  orchestration, canonical approval and runtime. Repository components are not
+  automation-platform must still **deploy** the AI Gateway that carries
+  persistent Postgres cost reservation/reconciliation, the EU Vertex adapter,
+  Drive adapters, orchestration, canonical approval and runtime. Note the
+  narrowing, verified 2026-08-10: those components are **implemented and
+  tested**, not missing — `AI Gateway Tests` run
+  [`31214858400`](https://github.com/Ivan-Shyla/adapteng-automation-platform/actions/runs/31214858400)
+  on platform `main` (head `d6ab6322983af42e355dedea4de6d0d21752de59`,
+  conclusion `success`) is green across unit tests on `ubuntu-latest` and
+  `windows-latest`, PostgreSQL-backed semantics, supply-chain gates and repo
+  validation. What is missing is a deployed, running service, so this reads as
+  "build the deployment", never as "build the components". The `REJECT_LIVE`
+  in this item's heading is the **control-plane in-memory** model gateway
+  above, not the `ai-gateway` service. Repository components are not
   deployed/working business AI.
 - [ ] **AI-001 exact first live model proof.** Use only the already-approved and
   published July public article-radar package `ART-2026-001` with source set
@@ -263,14 +301,12 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   actual WordPress/Fluent Forms producer T1–T4, atomic mode switch with no
   dual-write, seven-day reconciliation and rollback proof; MM-18 retirement
   last. Keep model-provider legal placeholders unpublished.
-  Separately, a **theme-only** deployment track (unrelated to WEB-001) was
-  authorized by the owner and merged as PRs #121–#130; `main` now carries an
-  active `main-protected` ruleset (all five active repos, 2026-08-02T15:30
-  CEST), and the `Deploy theme to Cloudways` workflow's run `30766896787`
-  (head `18767bd1...`, 2026-08-02T21:00:26Z) completed with its snapshot,
-  deploy and production-smoke-test steps all `success` per GitHub Actions
-  metadata — independently re-verify the live site before treating that as
-  accepted.
+  The separate **theme-only** track now has accepted post-deploy evidence:
+  PRs #139/#140 produced a recorded 96-URL crawl with no unreachable,
+  non-200, fragment or hreflang failures, and PR #143 plus deployment run
+  `31329017343` produced exactly one localized description on all 18 checked
+  commercial pages. This does not deploy `adapteng-core`: its last successful
+  plugin deployment remains run `30720691975` at the pre-WEB-001 head.
 - [ ] **self-hosted n8n cutover:** repoint the Coolify source from branch
   `palinaruban-repo-status-review` to `main`, verify auto-deploy, then complete
   the inactive company-workflow shadow. n8n Cloud remains the authority for
@@ -314,25 +350,95 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
   with zero durable synthetic state; and independent C ending in B's exact
   migrated catalog state. Record digest-only evidence, capture C final exact
   status before cleanup, then delete the host/volumes and revoke the read-only
-  key. A separately reviewed automation evidence-lifecycle schema, validator,
-  fixtures and consumer PR is an explicit blocker; no final schema version or
-  compatibility is claimed. Current
-  status is `NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR`; rollout
-  authorization remains blocked until that PR merges and validates these
-  exact local fields: `completed_at`, `selected_set_info_sha256`,
-  `scheduler_inventory_sha256`, `scheduler_inventory_observed_at`, and
-  `retention_valid_until`. Do not dispatch
-  approved-assets before that dependency merges and a reviewed sanitized
-  `PASS` validates.
-- [ ] **Migrations not live:** 002 (run ledger), 003 (approval/outbox), 005 (AI
-  gateway), 006 (integrity), 007 (source-identity reservation) and Drive-008
-  (replay reservations) are repo-only and unapplied. The approved-source pair
-  was merged by automation-platform PR #89 at
-  `dbcf806ea7714b8e2a7415ae6cd788491924178d`; apply it to live only after the
-  physical-backup rehearsal above, rollout review and explicit owner go/no-go.
-  Follow [`runbooks/apply-migration.md`](../runbooks/apply-migration.md), require
-  a real consumer, and redeploy the adapter for 007. Unrelated
-  `008_ai_gateway_runtime_hardening.sql` remains forbidden for this rollout.
+  key. **The automation evidence-lifecycle dependency is CLOSED.** It was recorded
+  here as an explicit outstanding blocker with status
+  `NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR`; that chain has since
+  merged on `adapteng-automation-platform` `main` (verified read-only
+  2026-08-10):
+  PR #93 *add exact-subject rollout authorization*, merged 2026-08-05T15:59:29Z as
+  `1f420dc0f1cc7cfc88fa8037e00b982c0514cc08`;
+  PR #94 *bind backup retention evidence*, merged 2026-08-05T16:58:09Z as
+  `0fa357d0baebc362b5bea0afba78e6233d91b7c8`; and
+  PR #98 *add first governed Company OS model proof*, merged 2026-08-05T17:07:57Z
+  as `d06bdd41964e57d9fc7f1b2490d6dcde64b0143d`.
+  PR #94 is the evidence-lifecycle unit: it upgrades rollout evidence, policy and
+  receipts to v4 and its stated contract covers exactly the five local fields
+  this item required — `completed_at`, `selected_set_info_sha256`,
+  `scheduler_inventory_sha256`, `scheduler_inventory_observed_at` and
+  `retention_valid_until` — and it names company-os PR #15
+  (`e30da31607708153ce11c6e6f513145523a8f335`) as the compatible producer
+  contract. Stop citing this dependency as a reason to wait.
+  `UNVERIFIED`: that a reviewed sanitized `PASS` has actually been produced and
+  validated against a real evidence packet — PR #94's own body still reads
+  "Rollout remains NOT READY", and no `Migrate Approved Assets` run exists. What
+  would settle it: a reviewed sanitized `PASS` packet recorded against a named
+  run. The remaining hold on this item is therefore the **production backup
+  itself**, which is still not configured, and no longer this cross-repository
+  dependency. Current rollout-authorization status:
+  `BLOCKED_ON_UNCONFIGURED_PRODUCTION_BACKUP`.
+- [x] **Migrations ARE live in production — DO NOT REPLAY THEM.**
+  ✅ **CORRECTED 2026-08-10.** This item previously read *"002, 003, 005, 006,
+  007, Drive-008 and AI-Gateway-008 remain repo-only and unapplied"* and told the
+  reader to apply 007 and Drive-008 through `Migrate Approved Assets`. **That was
+  wrong, and acting on it would have damaged production.** The owner's
+  post-rollout manual production check found **all nine logical migration units
+  exact in production**: 001 (id allocator), 002 (run ledger), 003
+  (approval/outbox), 004 (lead identity), 005 (AI gateway), 006 (integrity), 007
+  (source-identity reservation), `008_drive_bridge_replay_reservations.sql` and
+  `008_ai_gateway_runtime_hardening.sql`. Production outranks a repository note.
+  - **Do not re-apply any of the nine units.** Do not dispatch
+    `Migrate Approved Assets` "to apply 007 and Drive-008", and do not route
+    `008_ai_gateway_runtime_hardening.sql` through any approved-assets path.
+    Those instructions described a database state that no longer exists.
+    Replaying an applied migration against live operational truth — the id
+    allocator and the lead identity reservation that AUT-001 and WEB-002 depend
+    on — is the most destructive action currently available in this repository.
+    Any future migration work starts from a read-only status check, never from a
+    repository `live:` flag.
+  - **Evidence:** the owner's post-rollout manual production check. It is
+    owner-attested and deliberately **not** reproducible from GitHub. Read-only
+    confirmation 2026-08-10: the `Migrate Approved Assets` workflow
+    (`adapteng-automation-platform`, id `323029213`) has **zero runs**, so the
+    rollout did not go through GitHub Actions and GitHub holds no dispatch record
+    of it. The absence of a run is therefore **not** evidence that the migrations
+    are unapplied — that inference is exactly the error corrected here.
+  - **`UNVERIFIED` from GitHub:** the per-unit applied state, the rollout
+    timestamp and the operator. What would settle it: a read-only `db_status`
+    output from the merged fail-closed runners, or a `\dt`-equivalent catalog
+    capture from the live `adapteng_ops` database, attached to a status PR.
+    Until such a capture exists the owner's check stands as the authority, and
+    the do-not-replay rule above applies regardless.
+  - Repository-side runners for all nine units are merged and CI-green —
+    automation-platform PRs #105 (`a19c9fdb30122c3e94cc40adc95a78cc94d64978`),
+    #106 (`8441ad5b39102ef68b1a66f98380a8cfb262e27a`) and #107
+    (`d6ab6322983af42e355dedea4de6d0d21752de59`). A merged runner is a capability,
+    not an instruction to run it.
+- [x] **Migration 001 allocator schema mismatch — root cause closed.**
+  ✅ **CLOSED IN CODE 2026-08-08** by automation-platform PR #108
+  *fix(baserow-adapter): schema-qualify the allocator table as public*, merged
+  2026-08-08T22:19:10Z as `23a23f0fd5cacd630badf3bd20503789366f7220` (verified
+  read-only 2026-08-10; all five checks on that merge commit — Validate Repo,
+  Adapter Tests, Baserow Adapter Service, Rollout Policy and the hard-fail scan —
+  concluded `success`). The incident was that both code paths touching the
+  allocator used an unqualified table name, so placement followed the connecting
+  role's `search_path` and resolved to the identically-named `adapteng_ops`
+  schema before `public`. PR #108 pins both the `RUN_MIGRATIONS_ON_START`
+  bootstrap and every runtime allocation to `public.id_allocator_sequences`, and
+  adds a regression test against a real disposable PostgreSQL that reproduces the
+  original condition and was confirmed to fail against the pre-fix code.
+  `001_id_allocator.sql` and its digest pin are unchanged.
+  - **`UNVERIFIED`: the live disposition of the misplaced copy.** PR #108's own
+    description states "No production changes in this PR. Production remediation
+    plan to follow separately once this merges." Nothing in GitHub shows whether
+    the structurally-correct copy under `adapteng_ops` was moved, merged or
+    dropped, or which of the two the allocator now reads. The owner's
+    post-rollout production check attests the nine canonical units are exact,
+    which covers `public`; it does not speak to the leftover shadow object.
+    What would settle it: a read-only capture showing the allocator table present
+    in `public` with its current sequence values, and the `adapteng_ops` copy
+    either absent or explicitly retained as inert, attached to a status PR.
+  - Owner: before any repair, confirm sequence values and every caller read-only.
+    Preservation first — allocated AE-* business IDs must never be re-issued.
 - [ ] **Baserow off-host export/restore** completion; **Google Workspace**
   Manager/recovery acceptance.
 - [ ] **Workspace recovery/break-glass acceptance:** verify Ivan is Manager of

@@ -8,6 +8,12 @@ proof of that, and it runs before the rehearsal is allowed to touch anything:
 * the rehearsal repository prefix must be run-scoped and must share no path
   lineage with the production pgBackRest repository, so a rehearsal expire can
   never reach production repository content;
+* the repository pgBackRest will *actually* use must be the one this gate was
+  told about. pgBackRest reads every ``PGBACKREST_<OPTION>`` environment
+  variable as configuration, so ``PGBACKREST_REPO1_PATH`` in the environment
+  decides where a backup lands regardless of what any caller passes here. A
+  gate that only inspects its own arguments can be satisfied by a caller that
+  declares one repository and exports another;
 * every cluster directory must live inside the runner's ephemeral root, and the
   restore targets must be absent or empty before a restore writes into them;
 * every cluster must be configured with an empty ``listen_addresses``, so the
@@ -62,9 +68,52 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "[::1]", "localhost"})
 # reach over the network instead of the local data directory.
 REMOTE_PG_OPTION = re.compile(r"^\s*pg\d*-host(?:-[a-z0-9-]+)?\s*=", re.IGNORECASE)
 
+# The environment variable pgBackRest consults for the repository prefix. It is
+# the value that decides where a backup is written; the command line this gate
+# is given is only a claim about it.
+EFFECTIVE_REPO_PATH_VARIABLE = "PGBACKREST_REPO1_PATH"
+
+# A second configured repository would give pgBackRest another place to write,
+# which this gate has proven nothing about. repo1 is the only one it vouches for.
+ADDITIONAL_REPOSITORY = re.compile(r"^PGBACKREST_REPO(?:[2-9]|\d{2,})_", re.IGNORECASE)
+
 SETTING = re.compile(
     r"^\s*(?P<name>[A-Za-z][A-Za-z0-9_-]*)\s*=\s*(?P<value>.*?)\s*$"
 )
+
+# ``str.splitlines()`` ends a line on eleven separators; an LF-delimited reader
+# ends it on one. Where the two disagree this gate reads a different file than
+# the tool it vouches for: given ``pg1-path = /mnt/ephemeral\x0c/../../etc``,
+# splitlines() yields the allowed ``/mnt/ephemeral`` and the gate passes, while
+# the whole value resolves to ``/etc``. That is a fail-open in a fail-closed
+# gate, so this module refuses to guess which parser is right -- a separator
+# that could move a line boundary makes the configuration unreadable instead.
+#
+# CR is not in the set below, and its absence is load-bearing rather than an
+# oversight. ``Path.read_text`` decodes in universal-newline mode, so a lone CR
+# and a CRLF are both already LF by the time either reader in this module runs
+# -- measured, not assumed.
+#
+# But ``config_lines`` is a public function taking ``str``, so that guarantee
+# belongs to its callers and not to it. Fed from ``read_bytes().decode()``,
+# ``open(newline="")`` or a subprocess, CR survives, and it reconstructs exactly
+# the fail-open above: ``pg1-path = /etc\x0d/../mnt/ephemeral`` resolves whole to
+# the allowed ``/mnt/ephemeral`` and the gate passes, while a CR-splitting reader
+# takes ``/etc``. The direction is reversed from the VT case and the outcome is
+# the same. ``config_lines`` therefore refuses CR itself rather than trusting the
+# ingress, so the invariant is enforced where it is stated. The eight below are
+# the separators ``str.splitlines()`` honours and essentially nothing else does;
+# CR is handled separately because it is the one every reader honours.
+AMBIGUOUS_LINE_SEPARATORS = {
+    "\v": "VT",
+    "\f": "FF",
+    "\x1c": "FS",
+    "\x1d": "GS",
+    "\x1e": "RS",
+    "\x85": "NEL",
+    "\u2028": "LS",
+    "\u2029": "PS",
+}
 
 
 class GuardError(RuntimeError):
@@ -155,8 +204,96 @@ def check_repository_disjoint(production: str, rehearsal: str) -> list[Check]:
     return checks
 
 
+def check_effective_repository(
+    environment: dict[str, str],
+    declared_rehearsal: str,
+    production: str,
+    *,
+    required: bool = False,
+) -> list[Check]:
+    """Check the repository pgBackRest will really use, not the one it is told.
+
+    ``check_repository_disjoint`` compares the two paths this gate is handed on
+    the command line. That proves the caller's intent, not the outcome:
+    pgBackRest takes ``PGBACKREST_REPO1_PATH`` straight from the environment, so
+    a caller that exports the production prefix while passing a harmless-looking
+    ``--rehearsal-repo-path`` would satisfy every other check here and still back
+    up into production. These checks read the environment itself, which is the
+    only thing pgBackRest will obey.
+
+    Whenever that variable is set it is checked, with or without ``required`` --
+    so the export above is caught even by a caller that never opted in. What
+    ``required`` adds is the demand that it be set at all, which is true inside
+    the rehearsal workflow and not true of a unit test evaluating a fixture.
+    """
+
+    effective = environment.get(EFFECTIVE_REPO_PATH_VARIABLE, "").strip()
+    checks: list[Check] = []
+
+    if required:
+        checks.append(
+            Check(
+                "effective_repo_path_declared",
+                bool(effective),
+                f"{EFFECTIVE_REPO_PATH_VARIABLE}={effective}"
+                if effective
+                else f"{EFFECTIVE_REPO_PATH_VARIABLE} is unset, so the repository "
+                "pgBackRest would use is not knowable here",
+            )
+        )
+
+    if effective:
+        agrees = effective == declared_rehearsal.strip()
+        checks.append(
+            Check(
+                "effective_repo_path_matches_declared_rehearsal",
+                agrees,
+                "the environment and the declared rehearsal path agree"
+                if agrees
+                else f"the environment says {effective}, but this gate was told "
+                f"{declared_rehearsal}",
+            )
+        )
+
+        try:
+            effective_parts = repository_segments(effective)
+            production_parts = repository_segments(production)
+        except GuardError as exc:
+            checks.append(
+                Check("effective_repo_path_disjoint_from_production", False, str(exc))
+            )
+        else:
+            overlapping = (
+                not effective_parts
+                or not production_parts
+                or shares_lineage(effective_parts, production_parts)
+            )
+            checks.append(
+                Check(
+                    "effective_repo_path_disjoint_from_production",
+                    not overlapping,
+                    "no shared path lineage with the production repository"
+                    if not overlapping
+                    else "the repository pgBackRest would use overlaps production",
+                )
+            )
+
+    extra = sorted(name for name in environment if ADDITIONAL_REPOSITORY.match(name))
+    checks.append(
+        Check(
+            "no_additional_pgbackrest_repository_configured",
+            not extra,
+            "repo1 is the only configured repository"
+            if not extra
+            else f"a second repository is configured by: {', '.join(extra)}",
+        )
+    )
+    return checks
+
+
 def check_scope_token(rehearsal: str, scope_token: str) -> Check:
     if not scope_token.strip():
+
         return Check("rehearsal_repo_path_run_scoped", False, "no scope supplied")
     try:
         parts = repository_segments(rehearsal)
@@ -223,13 +360,48 @@ def check_empty(paths: dict[str, Path]) -> list[Check]:
     return checks
 
 
+def config_lines(text: str, path: Path, name: str) -> list[str]:
+    """Return LF-delimited lines, refusing any separator that could move a boundary.
+
+    A configuration file whose line structure depends on which parser reads it
+    is one this gate cannot establish a property about, so the ambiguity is
+    fatal rather than silently resolved in the gate's favour.
+
+    CR is refused here rather than assumed absent. Both readers in this module
+    obtain their text from ``Path.read_text``, which decodes in universal-newline
+    mode and cannot deliver one -- but this function is public and takes ``str``,
+    so that is a property of today's callers, not of this function. Enforcing it
+    here is what makes the guarantee below true of the function itself.
+
+    With CR and those separators excluded, LF splitting and ``str.splitlines()``
+    agree on every surviving input, which is what makes the choice between them
+    inert here.
+    """
+    if "\r" in text:
+        raise GuardError(
+            f"{name}: {path} contains CR (U+000D) after decoding, so it was not read in "
+            "universal-newline mode; a CR-splitting reader and this gate would disagree "
+            "about where a value ends"
+        )
+    for character, label in AMBIGUOUS_LINE_SEPARATORS.items():
+        if character in text:
+            raise GuardError(
+                f"{name}: {path} contains {label} (U+{ord(character):04X}), which ends a "
+                "line for some readers and not others; its line structure is ambiguous"
+            )
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def read_settings(path: Path, name: str) -> list[tuple[str, str]]:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise GuardError(f"{name}: cannot read {path}") from exc
     settings: list[tuple[str, str]] = []
-    for line in text.splitlines():
+    for line in config_lines(text, path, name):
         stripped = line.split("#", 1)[0]
         match = SETTING.match(stripped)
         if match:
@@ -308,7 +480,11 @@ def check_pgbackrest_config(path: Path, allowed: set[Path]) -> list[Check]:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise GuardError(f"cannot read pgBackRest configuration {path}") from exc
-    remote = [line.strip() for line in text.splitlines() if REMOTE_PG_OPTION.match(line)]
+    remote = [
+        line.strip()
+        for line in config_lines(text, path, "pgbackrest")
+        if REMOTE_PG_OPTION.match(line)
+    ]
     checks = [
         Check(
             "pgbackrest_targets_no_remote_postgresql",
@@ -347,6 +523,14 @@ def evaluate(args: argparse.Namespace, environment: dict[str, str]) -> list[Chec
 
     checks: list[Check] = []
     checks.extend(check_repository_disjoint(args.production_repo_path, args.rehearsal_repo_path))
+    checks.extend(
+        check_effective_repository(
+            environment,
+            args.rehearsal_repo_path,
+            args.production_repo_path,
+            required=args.require_effective_repo_path,
+        )
+    )
     checks.append(check_scope_token(args.rehearsal_repo_path, args.scope_token))
     checks.extend(check_ephemeral(args.ephemeral_root, {**clusters, **restore_targets}))
     checks.extend(check_empty(restore_targets))
@@ -363,6 +547,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--production-repo-path", required=True)
     parser.add_argument("--rehearsal-repo-path", required=True)
+    parser.add_argument(
+        "--require-effective-repo-path",
+        action="store_true",
+        help=(
+            f"demand that {EFFECTIVE_REPO_PATH_VARIABLE} is set in the environment. "
+            "Whenever it is set it is checked regardless; this makes its absence a "
+            "failure too, which is what the rehearsal workflow wants and what a "
+            "unit test evaluating a fixture does not."
+        ),
+    )
     parser.add_argument("--scope-token", required=True)
     parser.add_argument("--ephemeral-root", required=True, type=Path)
     parser.add_argument("--cluster", action="append", default=[], metavar="NAME=PATH")

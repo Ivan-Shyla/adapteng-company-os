@@ -44,9 +44,23 @@ TARGETS: tuple[Target, ...] = (
     ),
     Target(
         "adapteng-automation-platform",
+        # This tuple is mirrored, descriptively, in that repository's
+        # ``docs/github-governance-checklist.md`` §3, which correctly names
+        # this file as the authority. The reference is deliberately made
+        # bidirectional here: a one-way pointer is how the README and CI
+        # command lists drifted apart (friction audit F-7). If you change this
+        # tuple, update that table in the same round of work.
         (
             "Fail on unencrypted secret-like content",
             "independent-rollout-policy",
+            # Safe to require only because the job always starts. It runs the
+            # isolation validator on every push and pull request and fails
+            # solely when the change under test touches ``n8n/``; it carries no
+            # workflow-level ``paths:`` filter. Requiring it is what makes the
+            # data boundary actually blocking for n8n changes rather than
+            # merely reported, and it is scoped so an expired waiver can no
+            # longer seal the whole repository.
+            "n8n isolation",
             "root-rollout-tests",
             "Validate repository structure and content",
         ),

@@ -1,0 +1,115 @@
+name: Postgres runtime role
+
+# Provisions the least-privilege Postgres role the AI Gateway connects as.
+#
+# This runs on the dedicated operations runner, which sits on the same private
+# Docker network as the managed database. That placement is what makes the job
+# possible at all: canonical production Postgres is not published, and no route
+# to it exists from a GitHub-hosted runner.
+#
+# The runner holds no Docker socket, no host shell and no root, so the database
+# is reached over the network rather than through the daemon. It also holds no
+# database credential of its own: the Coolify credential it already has is used
+# to look up where the database is and how to log in, so no new secret is
+# created, stored or rotated for this. Nothing is written to disk and nothing is
+# printed - the value travels from the API response into the environment of the
+# psql process and no further.
+#
+# recon reads and writes nothing, and answers one question this deployment has
+# recorded two contradictory answers to: whether the connection is actually
+# encrypted. credentials also reads nothing, and answers a different one: which
+# of the logins Coolify records for this database the server actually accepts,
+# reported by shape and never by value. provision creates or rotates the role, applies the grants from the
+# platform runbook, runs that runbook's own verifications, and publishes the
+# DSN. Run recon first and read it: provision refuses to proceed unless the
+# objects it grants on already exist with the exact shapes migration 008a
+# defines.
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "recon and credentials read only; provision creates the role and publishes the DSN"
+        required: true
+        default: recon
+        type: choice
+        options:
+          - recon
+          - credentials
+          - provision
+      db_host:
+        description: "Database host on the private network. Leave empty to discover it from Coolify."
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+# One run at a time. Two overlapping provisions would each rotate a credential
+# the other is about to publish, and the loser would publish a DSN that cannot
+# log in.
+concurrency:
+  group: postgres-runtime-role
+  cancel-in-progress: false
+
+jobs:
+  drive:
+    name: Postgres role ${{ inputs.operation }}
+    # The label is the whole access-control story: this job runs only on the
+    # dedicated operations runner, which is registered to this repository alone.
+    runs-on: [self-hosted, adapteng-ops]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Refuse to start without the access this needs
+        env:
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_URL: ${{ vars.COOLIFY_URL }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for name in COOLIFY_API_TOKEN COOLIFY_URL; do
+            if [ -z "${!name:-}" ]; then
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing required configuration:$missing"
+            exit 1
+          fi
+          echo "all required configuration is present"
+
+      - name: Prove this runner can reach the database at all
+        run: |
+          set -euo pipefail
+          # A psql failure reads the same whether the address is wrong, the
+          # server is down, or this container is not on the network. Those have
+          # different owners, so the client's presence is established here
+          # rather than inferred from a later failure.
+          if ! command -v psql > /dev/null; then
+            echo "::error::psql is not installed on this runner. The runner image"
+            echo "installs postgresql-client at build time, so an image without it"
+            echo "is a stale build rather than a configuration mistake."
+            exit 1
+          fi
+          psql --version
+
+      - name: Run the operation
+        env:
+          OPERATION: ${{ inputs.operation }}
+          DB_HOST: ${{ inputs.db_host }}
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_URL: ${{ vars.COOLIFY_URL }}
+          COOLIFY_APP_UUID: ${{ vars.AI_GATEWAY_COOLIFY_APP_UUID }}
+          PG_DSN_HOST: ${{ vars.AI_GATEWAY_PG_DSN_HOST }}
+        run: |
+          set -euo pipefail
+          # The credential is never placed on a command line: psql receives it
+          # through its own environment, which other processes cannot read.
+          host_argument=""
+          if [ -n "${DB_HOST:-}" ]; then
+            host_argument="--db-host $DB_HOST"
+          fi
+          python3 scripts/postgres_runtime_role.py "$OPERATION" $host_argument

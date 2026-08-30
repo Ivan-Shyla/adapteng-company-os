@@ -1,0 +1,5 @@
+# Running the pre-PR checks documented in README.md executes the unittest
+# suites from the repository root, which leaves compiled bytecode in
+# scripts/__pycache__/. Without this entry the next `git add -A` commits it.
+__pycache__/
+*.py[cod]
