@@ -16,6 +16,36 @@ platform:
     attempted: n8n redeploy with Connect to predefined network selected
     unresolved: actual Docker network membership and adapter service/container alias
     next_action: inspect runtime metadata and correct only the minimum persistent Coolify network setting
+  l1_network_verification:
+    observed_at: 2026-09-05
+    evidence_class: GITHUB-VERIFIED repository evidence plus two live control-plane probes
+    adapter_alias_resolves: >-
+      Yes, on the shared adapteng-ops production network. Company-os run
+      31590576870 measured adapteng-baserow-adapter -> 10.0.1.11 from inside a
+      container on that network. The adapter sets
+      custom_network_aliases=adapteng-baserow-adapter.
+    conclusion: >-
+      The adapter alias, port 8080 and read contract are not the fault. The
+      remaining variable is whether n8n-selfhosted is attached to the network
+      that carries that alias. Treat the n8n side as the object of the fix.
+    still_unknown: n8n-selfhosted network membership; it could not be enumerated because the Coolify API is currently failing
+  coolify_control_plane:
+    observed_at: 2026-09-05
+    evidence_class: LIVE-VERIFIED (two authorized read-only company-os workflow runs)
+    probe: coolify-deploy.yml operation=networks, an all-GET enumeration that writes nothing
+    runs: [33962710912, 33962771132]
+    result: "GET /projects returned HTTP 502 Bad Gateway on both runs, about 90 seconds apart"
+    prior_success: run 31678106671 on 2026-08-13 used the same workflow, URL reference and token reference and succeeded, so this is a change of state rather than a misconfiguration
+    scope_of_claim: >-
+      This proves the Coolify control-plane API is degraded. It does NOT prove
+      deployed applications are down. In the same session the n8n management API
+      answered normally and returned 91 workflows, and n8n runs on this host, so
+      containers and the ingress proxy were serving while the control plane was
+      returning 502.
+    consequence: >-
+      The owner-side network fix for the L1 read path is applied through this
+      same control plane, so control-plane recovery precedes the network change.
+    next_action: owner restores the Coolify control plane, then re-runs the read-only networks probe to confirm recovery
 
 operator_access:
   production_host: 37.27.213.220

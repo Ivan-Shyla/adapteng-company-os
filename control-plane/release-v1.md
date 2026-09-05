@@ -9,9 +9,11 @@ repository `main`, this checkpoint, then the older review.
 
 ### Evidence boundary
 
-- **GITHUB-VERIFIED:** public `adapteng-company-os` `main` is
-  `7805545dbb3f509bafafc341400c8169698bf1f4`; draft PR #222 remains open and
-  is unrelated to the L1 runtime path.
+- **GITHUB-VERIFIED:** public `adapteng-company-os` `main` has moved from
+  `7805545dbb3f509bafafc341400c8169698bf1f4` to
+  `5774be96d81560cdff540f939dcabf14795f17cd` by a clean fast-forward of one
+  commit (`docs: record L1 checkpoint and execution authority (#226)`). Draft
+  PR #222 remains open and is unrelated to the L1 runtime path.
 - **OWNER-SUPPLIED EXECUTION EVIDENCE:** the latest Coolify/n8n/GitHub results
   supplied by Ivan are recorded below. This recording session could not access
   the private implementation repositories or provider consoles, so the next
@@ -21,9 +23,10 @@ repository `main`, this checkpoint, then the older review.
   2026-06-25/26. The inventory contains 83 original workflow rows plus 9
   restored inactive helpers in the later archive. None of those counts may be
   treated as current without a live n8n read.
-- **UNKNOWN:** actual Docker network membership/aliases, current private-repo
-  heads, provider credential presence and the latest execution history have not
-  been independently re-read in this recording session.
+- **UNKNOWN:** `n8n-selfhosted`'s own Docker network membership remains the one
+  unresolved runtime fact, because the Coolify API could not be queried. Private
+  repository heads, credential presence and the adapter's alias/port were
+  re-read on 2026-09-05 and are recorded in the verification table below.
 
 ### Current verdict
 
@@ -46,17 +49,47 @@ complete successfully.
 | `adapteng-automation-platform` PR #130 | Merged at `f9daf1b50c490e4fdaa4a36cc38beddf18c022ac`; post-merge CI was reported green. Re-verify in the private repository. |
 | `adapteng-baserow-adapter` | Deployed from the PR #130 merge and reported `running:healthy`; deployment reference `qr2zdnpthsnewaz6i06ftpsn`. |
 | Read contract | `/healthz`, authenticated `/v1/schema/system`, authenticated `/v1/sample/system?limit=3`, expected unauthenticated `401`, expected disallowed-kind `403`. |
-| n8n proof | `L1 - Baserow Systems Read Proof`, id `h4P31QIIUm1mhJAD`, inactive after failed attempts. Latest supplied execution `22677`; earlier attempts `22675` and `22676`. |
+| n8n proof | `L1 - Baserow Systems Read Proof`, id `h4P3lQIIUmlmhJAD` (corrected 2026-09-05; the previously recorded `h4P31QIIUm1mhJAD` used digit `1` where the live id uses lowercase `l`), inactive after failed attempts. Latest supplied execution `22677`; earlier attempts `22675` and `22676`. |
 | Failure | `ENOTFOUND` before any request reached the adapter. Short display name and UUID-derived guesses failed. |
 | Network setting | `n8n-selfhosted` showed `Connect to predefined network`; a real redeploy was completed, but DNS still failed. Actual shared network membership and runtime alias remain unverified. |
 | Existing n8n credential reference | `X-Worker-Token`; reuse by reference and never expose its stored value. |
 | Evidence PR #129 | Draft, supplied head `6952f2e335f49ef192950a48a4b173e648237574`, reported 12/12 CI green. Keep draft until live proof succeeds. |
 | Baserow mutation | None. The failed request did not reach the adapter and no write was authorized. |
 
-**Single immediate blocker:** establish the real Docker network shared by the
-n8n and adapter containers, read the adapter's actual container/service aliases
-and listening port, then use that verified address in the existing workflow.
+**Single immediate blocker:** attach `n8n-selfhosted` to the Docker network that
+already carries the `adapteng-baserow-adapter` alias. The alias, the port and
+the read contract are no longer open questions — see the verification below.
 Do not try further guessed hostnames.
+
+### Connected-session verification — 2026-09-05
+
+A session with GitHub and authenticated n8n access, but **no** Coolify, Docker,
+Postgres, Baserow or B2 client, token or network route, re-read the items above.
+It changed no provider state.
+
+| Claim under test | Result | Evidence |
+|---|---|---|
+| Platform PR #130 merge SHA | **CONFIRMED** | `f9daf1b5…` is the current `adapteng-automation-platform` `main`; its 30 latest main check runs all concluded success. Upgraded from owner-supplied to GITHUB-VERIFIED. |
+| Adapter alias is wrong or unresolvable | **REFUTED** | Company-os run `31590576870` measured `adapteng-baserow-adapter` → `10.0.1.11` from inside the shared `adapteng-ops` network. The adapter sets `custom_network_aliases=adapteng-baserow-adapter`. |
+| Adapter port / read contract | **CONFIRMED from source** | Binds `0.0.0.0:8080`; `/healthz` unauthenticated; `/v1/schema/system` and `/v1/sample/system` authenticated; `system` is the only readable kind, other kinds return `403`. |
+| Proof workflow id | **CORRECTED** | Live id is `h4P3lQIIUmlmhJAD`, not `h4P31QIIUm1mhJAD`. |
+| Proof workflow is executable by an agent | **REFUTED** | It is one of only 2 workflows out of 91 with `availableInMCP: false`, so a connected agent cannot read, update or run it. |
+| n8n instance census | **REFRESHED** | 91 workflows, 32 active, 89 MCP-exposed. The 2026-07-27 census of 2 + 89 is superseded; the self-hosted/cloud split is **UNKNOWN** from this read. |
+| Coolify control plane is usable | **REFUTED** | Two authorized read-only probes (runs `33962710912`, `33962771132`, ~90 s apart) both returned `HTTP 502` on `GET /projects`. The same workflow and token reference succeeded on 2026-08-13 (run `31678106671`). |
+| Deployed applications are down | **NOT SUPPORTED** | In the same session the n8n management API answered normally and n8n runs on this host, so containers and ingress were serving while the control plane returned 502. |
+| Baserow was written to | **NO** | No request reached the adapter; no write was attempted or authorized. |
+
+**Verdict: `PLATFORM V1 L1 PARTIAL`.** The read path is one Coolify network
+attachment away from provable, and that attachment cannot be made while the
+control plane is returning 502. Two owner actions remain, in order:
+
+1. Restore the Coolify control-plane API, then re-run the read-only `networks`
+   probe to confirm recovery.
+2. Attach `n8n-selfhosted` to the adapter's network, enable **Available in MCP**
+   on `h4P3lQIIUmlmhJAD`, run the proof once, return it to inactive.
+
+`adapteng-automation-platform` PR #129 stays **draft**: the prompt-level rule is
+that it merges only after a successful live proof, and no proof occurred.
 
 ### Access and credential posture
 

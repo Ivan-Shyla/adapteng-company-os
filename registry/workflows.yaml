@@ -7,10 +7,28 @@
 # No secrets: webhook paths and tokens are marked, not printed.
 version: 1
 updated: 2026-09-05
-last_verified_live: 2026-07-27
+last_verified_live: 2026-09-05
 latest_owner_supplied_checkpoint: 2026-09-05
-count_warning: live_counts below remain the dated 2026-07-27 census and must be refreshed from n8n before use
-live_counts:
+count_warning: >-
+  live_counts_2026_07_27 is the superseded dated census, retained only for
+  comparison. live_counts_observed is a direct authenticated read and is
+  authoritative for totals.
+live_counts_observed:
+  observed_at: 2026-09-05
+  evidence_class: LIVE-VERIFIED (authenticated n8n management API, read-only, single complete page, no continuation cursor)
+  total: 91
+  active: 32
+  inactive: 59
+  available_in_mcp: 89
+  not_available_in_mcp: 2
+  not_available_in_mcp_ids: [h4P3lQIIUmlmhJAD, SaLFJm7NwdocSZcN]
+  self_hosted_vs_cloud_split: UNKNOWN
+  split_note: >-
+    The connected instance returns one combined list of 91. The 2026-07-27
+    census recorded 2 self-hosted plus 89 cloud, which sums to the same 91, but
+    this read cannot attribute an individual workflow to a runtime, so the
+    split is not restated as fact.
+live_counts_2026_07_27:
   self_hosted: { total: 2, active: 2, drift: none }
   cloud: { total: 89, active: 31, inactive: 58, repo_exports: 82, live_only: 14, repo_only: 7 }
 cloud_pre_freeze_audit: { total: 89, active: 33, verified: 2026-07-27 }
@@ -42,6 +60,7 @@ repository_containment_evidence:
 systemic_mcp_exposure:
   status: unresolved
   observed: audited workflows still have Available in MCP enabled
+  measured: 2026-09-05 LIVE-VERIFIED - 89 of 91 workflows report availableInMCP true; only h4P3lQIIUmlmhJAD and SaLFJm7NwdocSZcN are excluded
   update_attempt: workflow update API rejected the availability field as unsupported; no availability changed
   exposure_semantics: instance-level MCP plus per-workflow availability and an authenticated user exposes supported workflows
   trigger_independence: disabling Available in MCP does not stop normal webhook, schedule, manual or internal triggers
@@ -62,8 +81,12 @@ excluded_personal_projects:
 canonical_full_index: adapteng-automation-platform/n8n/workflow-index.json  # 82 repository exports; live drift above must be reconciled
 
 company_os_workflows:
-  - id: h4P31QIIUm1mhJAD
+  - id: h4P3lQIIUmlmhJAD
     name: L1 - Baserow Systems Read Proof
+    id_correction: >-
+      2026-09-05 LIVE-VERIFIED. The registry previously recorded h4P31QIIUm1mhJAD.
+      The live instance returns h4P3lQIIUmlmhJAD; the two differing characters are
+      lowercase L, not digit 1.
     runtime: self-hosted n8n (n8n.adapteng.com)
     trigger: bounded manual/one-shot proof
     calls: adapteng-baserow-adapter read contract
@@ -72,8 +95,21 @@ company_os_workflows:
     status: inactive-connectivity-blocked
     supplied_failed_executions: [22675, 22676, 22677]
     latest_failure: ENOTFOUND before the request reached the adapter
+    live_state_2026_09_05:
+      evidence_class: LIVE-VERIFIED (authenticated n8n management API, read-only)
+      active: false
+      available_in_mcp: false
+      consequence: >-
+        This workflow cannot be read, updated or executed through the MCP
+        connector while availableInMCP is false, so a connected agent cannot
+        complete the proof even after the network path is fixed.
+      owner_action: enable Available in MCP on this workflow, or run the proof from the n8n UI
     network_state: n8n was redeployed with Connect to predefined network selected, but actual shared network membership and adapter alias remain unverified
-    next_action: inspect live Docker/Coolify network metadata, use the verified internal address, execute once, then return the workflow to inactive
+    next_action: >-
+      Owner-only. First restore the Coolify control plane (its API returned 502
+      on 2026-09-05, see registry/environments.yaml), then attach n8n-selfhosted
+      to the network carrying the adapteng-baserow-adapter alias, then enable
+      Available in MCP on this workflow, execute once and return it to inactive.
     evidence_pr: adapteng-automation-platform PR #129 remains draft until the live proof succeeds
     owner: Ivan
 
