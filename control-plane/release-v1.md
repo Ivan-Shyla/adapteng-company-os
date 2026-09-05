@@ -105,17 +105,26 @@ redeployed.
 **Verdict: `PLATFORM V1 L1 PARTIAL`.** The blocker is workflow placement, not
 networking. Two owner actions remain, in order:
 
-1. Decide the execution home for the L1 proof. Either rebuild it on the
-   self-hosted `n8n.adapteng.com` instance, which already sits on the adapter's
-   network, or give the adapter a governed route the cloud instance may use.
-   Rebuilding on self-hosted is the smaller path and needs no new exposure.
-2. Supply a valid self-hosted n8n API key so the proof can run without console
-   work. Requested per the credential-request rule, value never displayed:
-   - required secret name: `N8N_SELFHOSTED_API_KEY`
-   - provider: self-hosted n8n at `n8n.adapteng.com`
-   - exact destination field: the `X-N8N-API-KEY` header of an n8n
-     `httpHeaderAuth` credential
-   - minimum required scope: workflow read and execute only
+1. Decide the execution home for the L1 proof. **Owner decision 2026-09-05:
+   self-hosted `n8n.adapteng.com`.** It already sits on the adapter's network,
+   so no new exposure is needed.
+2. Supply a self-hosted n8n API key. An attempt on 2026-09-05 produced a key
+   that authenticates against **n8n Cloud**, not the self-hosted host, so the
+   proof still cannot run. The distinction below is the whole blocker:
+
+   - the key must be minted **on the self-hosted host itself**, by signing in to
+     `https://n8n.adapteng.com` and using **Settings → n8n API → Create an API
+     key** on that screen
+   - a key created in the n8n Cloud UI (`ivanshyla.app.n8n.cloud`) is **not
+     interchangeable**; the two instances have separate user stores
+   - store it as an `httpHeaderAuth` credential named `N8N_SELFHOSTED_API_KEY`
+     with header field `X-N8N-API-KEY`
+   - minimum required scope: workflow read, create and execute
+   - value never displayed, requested or committed
+
+   Verification that settles it without exposing anything: the same stored
+   reference must return HTTP 200 from `GET https://n8n.adapteng.com/api/v1/workflows`.
+   Today it returns 401 there and 200 against the cloud host.
 
 `adapteng-automation-platform` PR #129 stays **draft**: the prompt-level rule is
 that it merges only after a successful live proof, and no proof occurred.
