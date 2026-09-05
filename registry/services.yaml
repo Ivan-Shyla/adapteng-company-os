@@ -170,7 +170,7 @@ services:
     path: services/adapteng-baserow-adapter
     role: Governed Baserow write path plus the field-allowlisted read contract used by the L1 Systems proof.
     runtime: Coolify (Hetzner), internal-only
-    endpoint_internal: "declared http://adapteng-baserow-adapter:8080; the adapter is healthy, but this alias is not currently resolvable from n8n"
+    endpoint_internal: "declared http://adapteng-baserow-adapter:8080; the alias resolved to 10.0.1.11 from inside the shared adapteng-ops network on 2026-08-12 (company-os run 31590576870), but it does not resolve from n8n"
     read_contract: [/healthz, /v1/schema/system, "/v1/sample/system?limit=3"]
     public_endpoint: none (public URL removed after canary; verified 503)
     coolify_app_uuid: rrzq6gk3qpjfwuphvj1vsfzq
@@ -181,13 +181,27 @@ services:
     owner: Ivan
     latest_l1_evidence:
       recorded: 2026-09-05
-      evidence_class: owner-supplied; private repository and provider state require connected-agent re-verification
-      platform_pr_130: merged at f9daf1b50c490e4fdaa4a36cc38beddf18c022ac; post-merge CI reported green
-      deployment: qr2zdnpthsnewaz6i06ftpsn; reported running:healthy
-      n8n_workflow: h4P31QIIUm1mhJAD
+      evidence_class: >-
+        Mixed. platform_pr_130 is now GITHUB-VERIFIED. The deployment reference
+        and adapter health remain owner-supplied because the Coolify API was
+        unreachable during this verification.
+      platform_pr_130: GITHUB-VERIFIED merged at f9daf1b50c490e4fdaa4a36cc38beddf18c022ac; that SHA is the current adapteng-automation-platform main and its 30 latest main check runs all concluded success
+      deployment: qr2zdnpthsnewaz6i06ftpsn; reported running:healthy (owner-supplied; not re-verified, Coolify API returned 502 on 2026-09-05)
+      n8n_workflow: h4P3lQIIUmlmhJAD
       latest_execution: 22677
       result: ENOTFOUND before the request reached the adapter
-      next_action: inspect actual Docker network membership, service/container aliases and internal port; do not guess another hostname
+      alias_finding: >-
+        2026-09-05 GITHUB-VERIFIED from deploy/ai-gateway.json. Company-os run
+        31590576870 measured, from inside a container on the shared
+        adapteng-ops production network, that adapteng-baserow-adapter resolved
+        to 10.0.1.11 while ai-gateway did not resolve at all. The adapter
+        carries custom_network_aliases=adapteng-baserow-adapter, so the alias is
+        correct and answerable. The unresolved variable is therefore n8n's own
+        network attachment, not the adapter's name or port.
+      next_action: >-
+        Owner-only. Attach n8n-selfhosted to the network that carries the
+        adapteng-baserow-adapter alias. Do not guess further hostnames; the
+        alias is already proven to resolve on that network.
     notes: >-
       Migration 001 applied on first boot via RUN_MIGRATIONS_ON_START, then the
       flag returned to false. Proven live by AUT-001 + WEB-002. Replay is safe
