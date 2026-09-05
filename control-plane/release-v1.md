@@ -34,7 +34,7 @@ repository `main`, this checkpoint, then the older review.
 |---|---|---|
 | Repository development | **GO** | Company OS `main` is reachable and current public history is intact. |
 | L1 authorization | **GO** | Owner-authoritative runtime policy permits existing access, reversible provider configuration, green ordinary PR merges and one bounded internal model proof. |
-| L1 end-to-end runtime | **PARTIAL** | Adapter deploy is healthy, but the n8n proof has not reached it because Docker DNS returns `ENOTFOUND`. |
+| L1 end-to-end runtime | **PARTIAL** | Adapter deploy is healthy, but the n8n proof cannot reach it: the proof workflow runs on n8n Cloud, which is off-host and cannot resolve the private Coolify alias. |
 | L2 controlled business writes | **NOT PROVEN** | Do not infer L2 from a healthy adapter or repository CI. |
 | L3 autonomous external action | **NOT AUTHORIZED** | External send/publish, DNS, destructive production action and unbounded spend remain explicit owner gates. |
 
@@ -56,9 +56,10 @@ complete successfully.
 | Evidence PR #129 | Draft, supplied head `6952f2e335f49ef192950a48a4b173e648237574`, reported 12/12 CI green. Keep draft until live proof succeeds. |
 | Baserow mutation | None. The failed request did not reach the adapter and no write was authorized. |
 
-**Single immediate blocker:** attach `n8n-selfhosted` to the Docker network that
-already carries the `adapteng-baserow-adapter` alias. The alias, the port and
-the read contract are no longer open questions — see the verification below.
+**Single immediate blocker (SUPERSEDED 2026-09-05, second pass):** this entry
+read "attach `n8n-selfhosted` to the Docker network that already carries the
+`adapteng-baserow-adapter` alias". That attachment was then verified to already
+exist, so it is **not** the fault. See "Root cause — 2026-09-05 (second pass)".
 Do not try further guessed hostnames.
 
 ### Connected-session verification — 2026-09-05
@@ -79,17 +80,63 @@ It changed no provider state.
 | Deployed applications are down | **NOT SUPPORTED** | In the same session the n8n management API answered normally and n8n runs on this host, so containers and ingress were serving while the control plane returned 502. |
 | Baserow was written to | **NO** | No request reached the adapter; no write was attempted or authorized. |
 
-**Verdict: `PLATFORM V1 L1 PARTIAL`.** The read path is one Coolify network
-attachment away from provable, and that attachment cannot be made while the
-control plane is returning 502. Two owner actions remain, in order:
+### Root cause — 2026-09-05 (second pass, Coolify restored)
 
-1. Restore the Coolify control-plane API, then re-run the read-only `networks`
-   probe to confirm recovery.
-2. Attach `n8n-selfhosted` to the adapter's network, enable **Available in MCP**
-   on `h4P3lQIIUmlmhJAD`, run the proof once, return it to inactive.
+The Coolify control plane recovered, which closed the 502 condition above and
+allowed the network question to be settled. Settling it **refuted** the network
+theory.
+
+| Claim under test | Result | Evidence |
+|---|---|---|
+| Coolify control plane is usable | **RESTORED** | Read-only `networks` probe run `33986216491` returned `RESULT networks ok shared_network=YES alias=YES`. |
+| `n8n-selfhosted` is off the adapter's network | **REFUTED** | All four applications report `destination.network='coolify'`, `destination_id='0'`. `n8n-selfhosted` (`z3alm18h2giehus9ztzzk9gq`) already shares the network with `adapteng-baserow-adapter` (`rrzq6gk3qpjfwuphvj1vsfzq`). |
+| The proof workflow runs on self-hosted n8n | **REFUTED** | The instance holding `h4P3lQIIUmlmhJAD` reports its own base URL as `ivanshyla.app.n8n.cloud`, which resolves to Cloudflare addresses. `n8n.adapteng.com` resolves to `37.27.213.220` and serves with no CDN. Two different instances. |
+| The failed proof attempts ran on that same instance | **CONFIRMED** | Execution `22674` (2026-08-23T07:16:46Z) is present on it, immediately preceding the documented attempts `22675` and `22676`. |
+| `ENOTFOUND` is a Docker-DNS misconfiguration | **REFUTED** | Reproduced live at 2026-09-05T19:16:17Z (execution `25497`): `getaddrinfo ENOTFOUND adapteng-baserow-adapter`. The same instance resolved public hosts normally in the same session, so egress DNS works; only the private alias is unreachable. |
+| The stored n8n API reference still authenticates | **REFUTED** | Both n8n hosts answered HTTP 401 unauthorized to the existing stored reference. Its value was never displayed or copied. |
+
+**Corrected root cause.** `h4P3lQIIUmlmhJAD` executes on **n8n Cloud**, which is
+not on the Hetzner host. A managed multi-tenant runner cannot resolve a private
+Coolify Docker alias, so no Coolify network change can make this workflow reach
+`adapteng-baserow-adapter:8080`. The previously recorded remediation would not
+have worked. No Coolify network change was made, and the adapter was not
+redeployed.
+
+**Verdict: `PLATFORM V1 L1 PARTIAL`.** The blocker is workflow placement, not
+networking. Two owner actions remain, in order:
+
+1. Decide the execution home for the L1 proof. Either rebuild it on the
+   self-hosted `n8n.adapteng.com` instance, which already sits on the adapter's
+   network, or give the adapter a governed route the cloud instance may use.
+   Rebuilding on self-hosted is the smaller path and needs no new exposure.
+2. Supply a valid self-hosted n8n API key so the proof can run without console
+   work. Requested per the credential-request rule, value never displayed:
+   - required secret name: `N8N_SELFHOSTED_API_KEY`
+   - provider: self-hosted n8n at `n8n.adapteng.com`
+   - exact destination field: the `X-N8N-API-KEY` header of an n8n
+     `httpHeaderAuth` credential
+   - minimum required scope: workflow read and execute only
 
 `adapteng-automation-platform` PR #129 stays **draft**: the prompt-level rule is
 that it merges only after a successful live proof, and no proof occurred.
+
+### Durability follow-up — Coolify auto-update
+
+This item does not block L1. It is recorded because an unattended upgrade on
+2026-08-27 removed the four control-plane containers while the upgrade script
+recorded success.
+
+Instance auto-update is an instance-level Coolify setting (Settings → Instance →
+**Auto Update**; API field `instance_auto_update` on `PATCH /api/v1/settings`).
+It could not be changed from this session: the authorized company-os route,
+`scripts/coolify_deploy.py`, exposes only `inspect`, `reconcile`, `deploy`,
+`status`, `verify`, the `peer-*` and `service-resolve` probes, `diagnose` and
+`networks`. None of them reach instance settings, and `DELETE` is globally
+forbidden. No direct provider client is configured here.
+
+**Precise follow-up (owner, reversible):** turn **Auto Update** off in the
+Coolify instance settings, and re-enable it only for a supervised upgrade
+window. No upgrade was executed during this mission.
 
 ### Access and credential posture
 
