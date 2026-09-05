@@ -6,8 +6,16 @@ updated: 2026-08-11
 platform:
   compute: Hetzner (EU region) — single self-hosted host
   orchestrator: Coolify (self-hosted PaaS on Hetzner)
-  container_network: coolify (internal; services reach each other by alias, no public exposure)
+  container_network: coolify (declared internal; cross-resource membership and aliases must be verified rather than inferred from the UI setting)
   policy: upgrade the existing host only after 7 days of measured CPU/RAM/disk pressure (ARCHITECTURE.md §9)
+  l1_network_checkpoint:
+    recorded: 2026-09-05
+    evidence_class: owner-supplied
+    adapter_health: running:healthy
+    n8n_to_adapter: ENOTFOUND
+    attempted: n8n redeploy with Connect to predefined network selected
+    unresolved: actual Docker network membership and adapter service/container alias
+    next_action: inspect runtime metadata and correct only the minimum persistent Coolify network setting
 
 operator_access:
   production_host: 37.27.213.220

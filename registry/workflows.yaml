@@ -6,8 +6,10 @@
 # Job Monitor/job-search, English Coach/English-learning and Kraken are excluded personal projects.
 # No secrets: webhook paths and tokens are marked, not printed.
 version: 1
-updated: 2026-07-28
+updated: 2026-09-05
 last_verified_live: 2026-07-27
+latest_owner_supplied_checkpoint: 2026-09-05
+count_warning: live_counts below remain the dated 2026-07-27 census and must be refreshed from n8n before use
 live_counts:
   self_hosted: { total: 2, active: 2, drift: none }
   cloud: { total: 89, active: 31, inactive: 58, repo_exports: 82, live_only: 14, repo_only: 7 }
@@ -60,6 +62,21 @@ excluded_personal_projects:
 canonical_full_index: adapteng-automation-platform/n8n/workflow-index.json  # 82 repository exports; live drift above must be reconciled
 
 company_os_workflows:
+  - id: h4P31QIIUm1mhJAD
+    name: L1 - Baserow Systems Read Proof
+    runtime: self-hosted n8n (n8n.adapteng.com)
+    trigger: bounded manual/one-shot proof
+    calls: adapteng-baserow-adapter read contract
+    credential_ref: X-Worker-Token (existing n8n credential; value never exported)
+    writes: none; Baserow read-only
+    status: inactive-connectivity-blocked
+    supplied_failed_executions: [22675, 22676, 22677]
+    latest_failure: ENOTFOUND before the request reached the adapter
+    network_state: n8n was redeployed with Connect to predefined network selected, but actual shared network membership and adapter alias remain unverified
+    next_action: inspect live Docker/Coolify network metadata, use the verified internal address, execute once, then return the workflow to inactive
+    evidence_pr: adapteng-automation-platform PR #129 remains draft until the live proof succeeds
+    owner: Ivan
+
   - id: NsWG1hD8VmIRRwCv
     name: AUT-001 Systems Registry (governed upsert)
     runtime: self-hosted n8n (n8n.adapteng.com)

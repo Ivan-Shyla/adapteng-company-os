@@ -1,5 +1,103 @@
 # Platform v1 — release command center
 
+## Operational checkpoint — 2026-09-05
+
+This checkpoint controls the next execution. The longer 2026-08-13 GitHub-only
+review below is retained as historical evidence, not as the current task queue.
+When facts conflict, use this order: freshly observed provider runtime, current
+repository `main`, this checkpoint, then the older review.
+
+### Evidence boundary
+
+- **GITHUB-VERIFIED:** public `adapteng-company-os` `main` is
+  `7805545dbb3f509bafafc341400c8169698bf1f4`; draft PR #222 remains open and
+  is unrelated to the L1 runtime path.
+- **OWNER-SUPPLIED EXECUTION EVIDENCE:** the latest Coolify/n8n/GitHub results
+  supplied by Ivan are recorded below. This recording session could not access
+  the private implementation repositories or provider consoles, so the next
+  connected agent must re-read them before changing the state.
+- **HISTORICAL BASELINE ONLY:** the supplied n8n health check and migration
+  audit are dated 2026-06-22; the architecture documents are dated
+  2026-06-25/26. The inventory contains 83 original workflow rows plus 9
+  restored inactive helpers in the later archive. None of those counts may be
+  treated as current without a live n8n read.
+- **UNKNOWN:** actual Docker network membership/aliases, current private-repo
+  heads, provider credential presence and the latest execution history have not
+  been independently re-read in this recording session.
+
+### Current verdict
+
+| Layer | Verdict | Latest evidence |
+|---|---|---|
+| Repository development | **GO** | Company OS `main` is reachable and current public history is intact. |
+| L1 authorization | **GO** | Owner-authoritative runtime policy permits existing access, reversible provider configuration, green ordinary PR merges and one bounded internal model proof. |
+| L1 end-to-end runtime | **PARTIAL** | Adapter deploy is healthy, but the n8n proof has not reached it because Docker DNS returns `ENOTFOUND`. |
+| L2 controlled business writes | **NOT PROVEN** | Do not infer L2 from a healthy adapter or repository CI. |
+| L3 autonomous external action | **NOT AUTHORIZED** | External send/publish, DNS, destructive production action and unbounded spend remain explicit owner gates. |
+
+Authorization and operation are deliberately separate: L1 is allowed now, but
+it is not operational until the live read path and one useful internal result
+complete successfully.
+
+### Latest L1 handoff
+
+| Component | State |
+|---|---|
+| `adapteng-automation-platform` PR #130 | Merged at `f9daf1b50c490e4fdaa4a36cc38beddf18c022ac`; post-merge CI was reported green. Re-verify in the private repository. |
+| `adapteng-baserow-adapter` | Deployed from the PR #130 merge and reported `running:healthy`; deployment reference `qr2zdnpthsnewaz6i06ftpsn`. |
+| Read contract | `/healthz`, authenticated `/v1/schema/system`, authenticated `/v1/sample/system?limit=3`, expected unauthenticated `401`, expected disallowed-kind `403`. |
+| n8n proof | `L1 - Baserow Systems Read Proof`, id `h4P31QIIUm1mhJAD`, inactive after failed attempts. Latest supplied execution `22677`; earlier attempts `22675` and `22676`. |
+| Failure | `ENOTFOUND` before any request reached the adapter. Short display name and UUID-derived guesses failed. |
+| Network setting | `n8n-selfhosted` showed `Connect to predefined network`; a real redeploy was completed, but DNS still failed. Actual shared network membership and runtime alias remain unverified. |
+| Existing n8n credential reference | `X-Worker-Token`; reuse by reference and never expose its stored value. |
+| Evidence PR #129 | Draft, supplied head `6952f2e335f49ef192950a48a4b173e648237574`, reported 12/12 CI green. Keep draft until live proof succeeds. |
+| Baserow mutation | None. The failed request did not reach the adapter and no write was authorized. |
+
+**Single immediate blocker:** establish the real Docker network shared by the
+n8n and adapter containers, read the adapter's actual container/service aliases
+and listening port, then use that verified address in the existing workflow.
+Do not try further guessed hostnames.
+
+### Access and credential posture
+
+No new token is requested by this checkpoint. Existing configured access must
+be tested first, by name/presence only. Likely relevant references include the
+GitHub App/connector for private repositories, the existing Coolify API
+connection, the n8n management API connection, `X-Worker-Token`, the adapter's
+runtime Baserow credential, the AI Gateway caller credential and its existing
+Google/Vertex identity. Their presence is **not** assumed and their values must
+never be printed.
+
+If the next agent lacks access, it must return one consolidated setup table:
+provider, exact UI/store, credential/variable name, minimum scope, purpose and
+verification test. Ivan adds values directly in the named provider store; no
+value is pasted into chat or committed.
+
+### Completion target
+
+Platform v1 becomes **L1 OPERATIONAL** when all of the following are evidenced:
+
+1. n8n reaches the adapter on a verified internal address;
+2. the five HTTP contract checks return `200/200/200/401/403` as applicable;
+3. the sample contains no more than three records and only the approved system
+   fields;
+4. the existing n8n proof execution succeeds and the workflow returns inactive;
+5. one internal, schema-valid recommendation is produced from sanitized system
+   metadata, optionally through one already-budgeted AI Gateway call;
+6. no Baserow business write, external send or publication occurs;
+7. PR #129 is updated with sanitized evidence, passes CI and is merged at its
+   exact verified head;
+8. Company OS registries and this command center are refreshed from the final
+   evidence.
+
+Use the credential-free execution package in
+[`polina-ai-platform-completion-prompt.md`](polina-ai-platform-completion-prompt.md).
+It grants broad practical authority under
+[`owner-ai-runtime-policy.md`](owner-ai-runtime-policy.md) and prevents another
+open-ended security audit from replacing delivery.
+
+---
+
 **Owner decision — 2026-08-21.**
 [Owner-authoritative AI runtime policy](owner-ai-runtime-policy.md) authorizes
 L1 internal AI operation now. Its approval of existing Baserow access and the

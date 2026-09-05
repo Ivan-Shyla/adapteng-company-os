@@ -8,18 +8,21 @@ allowed to happen without the owner, and what work is currently dispatched**.
 
 | File | Purpose |
 |---|---|
-| [`current-state.md`](current-state.md) | Verified cross-repository state and the drift register: every place documentation disagrees with production or `main`. |
+| [`release-v1.md`](release-v1.md) | Current concise operational checkpoint and Platform v1 command center. Read this first for the active verdict and next execution. |
+| [`current-state.md`](current-state.md) | Deep historical cross-repository evidence and drift register. Use it to trace a claim, not as the current task queue. |
 | [`autonomy-policy.md`](autonomy-policy.md) | The owner-versus-agent permission model. What an agent may do alone, what it may do if automated verification passes, and the short list that is genuinely owner-only. |
+| [`polina-ai-platform-completion-prompt.md`](polina-ai-platform-completion-prompt.md) | Credential-free execution prompt for a fully connected AI operator to reconcile the whole platform and finish the L1 runtime proof. |
 | [`friction-audit.md`](friction-audit.md) | Every material protection mechanism classified P0–P3, with the exact remediation for the ones that cost more than they protect. |
 | [`execution-program.md`](execution-program.md) | Current workstreams, their dependency order, and the dispatch package for each. |
 
 ## How to use this folder
 
-Read `current-state.md` first. It is the only file here that makes claims about
-reality, and every claim carries the evidence that supports it.
+Read `release-v1.md` first. Its newest dated checkpoint controls the current
+execution. Use `current-state.md` only when the checkpoint links to historical
+evidence or a prior diagnosis.
 
-The other three are decisions, not observations. They change only by pull
-request.
+Policies and execution prompts are decisions, not observations. They change
+only by pull request.
 
 ## Evidence rule
 
