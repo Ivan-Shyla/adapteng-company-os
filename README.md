@@ -44,8 +44,10 @@ runtime-дампов и копий реализации из других реп
 | Как ротировать токен (и почему старый ещё живой)? | [`runbooks/secret-rotation.md`](runbooks/secret-rotation.md) |
 | Что должен сделать Иван? | [`owner/action-items.md`](owner/action-items.md) |
 | Что агент может делать без approve? | [`control-plane/owner-ai-runtime-policy.md`](control-plane/owner-ai-runtime-policy.md) |
-| Что реально блокирует работу прямо сейчас? | [`control-plane/current-state.md`](control-plane/current-state.md) |
+| Что реально блокирует работу прямо сейчас? | [`control-plane/release-v1.md`](control-plane/release-v1.md) |
 | Готова ли Platform v1 к релизу и что мешает? | [`control-plane/release-v1.md`](control-plane/release-v1.md) |
+| Какой prompt дать AI Полины для завершения Platform v1? | [`control-plane/polina-ai-platform-completion-prompt.md`](control-plane/polina-ai-platform-completion-prompt.md) |
+| Где подробная история проверок и расхождений? | [`control-plane/current-state.md`](control-plane/current-state.md) |
 | Какие работы запущены и в каком порядке? | [`control-plane/execution-program.md`](control-plane/execution-program.md) |
 | Куда встраивается AI и по какой цене? | [`ai/insertion-points.md`](ai/insertion-points.md), [`ai/model-choices.md`](ai/model-choices.md) |
 | Текущий статус всего | [`ARCHITECTURE.md` §11](ARCHITECTURE.md#11-current-status) |

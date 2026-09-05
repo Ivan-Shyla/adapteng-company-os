@@ -168,23 +168,35 @@ services:
   - id: adapteng-baserow-adapter
     repo: adapteng-automation-platform
     path: services/adapteng-baserow-adapter
-    role: Governed write path into Baserow Company Operations (allocates AE-* business ids and enforces field ownership).
+    role: Governed Baserow write path plus the field-allowlisted read contract used by the L1 Systems proof.
     runtime: Coolify (Hetzner), internal-only
-    endpoint_internal: http://adapteng-baserow-adapter:8080  # /v1/upsert, /healthz
+    endpoint_internal: "declared http://adapteng-baserow-adapter:8080; the adapter is healthy, but this alias is not currently resolvable from n8n"
+    read_contract: [/healthz, /v1/schema/system, "/v1/sample/system?limit=3"]
     public_endpoint: none (public URL removed after canary; verified 503)
     coolify_app_uuid: rrzq6gk3qpjfwuphvj1vsfzq
     auth: internal bearer (ADAPTER_SERVICE_TOKEN), rotated post-canary
     source_of_truth_for: none (writes into Baserow; authority stays Baserow/Postgres)
     depends_on: [postgres-adapteng-ops (id allocator, migration 001), baserow-company-operations]
-    status: live
+    status: live-adapter-l1-connectivity-blocked
     owner: Ivan
+    latest_l1_evidence:
+      recorded: 2026-09-05
+      evidence_class: owner-supplied; private repository and provider state require connected-agent re-verification
+      platform_pr_130: merged at f9daf1b50c490e4fdaa4a36cc38beddf18c022ac; post-merge CI reported green
+      deployment: qr2zdnpthsnewaz6i06ftpsn; reported running:healthy
+      n8n_workflow: h4P31QIIUm1mhJAD
+      latest_execution: 22677
+      result: ENOTFOUND before the request reached the adapter
+      next_action: inspect actual Docker network membership, service/container aliases and internal port; do not guess another hostname
     notes: >-
       Migration 001 applied on first boot via RUN_MIGRATIONS_ON_START, then the
       flag returned to false. Proven live by AUT-001 + WEB-002. Replay is safe
       with an explicit business_id and through WEB-002's migration-004 lead
       reservation. Bare COUNTER creates with business_id omitted allocate a new
       ID on each call; generic hash-only reservation is in build before
-      automated case/content/document writes.
+      automated case/content/document writes. PR #130 added the bounded L1 read
+      contract. A healthy adapter does not prove cross-resource reachability;
+      the current L1 block is the n8n-to-adapter Docker DNS/network path.
 
   - id: ai-gateway
     repo: adapteng-automation-platform
