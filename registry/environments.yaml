@@ -15,7 +15,7 @@ platform:
     n8n_to_adapter: ENOTFOUND
     attempted: n8n redeploy with Connect to predefined network selected
     unresolved: actual Docker network membership and adapter service/container alias
-    next_action: inspect runtime metadata and correct only the minimum persistent Coolify network setting
+    next_action: SUPERSEDED 2026-09-05 second pass — the Coolify network setting was not the fault; see l1_execution_home
   l1_network_verification:
     observed_at: 2026-09-05
     evidence_class: GITHUB-VERIFIED repository evidence plus two live control-plane probes
@@ -28,7 +28,28 @@ platform:
       The adapter alias, port 8080 and read contract are not the fault. The
       remaining variable is whether n8n-selfhosted is attached to the network
       that carries that alias. Treat the n8n side as the object of the fix.
-    still_unknown: n8n-selfhosted network membership; it could not be enumerated because the Coolify API is currently failing
+    still_unknown: SUPERSEDED — n8n-selfhosted membership was enumerated on 2026-09-05 (second pass) and is confirmed; see l1_execution_home
+  l1_execution_home:
+    observed_at: 2026-09-05
+    evidence_class: GITHUB-VERIFIED probe plus live n8n execution evidence
+    coolify_control_plane: restored; read-only networks probe run 33986216491 succeeded
+    n8n_selfhosted_on_adapter_network: true   # destination.network=coolify, destination_id=0, same as the adapter
+    proof_workflow_runtime: n8n Cloud (ivanshyla.app.n8n.cloud, Cloudflare addresses)
+    self_hosted_runtime: n8n.adapteng.com -> 37.27.213.220, no CDN; a different instance
+    reproduced_failure: >-
+      Execution 25497 at 2026-09-05T19:16:17Z returned
+      getaddrinfo ENOTFOUND adapteng-baserow-adapter. Public hostnames resolved
+      normally in the same session, so egress DNS works and only the private
+      Coolify alias is unreachable.
+    root_cause: >-
+      The L1 proof workflow h4P3lQIIUmlmhJAD executes on n8n Cloud, off the
+      Hetzner host. A managed multi-tenant runner cannot resolve a private
+      Coolify Docker alias, so no Coolify network change can fix this path.
+    credential_state: N8N_API_KEY_HEADER returned 401 against both n8n hosts
+    next_action: >-
+      Owner decision on execution home. Rebuilding the proof on the self-hosted
+      n8n.adapteng.com instance is the smaller path and needs no new exposure.
+      No Coolify network change was made and the adapter was not redeployed.
   coolify_control_plane:
     observed_at: 2026-09-05
     evidence_class: LIVE-VERIFIED (two authorized read-only company-os workflow runs)
