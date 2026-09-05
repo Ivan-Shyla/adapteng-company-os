@@ -120,6 +120,24 @@ networking. Two owner actions remain, in order:
 `adapteng-automation-platform` PR #129 stays **draft**: the prompt-level rule is
 that it merges only after a successful live proof, and no proof occurred.
 
+### Durability follow-up — Coolify auto-update
+
+This item does not block L1. It is recorded because an unattended upgrade on
+2026-08-27 removed the four control-plane containers while the upgrade script
+recorded success.
+
+Instance auto-update is an instance-level Coolify setting (Settings → Instance →
+**Auto Update**; API field `instance_auto_update` on `PATCH /api/v1/settings`).
+It could not be changed from this session: the authorized company-os route,
+`scripts/coolify_deploy.py`, exposes only `inspect`, `reconcile`, `deploy`,
+`status`, `verify`, the `peer-*` and `service-resolve` probes, `diagnose` and
+`networks`. None of them reach instance settings, and `DELETE` is globally
+forbidden. No direct provider client is configured here.
+
+**Precise follow-up (owner, reversible):** turn **Auto Update** off in the
+Coolify instance settings, and re-enable it only for a supervised upgrade
+window. No upgrade was executed during this mission.
+
 ### Access and credential posture
 
 No new token is requested by this checkpoint. Existing configured access must
