@@ -204,11 +204,51 @@ company_os_workflows:
     consumer_status_2026_09_06: >-
       CORRECTED. The previous entry recorded website PR #78 as draft, unmerged and
       undeployed. PR #78 was merged on 2026-08-01 (merge commit 6770e749) and the
-      producer plugin has been deployed to Cloudways from website main; the most
-      recent successful deploy ran 2026-08-14 on head 854f5971. The remaining gap
-      is configuration, not code: .github/workflows/configure-lead-intake.yml was
-      last dispatched on 2026-07-19, before the self_hosted delivery mode existed,
+      producer plugin has been deployed to Cloudways from website main. Two
+      distinct deploy workflows exist and were conflated in the earlier note:
+      "Deploy theme to Cloudways" last ran 2026-09-06 on head 0214cfa1, while the
+      application deploy that ships this plugin, "Deploy to Cloudways", last
+      succeeded 2026-08-12 on head ce1a200b. That distinction does not change the
+      conclusion: lead-intake.php is byte-identical at ce1a200b and at current
+      main (blob b834339d), so the deployed producer code is current. The
+      remaining gap is configuration, not code:
+      .github/workflows/configure-lead-intake.yml has been dispatched exactly once
+      in its history, on 2026-07-19, before the self_hosted delivery mode existed,
       so the site is not yet delivering to this webhook.
+    contract_reverified_2026_09_06:
+      evidence_class: LIVE-VERIFIED (authenticated self-hosted API read of the running definition)
+      workflow_version_id: fa199c8e-ad42-4681-bd5b-123fcefeab65
+      definition_last_changed: 2026-07-25T17:45:06Z
+      confirmed:
+        webhook: POST with header authentication, path matching web002-lead-[0-9a-f]{8}
+        reads_body_field: form.submission_id
+        canonical_key_prefix: sitelead_wp_
+        reservation_call: reserve_lead_identity
+        conflict_response: 409
+        idempotency_key_occurrences: 4
+        governed_upserts: [AE-ORG-, AE-PER-, AE-OPP-, AE-ACT-]
+      not_claimed: >-
+        This is a read of the running definition, not an execution of it. It is
+        weaker than the T1-T4 preflight, which exercises the lane end to end and
+        remains unrun; see control-plane/activation-path.md section 2.
+    cutover_blockers_2026_09_06:
+      note: >-
+        The cutover is gated on configuration values that only the owner can
+        place. Each fails closed today.
+      website_repo_secrets_absent: [AE_N8N_SELF_HOSTED_LEAD_WEBHOOK_URL, AE_N8N_LEAD_WEBHOOK_TOKEN, AE_N8N_WEB002_EVIDENCE_URL, AE_N8N_WEB002_EVIDENCE_TOKEN]
+      website_repo_variables_absent: [AE_LEAD_INTAKE_CUTOVER_APPROVED, AE_LEAD_WEB002_PREFLIGHT_EVIDENCE_REF, AE_LEAD_WEB002_PREFLIGHT_APPROVED_AT, AE_LEAD_WEB002_CONSUMER_IDEMPOTENCY_APPROVED]
+      evidence_lane_absent: >-
+        web002-t1-t4-evidence.yml drives an isolated lane at
+        /webhook/web002-lead-a11ce001 whose artifact lives in the platform
+        repository at n8n/workflows/experimental/MM-WEB002-self-hosted-lead-evidence-lane.json.
+        No workflow on the self-hosted instance serves that path.
+      why_agent_cannot_resolve: >-
+        The webhook and evidence tokens must equal values held in the n8n
+        credential store, which no API returns, and rotating them is forbidden.
+      backup_gate: >-
+        No agent-executable production backup path exists. postgres-backup-rehearsal.yml
+        backs up and restores a disposable cluster by design, and host-side
+        execution has no working route.
     producer_cutover:
       producer: "adapteng-website PR #78"
       historical_last_reviewed_head: b0e3a656cf6659b893810e11a15b9f515527ab79
