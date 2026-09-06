@@ -19,6 +19,33 @@ these, follow `runbooks/secret-rotation.md`.
 | `adapteng_ops` Postgres DSN | internal Coolify network | Ivan | adapter, governed workflows | Internal-only (SSL disabled on internal net) |
 | GitHub repo access | GitHub | Ivan | all repos | Actions budget $10/mo hard stop |
 
+## Presence verification — 2026-09-06
+
+An authenticated read-only pass listed GitHub Actions storage **by name and
+scope only** across the five authoritative repositories. No value was requested,
+returned, decrypted, compared or logged, and none is reproduced here. The pass
+established where each reference actually lives, which had previously been
+guessed:
+
+| Scope | Location | Holds (names only) |
+|---|---|---|
+| Repository | `adapteng-company-os` | 12 secrets and 19 variables covering Coolify, object storage, pgBackRest, production SSH and Workspace admin |
+| Repository | `adapteng-automation-platform` | 3 secrets, 4 variables |
+| Environment | `adapteng-automation-platform` / `approved-assets-preflight`, `approved-assets-import` | the approved-assets, canonical-folder, Workspace service-account and cross-repository read references, plus 3 Workspace variables |
+| Environment | `adapteng-automation-platform` / `approved-assets-migrations` | the approved-assets database reference |
+| Environment | `adapteng-automation-platform` / `company-os-vertex-runtime-readiness` | the three Vertex identity references |
+| Repository | `adapteng-website` | 10 secrets, and 3 preflight attestation variables set 2026-09-06 |
+| Repository | `adapteng-marketing`, `ai-dev-loop-control-plane` | none |
+
+Most references previously reported as absent are present at **environment**
+scope rather than repository scope. Environment scope is the stricter placement,
+so this is a correction to the inventory, not a change to the platform.
+
+Two references named in current default-branch configuration have no GitHub
+binding at any scope and are supplied by the runtime instead: the Drive-bridge
+replay database reference and the Workspace delegated-user reference, for which
+GitHub carries the Workspace admin variable under a different name.
+
 ## Presence verification — 2026-09-05
 
 An authenticated read-only pass over the connected n8n credential store listed
@@ -31,8 +58,11 @@ Two access facts were established in the same session and belong to the gap
 table rather than to this map:
 
 - The **Coolify API is currently failing** (`HTTP 502` on two authorized
-  read-only probes, 2026-09-05). The token reference itself is unchanged and
-  worked on 2026-08-13, so this is a service condition, not a credential one.
+  read-only probes, 2026-09-05, and again on two more, 2026-09-06 20:54 and
+  20:55). The token reference itself is unchanged and worked on 2026-08-13, so
+  this is a service condition, not a credential one. Deployed applications are
+  unaffected — the self-hosted n8n API answered 200 throughout — but deployment
+  revision and network-alias questions have no read path while it persists.
 - No Coolify, Docker, Postgres, Baserow or B2 client, token or network route is
   present in the automation session, so provider runtime cannot be observed from
   here except through existing repository operations.

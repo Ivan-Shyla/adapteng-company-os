@@ -8,6 +8,54 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
 
 ---
 
+## Setup queue by next mission — 2026-09-06
+
+Ordered by dependency. Everything above the line in each block must be done
+before the mission below it can run. Enter every value directly in the named
+provider UI. Never paste a value into a chat, an issue, a pull request or any
+file in this repository.
+
+### Mission 1 — production backup, then WEB-002 cutover
+
+The WEB-002 preflight is finished: T1–T4 passed in full on 2026-09-06 and the
+three attestation variables are set. Only the backup gate remains.
+
+| # | Provider / screen | Name to set | Purpose | Minimum scope | Verification |
+|---|---|---|---|---|---|
+| 1 | GitHub → `adapteng-company-os` → Settings → Secrets and variables → Actions → Variables | `PGBACKREST_REPO1_PATH` | Make the configured repository prefix equal the value the restore guard pins, so a restore can start. The guard fails closed and must not be relaxed. | repository variable | Re-run the restore generation step and confirm it no longer aborts on the stanza/repo check |
+| 2 | Backblaze B2 → Buckets → lifecycle rules, and Application Keys | the bucket lifecycle rules and the key's prefix restriction | A lifecycle rule left on a stale prefix silently stops expiring hidden versions, and no pgBackRest command reports that | same bucket, prefix restricted to the value settled in #1 | List the rule and the key prefix and confirm both read the same prefix as #1 |
+| 3 | Coolify → the `n8n-self-hosted` application → Source | deployment branch | The application still tracks a branch 82 commits behind with a head dated 2026-07-24 | same application, no network change | Re-read the application source and confirm it tracks `main` |
+| 4 | Coolify → control plane | restore API availability | Authorized read-only probes answered 502 on 2026-09-05 and 2026-09-06, so deployment revision and alias checks have no read path | none | Re-run `gateway-readiness.yml` with `probe` and confirm it gets past `GET /projects` |
+
+Only after #1 and #2 are done and one isolated restore is evidenced may
+`configure-lead-intake.yml` be dispatched. The dispatch answers are in
+`control-plane/activation-path.md` §2.
+
+### Mission 2 — first governed model proof
+
+| # | Provider / screen | Name to set | Purpose | Minimum scope | Verification |
+|---|---|---|---|---|---|
+| 1 | Coolify → the `ai-gateway` application → Environment variables | the gateway caller-token variable | The service answers on the private network, but no caller reference is reachable, so no bounded model call can be made | runtime environment variable on that application only | Issue one unauthenticated request and confirm the endpoint still refuses it |
+| 2 | Google Cloud → the Workspace automation project → IAM | the Vertex prediction role on the existing service-account principal | The Vertex identity references are present in the `company-os-vertex-runtime-readiness` environment, but no evidence shows the principal may call a model | prediction only, EU region | Run the runtime-readiness workflow and confirm the identity check passes |
+| 3 | Google Cloud → the same project → APIs and services | Vertex AI API enablement and EU regional quota | A first call fails on either without a useful error | project scope | Confirm the API shows enabled and the regional quota is non-zero |
+
+### Mission 3 — Drive and Baserow daily loop
+
+| # | Provider / screen | Name to set | Purpose | Minimum scope | Verification |
+|---|---|---|---|---|---|
+| 1 | GitHub → `adapteng-automation-platform` → Settings → Environments | the Drive-bridge replay database reference | Named in current default-branch configuration but bound at no GitHub scope | one environment, not repository-wide | Re-list that environment and confirm the name appears |
+| 2 | Coolify → the media-worker application → Environment variables | replace the legacy Workspace service-account reference with the current one | The live media worker still reads a personal Drive through an old project account | same application | Confirm the worker reads the corporate Shared Drive after a snapshot and canary |
+| 3 | n8n Cloud → credential store | retire the legacy Drive OAuth credential | It reads a personal My Drive and has no corporate Shared Drive write access, proven 2026-07-26 | after the canary in #2 | Confirm no remaining workflow references it |
+
+### Mission 4 — company workflow migration to self-hosted n8n
+
+No new owner value is required. The self-hosted instance holds five workflows
+and one data table; the 91 Cloud workflows stay where they are until each is
+migrated with its own proof. Job Monitor, English Coach and Kraken are personal
+projects and are permanently out of scope.
+
+---
+
 ## 🔴 Security — do first
 
 - [ ] **URGENT - revoke and rotate the compromised Baserow API token**

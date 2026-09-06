@@ -234,7 +234,7 @@ company_os_workflows:
     cutover_blockers_2026_09_06:
       note: >-
         Superseded at 18:34Z the same day. Four of the five items below were
-        closed; see cutover_state_2026_09_06_1834z for the current position.
+        closed; see cutover_state_2026_09_06_2046z for the current position.
       website_repo_secrets_absent: [AE_N8N_SELF_HOSTED_LEAD_WEBHOOK_URL, AE_N8N_LEAD_WEBHOOK_TOKEN, AE_N8N_WEB002_EVIDENCE_URL, AE_N8N_WEB002_EVIDENCE_TOKEN]
       website_repo_variables_absent: [AE_LEAD_INTAKE_CUTOVER_APPROVED, AE_LEAD_WEB002_PREFLIGHT_EVIDENCE_REF, AE_LEAD_WEB002_PREFLIGHT_APPROVED_AT, AE_LEAD_WEB002_CONSUMER_IDEMPOTENCY_APPROVED]
       evidence_lane_absent: >-
@@ -296,6 +296,69 @@ company_os_workflows:
         did not start. No agent-executable production backup path exists.
         postgres-backup-rehearsal.yml backs up and restores a disposable cluster
         by design, and host-side execution has no working route.
+    cutover_state_2026_09_06_2046z:
+      supersedes: cutover_state_2026_09_06_1834z
+      evidence_class: LIVE-VERIFIED (one dispatched T1-T4 run that passed in full)
+      verdict: WEB-002 EVIDENCE PASS - READY FOR CUTOVER
+      lane_defect_fixed:
+        repo: Ivan-Shyla/adapteng-automation-platform
+        pr: 131
+        merge_sha: 9957271a267ececd41abd09c22243d35fe87416f
+        change: the content-type check now runs before the body-shape checks in the lane validation node
+        artifact_sha256_before: fb70720fc5679e6bd81e8a67b4088567d41d86a86d737c7e8e00ea43010cc0f6
+        artifact_sha256_after: 29f53422a5199705b2e3333eb58c79df5b2d9dafebb0c9245e3734cb5a18fbcf
+        regression_tests_added: 4
+        ci: success
+      website_pin_moved:
+        repo: Ivan-Shyla/adapteng-website
+        pr: 187
+        merge_sha: cd17a2969041ed68cb336150182df544c73c6a46
+        change: the pinned consumer artifact digest in tools/contracts/web002-evidence-runner.mjs now matches the corrected artifact
+        ci: success
+      evidence_lane_updated:
+        workflow_id: 6t0GJrZjfMMOMNVo
+        workflow_version_id_before: 22485020-691e-431d-afed-991145e672ab
+        workflow_version_id_after: c6f95c40-e927-4bd4-916c-3bd227ebfa11
+        node_count: 22
+        structural_diff_against_repo_artifact: none
+        connections_match_repo_artifact: true
+        path: /webhook/web002-lead-a11ce001
+        test_data_table: WEB002_Evidence_Test_Effects (P4COpnElwU9pg20P)
+        activation_window: 2026-09-06T20:45:04Z to 2026-09-06T20:46:47Z
+        final_state: inactive
+      t1_t4_run:
+        repository: Ivan-Shyla/adapteng-website
+        workflow: .github/workflows/web002-t1-t4-evidence.yml
+        run_id: 34058980920
+        head_sha: cd17a2969041ed68cb336150182df544c73c6a46
+        conclusion: success
+        context_validation: passed
+        approved_at: "2026-09-06T20:46:15.072Z"
+        t1: pass
+        t2: pass
+        t3: pass
+        t4: pass
+        test_table_rows_before: 1
+        test_table_rows_after: 5
+        physical_rows_per_effect_key: 1
+        production_writes: 0
+      website_repo_variables_now_present: [AE_LEAD_WEB002_PREFLIGHT_EVIDENCE_REF, AE_LEAD_WEB002_PREFLIGHT_APPROVED_AT, AE_LEAD_WEB002_CONSUMER_IDEMPOTENCY_APPROVED]
+      evidence_ref: WEB002-T1-T4:cd17a2969041ed68cb336150182df544c73c6a46:34058980920
+      web002_unchanged: >-
+        WEB-002 itself was not modified and received no traffic. Still active on
+        version fa199c8e-ad42-4681-bd5b-123fcefeab65, 16 nodes, updatedAt
+        2026-07-25T17:45:06Z, zero executions in the retained self-hosted log.
+      cutover_not_dispatched: >-
+        configure-lead-intake.yml was deliberately not dispatched. The three
+        repository variables record that the preflight passed; they are not the
+        cutover and do not authorise one.
+      remaining_blocker: >-
+        The production backup gate, unchanged and now the only one. The
+        repository prefix variable is configured with an underscore while
+        postgres_restore_guard.py pins the hyphenated form and fails closed on
+        any difference, so a restore wired to the variable stops before it
+        starts. See issue 32. The cutover must not be dispatched until a
+        recoverable production backup and one isolated restore are evidenced.
     producer_cutover:
       producer: "adapteng-website PR #78"
       historical_last_reviewed_head: b0e3a656cf6659b893810e11a15b9f515527ab79
