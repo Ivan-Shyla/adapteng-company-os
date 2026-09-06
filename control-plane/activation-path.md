@@ -1,8 +1,10 @@
 # Platform v1 — activation path
 
-- **observed_at:** 2026-09-06 (UTC)
-- **Evidence:** live authenticated reads of the self-hosted n8n API, the GitHub
-  API for five repositories, and deployed source in `adapteng-website`.
+- **observed_at:** 2026-09-06 18:34 (UTC)
+- **Evidence:** live authenticated reads of the self-hosted n8n API, one live
+  T1–T4 evidence run in `adapteng-website` (`34051896721`), direct probes of the
+  isolated evidence lane, the GitHub API for five repositories, and deployed
+  source in `adapteng-website`.
 - **Purpose:** state what actually runs today and give the shortest honest route
   to a platform that processes real work. This is a build plan, not an audit.
 
@@ -94,24 +96,85 @@ The self-hosted instance holds four workflows: WEB-002 and AUT-001 (both
 enabled, both still with no production traffic) and the two completed L1 proofs
 (both inactive).
 
-### What actually blocks the cutover
+### Cutover prerequisites, resolved 2026-09-06
 
-Neither remaining step is a code or design problem. Both are configuration
-values that only the owner can place, and each one fails closed today.
+Four of the five items recorded earlier as blockers are now closed. The owner
+placed the shared webhook secret at 18:00:29Z; the remaining three secrets and
+the isolated evidence lane were configured by the agent between 18:26Z and
+18:29Z.
 
-| # | Blocker | Where | Why the agent cannot resolve it |
-|---|---|---|---|
-| 1 | `AE_N8N_LEAD_WEBHOOK_TOKEN` absent | website repo secret | Must equal the value of the existing self-hosted webhook token credential. n8n never returns credential values, and rotating the token is forbidden. |
-| 2 | `AE_N8N_SELF_HOSTED_LEAD_WEBHOOK_URL` absent | website repo secret | Derivable, but useless without blocker 1. |
-| 3 | `AE_N8N_WEB002_EVIDENCE_URL` / `AE_N8N_WEB002_EVIDENCE_TOKEN` absent | website repo secrets | Required by `web002-t1-t4-evidence.yml`. |
-| 4 | Evidence lane not deployed | self-hosted n8n | The runner targets the isolated lane `/webhook/web002-lead-a11ce001`, whose artifact lives in the platform repository at `n8n/workflows/experimental/MM-WEB002-self-hosted-lead-evidence-lane.json`. No workflow on the instance serves that path. |
-| 5 | Four attestation variables absent | website repo variables | `AE_LEAD_INTAKE_CUTOVER_APPROVED`, `AE_LEAD_WEB002_PREFLIGHT_EVIDENCE_REF`, `AE_LEAD_WEB002_PREFLIGHT_APPROVED_AT`, `AE_LEAD_WEB002_CONSUMER_IDEMPOTENCY_APPROVED`. They must not be set before a real T1–T4 run, because setting them is the attestation. |
+| # | Item | State on 2026-09-06 |
+|---|---|---|
+| 1 | `AE_N8N_LEAD_WEBHOOK_TOKEN` | present, owner-placed 18:00:29Z, verified by metadata only |
+| 2 | `AE_N8N_SELF_HOSTED_LEAD_WEBHOOK_URL` | present, 18:28:28Z, read from the running webhook node and shape-checked against the workflow's own pattern |
+| 3 | `AE_N8N_WEB002_EVIDENCE_URL` / `AE_N8N_WEB002_EVIDENCE_TOKEN` | present, 18:28:29Z and 18:28:59Z |
+| 4 | Evidence lane deployed | imported to self-hosted n8n as `6t0GJrZjfMMOMNVo`, version `22485020-691e-431d-afed-991145e672ab`, 22 nodes, serving `/webhook/web002-lead-a11ce001`; test table `WEB002_Evidence_Test_Effects` (`P4COpnElwU9pg20P`) created |
+| 5 | Four attestation variables | still unset, correctly — no valid evidence reference exists yet |
 
-Two further facts belong on the record. `configure-lead-intake.yml` has run
-exactly once in its history, on 2026-07-19, so the producer still carries that
-run's configuration and re-dispatching with the previous mode is the rollback.
-And `deploy-cloudways.yml` last succeeded on 2026-08-12 against `ce1a200b`,
-while website `main` is now `0214cfa1` — the deployed producer lags `main`.
+Website `main` moved from `0214cfa1` to `b188e9ef742e0d6342a56b273190f5169fb7658e`
+across eight content-only commits; `configure-lead-intake.yml` is byte-identical
+across that range, so no gate logic changed. `configure-lead-intake.yml` has
+still run exactly once in its history, on 2026-07-19, so the producer carries
+that run's configuration and re-dispatching with the previous mode remains the
+rollback.
+
+### First live T1–T4 attempt, run 34051896721
+
+`web002-t1-t4-evidence.yml` was dispatched against website `main`
+`b188e9ef742e0d6342a56b273190f5169fb7658e` at 18:29:48Z and failed at 18:30:11Z.
+Context validation passed, so the endpoint, its authentication and the exact-main
+check are all sound. The run reached T1 probe 7 of 11, which means probes 1–6
+passed live:
+
+| Probe | Result |
+|---|---|
+| Accepted canonical lead | success, exactly one committed effect written to the isolated test table |
+| Wrong authentication | rejected as required |
+| Missing authentication | rejected as required |
+| Missing field | `422`, `invalid_envelope` |
+| Extra field | `422`, `invalid_envelope` |
+| Malformed field | `422`, `invalid_envelope` |
+| Content-type rejection | **mismatch — run stopped here** |
+
+The isolated test table held exactly one row afterwards, with `effect_count` 1
+and status `committed`, which is the intended single-effect result. No
+production table was involved at any point: the lane's declared write boundary
+is that one n8n Data Table.
+
+### The one remaining blocker
+
+The failure is a real defect in the pinned lane artifact, not a configuration
+gap. The deployed lane is byte-faithful to
+`n8n/workflows/experimental/MM-WEB002-self-hosted-lead-evidence-lane.json`,
+whose SHA-256 `fb70720fc5679e6bd81e8a67b4088567d41d86a86d737c7e8e00ea43010cc0f6`
+matches the constant pinned in `tools/contracts/web002-evidence-runner.mjs`
+exactly, so the imported artifact is the authoritative one.
+
+Inside the lane's validation node the body-shape checks are evaluated before the
+content-type check, and the failure helper keeps only the first code it is
+given. n8n does not parse a `text/plain` request body into an object, so such a
+request reaches the body checks as an empty object and is rejected as
+`invalid_envelope`. The runner requires `invalid_content_type` for that probe.
+Reproduced directly against the lane on 2026-09-06: a `text/plain` request
+returned `422` with `invalid_envelope`, while the same body sent as
+`application/json` reached the header checks and returned `422` with
+`header_identity_mismatch`. Every other probe therefore works; only this
+ordering makes one rejection code unreachable.
+
+The fix is one line — evaluate the content-type check before the body-shape
+checks — but it changes the artifact, and the artifact's digest is a governance
+control pinned in the website repository. Editing the control that an agent must
+satisfy is exactly what that pin exists to prevent, so this run stops here. It
+needs an owner-authorized, two-repository change: reorder the check in
+`Ivan-Shyla/adapteng-automation-platform`, then update the pinned digest in
+`tools/contracts/web002-evidence-runner.mjs` in `Ivan-Shyla/adapteng-website`.
+Re-import and reactivate the lane afterwards, and rotate the evidence-lane
+credential together with its matching repository secret, because both were
+created for this bounded attempt.
+
+The lane was left inactive after the attempt. `WEB-002 Lead Intake (governed)`
+was not modified: it is still active on version
+`fa199c8e-ad42-4681-bd5b-123fcefeab65`, and the existing route stays in place.
 
 ### Backup before production writes
 
@@ -124,6 +187,10 @@ execution has no working route — the production host does not accept SSH from
 GitHub-hosted runners, which is precisely the gap `ops-runner.yml` exists to
 close. **A rehearsal is not a backup of production, and this document does not
 treat it as one.**
+
+This gate was not reached on 2026-09-06. The T1–T4 lane writes only to an
+isolated n8n Data Table, so it needs no production backup; the backup
+requirement applies to the cutover itself, which did not start.
 
 ---
 
@@ -187,23 +254,27 @@ it delivers. Separating the two honestly:
 
 **Owner-only (cannot be automated from here):**
 
-1. Place the four website repository secrets. Two of them — the WEB-002 webhook
-   token and the evidence-lane token — carry values that exist only in the n8n
-   credential store, and no read path returns them.
-2. Deploy the evidence-lane artifact to self-hosted n8n so the isolated lane
-   `/webhook/web002-lead-a11ce001` answers, then run
-   `web002-t1-t4-evidence.yml` and set the four attestation variables from its
-   result.
-3. Configure or evidence the production backup, then verify one isolated
+1. Authorise the two-repository lane fix. In
+   `Ivan-Shyla/adapteng-automation-platform`, move the content-type check above
+   the body-shape checks in the lane's validation node; in
+   `Ivan-Shyla/adapteng-website`, update the pinned artifact digest in
+   `tools/contracts/web002-evidence-runner.mjs` to match. Both changes are
+   needed together, because the digest is the control that proves which
+   consumer was tested.
+2. Configure or evidence the production backup, then verify one isolated
    restore. This is the last substantive gate before live writes (B-4).
-4. Repoint the Coolify application for `n8n-self-hosted` from
+3. Repoint the Coolify application for `n8n-self-hosted` from
    `palinaruban-repo-status-review` to `main`. That branch is 82 commits behind
    with a head dated 2026-07-24 (B-3).
-5. Redeploy the website so the running producer matches `main`, then dispatch
-   `configure-lead-intake.yml` with the inputs in §2.
 
 **Agent-executable once authorised:**
 
+- Re-import and reactivate the corrected lane. Rotate its credential and the
+  matching repository secret, since both were created for this bounded attempt.
+- Re-run `web002-t1-t4-evidence.yml` and set the four attestation variables from
+  a genuine passing result.
+- Dispatch `configure-lead-intake.yml` with the inputs in §2 once T1–T4 and the
+  backup gate both pass.
 - After the first real leads land, verify the flow from the self-hosted
   execution log and report duplicates, 409s and 500s.
 - Exercise the first bounded model call once a gateway bearer token is
