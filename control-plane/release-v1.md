@@ -34,13 +34,13 @@ repository `main`, this checkpoint, then the older review.
 |---|---|---|
 | Repository development | **GO** | Company OS `main` is reachable and current public history is intact. |
 | L1 authorization | **GO** | Owner-authoritative runtime policy permits existing access, reversible provider configuration, green ordinary PR merges and one bounded internal model proof. |
-| L1 end-to-end runtime | **PARTIAL** | Adapter deploy is healthy, but the n8n proof cannot reach it: the proof workflow runs on n8n Cloud, which is off-host and cannot resolve the private Coolify alias. |
+| L1 end-to-end runtime | **GO** | Proven live on 2026-09-06: workflow `65ATNbi5sColtnp0` on self-hosted `n8n.adapteng.com`, execution `26` succeeded with all five checks — `200`, `200`, `200`, `401`, `403` — reading 3 allowlisted records with zero writes. |
 | L2 controlled business writes | **NOT PROVEN** | Do not infer L2 from a healthy adapter or repository CI. |
 | L3 autonomous external action | **NOT AUTHORIZED** | External send/publish, DNS, destructive production action and unbounded spend remain explicit owner gates. |
 
-Authorization and operation are deliberately separate: L1 is allowed now, but
-it is not operational until the live read path and one useful internal result
-complete successfully.
+Authorization and operation were deliberately separate. Both are now satisfied for
+L1: the live read path and one useful internal result completed successfully on the
+authoritative self-hosted runtime. L2 and L3 remain closed and are not implied by this.
 
 ### Latest L1 handoff
 
@@ -49,12 +49,12 @@ complete successfully.
 | `adapteng-automation-platform` PR #130 | Merged at `f9daf1b50c490e4fdaa4a36cc38beddf18c022ac`; post-merge CI was reported green. Re-verify in the private repository. |
 | `adapteng-baserow-adapter` | Deployed from the PR #130 merge and reported `running:healthy`; deployment reference `qr2zdnpthsnewaz6i06ftpsn`. |
 | Read contract | `/healthz`, authenticated `/v1/schema/system`, authenticated `/v1/sample/system?limit=3`, expected unauthenticated `401`, expected disallowed-kind `403`. |
-| n8n proof | `L1 - Baserow Systems Read Proof`, id `h4P3lQIIUmlmhJAD` (corrected 2026-09-05; the previously recorded `h4P31QIIUm1mhJAD` used digit `1` where the live id uses lowercase `l`), inactive after failed attempts. Latest supplied execution `22677`; earlier attempts `22675` and `22676`. |
-| Failure | `ENOTFOUND` before any request reached the adapter. Short display name and UUID-derived guesses failed. |
-| Network setting | `n8n-selfhosted` showed `Connect to predefined network`; a real redeploy was completed, but DNS still failed. Actual shared network membership and runtime alias remain unverified. |
-| Existing n8n credential reference | `X-Worker-Token`; reuse by reference and never expose its stored value. |
-| Evidence PR #129 | Draft, supplied head `6952f2e335f49ef192950a48a4b173e648237574`, reported 12/12 CI green. Keep draft until live proof succeeds. |
-| Baserow mutation | None. The failed request did not reach the adapter and no write was authorized. |
+| n8n proof | **Succeeded 2026-09-06.** `L1 - Baserow Systems Read Proof`, id `65ATNbi5sColtnp0`, created and run on self-hosted `n8n.adapteng.com`; execution `26`, mode webhook, status success, `2026-09-06T09:45:51Z`–`09:45:52Z`; left inactive. The n8n Cloud workflow `h4P3lQIIUmlmhJAD` is superseded, stays inactive and is not the proof. |
+| Result | All five checks passed: `/healthz` `200`, authenticated schema `200`, authenticated sample `200`, unauthenticated `401`, non-readable kind `403`. 3 records returned, fields limited to the read allowlist, no writes. |
+| Network setting | Settled. Self-hosted n8n and the adapter share the `coolify` network; the earlier `ENOTFOUND` was caused by the proof running on n8n Cloud, not by Docker networking. No networking change was made. |
+| Existing n8n credential reference | On self-hosted the adapter calls use the pre-existing Header Auth credential `AUT-001 Adapter Bearer (internal)`, referenced by id and name only. The earlier `X-Worker-Token` naming describes the cloud instance. No duplicate was created and no stored value was exposed. |
+| Evidence PR #129 | Updated with the live proof and merged after green CI. |
+| Baserow mutation | None. The proof issues only `GET` requests and recorded zero writes. |
 
 **Single immediate blocker (SUPERSEDED 2026-09-05, second pass):** this entry
 read "attach `n8n-selfhosted` to the Docker network that already carries the
@@ -102,32 +102,34 @@ Coolify Docker alias, so no Coolify network change can make this workflow reach
 have worked. No Coolify network change was made, and the adapter was not
 redeployed.
 
-**Verdict: `PLATFORM V1 L1 PARTIAL`.** The blocker is workflow placement, not
-networking. Two owner actions remain, in order:
+**Verdict: `PLATFORM V1 L1 OPERATIONAL` (2026-09-06).** The placement diagnosis
+above was correct and both owner actions are now closed:
 
-1. Decide the execution home for the L1 proof. **Owner decision 2026-09-05:
-   self-hosted `n8n.adapteng.com`.** It already sits on the adapter's network,
-   so no new exposure is needed.
-2. Supply a self-hosted n8n API key. An attempt on 2026-09-05 produced a key
-   that authenticates against **n8n Cloud**, not the self-hosted host, so the
-   proof still cannot run. The distinction below is the whole blocker:
+1. Execution home — **decided and in use**: self-hosted `n8n.adapteng.com`, which
+   already sits on the adapter's network, so no new exposure was needed.
+2. Self-hosted API key — **supplied and verified**. The key was re-minted on the
+   self-hosted host itself and stored under the same reference, whose header field
+   remains `X-N8N-API-KEY`. It now returns HTTP 200 from
+   `GET https://n8n.adapteng.com/api/v1/workflows`, where the earlier key returned
+   401. No value was displayed, requested or committed.
 
-   - the key must be minted **on the self-hosted host itself**, by signing in to
-     `https://n8n.adapteng.com` and using **Settings → n8n API → Create an API
-     key** on that screen
-   - a key created in the n8n Cloud UI (`ivanshyla.app.n8n.cloud`) is **not
-     interchangeable**; the two instances have separate user stores
-   - store it as an `httpHeaderAuth` credential named `N8N_SELFHOSTED_API_KEY`
-     with header field `X-N8N-API-KEY`
-   - minimum required scope: workflow read, create and execute
-   - value never displayed, requested or committed
+Live proof, 2026-09-06: workflow `65ATNbi5sColtnp0` on self-hosted n8n, execution
+`26`, status success. Five checks against `http://adapteng-baserow-adapter:8080`
+returned `200`, `200`, `200`, `401`, `403`. Three records were returned, limited to
+the read allowlist, with zero writes; the workflow was left inactive. Adapter
+deployed commit `f9daf1b50c490e4fdaa4a36cc38beddf18c022ac` is unchanged.
 
-   Verification that settles it without exposing anything: the same stored
-   reference must return HTTP 200 from `GET https://n8n.adapteng.com/api/v1/workflows`.
-   Today it returns 401 there and 200 against the cloud host.
+Scope note: this establishes L1 — internal, read-only, human-reviewed operation. It
+does **not** establish L2 production writes or L3 autonomous external action, and it
+is not evidence for G4 backup or for PR #121 authorization.
 
-`adapteng-automation-platform` PR #129 stays **draft**: the prompt-level rule is
-that it merges only after a successful live proof, and no proof occurred.
+One non-blocking follow-up from the returned metadata: `channel` is in the adapter
+read allowlist but absent from the live systems schema, and the two monitoring-signal
+fields were unpopulated across the sample. Reconcile before building monitoring on
+this read path. Recorded in Later backlog, not a release blocker.
+
+`adapteng-automation-platform` PR #129 was updated with this evidence and merged
+after green CI, per the rule that it merges only once a live proof succeeds.
 
 ### Durability follow-up — Coolify auto-update
 
