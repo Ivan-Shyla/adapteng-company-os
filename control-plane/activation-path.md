@@ -1,10 +1,11 @@
 # Platform v1 — activation path
 
-- **observed_at:** 2026-09-06 18:34 (UTC)
+- **observed_at:** 2026-09-06 20:56 (UTC)
 - **Evidence:** live authenticated reads of the self-hosted n8n API, one live
-  T1–T4 evidence run in `adapteng-website` (`34051896721`), direct probes of the
-  isolated evidence lane, the GitHub API for five repositories, and deployed
-  source in `adapteng-website`.
+  T1–T4 evidence run in `adapteng-website` that passed in full (`34058980920`),
+  direct probes of the isolated evidence lane, two authorized read-only Coolify
+  probes, the GitHub API for five repositories, and deployed source in
+  `adapteng-website`.
 - **Purpose:** state what actually runs today and give the shortest honest route
   to a platform that processes real work. This is a build plan, not an audit.
 
@@ -19,17 +20,30 @@ receiving anything.
 |---|---|---|
 | Baserow adapter | Deployed and serving | Commit `f9daf1b5`; five live checks passed 2026-09-06 |
 | Governed read path (L1) | **Operational** | Workflow `65ATNbi5sColtnp0`, execution `26`, `200/200/200/401/403` |
-| AI Gateway | **Answering on the private network** | `health` 200, `ready` 200, alias resolves, 2026-09-06 |
+| AI Gateway | **Answering on the private network** | `health` 200, `ready` 200, alias resolves, 2026-09-06 10:43 |
 | Producer plugin on Cloudways | Deployed and current | `lead-intake.php` byte-identical at deployed `ce1a200b` and at `main` |
 | Lead delivery configuration | Never switched on | `configure-lead-intake.yml` dispatched once ever, 2026-07-19 |
 | WEB-002 lead intake | Enabled, **zero traffic** | 16 nodes, 0 disabled, 0 executions in the retained self-hosted log |
 | AUT-001 systems upsert | Enabled, **zero traffic** | 2 nodes, 0 executions in the retained self-hosted log |
 | WordPress producer | Merged and deployed | Website PR #78 merged 2026-08-01; Cloudways deploy succeeded 2026-08-14 on `854f5971` |
 | Lead delivery configuration | **Never switched on** | `configure-lead-intake.yml` last dispatched 2026-07-19 |
+| WEB-002 evidence lane | **Passed T1–T4 in full, returned to inactive** | Run `34058980920`, lane `6t0GJrZjfMMOMNVo` version `c6f95c40`, 4 effect keys, 1 physical row each |
+| Coolify control-plane API | **Degraded** | `GET /projects` answered 502 on two authorized probes, 2026-09-06 20:54 and 20:55; unchanged since 2026-09-05 |
 
-**The gap is one configuration switch, not missing code.** The consumer, the
-producer and the transport all exist and have each been proven in isolation.
-The producer was never pointed at the consumer.
+**The gap is one configuration switch and one backup, not missing code.** The
+consumer, the producer and the transport all exist, and the consumer contract has
+now been exercised end to end rather than only read.
+
+### Preflight status — closed 2026-09-06
+
+The two-repository lane fix in §5 is done. `adapteng-automation-platform` PR #131
+moved the content-type check above the body-shape checks
+(`9957271a267ececd41abd09c22243d35fe87416f`), `adapteng-website` PR #187 moved the
+pinned artifact digest to match (`cd17a2969041ed68cb336150182df544c73c6a46`), and
+the live lane was updated in place with no structural difference from the
+reviewed artifact. The T1–T4 run then passed in full and the three attestation
+variables are set. Full detail is in `registry/workflows.yaml` under
+`cutover_state_2026_09_06_2046z`.
 
 ### Correction to previous status
 
@@ -54,7 +68,7 @@ One owner-dispatched GitHub Actions run activates the end-to-end lead flow:
 | `mode` | `self_hosted` | Routes the site to WEB-002 on `n8n.adapteng.com` |
 | `confirm_cutover` | `true` | Owner decision |
 | `consumer_idempotency_approved` | **`true`** | Verified 2026-09-06; see below |
-| `preflight_evidence_ref` | `WEB002-T1-T4:<sha>:<run_id>` | Must equal repository variable `AE_LEAD_WEB002_PREFLIGHT_EVIDENCE_REF` and bind the dispatch commit |
+| `preflight_evidence_ref` | `WEB002-T1-T4:cd17a2969041ed68cb336150182df544c73c6a46:34058980920` | Set 2026-09-06 from a T1–T4 run that passed in full; equals repository variable `AE_LEAD_WEB002_PREFLIGHT_EVIDENCE_REF` and binds the dispatch commit |
 
 ### Why idempotency can be approved
 
@@ -254,27 +268,29 @@ it delivers. Separating the two honestly:
 
 **Owner-only (cannot be automated from here):**
 
-1. Authorise the two-repository lane fix. In
-   `Ivan-Shyla/adapteng-automation-platform`, move the content-type check above
-   the body-shape checks in the lane's validation node; in
-   `Ivan-Shyla/adapteng-website`, update the pinned artifact digest in
-   `tools/contracts/web002-evidence-runner.mjs` to match. Both changes are
-   needed together, because the digest is the control that proves which
-   consumer was tested.
-2. Configure or evidence the production backup, then verify one isolated
-   restore. This is the last substantive gate before live writes (B-4).
+1. ~~Authorise the two-repository lane fix.~~ **Done 2026-09-06.** Platform
+   PR #131 and website PR #187 are merged, the live lane carries the corrected
+   validator with no structural difference from the reviewed artifact, and the
+   T1–T4 evidence run passed in full.
+2. Correct the pgBackRest repository prefix so a production restore can start,
+   then configure or evidence the production backup and verify one isolated
+   restore. This is now the **only** substantive gate before live writes (B-4).
+   The configured prefix uses an underscore; `scripts/postgres_restore_guard.py`
+   pins the hyphenated form and fails closed on any difference. Whichever value
+   is settled on, the object-storage lifecycle rules and the application-key
+   prefix restriction must be re-scoped to match it. See issue 32.
 3. Repoint the Coolify application for `n8n-self-hosted` from
    `palinaruban-repo-status-review` to `main`. That branch is 82 commits behind
    with a head dated 2026-07-24 (B-3).
+4. Restore the Coolify control-plane API. Authorized read-only probes answered
+   502 on 2026-09-05 and again on 2026-09-06, so deployment revision and
+   network-alias questions currently have no read path. Deployed applications
+   are unaffected: the self-hosted n8n API answered 200 throughout.
 
 **Agent-executable once authorised:**
 
-- Re-import and reactivate the corrected lane. Rotate its credential and the
-  matching repository secret, since both were created for this bounded attempt.
-- Re-run `web002-t1-t4-evidence.yml` and set the four attestation variables from
-  a genuine passing result.
-- Dispatch `configure-lead-intake.yml` with the inputs in §2 once T1–T4 and the
-  backup gate both pass.
+- Dispatch `configure-lead-intake.yml` with the inputs in §2 once the backup
+  gate passes. The preflight side is already satisfied.
 - After the first real leads land, verify the flow from the self-hosted
   execution log and report duplicates, 409s and 500s.
 - Exercise the first bounded model call once a gateway bearer token is
@@ -289,8 +305,8 @@ it delivers. Separating the two honestly:
 - It does not claim any service is healthy right now beyond what §1 and §3
   record from live probes.
 - It does not claim a production backup exists.
-- It does not claim the T1–T4 preflight has been run. §2 records a live
-  verification of the consumer contract, which is a weaker and different
-  statement: it reads the running definition, it does not exercise it.
+- It does not claim the cutover has happened. `configure-lead-intake.yml` has
+  not been dispatched since 2026-07-19, and the three attestation variables
+  record a passed preflight rather than an authorised cutover.
 - It does not authorise the cutover. It supplies the answers the cutover form
   asks for so the owner can decide in one step instead of reopening the question.
