@@ -17,6 +17,7 @@ receiving anything.
 |---|---|---|
 | Baserow adapter | Deployed and serving | Commit `f9daf1b5`; five live checks passed 2026-09-06 |
 | Governed read path (L1) | **Operational** | Workflow `65ATNbi5sColtnp0`, execution `26`, `200/200/200/401/403` |
+| AI Gateway | **Answering on the private network** | `health` 200, `ready` 200, alias resolves, 2026-09-06 |
 | WEB-002 lead intake | Enabled, **zero traffic** | 16 nodes, 0 disabled, 0 executions in the retained self-hosted log |
 | AUT-001 systems upsert | Enabled, **zero traffic** | 2 nodes, 0 executions in the retained self-hosted log |
 | WordPress producer | Merged and deployed | Website PR #78 merged 2026-08-01; Cloudways deploy succeeded 2026-08-14 on `854f5971` |
@@ -77,7 +78,30 @@ autonomous one.
 
 ---
 
-## 3. Proportionality: what is a real risk and what is not
+## 3. The AI layer
+
+The same pattern holds on the AI side: built, deployed, and until today
+unverified. A read-only probe issued from inside the shared network on
+2026-09-06 returned `health` 200 and `ready` 200 from `http://ai-gateway:8081`,
+and the `ai-gateway` alias resolved. Because `/ready` touches the database, that
+single result proves the container is up, the name resolves and the gateway
+reaches `postgres-adapteng-ops`. The alias gap measured on 2026-08-12 — when the
+Baserow adapter resolved and this service did not — is closed.
+
+The registry status moves from `deployed-live-unverified` to
+`live-internal-verified`. Cost, model pricing and FX configuration were already
+not blockers.
+
+**What remains unproven** is the first real model call: the EU Vertex client,
+Drive adapters, orchestration and canonical approval composition have never been
+exercised against the running service. That is the next AI milestone, and it is
+bounded — one schema-valid, side-effect-free draft, which is the service's
+declared first operation. It costs a model call, so it is worth doing
+deliberately rather than incidentally.
+
+---
+
+## 4. Proportionality: what is a real risk and what is not
 
 The user-visible complaint is that the platform is over-guarded relative to what
 it delivers. Separating the two honestly:
@@ -102,7 +126,7 @@ it delivers. Separating the two honestly:
 
 ---
 
-## 4. Ordered next actions
+## 5. Ordered next actions
 
 **Owner-only (cannot be automated from here):**
 
@@ -124,7 +148,7 @@ it delivers. Separating the two honestly:
 
 ---
 
-## 5. What this document does not claim
+## 6. What this document does not claim
 
 - It does not claim any service is healthy right now. Runtime health was not
   probed; only the n8n API and GitHub were read.

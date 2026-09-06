@@ -131,6 +131,23 @@ company_os_workflows:
     next_action: None. Proof complete; workflow intentionally left inactive.
     owner: Ivan
 
+  - id: dHfkW4b31p5oIUNZ
+    name: L1 - AI Gateway Reachability Proof
+    runtime: self-hosted n8n (n8n.adapteng.com)
+    evidence_class: LIVE-VERIFIED (executed once on the self-hosted instance)
+    trigger: temporary webhook, deactivated immediately after the single run
+    calls: ai-gateway (internal http://ai-gateway:8081)
+    writes: none; 0 writes performed
+    status: inactive-proof-complete
+    checks: { health: 200, ready: 200, name_resolved: true, verdict: PASS }
+    observed_at: 2026-09-06T10:43:00Z
+    significance: >-
+      Closes the ai-gateway alias gap. /ready touches the database, so a 200
+      proves the container is up, the network alias resolves and the gateway
+      reaches postgres-adapteng-ops. No public route was created or used.
+    next_action: None. Proof complete; workflow intentionally left inactive.
+    owner: Ivan
+
   - id: NsWG1hD8VmIRRwCv
     name: AUT-001 Systems Registry (governed upsert)
     runtime: self-hosted n8n (n8n.adapteng.com)
