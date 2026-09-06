@@ -7,6 +7,7 @@
 #   live-partial-authority   - production workload runs here, but other domains remain on a legacy authority
 #   live-legacy-binding      - production service is up but still uses a credential/data binding scheduled for cutover
 #   deployed-live-unverified - a deployment operation is GitHub-verified, but the current serving/runtime state is not live-verified
+#   live-internal-verified   - answering now on the private network, proven by a live read-only probe from inside that network; not publicly reachable by design
 #   implemented-tested-not-deployed - code merged AND its suite is green in CI, but nothing runs in production yet
 #   repo-merged-not-live     - code merged to main, no live deploy/wiring yet
 #   planned                  - designed, not built
@@ -216,10 +217,10 @@ services:
     repo: adapteng-automation-platform
     path: services/ai-gateway
     role: Provider-pluggable model adapter (EU Vertex canonical). First op is a schema-valid, side-effect-free draft.
-    runtime: Coolify. A deploy operation succeeded from company-os main (run 31584649767); current serving state is not established by repository evidence.
+    runtime: Coolify. A deploy operation succeeded from company-os main (run 31584649767) and the service was confirmed answering on the private network on 2026-09-06 - see live_verification_2026_09_06.
     source_of_truth_for: none
     depends_on: [postgres-adapteng-ops (migration 005 ai_gateway), approval-outbox]
-    status: deployed-live-unverified
+    status: live-internal-verified
     implemented: true
     tested: true
     deployed: true                       # a deploy operation succeeded; see deployment_evidence. NOT a claim about current health
@@ -233,8 +234,23 @@ services:
       conclusion: success
       jobs_green: [ai-gateway unit tests (ubuntu-latest), ai-gateway unit tests (windows-latest), ai-gateway postgres semantics, ai-gateway supply-chain gates, repo validation]
       verified: 2026-08-10
-    not_blocked_by: [cost, model pricing, FX configuration]
-    blocked_by: ["live verification: a deploy operation succeeded (run 31584649767), but no repository evidence establishes that the service is answering now, so the tested durable cost authority is still not proven to be the live authority; the real EU Vertex client, Drive adapters, orchestration and canonical approval composition are unproven against a running service"]
+    not_blocked_by: [cost, model pricing, FX configuration, live reachability, database readiness]
+    blocked_by: ["first real model call: the service answers and its readiness gate passes, but the EU Vertex client, Drive adapters, orchestration and canonical approval composition have not yet been exercised against the running service by an actual draft request"]
+    live_verification_2026_09_06:
+      verdict: LIVE-VERIFIED
+      method: read-only probe issued from inside the shared Coolify network by a temporary self-hosted n8n workflow; no public route was created or used
+      self_hosted_workflow_id: dHfkW4b31p5oIUNZ
+      workflow_name: L1 - AI Gateway Reachability Proof
+      final_state: inactive
+      target: http://ai-gateway:8081
+      results: { health: 200, ready: 200, name_resolved: true, writes_performed: 0, verdict: PASS }
+      significance: >-
+        /ready touches the database, so a 200 proves three things at once: the
+        container is up, the ai-gateway network alias now resolves, and the
+        gateway can reach postgres-adapteng-ops. The alias gap recorded in
+        deploy/ai-gateway.json - measured on 2026-08-12, when the adapter
+        resolved and this service did not - is closed.
+      not_proven: current model-call behaviour, cost accounting under real load, and approval composition
     deployment_evidence:
       verdict: GITHUB-VERIFIED
       means: a deploy operation for this service completed successfully; this records what the deploy workflow did, not what the service is doing now
