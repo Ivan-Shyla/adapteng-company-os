@@ -233,8 +233,8 @@ company_os_workflows:
         remains unrun; see control-plane/activation-path.md section 2.
     cutover_blockers_2026_09_06:
       note: >-
-        The cutover is gated on configuration values that only the owner can
-        place. Each fails closed today.
+        Superseded at 18:34Z the same day. Four of the five items below were
+        closed; see cutover_state_2026_09_06_1834z for the current position.
       website_repo_secrets_absent: [AE_N8N_SELF_HOSTED_LEAD_WEBHOOK_URL, AE_N8N_LEAD_WEBHOOK_TOKEN, AE_N8N_WEB002_EVIDENCE_URL, AE_N8N_WEB002_EVIDENCE_TOKEN]
       website_repo_variables_absent: [AE_LEAD_INTAKE_CUTOVER_APPROVED, AE_LEAD_WEB002_PREFLIGHT_EVIDENCE_REF, AE_LEAD_WEB002_PREFLIGHT_APPROVED_AT, AE_LEAD_WEB002_CONSUMER_IDEMPOTENCY_APPROVED]
       evidence_lane_absent: >-
@@ -249,6 +249,53 @@ company_os_workflows:
         No agent-executable production backup path exists. postgres-backup-rehearsal.yml
         backs up and restores a disposable cluster by design, and host-side
         execution has no working route.
+    cutover_state_2026_09_06_1834z:
+      evidence_class: LIVE-VERIFIED (one dispatched T1-T4 run plus direct probes of the isolated lane)
+      website_repo_secrets_present: [AE_N8N_LEAD_WEBHOOK_TOKEN, AE_N8N_SELF_HOSTED_LEAD_WEBHOOK_URL, AE_N8N_WEB002_EVIDENCE_URL, AE_N8N_WEB002_EVIDENCE_TOKEN]
+      website_repo_variables_still_absent: [AE_LEAD_INTAKE_CUTOVER_APPROVED, AE_LEAD_WEB002_PREFLIGHT_EVIDENCE_REF, AE_LEAD_WEB002_PREFLIGHT_APPROVED_AT, AE_LEAD_WEB002_CONSUMER_IDEMPOTENCY_APPROVED]
+      variables_absent_is_correct: >-
+        Setting them is the attestation, and no valid evidence reference exists
+        yet because the T1-T4 run did not complete.
+      evidence_lane_deployed:
+        workflow_id: 6t0GJrZjfMMOMNVo
+        workflow_version_id: 22485020-691e-431d-afed-991145e672ab
+        node_count: 22
+        path: /webhook/web002-lead-a11ce001
+        artifact_sha256: fb70720fc5679e6bd81e8a67b4088567d41d86a86d737c7e8e00ea43010cc0f6
+        artifact_digest_matches_website_pin: true
+        test_data_table: WEB002_Evidence_Test_Effects (P4COpnElwU9pg20P)
+        final_state: inactive
+      t1_t4_run:
+        repository: Ivan-Shyla/adapteng-website
+        run_id: 34051896721
+        head_sha: b188e9ef742e0d6342a56b273190f5169fb7658e
+        started: 2026-09-06T18:29:48Z
+        conclusion: failure
+        context_validation: passed
+        probes_passed: 6 of 11 in T1 (accepted, wrong auth, missing auth, missing field, extra field, malformed field)
+        failed_probe: T1 content-type rejection
+        test_table_rows_after: 1
+        test_table_effect_count: 1
+        test_table_effect_status: committed
+        production_writes: none
+      remaining_blocker: >-
+        The pinned lane artifact evaluates body-shape checks before the
+        content-type check and keeps only the first rejection code. n8n does not
+        parse a text/plain body into an object, so that probe is answered
+        invalid_envelope where the runner requires invalid_content_type.
+        Reproduced directly against the lane. The fix is one line but changes the
+        artifact digest, which is a governance control pinned in
+        tools/contracts/web002-evidence-runner.mjs, so it needs an
+        owner-authorized change in both repositories.
+      web002_unchanged: >-
+        WEB-002 itself was not modified. Still active on version
+        fa199c8e-ad42-4681-bd5b-123fcefeab65 with the existing route in place.
+      backup_gate: >-
+        Not reached. The lane writes only to an isolated n8n Data Table, so it
+        needs no production backup; the requirement applies to the cutover, which
+        did not start. No agent-executable production backup path exists.
+        postgres-backup-rehearsal.yml backs up and restores a disposable cluster
+        by design, and host-side execution has no working route.
     producer_cutover:
       producer: "adapteng-website PR #78"
       historical_last_reviewed_head: b0e3a656cf6659b893810e11a15b9f515527ab79
