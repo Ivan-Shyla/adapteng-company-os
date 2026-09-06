@@ -46,21 +46,42 @@ platform:
       Hetzner host. A managed multi-tenant runner cannot resolve a private
       Coolify Docker alias, so no Coolify network change can fix this path.
     credential_state: >-
-      2026-09-05 second attempt. A reference named N8N_SELFHOSTED_API_KEY was
-      supplied in the n8n Cloud project Adapteng. Measured by reference without
-      exposing its value: HTTP 200 against ivanshyla.app.n8n.cloud and HTTP 401
-      against n8n.adapteng.com. It is therefore an n8n Cloud key, not a
-      self-hosted key. A second copy in the personal project behaves the same.
-      Self-hosted control is still unavailable.
+      RESOLVED 2026-09-06. The API key was re-minted on the self-hosted host and
+      stored under the same reference, header field unchanged. Measured by
+      reference without exposing its value: HTTP 200 from
+      GET https://n8n.adapteng.com/api/v1/workflows, where the previous n8n Cloud
+      key returned 401. Self-hosted control is available.
+    live_proof:
+      observed_at: 2026-09-06
+      evidence_class: LIVE-VERIFIED (successful self-hosted n8n execution)
+      workflow_name: L1 - Baserow Systems Read Proof
+      workflow_id: 65ATNbi5sColtnp0
+      execution_id: 26
+      execution_mode: webhook
+      execution_status: success
+      started_at: 2026-09-06T09:45:51.004Z
+      stopped_at: 2026-09-06T09:45:52.404Z
+      adapter_target: http://adapteng-baserow-adapter:8080
+      adapter_commit: f9daf1b50c490e4fdaa4a36cc38beddf18c022ac
+      status_codes: {healthz: 200, schema_system: 200, sample_system: 200, unauthenticated: 401, non_readable_kind: 403}
+      record_count: 3
+      returned_fields: [domain, health, next_review_at, repository, runtime, source_of_truth, system_id]
+      fields_outside_allowlist: 0
+      writes_performed: 0
+      final_workflow_state: inactive
+      adapter_credential: >-
+        Pre-existing self-hosted Header Auth credential AUT-001 Adapter Bearer
+        (internal), referenced by id and name only. No duplicate was created and
+        no stored value was exposed.
+      schema_drift_note: >-
+        The channel field is in the adapter read allowlist but absent from the live
+        systems schema, and the two monitoring-signal fields carried no value in the
+        sample. Non-blocking; reconcile before building monitoring on this path.
     next_action: >-
-      Mint the API key on the self-hosted host itself: sign in to
-      https://n8n.adapteng.com, then Settings -> n8n API -> Create an API key.
-      Keys created in the n8n Cloud UI are not interchangeable because the two
-      instances have separate user stores. Store as httpHeaderAuth named
-      N8N_SELFHOSTED_API_KEY with header field X-N8N-API-KEY, scope workflow
-      read/create/execute. Settled when the same reference returns HTTP 200 from
-      GET https://n8n.adapteng.com/api/v1/workflows. No Coolify network change
-      was made and the adapter was not redeployed.
+      None. L1 is OPERATIONAL. Scope limit: this proves internal read-only
+      operation only. It is not evidence for L2 production writes, L3 autonomous
+      external action, G4 backup or PR #121 authorization. No Coolify network
+      change was made and the adapter was not redeployed.
   coolify_control_plane:
     observed_at: 2026-09-05
     evidence_class: LIVE-VERIFIED (two authorized read-only company-os workflow runs)
