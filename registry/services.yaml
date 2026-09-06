@@ -400,7 +400,7 @@ services:
     source_of_truth_for: Company OS governed workflows (AUT-001, WEB-002)
     status: live-partial-authority
     owner: Ivan
-    notes: Hosts exactly two active governed workflows (AUT-001 and WEB-002). Coolify still deploys from branch palinaruban-repo-status-review; repoint to main is an owner action. Workflow-to-credential binding isolation and second-admin continuity are not yet evidenced. n8n Cloud remains the authority for company MM/LM domains until staged company cutover; excluded personal projects are not cutover candidates.
+    notes: Hosts three workflows as of 2026-09-06 - AUT-001 and WEB-002 (both enabled but with zero executions in the retained log) and the completed, inactive L1 read proof 65ATNbi5sColtnp0. Coolify still deploys this service from branch palinaruban-repo-status-review, which is diverged from main by 35 ahead / 82 behind with a head dated 2026-07-24; repointing to main is an owner action. Workflow-to-credential binding isolation and second-admin continuity are not yet evidenced. n8n Cloud remains the authority for company MM/LM domains until staged company cutover; excluded personal projects are not cutover candidates.
 
   - id: n8n-cloud
     repo: n/a (SaaS)

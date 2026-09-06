@@ -22,12 +22,14 @@ live_counts_observed:
   available_in_mcp: 89
   not_available_in_mcp: 2
   not_available_in_mcp_ids: [h4P3lQIIUmlmhJAD, SaLFJm7NwdocSZcN]
-  self_hosted_vs_cloud_split: UNKNOWN
+  self_hosted_vs_cloud_split: RESOLVED 2026-09-06
   split_note: >-
-    The connected instance returns one combined list of 91. The 2026-07-27
-    census recorded 2 self-hosted plus 89 cloud, which sums to the same 91, but
-    this read cannot attribute an individual workflow to a runtime, so the
-    split is not restated as fact.
+    Previously UNKNOWN. A direct authenticated read of https://n8n.adapteng.com
+    on 2026-09-06 returned exactly 3 workflows (AUT-001, WEB-002 and the
+    completed L1 proof). The MCP-connected instance that returns 91 is therefore
+    n8n Cloud in full. The two instances have separate user stores, so their API
+    keys are not interchangeable; this is what made the earlier proof attempts
+    fail. All availableInMCP figures below describe n8n Cloud only.
 live_counts_2026_07_27:
   self_hosted: { total: 2, active: 2, drift: none }
   cloud: { total: 89, active: 31, inactive: 58, repo_exports: 82, live_only: 14, repo_only: 7 }
@@ -87,30 +89,46 @@ company_os_workflows:
       2026-09-05 LIVE-VERIFIED. The registry previously recorded h4P31QIIUm1mhJAD.
       The live instance returns h4P3lQIIUmlmhJAD; the two differing characters are
       lowercase L, not digit 1.
-    runtime: self-hosted n8n (n8n.adapteng.com)
+    runtime: n8n Cloud (ivanshyla.app.n8n.cloud)
+    runtime_correction: >-
+      2026-09-06 LIVE-VERIFIED. This workflow was previously recorded as
+      self-hosted. A direct authenticated read of the self-hosted instance
+      returns only three workflows and this is not one of them. It has always
+      been a n8n Cloud workflow, which is why it could never resolve the private
+      Coolify alias adapteng-baserow-adapter.
     trigger: bounded manual/one-shot proof
     calls: adapteng-baserow-adapter read contract
-    credential_ref: X-Worker-Token (existing n8n credential; value never exported)
     writes: none; Baserow read-only
-    status: inactive-connectivity-blocked
+    status: superseded-wrong-instance
     supplied_failed_executions: [22675, 22676, 22677]
-    latest_failure: ENOTFOUND before the request reached the adapter
-    live_state_2026_09_05:
-      evidence_class: LIVE-VERIFIED (authenticated n8n management API, read-only)
-      active: false
-      available_in_mcp: false
-      consequence: >-
-        This workflow cannot be read, updated or executed through the MCP
-        connector while availableInMCP is false, so a connected agent cannot
-        complete the proof even after the network path is fixed.
-      owner_action: enable Available in MCP on this workflow, or run the proof from the n8n UI
-    network_state: n8n was redeployed with Connect to predefined network selected, but actual shared network membership and adapter alias remain unverified
-    next_action: >-
-      Owner-only. First restore the Coolify control plane (its API returned 502
-      on 2026-09-05, see registry/environments.yaml), then attach n8n-selfhosted
-      to the network carrying the adapteng-baserow-adapter alias, then enable
-      Available in MCP on this workflow, execute once and return it to inactive.
-    evidence_pr: adapteng-automation-platform PR #129 remains draft until the live proof succeeds
+    root_cause: >-
+      Not a network fault. A n8n Cloud runner cannot resolve a private Coolify
+      network alias by design, so ENOTFOUND was the correct response and no
+      network change would ever have fixed it.
+    superseded_by: 65ATNbi5sColtnp0
+    next_action: None. Keep inactive for audit history. Do not repair or reuse.
+    owner: Ivan
+
+  - id: 65ATNbi5sColtnp0
+    name: L1 - Baserow Systems Read Proof
+    runtime: self-hosted n8n (n8n.adapteng.com)
+    evidence_class: LIVE-VERIFIED (executed once on the self-hosted instance)
+    trigger: temporary webhook, deactivated immediately after the single run
+    calls: adapteng-baserow-adapter (internal http://adapteng-baserow-adapter:8080)
+    credential_ref: AUT-001 Adapter Bearer (internal) - existing self-hosted Header Auth binding, referenced by id only; value never read or exported
+    writes: none; 0 writes performed
+    status: inactive-proof-complete
+    execution: { id: 26, mode: webhook, status: success, started_at: 2026-09-06T09:45:51Z }
+    checks: { healthz: 200, schema_system: 200, sample_system: 200, unauthenticated: 401, non_readable_kind: 403 }
+    result: { record_count: 3, disallowed_fields_present: 0, verdict: PASS }
+    returned_fields: [system_id, domain, repository, runtime, source_of_truth, health, next_review_at]
+    schema_drift_note: >-
+      channel is in the adapter READ_FIELD_ALLOWLIST but absent from the live
+      Systems_Automations schema; health and next_review_at exist but carried no
+      value in any sampled record. All three are monitoring signals, so
+      monitoring built on this path would observe nothing today.
+    evidence_pr: adapteng-automation-platform PR #129, merged 1ba4c65c
+    next_action: None. Proof complete; workflow intentionally left inactive.
     owner: Ivan
 
   - id: NsWG1hD8VmIRRwCv
@@ -120,7 +138,15 @@ company_os_workflows:
     calls: adapteng-baserow-adapter (internal http://adapteng-baserow-adapter:8080/v1/upsert)
     writes: Baserow Systems_Automations (table 849), governed by field ownership
     governance: idempotent upsert; skipped_human_owned protects human fields (e.g. health)
-    status: live-active
+    status: enabled-no-traffic
+    live_state_2026_09_06:
+      evidence_class: LIVE-VERIFIED (authenticated self-hosted API, read-only)
+      active: true
+      executions_in_retained_history: 0
+      note: >-
+        The workflow is enabled and correctly wired, but the self-hosted
+        execution log contains no run of it. Enabled is not the same as
+        operating; no producer currently calls this webhook.
     proven: 2026-07-25 (created AE-SYS-baserow-adapter, idempotent governed re-run, pure-internal, verified 503 on public)
     owner: Ivan
 
@@ -134,10 +160,38 @@ company_os_workflows:
     fail_closed: per-node error outputs route to Respond500 (HTTP 500) so a producer retries instead of silently losing a lead
     calls: adapteng-baserow-adapter (internal)
     writes: Baserow Organizations 842 / People 843 / Opportunities 844 / Actions 846
-    status: live-active
+    status: enabled-no-traffic
+    live_state_2026_09_06:
+      evidence_class: LIVE-VERIFIED (authenticated self-hosted API, read-only)
+      active: true
+      node_count: 16
+      disabled_nodes: 0
+      executions_in_retained_history: 0
+      note: >-
+        Fully built and enabled, but never invoked in the retained execution
+        log. The consumer is ready; the producer is not yet pointed at it.
+    idempotency_verified_2026_09_06:
+      evidence_class: LIVE-VERIFIED (read of the deployed workflow definition)
+      key: body field form.submission_id, format N:N, canonical sitelead_wp_<id>_<ts>
+      mechanism: Postgres public.reserve_lead_identity('lead.created','wordpress',...) returns an outcome; outcome=conflict routes to Respond409
+      header_note: >-
+        The workflow does not read the X-AE-Submission-ID header. The WordPress
+        producer sends the same value in both that header and form.submission_id,
+        so dedupe is consistent end to end, but the body field is the load-bearing
+        one and must never be dropped by a proxy or a future producer change.
+      answer_for_cutover_form: >-
+        consumer_idempotency_approved can be answered YES, with the note that the
+        consumer keys on the body field carrying the same value as the header.
     proven: 2026-07-25 (T1 create, T2 idempotent replay, T3 reservation conflict -> HTTP 409, T4 no-loss -> HTTP 500 -> clean retry; independent Baserow read-back, zero duplicates)
     owner: Ivan
-    consumer_pending: "website producer PR #78 remains draft, unmerged and undeployed; its current head awaits fresh independent review and must not be cut over."
+    consumer_status_2026_09_06: >-
+      CORRECTED. The previous entry recorded website PR #78 as draft, unmerged and
+      undeployed. PR #78 was merged on 2026-08-01 (merge commit 6770e749) and the
+      producer plugin has been deployed to Cloudways from website main; the most
+      recent successful deploy ran 2026-08-14 on head 854f5971. The remaining gap
+      is configuration, not code: .github/workflows/configure-lead-intake.yml was
+      last dispatched on 2026-07-19, before the self_hosted delivery mode existed,
+      so the site is not yet delivering to this webhook.
     producer_cutover:
       producer: "adapteng-website PR #78"
       historical_last_reviewed_head: b0e3a656cf6659b893810e11a15b9f515527ab79
