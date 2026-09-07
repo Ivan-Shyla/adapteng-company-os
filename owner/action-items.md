@@ -46,13 +46,24 @@ So the remaining half of this gate is **restore**, not backup.
 | 5 | 🟡 | Google Cloud → IAM, and the gateway runtime store | Vertex prediction role + caller-token reference | Grant the existing service account prediction-only Vertex permission, enable the Vertex AI API, confirm non-zero EU regional quota, and make the caller-token reference available to the intended internal caller. | `roles/aiplatform.user` on that project only; no broader IAM | One bounded gateway call returns a model response, an unauthenticated call still fails, and the run ledger records model and token totals | The first governed model proof |
 | 6 | 🟡 | GitHub → `adapteng-automation-platform` → Environments | Drive-bridge replay database reference | Bind it at **environment** scope, not repository-wide. Most references in that repository already live at environment scope. | The single environment that runs the Drive bridge | The Drive canary workflow resolves the reference and the replay layer connects | The corporate Drive daily-loop canary |
 
-**One thing to watch without acting on it.** The scheduler has not yet been
-observed firing on its own since Coolify returned; the on-demand run proves
-the backup path works, not that the timer resumed. The next unattended run is
-due at 02:00 UTC, and the new **Backup freshness** workflow now asks at 03:00
-UTC daily how old the newest *successful* run is. If the scheduler did not
-resume, that run goes red on its own — this no longer depends on anyone
-remembering to look.
+**One thing to watch without acting on it.** The scheduler question is now
+answered, and the answer was the worse of the two. Run `34149316035` read
+Docker cleanup — the other thing Coolify runs on a timer, which nobody triggers
+by hand. Its last run was `2026-08-27T00:00:11Z`, two hours *before* the last
+backup. Both timers stopped the same day and neither has fired since, so the
+backup schedule was never the fault: **scheduled work as a whole is dead**, and
+it will not recover by itself.
+
+The agent has covered this without waiting for you. A **Daily production
+backup** workflow now asks Coolify at 02:00 UTC to run the schedule it already
+declares, driven from the one scheduler in this system that works, and the
+**Backup freshness** check an hour later still fails independently if the
+recovery point ages past 48 hours. Item 7 below repairs the real cause; the
+stopgap is meant to be deleted when you do.
+
+| # | Priority | Provider / screen | Name or setting | Exact action | Minimum scope | Verification | Blocks |
+|---|---|---|---|---|---|---|---|
+| 7 | 🟠 | Hetzner host shell (SSH) → Coolify containers | Coolify scheduler / queue worker | Restart Coolify's scheduler so timed work runs again. Nothing scheduled has fired since 2026-08-27 although the API, deployments and every workload are healthy, so this is invisible from the dashboard. While it is down, no Coolify schedule of any kind runs — backups, cleanup or anything added later. | The Coolify control-plane containers only; no application restarts | Dispatch **Coolify deploy** with `operation=scheduler-check` and see `RESULT scheduler-check alive`; then delete `.github/workflows/backup-daily.yml` | Every current and future Coolify schedule |
 
 **Not on this list on purpose.** The WEB-002 cutover approval is a decision, not
 a setup step. When items 2–4 are done, the agent will hand you one approval

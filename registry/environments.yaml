@@ -69,12 +69,35 @@ production_backup_state_2026_09_07:
     rehearsal under postgres-physical-backup/validation/ against the disposable
     adapteng_ops_test stanza, which is not production data.
   restore: NEVER EXERCISED against production data — this is the remaining half of the durability gate
-  scheduler_resumption: UNVERIFIED — the on-demand run proves the path, not the timer; next unattended run due 02:00 UTC
+  scheduler_state:
+    evidence_class: LIVE-VERIFIED
+    observed_at: 2026-09-07T17:55Z
+    workflow_run: 34149316035
+    verdict: STALLED — Coolify runs no scheduled work at all
+    pulse_source: docker-cleanup executions on server localhost (the other Coolify timer, never triggered by hand)
+    newest_cleanup_run: 2026-08-27T00:00:11Z
+    newest_backup_run_before_session: 2026-08-27T02:00:05Z
+    reasoning: >-
+      Both timers stopped the same day, cleanup two hours before the backup, and
+      neither has fired in the 11.7 days since — while the API answers,
+      deployments run on demand and every workload reads healthy. So the backup
+      schedule was never the fault. Scheduled work as a whole is dead, and a
+      schedule left alone does not recover; without intervention the on-demand
+      2026-09-07 backup would have been the last one.
+    repair: owner action 7 — restart Coolify's scheduler on the host
+  daily_backup_stopgap:
+    workflow: .github/workflows/backup-daily.yml
+    schedule: "0 2 * * *"
+    method: asks Coolify to run the schedule it already declares; defines no second schedule and edits no existing one
+    remove_when: the Coolify scheduler is repaired and scheduler-check reports alive
   how_to_check: >-
-    Automatic. backup-freshness.yml runs at 03:00 UTC daily, ages the newest
-    successful run and fails past 48 hours (two daily windows, so one transient
-    miss is not an alarm and a stopped scheduler cannot stay quiet for a second
-    day). Live-verified 2026-09-07T17:35Z: RESULT backup-check ok age=0.6h.
+    Automatic, and deliberately split across two jobs. backup-daily.yml takes the
+    backup at 02:00 UTC; backup-freshness.yml at 03:00 UTC reads the scheduler
+    pulse for the cause, then ages the newest successful run and fails past 48
+    hours (two daily windows, so one transient miss is not an alarm and a stopped
+    scheduler cannot stay quiet for a second day). A single job that both took
+    the backup and aged it could never fail, so the two stay apart.
+    Live-verified 2026-09-07T17:35Z: RESULT backup-check ok age=0.6h.
     The same check run a day earlier would have reported age=279h.
 
 platform:
