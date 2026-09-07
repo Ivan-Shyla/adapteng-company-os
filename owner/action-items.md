@@ -68,6 +68,10 @@ stopgap is meant to be deleted when you do.
 **Not on this list on purpose.** The WEB-002 cutover approval is a decision, not
 a setup step. When items 2–4 are done, the agent will hand you one approval
 package; you reply with the exact phrase it asks for and it runs the cutover.
+That package is one step shorter than it was: the pinned T1–T4 preflight was
+re-checked against current website `main` on 2026-09-07 and still holds, because
+neither `lead-intake.php` nor `configure-lead-intake.yml` has changed since the
+evidence was taken. Nothing about the website needs redoing before you decide.
 
 ---
 
