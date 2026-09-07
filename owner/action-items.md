@@ -49,8 +49,10 @@ So the remaining half of this gate is **restore**, not backup.
 **One thing to watch without acting on it.** The scheduler has not yet been
 observed firing on its own since Coolify returned; the on-demand run proves
 the backup path works, not that the timer resumed. The next unattended run is
-due at 02:00 UTC. `coolify-deploy.yml` with `operation=inspect` now prints the
-newest recorded run, so the check is one dispatch and needs no host access.
+due at 02:00 UTC, and the new **Backup freshness** workflow now asks at 03:00
+UTC daily how old the newest *successful* run is. If the scheduler did not
+resume, that run goes red on its own — this no longer depends on anyone
+remembering to look.
 
 **Not on this list on purpose.** The WEB-002 cutover approval is a decision, not
 a setup step. When items 2–4 are done, the agent will hand you one approval

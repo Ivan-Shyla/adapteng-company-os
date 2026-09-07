@@ -70,7 +70,12 @@ production_backup_state_2026_09_07:
     adapteng_ops_test stanza, which is not production data.
   restore: NEVER EXERCISED against production data — this is the remaining half of the durability gate
   scheduler_resumption: UNVERIFIED — the on-demand run proves the path, not the timer; next unattended run due 02:00 UTC
-  how_to_check: coolify-deploy.yml operation=inspect now prints the newest recorded run, so this needs no host access
+  how_to_check: >-
+    Automatic. backup-freshness.yml runs at 03:00 UTC daily, ages the newest
+    successful run and fails past 48 hours (two daily windows, so one transient
+    miss is not an alarm and a stopped scheduler cannot stay quiet for a second
+    day). Live-verified 2026-09-07T17:35Z: RESULT backup-check ok age=0.6h.
+    The same check run a day earlier would have reported age=279h.
 
 platform:
   compute: Hetzner (EU region) — single self-hosted host
