@@ -19,6 +19,22 @@ these, follow `runbooks/secret-rotation.md`.
 | `adapteng_ops` Postgres DSN | internal Coolify network | Ivan | adapter, governed workflows | Internal-only (SSL disabled on internal net) |
 | GitHub repo access | GitHub | Ivan | all repos | Actions budget $10/mo hard stop |
 
+## Presence verification — 2026-09-07
+
+Names and status only, as everywhere in this file.
+
+| Reference | Location | State on 2026-09-07 |
+|---|---|---|
+| `PGBACKREST_REPO1_PATH` | `adapteng-company-os` repository variable | **Corrected** to the hyphenated value the fail-closed guard requires. The previous spelling was proven to hold no repository content before the change, and the disposable rehearsal passed afterwards. |
+| `PGBACKREST_REPO1_S3_KEY` / `..._SECRET` / `..._CIPHER_PASS` | `adapteng-company-os` repository secrets | Present and working — they authenticated the object-store inventory and the rehearsal on 2026-09-07. |
+| `baserow-company-os-primary` | Baserow database token | **Still compromised.** Its literal value exists in Git history. Rotation is owner action 2 in `action-items.md` and gates the WEB-002 cutover. |
+| `COOLIFY_API_TOKEN` / `COOLIFY_URL` | `adapteng-company-os` secret and variable | Present, but unusable while the Coolify control-plane container is down. Not a credential fault: the same 502 is returned to unauthenticated requests for the web UI root. |
+| n8n management API key | n8n Cloud credential, referenced by name | Present and working. Rotation remains scheduled for after the launch/configuration work, per the standing note below. |
+| `AE_LEAD_INTAKE_CUTOVER_APPROVED` | `adapteng-website` repository variable | **Deliberately not set.** It is the final cutover gate and is one-shot: it is set only immediately before an approved dispatch and returned to `false` or removed straight afterwards. |
+
+The three WEB-002 preflight attestation variables set on 2026-09-06 remain in
+place and do **not** substitute for the cutover approval variable above.
+
 ## Presence verification — 2026-09-06
 
 An authenticated read-only pass listed GitHub Actions storage **by name and

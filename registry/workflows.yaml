@@ -6,8 +6,8 @@
 # Job Monitor/job-search, English Coach/English-learning and Kraken are excluded personal projects.
 # No secrets: webhook paths and tokens are marked, not printed.
 version: 1
-updated: 2026-09-05
-last_verified_live: 2026-09-05
+updated: 2026-09-07
+last_verified_live: 2026-09-07
 latest_owner_supplied_checkpoint: 2026-09-05
 count_warning: >-
   live_counts_2026_07_27 is the superseded dated census, retained only for

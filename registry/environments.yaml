@@ -1,7 +1,27 @@
 # AdaptEng Company OS — Environment Registry
 # Production hosts, domains, platform and budgets. NO secrets — names/hostnames/ids only.
 version: 1
-updated: 2026-08-11
+updated: 2026-09-07
+
+control_plane_state_2026_09_07:
+  evidence_class: LIVE-VERIFIED
+  coolify_control_plane: >-
+    Down. https://coolify.adapteng.com returns HTTP 502 on every path tested,
+    including the web UI root and a static asset, not only the API. The edge
+    proxy answers, so the reverse proxy is healthy and the Coolify application
+    container behind it is not. Company OS run 34099598085 failed at
+    GET /projects 502, which is the same condition seen from inside the network.
+  managed_workloads: >-
+    Unaffected, and measured rather than assumed. https://n8n.adapteng.com/healthz
+    returned 200 and /rest/login returned 401, and https://adapteng.com returned
+    200. Deployed containers keep running and keep being routed while the
+    control plane is down.
+  consequence: >-
+    Deployment revision reads, application configuration snapshots, network
+    membership reads and any redeploy or rollback are unavailable until the
+    Coolify container is restarted on the host. This blocks the Coolify source
+    reconciliation, so no source-branch switch was attempted.
+  owner_action: restart the Coolify application container on the Hetzner host, then confirm GET /api/v1/version returns 200
 
 platform:
   compute: Hetzner (EU region) — single self-hosted host

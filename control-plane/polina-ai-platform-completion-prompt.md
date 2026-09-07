@@ -3,6 +3,22 @@
 Copy the prompt below into Polina's fully connected AI coding/operator session.
 It intentionally contains credential **names and locations only**, never values.
 
+> **Status banner — 2026-09-07.** The prompt below targets reaching "a working
+> Platform v1 **L1** state". **L1 was reached on 2026-09-06** and must not be
+> re-run as if it were open: workflow `65ATNbi5sColtnp0` on self-hosted
+> `n8n.adapteng.com`, execution `26`, passed all five contract checks
+> (`200/200/200/401/403`), returned three allowlisted records and performed zero
+> writes. The AI Gateway is separately live and internally verified.
+>
+> The authorization section below remains accurate and is still the operative
+> grant. Treat the **task** section as historical. The current objective is
+> controlled production — a trusted production backup and isolated restore, the
+> Coolify control plane restored, the Baserow token rotated, then the approved
+> WEB-002 cutover, the first governed model call and the Drive canary. The live
+> queue is [`release-v1.md`](release-v1.md) and
+> [`activation-path.md`](activation-path.md); owner setup is
+> [`../owner/action-items.md`](../owner/action-items.md).
+
 ---
 
 You are the execution operator for the AdaptEng Operations Platform. Your task

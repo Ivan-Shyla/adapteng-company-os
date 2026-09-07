@@ -12,7 +12,34 @@
 #   repo-merged-not-live     - code merged to main, no live deploy/wiring yet
 #   planned                  - designed, not built
 version: 1
-updated: 2026-08-10
+updated: 2026-09-07
+
+backup_configuration_2026_09_07:
+  evidence_class: LIVE-VERIFIED
+  what_changed: >-
+    The PGBACKREST_REPO1_PATH repository variable was corrected from the
+    underscore spelling to /adapteng-ops, which is what
+    scripts/postgres_restore_guard.py line 472, the stanza name pinned at line
+    470 and the runbook configuration block all require. The guard was not
+    relaxed.
+  safety_evidence: >-
+    Company OS run 34100219296 measured the object store before the change.
+    The previously configured prefix held 0 objects, and the bucket's only
+    populated top-level prefixes were data/coolify, a single self-created
+    operation-class probe object, and postgres-physical-backup/validation.
+    None of them has the archive/ or backup/ children that identify a
+    pgBackRest repository, so no repository content was orphaned.
+  regression_evidence: >-
+    Company OS run 34100426430 re-ran the full disposable backup-and-restore
+    rehearsal after the change and concluded success, so the corrected value
+    does not break the isolation assertion or the backup contour.
+  still_open: >-
+    Configuration now agrees, but no production backup exists. The bucket
+    contains no pgBackRest repository under any prefix. Backblaze lifecycle
+    rules and the application-key prefix restriction must be re-scoped to the
+    corrected value, and the production full backup plus isolated restore
+    remain unexecuted because no production database credential exists in this
+    repository by design.
 
 excluded_personal_projects:
   status: excluded-from-company-os
@@ -171,38 +198,32 @@ services:
     path: services/adapteng-baserow-adapter
     role: Governed Baserow write path plus the field-allowlisted read contract used by the L1 Systems proof.
     runtime: Coolify (Hetzner), internal-only
-    endpoint_internal: "declared http://adapteng-baserow-adapter:8080; the alias resolved to 10.0.1.11 from inside the shared adapteng-ops network on 2026-08-12 (company-os run 31590576870), but it does not resolve from n8n"
+    endpoint_internal: "http://adapteng-baserow-adapter:8080 — LIVE-VERIFIED reachable from self-hosted n8n on 2026-09-06"
     read_contract: [/healthz, /v1/schema/system, "/v1/sample/system?limit=3"]
     public_endpoint: none (public URL removed after canary; verified 503)
     coolify_app_uuid: rrzq6gk3qpjfwuphvj1vsfzq
     auth: internal bearer (ADAPTER_SERVICE_TOKEN), rotated post-canary
     source_of_truth_for: none (writes into Baserow; authority stays Baserow/Postgres)
     depends_on: [postgres-adapteng-ops (id allocator, migration 001), baserow-company-operations]
-    status: live-adapter-l1-connectivity-blocked
+    status: live
     owner: Ivan
     latest_l1_evidence:
-      recorded: 2026-09-05
-      evidence_class: >-
-        Mixed. platform_pr_130 is now GITHUB-VERIFIED. The deployment reference
-        and adapter health remain owner-supplied because the Coolify API was
-        unreachable during this verification.
-      platform_pr_130: GITHUB-VERIFIED merged at f9daf1b50c490e4fdaa4a36cc38beddf18c022ac; that SHA is the current adapteng-automation-platform main and its 30 latest main check runs all concluded success
-      deployment: qr2zdnpthsnewaz6i06ftpsn; reported running:healthy (owner-supplied; not re-verified, Coolify API returned 502 on 2026-09-05)
-      n8n_workflow: h4P3lQIIUmlmhJAD
-      latest_execution: 22677
-      result: ENOTFOUND before the request reached the adapter
-      alias_finding: >-
-        2026-09-05 GITHUB-VERIFIED from deploy/ai-gateway.json. Company-os run
-        31590576870 measured, from inside a container on the shared
-        adapteng-ops production network, that adapteng-baserow-adapter resolved
-        to 10.0.1.11 while ai-gateway did not resolve at all. The adapter
-        carries custom_network_aliases=adapteng-baserow-adapter, so the alias is
-        correct and answerable. The unresolved variable is therefore n8n's own
-        network attachment, not the adapter's name or port.
-      next_action: >-
-        Owner-only. Attach n8n-selfhosted to the network that carries the
-        adapteng-baserow-adapter alias. Do not guess further hostnames; the
-        alias is already proven to resolve on that network.
+      recorded: 2026-09-06
+      supersedes: the 2026-09-05 record below, which described an L1 network block that has since been resolved
+      evidence_class: LIVE-VERIFIED
+      platform_pr_130: GITHUB-VERIFIED merged at f9daf1b50c490e4fdaa4a36cc38beddf18c022ac
+      n8n_workflow: 65ATNbi5sColtnp0 (self-hosted n8n.adapteng.com, left inactive after the proof)
+      latest_execution: 26
+      result: >-
+        All five contract checks passed from inside the private network —
+        /healthz 200, authenticated /v1/schema/system 200, authenticated
+        /v1/sample/system?limit=3 200, unauthenticated 401, non-readable kind
+        403. Three allowlisted records were returned and zero writes occurred.
+      resolved_2026_09_05_block: >-
+        The earlier ENOTFOUND was an n8n Cloud execution attempting a private
+        alias, which is correct isolation rather than an adapter defect. Running
+        the same contract from self-hosted n8n resolved the alias and passed.
+        The old cloud proof workflow h4P3lQIIUmlmhJAD remains inactive.
     notes: >-
       Migration 001 applied on first boot via RUN_MIGRATIONS_ON_START, then the
       flag returned to false. Proven live by AUT-001 + WEB-002. Replay is safe
@@ -210,8 +231,9 @@ services:
       reservation. Bare COUNTER creates with business_id omitted allocate a new
       ID on each call; generic hash-only reservation is in build before
       automated case/content/document writes. PR #130 added the bounded L1 read
-      contract. A healthy adapter does not prove cross-resource reachability;
-      the current L1 block is the n8n-to-adapter Docker DNS/network path.
+      contract, which execution 26 then exercised end to end. Adapter read
+      health does not by itself authorize governed production writes; WEB-002
+      production cutover remains separately gated.
 
   - id: ai-gateway
     repo: adapteng-automation-platform
