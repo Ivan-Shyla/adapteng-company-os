@@ -1,0 +1,51 @@
+# Ask one question on a timer: how old is the newest successful backup?
+#
+# This exists because of a specific incident rather than a general principle.
+# The production adapteng_ops backup schedule ran 25 consecutive times without
+# a single failure, then stopped being attempted on 2026-08-27 when the Coolify
+# scheduler stopped with the Coolify container. Nothing recorded a problem,
+# because nothing failed. The schedule still read enabled, the database still
+# read running:healthy, and every workload stayed green while the recovery
+# point aged for eleven days.
+#
+# That is the failure mode error-rate monitoring cannot see. The only signal
+# available was the absence of new runs, and absence is not something a
+# dashboard displays. So this compares the newest successful run against now,
+# which is the one comparison that would have caught it on day two.
+#
+# It writes nothing. The operation is GET-only and cannot deploy, reconcile or
+# trigger a backup; a stale result is a red run here and an entry in the owner
+# queue, not an automatic remediation.
+name: Backup freshness
+
+on:
+  workflow_dispatch:
+  schedule:
+    # An hour after the 02:00 UTC backup window, so a run that is merely slow is
+    # not reported as a run that never happened.
+    - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup-freshness
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check the production backup recovery point
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - name: Age the newest successful backup
+        env:
+          COOLIFY_API_CREDENTIAL: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_BASE_URL: ${{ vars.COOLIFY_URL }}
+          OPERATION: backup-check
+          SERVICE: ai-gateway
+        run: python scripts/coolify_deploy.py
