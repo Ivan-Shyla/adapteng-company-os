@@ -120,6 +120,25 @@ the backup and then aged it could never fail, and the alarm would be worthless.
 scheduler is repaired — at which point the two would both fire and the daily
 recovery point would simply be taken twice.
 
+### What else stopped with the timer
+
+The backup is covered. Two other things are not, and neither is visible from
+GitHub:
+
+- **Docker cleanup has not run since 2026-08-27.** It is configured
+  `0 0 * * *` at an 80% threshold, and those terms are simply not being
+  applied. Twelve days of unreclaimed images and build cache accumulate on the
+  single host every service on this platform shares.
+- **Disk usage is UNKNOWN, and its silence is not reassurance.**
+  `high_disk_usage_notification_sent` reads `None` — not `false`. Coolify sets
+  that flag from a *scheduled* check, so with the scheduler dead the flag
+  cannot report a filling disk any more than the schedule could take a backup.
+  A quiet disk alarm and a dead disk alarm look identical, which is the same
+  shape as the backup incident itself.
+
+No repository evidence can settle disk state; it is host-side. Restarting the
+scheduler (owner item 7) restores cleanup and the threshold check together.
+
 ---
 
 ## Operational checkpoint — 2026-09-07 08:30 (superseded by the 17:05 checkpoint above)

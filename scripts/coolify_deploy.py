@@ -4401,6 +4401,28 @@ def operate_scheduler_check(client: Client, spec: dict, now=None) -> int:
         if age is not None and (pulse is None or age < pulse):
             pulse = age
 
+        # What else stopped with the timer. Coolify raises high-disk-usage
+        # through a *scheduled* check, so a dead scheduler does not merely stop
+        # cleaning up -- it also stops saying that the disk is filling, on the
+        # single host every service on this platform shares.
+        settings = server.get("settings")
+        if not isinstance(settings, dict):
+            detail = call(client, "GET", f"/servers/{server_uuid}", allow_absent=True)
+            if isinstance(detail, dict):
+                settings = detail.get("settings")
+                server = {**server, **detail}
+        flagged = server.get("high_disk_usage_notification_sent")
+        if isinstance(settings, dict):
+            emit(
+                f"      cleanup config: frequency={settings.get('docker_cleanup_frequency')} "
+                f"threshold={settings.get('docker_cleanup_threshold')} "
+                f"forced={settings.get('force_server_cleanup')}"
+            )
+        emit(
+            f"      high disk usage flagged: {flagged} "
+            "(set by a scheduled check, so it is only meaningful when the timer runs)"
+        )
+
     emit("")
     if pulse is None:
         emit("RESULT scheduler-check unknown reason=no-readable-cleanup-run")

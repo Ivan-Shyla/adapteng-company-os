@@ -111,7 +111,19 @@ class FakeInstance:
     def __init__(self, *, with_application: bool = False, deployment_states=None) -> None:
         self.projects = [{"id": 1, "uuid": "prj-1", "name": PROJECT}]
         self.environments = {"prj-1": [{"id": 7, "uuid": "env-1", "name": ENVIRONMENT}]}
-        self.servers = [{"id": 1, "uuid": "srv-1", "name": "hetzner"}]
+        self.servers = [
+            {
+                "id": 1,
+                "uuid": "srv-1",
+                "name": "hetzner",
+                "high_disk_usage_notification_sent": False,
+                "settings": {
+                    "docker_cleanup_frequency": "0 0 * * *",
+                    "docker_cleanup_threshold": 80,
+                    "force_server_cleanup": False,
+                },
+            }
+        ]
         self.destinations = {"srv-1": [{"id": 1, "uuid": "dst-1", "name": "coolify"}]}
         # The production instance answers 404 for this endpoint. The default here
         # stays 200 so the existing suites keep exercising the endpoint path, and
@@ -4960,6 +4972,22 @@ class SchedulerCheckTests(unittest.TestCase):
             [call for call in instance.calls if call[0] != "GET"],
             [],
         )
+
+    def test_the_cleanup_configuration_is_reported_beside_the_pulse(self) -> None:
+        """A stalled timer and its cleanup terms answer different questions."""
+
+        instance = FakeInstance()
+        _code, report = self.check(instance)
+        self.assertIn("cleanup config:", report)
+        self.assertIn("threshold=", report)
+
+    def test_the_high_disk_usage_flag_is_reported_with_its_caveat(self) -> None:
+        """The flag is itself set on a timer, so it cannot vouch for a dead one."""
+
+        instance = FakeInstance()
+        _code, report = self.check(instance)
+        self.assertIn("high disk usage flagged:", report)
+        self.assertIn("only meaningful when the timer runs", report)
 
 
 if __name__ == "__main__":
