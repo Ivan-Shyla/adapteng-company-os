@@ -70,6 +70,7 @@ on:
           - backup-check
           - scheduler-check
           - ledger-read
+          - open-run
           - model-smoke
       service:
         description: "Spec file under deploy/, named without its extension"

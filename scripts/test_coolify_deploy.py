@@ -2252,6 +2252,7 @@ class EntryPointTests(unittest.TestCase):
                 "backup-check",
                 "scheduler-check",
                 "ledger-read",
+                "open-run",
                 "model-smoke",
             },
         )
@@ -3698,6 +3699,124 @@ class ProbeOnceTests(unittest.TestCase):
                     )
         self.assertTrue(instance.tasks)
         self.assertIs(instance.tasks[-1]["enabled"], False)
+
+
+class OpenRunTests(unittest.TestCase):
+    """Writing the one row that a model call has to bind to.
+
+    This is the only operation in this file that writes to a business table,
+    and it writes to a governed one. The tests are about that: it must be
+    retryable without duplicating, it must touch nothing else, and the
+    statement must survive a channel that cannot carry a quote.
+    """
+
+    def test_every_statement_is_retryable(self) -> None:
+        """Staging happens over several minutes and can fail partway through.
+
+        Without on-conflict the second attempt would fail on the primary key
+        and leave the operation permanently stuck after any hiccup.
+        """
+
+        for label, sql in driver.RUN_OPEN_STATEMENTS:
+            with self.subTest(label):
+                self.assertIn("on conflict do nothing", sql)
+
+    def test_it_writes_only_to_the_run_ledger(self) -> None:
+        """A typo here would insert into whatever table the typo named."""
+
+        for label, sql in driver.RUN_OPEN_STATEMENTS:
+            with self.subTest(label):
+                self.assertTrue(sql.startswith(f"insert into {label} "))
+                for verb in ("update", "delete", "drop", "alter", "truncate"):
+                    self.assertNotIn(verb, sql)
+
+    def test_the_run_names_the_task_it_belongs_to(self) -> None:
+        """agent_run.task_id is a foreign key; a mismatch fails at commit."""
+
+        _label, run_sql = driver.RUN_OPEN_STATEMENTS[1]
+        self.assertIn(driver.RUN_OPEN_TASK_ID, run_sql)
+        self.assertIn(driver.RUN_OPEN_RUN_ID, run_sql)
+
+    def test_statements_carry_no_character_the_shell_would_touch(self) -> None:
+        """Including the parenthesis, which is why there is no column list."""
+
+        for label, sql in driver.RUN_OPEN_STATEMENTS:
+            with self.subTest(label):
+                for character in ("'", '"', "$", "`", "(", ")", ";", "&", "|"):
+                    self.assertNotIn(character, sql)
+
+    def test_chunks_never_split_a_word(self) -> None:
+        """A cut identifier is a syntax error, or worse, a different identifier.
+
+        The budget here is deliberately far below the real one: the statement
+        has to survive being cut in many places, not just the one the current
+        lengths happen to produce.
+        """
+
+        sql = driver.RUN_OPEN_STATEMENTS[1][1]
+        chunks = driver.stage_chunks(sql, 40)
+        self.assertGreater(len(chunks), 2)
+        self.assertEqual(" ".join(chunks).split(), sql.split())
+        for chunk in chunks:
+            self.assertLessEqual(len(chunk), 40)
+
+    def test_a_word_longer_than_a_write_is_refused(self) -> None:
+        """Staging it would silently truncate the statement."""
+
+        with self.assertRaises(driver.Abort):
+            driver.stage_chunks("insert into t select averylongliteralvalue", 10)
+
+    def test_every_staged_statement_fits_the_channel_it_is_written_with(self) -> None:
+        """The budget is the endpoint bound minus the writer around the chunk."""
+
+        budget = driver.PEER_COMMAND_LIMIT - len(
+            driver.LEDGER_WRITE_COMMAND.format(mode="w", chunk="")
+        )
+        self.assertGreater(budget, 0)
+        for label, sql in driver.RUN_OPEN_STATEMENTS:
+            with self.subTest(label):
+                for chunk in driver.stage_chunks(sql, budget):
+                    command = driver.LEDGER_WRITE_COMMAND.format(mode="w", chunk=chunk)
+                    self.assertLessEqual(len(command), driver.PEER_COMMAND_LIMIT)
+
+    def test_the_executing_command_fits_and_names_no_secret(self) -> None:
+        """It only has to name the file and the variable, so it stays short."""
+
+        command = driver.LEDGER_EXEC_COMMAND.format(dsn="AI_GATEWAY_DATABASE_URL")
+        self.assertLessEqual(len(command), driver.PEER_COMMAND_LIMIT)
+        self.assertIn(driver.LEDGER_STAGE_PATH, command)
+        self.assertNotIn("postgres://", command)
+
+    def test_the_stage_file_stays_in_a_scratch_directory(self) -> None:
+        """Nothing this operation writes should outlive the container."""
+
+        self.assertTrue(driver.LEDGER_STAGE_PATH.startswith("/tmp/"))
+
+    def test_the_quote_standin_never_collides_with_the_statement(self) -> None:
+        """Every ~ is turned into a quote, so a real ~ would be corrupted."""
+
+        for label, sql in driver.RUN_OPEN_STATEMENTS:
+            with self.subTest(label):
+                restored = sql.replace(driver.LEDGER_QUOTE_STANDIN, "'")
+                self.assertEqual(restored.count("'") % 2, 0)
+
+    def test_every_command_keeps_room_below_the_bound(self) -> None:
+        """Landing exactly on 245 is not a margin.
+
+        The endpoint was measured accepting 245 and refusing 300; where in
+        between it turns over is unknown, so nothing here is built to sit on
+        the only value that was ever proven.
+        """
+
+        commands = [
+            driver.LEDGER_EXEC_COMMAND.format(dsn="ID_ALLOCATOR_DSN"),
+            driver.ledger_command(
+                driver.RUN_OPEN_VERIFY[0], driver.RUN_OPEN_VERIFY[1], "ID_ALLOCATOR_DSN"
+            ),
+        ]
+        for command in commands:
+            with self.subTest(command[:40]):
+                self.assertLess(len(command), driver.PEER_COMMAND_LIMIT - 20)
 
 
 class ServiceDiagnoseTests(unittest.TestCase):
