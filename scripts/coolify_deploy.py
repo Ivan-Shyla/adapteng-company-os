@@ -35,6 +35,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Iterable
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -70,6 +71,7 @@ OPERATIONS = (
     "diagnose",
     "networks",
     "backup-now",
+    "backup-check",
 )
 FORBIDDEN_METHODS = frozenset({"DELETE"})
 
@@ -77,6 +79,13 @@ FORBIDDEN_METHODS = frozenset({"DELETE"})
 # run, so this waits minutes rather than hours before calling it unproven.
 BACKUP_RUN_ATTEMPTS = 20
 BACKUP_RUN_INTERVAL_SECONDS = 15
+
+# Two missed daily windows, so one transient miss does not raise an alarm but a
+# stopped scheduler cannot stay quiet for a second day. The eleven-day gap this
+# threshold exists to catch was invisible precisely because nothing compared the
+# newest successful run against today.
+BACKUP_MAX_AGE_HOURS = 48
+BACKUP_AGE_VARIABLE = "BACKUP_MAX_AGE_HOURS"
 
 # Coolify reports a deployment through these states. Anything outside the two
 # sets below is unknown, and an unknown state is polled rather than guessed.
@@ -4230,6 +4239,103 @@ def operate_backup_now(client: Client, spec: dict, sleep=None) -> int:
     return EXIT_FAILED
 
 
+def backup_age_hours(created_at: str, now=None) -> float | None:
+    """Hours between a recorded run and now, or None if the stamp is unreadable."""
+
+    try:
+        moment = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    reference = now or datetime.now(timezone.utc)
+    return (reference - moment).total_seconds() / 3600.0
+
+
+def operate_backup_check(client: Client, spec: dict, max_age_hours=None, now=None) -> int:
+    """Fail when the newest successful backup is older than the allowed age.
+
+    This exists because of a specific incident rather than a general principle.
+    The schedule stopped firing and recorded nothing, so for eleven days the
+    only signal available was the absence of new runs -- which no dashboard
+    shows, because a dashboard shows what happened. The single question worth
+    asking on a timer is how old the newest *successful* run is.
+
+    A failed newest run is reported but does not become the answer: the
+    recovery point is the newest run that succeeded, so that is what is aged.
+    """
+
+    limit = float(max_age_hours if max_age_hours is not None else BACKUP_MAX_AGE_HOURS)
+    emit(f"--- backup-check (allowed age {limit:g}h)")
+    databases = call(client, "GET", "/databases", allow_absent=True)
+    if not isinstance(databases, list) or not databases:
+        emit("RESULT backup-check failed reason=no-database-reported")
+        return EXIT_FAILED
+    if len(databases) != 1:
+        emit(f"RESULT backup-check failed reason=ambiguous-database count={len(databases)}")
+        return EXIT_FAILED
+    database = databases[0]
+    database_uuid = str(database.get("uuid") or "")
+    emit(f"    database {database.get('name')} status={database.get('status')}")
+
+    configs = database.get("backup_configs")
+    if not isinstance(configs, list) or len(configs) != 1:
+        count = len(configs) if isinstance(configs, list) else 0
+        emit(f"RESULT backup-check failed reason=not-exactly-one-schedule count={count}")
+        return EXIT_FAILED
+    config = configs[0]
+    backup_uuid = str(config.get("uuid") or "")
+    if not config.get("enabled"):
+        emit("RESULT backup-check failed reason=schedule-disabled")
+        return EXIT_FAILED
+    emit(f"    schedule enabled={config.get('enabled')} frequency={config.get('frequency')}")
+
+    parsed = call(
+        client,
+        "GET",
+        f"/databases/{database_uuid}/backups/{backup_uuid}/executions",
+        allow_absent=True,
+    )
+    rows = parsed.get("executions") if isinstance(parsed, dict) else None
+    if not isinstance(rows, list) or not rows:
+        emit("RESULT backup-check failed reason=no-runs-recorded")
+        return EXIT_FAILED
+    ordered = sorted(
+        (row for row in rows if isinstance(row, dict)),
+        key=lambda row: str(row.get("created_at") or ""),
+        reverse=True,
+    )
+    newest = ordered[0]
+    if str(newest.get("status") or "") != "success":
+        emit(
+            f"    newest run {newest.get('created_at')} status={newest.get('status')} "
+            "-- not the recovery point"
+        )
+
+    succeeded = [row for row in ordered if str(row.get("status") or "") == "success"]
+    if not succeeded:
+        emit(f"RESULT backup-check failed reason=no-successful-run-in-{len(ordered)}-recorded")
+        return EXIT_FAILED
+    latest = succeeded[0]
+    created_at = str(latest.get("created_at") or "")
+    age = backup_age_hours(created_at, now=now)
+    if age is None:
+        emit(f"RESULT backup-check failed reason=unreadable-timestamp run={created_at}")
+        return EXIT_FAILED
+    emit(f"    newest successful run {created_at} size={latest.get('size')} age={age:.1f}h")
+
+    if age > limit:
+        emit("")
+        emit(
+            f"RESULT backup-check failed age={age:.1f}h allowed={limit:g}h run={created_at} "
+            "-- the recovery point is stale; check whether the scheduler is running"
+        )
+        return EXIT_FAILED
+    emit("")
+    emit(f"RESULT backup-check ok age={age:.1f}h allowed={limit:g}h run={created_at}")
+    return EXIT_OK
+
+
 def positive_integer(environ: dict, name: str, default: int) -> int:
     raw = (environ.get(name) or "").strip()
     if not raw:
@@ -4306,6 +4412,12 @@ def run(environ: dict) -> int:
         return operate_networks(client, spec)
     if operation == "backup-now":
         return operate_backup_now(client, spec)
+    if operation == "backup-check":
+        return operate_backup_check(
+            client,
+            spec,
+            max_age_hours=positive_integer(environ, BACKUP_AGE_VARIABLE, BACKUP_MAX_AGE_HOURS),
+        )
     return operate_deploy(
         client,
         spec,

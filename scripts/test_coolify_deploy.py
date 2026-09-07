@@ -2224,6 +2224,7 @@ class EntryPointTests(unittest.TestCase):
                 "diagnose",
                 "networks",
                 "backup-now",
+                "backup-check",
             },
         )
         workflow = (
@@ -4745,6 +4746,119 @@ class BackupNowTests(unittest.TestCase):
         _code, report = self.run_backup(instance)
         self.assertNotIn("s3cr3t-not-for-a-log", report)
         self.assertNotIn("not-for-a-log-either", report)
+
+
+class BackupCheckTests(unittest.TestCase):
+    """The only question worth asking on a timer: how old is the newest success?
+
+    The eleven-day gap this check exists to catch produced no error anywhere,
+    because nothing failed -- the runs stopped being attempted. So every case
+    below is about a *silence* being read correctly, not about an error being
+    reported.
+    """
+
+    def setUp(self) -> None:
+        driver.reset_redactions()
+        self.addCleanup(driver.reset_redactions)
+
+    def check(self, instance, now="2026-09-07T18:00:00+00:00", **kwargs) -> tuple[int, str]:
+        spec = driver.load_spec(driver.spec_path(RESOURCE))
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_backup_check(
+                instance, spec, now=datetime.datetime.fromisoformat(now), **kwargs
+            )
+        return code, buffer.getvalue()
+
+    def test_a_recent_successful_run_passes(self) -> None:
+        instance = FakeInstance()
+        instance.backup_runs = [
+            {"created_at": "2026-09-07T02:00:05+00:00", "status": "success", "size": 175419}
+        ]
+        code, report = self.check(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("RESULT backup-check ok", report)
+        self.assertIn("age=16.0h", report)
+
+    def test_the_gap_that_went_unnoticed_for_eleven_days_fails(self) -> None:
+        """The default fixture is the real 2026-08-27 run, eleven days stale."""
+
+        instance = FakeInstance()
+        code, report = self.check(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("RESULT backup-check failed", report)
+        self.assertIn("the recovery point is stale", report)
+
+    def test_it_reads_and_writes_nothing(self) -> None:
+        instance = FakeInstance()
+        self.check(instance)
+        self.assertEqual(instance.writes(), [])
+
+    def test_one_missed_window_is_not_an_alarm(self) -> None:
+        """A single transient miss must not page; two must."""
+
+        instance = FakeInstance()
+        instance.backup_runs = [
+            {"created_at": "2026-09-06T02:00:05+00:00", "status": "success", "size": 175419}
+        ]
+        code, _report = self.check(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+
+    def test_a_failed_newest_run_ages_the_newest_success_instead(self) -> None:
+        """A failure does not become the recovery point, and does not hide it."""
+
+        instance = FakeInstance()
+        instance.backup_runs = [
+            {"created_at": "2026-09-07T02:00:05+00:00", "status": "failed", "size": 0},
+            {"created_at": "2026-09-06T02:00:05+00:00", "status": "success", "size": 175419},
+        ]
+        code, report = self.check(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("status=failed -- not the recovery point", report)
+        self.assertIn("newest successful run 2026-09-06T02:00:05+00:00", report)
+
+    def test_runs_that_all_failed_leave_no_recovery_point(self) -> None:
+        instance = FakeInstance()
+        instance.backup_runs = [
+            {"created_at": "2026-09-07T02:00:05+00:00", "status": "failed", "size": 0}
+        ]
+        code, report = self.check(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reason=no-successful-run-in-1-recorded", report)
+
+    def test_no_recorded_run_at_all_fails(self) -> None:
+        instance = FakeInstance()
+        instance.backup_runs = []
+        code, report = self.check(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reason=no-runs-recorded", report)
+
+    def test_a_disabled_schedule_fails_however_recent_the_last_run(self) -> None:
+        """A recent dump under a switched-off schedule is a countdown, not safety."""
+
+        instance = FakeInstance()
+        instance.databases[0]["backup_configs"][0]["enabled"] = False
+        instance.backup_runs = [
+            {"created_at": "2026-09-07T02:00:05+00:00", "status": "success", "size": 175419}
+        ]
+        code, report = self.check(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reason=schedule-disabled", report)
+
+    def test_an_unreadable_timestamp_fails_rather_than_passing_silently(self) -> None:
+        instance = FakeInstance()
+        instance.backup_runs = [{"created_at": "not-a-date", "status": "success", "size": 1}]
+        code, report = self.check(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reason=unreadable-timestamp", report)
+
+    def test_the_allowed_age_is_configurable(self) -> None:
+        instance = FakeInstance()
+        instance.backup_runs = [
+            {"created_at": "2026-09-07T02:00:05+00:00", "status": "success", "size": 175419}
+        ]
+        code, _report = self.check(instance, max_age_hours=4)
+        self.assertEqual(code, driver.EXIT_FAILED)
 
 
 if __name__ == "__main__":

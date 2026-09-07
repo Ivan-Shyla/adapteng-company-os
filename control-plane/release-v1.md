@@ -63,8 +63,10 @@ and one of them was wrong in a way worth stating plainly.
   `runs-on: [self-hosted, adapteng-ops]` workflow now queues with no runner.
 - **UNVERIFIED:** whether the Coolify scheduler has resumed firing on its own.
   The on-demand run proves the backup path works; it does not prove the timer
-  recovered. The next unattended run is due at 02:00 UTC and
-  `coolify-deploy.yml operation=inspect` now prints the newest recorded run.
+  recovered. The next unattended run is due at 02:00 UTC, and the **Backup
+  freshness** workflow (`backup-freshness.yml`, 03:00 UTC daily) now ages the
+  newest successful run and fails past 48 hours. If the scheduler did not
+  resume, that check reports it without anyone having to look.
 - **UNVERIFIED:** restore. No dump from this series has ever been restored. The
   only restore evidence in the bucket is the 2026-08-03 rehearsal against the
   disposable `adapteng_ops_test` stanza, which is not production data.
