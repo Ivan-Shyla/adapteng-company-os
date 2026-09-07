@@ -139,6 +139,44 @@ GitHub:
 No repository evidence can settle disk state; it is host-side. Restarting the
 scheduler (owner item 7) restores cleanup and the threshold check together.
 
+### WEB-002 cutover evidence is still current
+
+The cutover is gated on owner items 1–4, not on evidence. But evidence decays
+quietly, and the T1–T4 preflight is pinned to website `cd17a296`
+(run *WEB-002 exact-SHA T1-T4 evidence*, 2026-09-06T20:45:41Z, success). Website
+`main` has moved three times since — through `badfbb95`, `44afbb75` and now
+`47a35b51` — all on 2026-09-07. So the pin was checked rather than assumed.
+
+The lead path is two files: `wp-content/plugins/adapteng-core/includes/lead-intake.php`
+(the producer) and `.github/workflows/configure-lead-intake.yml` (the cutover
+dispatch). **Neither appears in the 24-file diff.** The three commits are the
+legal-operator migration (#188), a YAML block-scalar parsing fix (#189) and a CI
+assertion fix (#190). The one plugin file they do touch,
+`generated/website-v2-config.php`, changed six lines and not one of them
+mentions lead, webhook, submission or n8n; its `generate_lead` and `lead_type`
+strings are GA4 analytics labels and were not among the changed lines.
+
+**The preflight therefore carries forward — it does not need re-running at
+cutover on account of these commits.** Production also carries the exact
+producer that evidence was taken against: the deployable surface was last
+shipped at `badfbb95` (16:22 UTC), and the two commits after it touch only
+`apply-content-corrections.yml` and a spec artifact.
+
+**A gap between website `main` and production is normal here and is not drift.**
+`deploy-cloudways.yml` carries no push trigger by design — merging to `main`
+never ships `adapteng-core`; deployment is a manual, SHA-pinned dispatch with a
+typed confirmation phrase. Two undeployed commits on that repository are the
+governance working, and reading the gap as an incident would be a false alarm.
+
+This conclusion has a shelf life; `main` moved three times in a single day.
+Re-ask it rather than trusting this paragraph — empty output means the evidence
+still holds:
+
+```
+gh api repos/Ivan-Shyla/adapteng-website/compare/cd17a296...main \
+  --jq '.files[].filename' | grep -E 'lead-intake\.php|configure-lead-intake\.yml'
+```
+
 ---
 
 ## Operational checkpoint — 2026-09-07 08:30 (superseded by the 17:05 checkpoint above)
