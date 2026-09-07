@@ -255,9 +255,21 @@ jobs:
             | tr '\t' '\n' | while read -r prefix; do
                 [ -n "$prefix" ] || continue
                 count=$(aws s3api list-objects-v2 --endpoint-url "$endpoint" \
-                  --bucket "$BUCKET" --prefix "$prefix" \
+                  --bucket "$BUCKET" --prefix "$prefix" --no-paginate \
                   --query 'length(Contents || `[]`)' --output text)
                 printf '    %-40s %s\n' "$prefix" "$count"
+                # A populated prefix is only meaningful once its shape is known.
+                # A pgBackRest repository is recognisable by its `archive/` and
+                # `backup/` children and the stanza directory beneath them, which
+                # is what distinguishes a real repository from unrelated storage
+                # that merely shares a bucket. Names only; no object is read.
+                aws s3api list-objects-v2 --endpoint-url "$endpoint" \
+                  --bucket "$BUCKET" --prefix "$prefix" --delimiter / \
+                  --query 'CommonPrefixes[].Prefix' --output text \
+                  | tr '\t' '\n' | while read -r child; do
+                      [ -n "$child" ] || continue
+                      printf '        %s\n' "$child"
+                    done
               done
 
           if [ "$held" = "0" ]; then
