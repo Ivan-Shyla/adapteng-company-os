@@ -246,12 +246,19 @@ jobs:
           # The top-level prefixes answer the second half of the question: if the
           # configured prefix is empty, is there a differently spelled sibling
           # that is not? `--delimiter /` returns prefix names only, never object
-          # contents.
-          echo "Top-level prefixes present in the bucket:"
+          # contents, and the per-prefix count that follows is what distinguishes
+          # a stale empty name from storage that is actually holding something.
+          echo "Top-level prefixes present in the bucket, with object counts:"
           aws s3api list-objects-v2 --endpoint-url "$endpoint" \
             --bucket "$BUCKET" --delimiter / \
             --query 'CommonPrefixes[].Prefix' --output text \
-            | tr '\t' '\n' | sed 's/^/    /'
+            | tr '\t' '\n' | while read -r prefix; do
+                [ -n "$prefix" ] || continue
+                count=$(aws s3api list-objects-v2 --endpoint-url "$endpoint" \
+                  --bucket "$BUCKET" --prefix "$prefix" \
+                  --query 'length(Contents || `[]`)' --output text)
+                printf '    %-40s %s\n' "$prefix" "$count"
+              done
 
           if [ "$held" = "0" ]; then
             echo "The configured prefix holds no repository content."
