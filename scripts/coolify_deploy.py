@@ -68,11 +68,13 @@ OPERATIONS = (
     "peer-resolve",
     "service-resolve",
     "peer-diagnose",
+    "service-diagnose",
     "diagnose",
     "networks",
     "backup-now",
     "backup-check",
     "scheduler-check",
+    "model-smoke",
 )
 FORBIDDEN_METHODS = frozenset({"DELETE"})
 
@@ -2308,6 +2310,17 @@ def peer_command(spec: dict) -> str:
 PEER_LADDER_TASK_NAME = "adapteng-peer-probe-acceptance"
 PEER_LADDER_TRIVIAL = "echo ADAPTENG_PEER trivial"
 
+# The same ladder, aimed at the service instead of the peer.
+#
+# The 245-character bound everything here is written against was measured on the
+# peer, and was then carried over to the gateway because it was the only number
+# available. That carry-over is an assumption, not evidence: the two
+# applications are different records, and nothing established that they share a
+# limit. Every command in this file is cramped by that unmeasured number, so it
+# is worth one read-mostly run to find out what the gateway itself accepts.
+SERVICE_LADDER_TASK_NAME = "adapteng-service-probe-acceptance"
+SERVICE_LADDER_TRIVIAL = "echo ADAPTENG_SERVICE trivial"
+
 
 def peer_ladder(spec: dict) -> list:
     """Rungs from trivially short to longer than the full probe, ascending.
@@ -2337,6 +2350,31 @@ def peer_ladder(spec: dict) -> list:
     # change when they are edited, and the first version of this list stopped
     # being ascending the moment one of them was shortened. Sorting keeps the
     # bracketing sound without depending on anyone re-checking the order.
+    return sorted(rungs, key=lambda rung: len(rung[1]))
+
+
+def service_ladder(spec: dict) -> list:
+    """Rungs for the service application, bracketing well past the peer bound.
+
+    Two rungs are real commands this application has already accepted, so a
+    refusal higher up cannot be read as "the gateway refuses tasks". The rest
+    is padding, which keeps length the only variable that moves.
+    """
+
+    def filler(size: int) -> str:
+        head = "echo ADAPTENG_SERVICE "
+        return head + "x" * (size - len(head))
+
+    rungs = [
+        ("trivial", filler(30)),
+        # Both known accepted on this application, from verify and model-smoke.
+        ("readiness-shaped", readiness_command(spec)),
+        ("model-smoke-shaped", model_smoke_command(model_smoke_call_id())),
+        ("filler-300", filler(300)),
+        ("filler-450", filler(450)),
+        ("filler-700", filler(700)),
+        ("filler-1000", filler(1000)),
+    ]
     return sorted(rungs, key=lambda rung: len(rung[1]))
 
 
@@ -2564,16 +2602,29 @@ def classify_probe_failure(message: object) -> tuple[str, str] | None:
     return None
 
 
-def operate_peer_diagnose(client: Client, spec: dict) -> int:
-    """Find what the scheduled-task endpoint will accept on the peer.
+def operate_peer_diagnose(client: Client, spec: dict, subject: str = "peer") -> int:
+    """Find what the scheduled-task endpoint will accept on one application.
 
     Read-mostly: it creates one task, rewrites it a few times, and leaves it
     disarmed. It never arms anything, so nothing executes in any container.
+
+    ``subject`` selects which application is measured. The peer was measured
+    first because it was the one refusing commands; the service is measured
+    because every command in this file is sized against the peer's number.
     """
 
     target = spec["target"]
-    peer_name = spec["network"]["peer_probe_application"]
-    emit(f"--- peer-diagnose {peer_name}")
+    if subject == "service":
+        peer_name = target["resource_name"]
+        ladder = service_ladder(spec)
+        task_name = SERVICE_LADDER_TASK_NAME
+        trivial = SERVICE_LADDER_TRIVIAL
+    else:
+        peer_name = spec["network"]["peer_probe_application"]
+        ladder = peer_ladder(spec)
+        task_name = PEER_LADDER_TASK_NAME
+        trivial = PEER_LADDER_TRIVIAL
+    emit(f"--- {subject}-diagnose {peer_name}")
 
     project = find_project(client, target["project"])
     environment = (
@@ -2589,23 +2640,23 @@ def operate_peer_diagnose(client: Client, spec: dict) -> int:
     peer = find_application(present, peer_name)
     service = find_application(present, target["resource_name"])
     if peer is None:
-        emit(f"    peer application {peer_name}: ABSENT")
+        emit(f"    {subject} application {peer_name}: ABSENT")
         return EXIT_FAILED
 
     peer_uuid = str(peer["uuid"])
-    emit(f"    peer {peer_name}: uuid={peer_uuid} state={peer.get('status')}")
-    if service is not None:
+    emit(f"    {subject} {peer_name}: uuid={peer_uuid} state={peer.get('status')}")
+    if service is not None and subject != "service":
         emit(
             f"    service {target['resource_name']}: uuid={service['uuid']} "
             f"state={service.get('status')}"
         )
 
-    existing = find_readiness_task(client, peer_uuid, PEER_LADDER_TASK_NAME)
+    existing = find_readiness_task(client, peer_uuid, task_name)
     task_uuid = str(existing["uuid"]) if existing else None
     results = []
 
-    for label, command in peer_ladder(spec):
-        body = readiness_task_body(command, armed=False, name=PEER_LADDER_TASK_NAME)
+    for label, command in ladder:
+        body = readiness_task_body(command, armed=False, name=task_name)
         if task_uuid is None:
             status, parsed = client.request(
                 "POST", f"/applications/{peer_uuid}/scheduled-tasks", body=body
@@ -2627,7 +2678,7 @@ def operate_peer_diagnose(client: Client, spec: dict) -> int:
         )
 
         if accepted and task_uuid is None:
-            found = find_readiness_task(client, peer_uuid, PEER_LADDER_TASK_NAME)
+            found = find_readiness_task(client, peer_uuid, task_name)
             if found is None:
                 emit("    the task was accepted but cannot be read back; stopping")
                 return EXIT_FAILED
@@ -2666,20 +2717,93 @@ def operate_peer_diagnose(client: Client, spec: dict) -> int:
             "and the earlier failure needs a different explanation."
         )
 
-    at_rest = readiness_task_body(
-        PEER_LADDER_TRIVIAL, armed=False, name=PEER_LADDER_TASK_NAME
-    )
+    at_rest = readiness_task_body(trivial, armed=False, name=task_name)
     client.request(
         "PATCH",
         f"/applications/{peer_uuid}/scheduled-tasks/{task_uuid}",
         body=at_rest,
     )
     emit(
-        f"    left one disabled task {PEER_LADDER_TASK_NAME} on {peer_name}, "
+        f"    left one disabled task {task_name} on {peer_name}, "
         "scheduled for a leap day and holding a harmless echo. It was never "
         "armed, so it has never run."
     )
     return EXIT_OK
+
+
+def operate_service_diagnose(client: Client, spec: dict) -> int:
+    """Measure the scheduled-task command bound on the service application."""
+
+    return operate_peer_diagnose(client, spec, subject="service")
+
+
+# --- the first live model call -----------------------------------------------
+# verify and peer-verify deliberately stop short of the one fact this service
+# exists for: whether the pinned Vertex model actually answers. Neither can
+# reach it, and that is by design -- /health and /ready both return before the
+# Authorization header is read, so no probe built on them can ever produce an
+# inference call. Everything proven so far is therefore about placement,
+# process and database, and says nothing about the provider.
+#
+# This closes that gap from inside the gateway's own container, through the
+# same scheduled-task mechanism verify already proved on this same application.
+#
+# Running it inside the container is what makes it credential-free. The request
+# is handed to AiGateway.handle, which is the code path *behind* authentication,
+# so AI_GATEWAY_BEARER_TOKENS is never read, never passed and never printed, and
+# the mounted ADC credential never leaves the container. Nothing in this file,
+# this repository or the run log can carry either.
+MODEL_SMOKE_TASK_NAME = "adapteng-model-smoke"
+MODEL_SMOKE_MARKER = "AEMODEL"
+# classify is the cheapest of the five operations that still exercises the whole
+# path end to end: budget reservation, the Vertex call, output schema validation
+# and the cost ledger write.
+MODEL_SMOKE_OPERATION = "classify"
+# Must match _CALLER_RE in the service's app/models.py: ^[a-z][a-z0-9._:-]{1,63}$
+MODEL_SMOKE_CALLER = "ae.smoke"
+# Synthetic, non-personal, and carrying no space on purpose. The command cannot
+# quote anything -- Coolify escapes single quotes and the program already sits
+# inside the only pair of double quotes available -- so every argument arrives
+# bare through argv, and a space would split one argument into two.
+MODEL_SMOKE_INPUT = "invoice_overdue"
+# The same measured bound as the peer probe. It is not a guess in either place:
+# the scheduled-task endpoint accepted 245 characters and refused 300, and the
+# readiness command this instance has accepted repeatedly is exactly 245. A test
+# holds the built command under it.
+MODEL_SMOKE_COMMAND_LIMIT = PEER_COMMAND_LIMIT
+# Same construction rules as READINESS_COMMAND and PEER_COMMAND: one line, no
+# single quote, no dollar, no backtick, and no double quote inside the program.
+#
+# _build_gateway is the service's own assembly of the gateway from the process
+# environment. It is reused rather than reproduced because reproducing it here
+# would mean this file deciding which provider, price snapshot and ledger the
+# call uses, and those decisions belong to the service.
+MODEL_SMOKE_COMMAND = (
+    'python -c "'
+    "import os,sys,app.models as A,app.company_os_model_proof as M;v=sys.argv;"
+    "print(v[1],M._build_gateway(os.environ).handle("
+    "A.GatewayRequest(v[2],v[2],v[3],v[4],v[5])))"
+    '" ' + MODEL_SMOKE_MARKER + " {call_id} " + MODEL_SMOKE_OPERATION
+    + " " + MODEL_SMOKE_CALLER + " " + MODEL_SMOKE_INPUT
+)
+
+
+def model_smoke_call_id(now=None) -> str:
+    """Name this call so a replay cannot be mistaken for a fresh answer.
+
+    call_id is the gateway's idempotency key. A fixed one would make every run
+    after the first return the stored response of the first, which is a real
+    and useful property -- it is what stops the every-minute schedule billing
+    twice while the task is armed -- and a badly misleading one across runs,
+    because a months-old success would keep being reported as today's.
+    """
+
+    stamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
+    return f"smk-{stamp}"
+
+
+def model_smoke_command(call_id: str) -> str:
+    return MODEL_SMOKE_COMMAND.format(call_id=call_id)
 
 
 def readiness_command(spec: dict) -> str:
@@ -3104,6 +3228,215 @@ def operate_verify(client: Client, spec: dict, sleep=None) -> int:
         "endpoints answer before the Authorization header is read."
     )
     emit("RESULT verify ok ready=yes answer=200")
+    return EXIT_OK
+
+
+MODEL_SMOKE_REPORTED_FIELDS = (
+    "status",
+    "provider",
+    "model",
+    "region",
+    "schema_status",
+    "input_tokens",
+    "output_tokens",
+    "actual_eur",
+    "estimated_eur",
+    "day_remaining_eur",
+    "price_version",
+)
+
+
+def model_smoke_fields(answer: str) -> dict[str, str]:
+    """Pull the reportable fields out of whatever the container printed.
+
+    Deliberately tolerant of the exact rendering. The container prints a
+    response object, and the point of this operation is the provider verdict
+    inside it, not the shape of a repr; a parser that demanded one exact form
+    would turn a successful call into an unreadable one after any harmless
+    change on the service side.
+    """
+
+    found = {}
+    for name in MODEL_SMOKE_REPORTED_FIELDS:
+        match = re.search(rf"\b{name}=[\"']?([A-Za-z0-9_.:+-]+)", answer)
+        if match:
+            found[name] = match.group(1)
+    return found
+
+
+def operate_model_smoke(client: Client, spec: dict, sleep=None, now=None) -> int:
+    """Ask the pinned model one synthetic question, from inside the container.
+
+    This is the only operation here that can produce an inference call, and it
+    is the only one that can answer whether the provider works. Everything
+    verify and peer-verify establish -- the process is up, the database is
+    reachable, the name resolves -- is true of a gateway whose Vertex
+    credentials have never once been exercised, which is exactly the state this
+    service was in.
+
+    Three properties keep it safe to run:
+
+    No credential is handled. The request goes to AiGateway.handle, behind
+    authentication, so no bearer token is read or presented, and the ADC file
+    stays mounted inside the container where it already is.
+
+    No personal data is sent. The input is a fixed synthetic token declared in
+    this file and visible in review.
+
+    It cannot bill twice. call_id is the gateway's idempotency key and is fixed
+    for the run, so if Coolify's every-minute schedule fires the task more than
+    once before it is disarmed, every run after the first is served from the
+    stored response instead of the provider.
+    """
+
+    import time
+
+    sleep = sleep or time.sleep
+    target = spec["target"]
+    emit(f"--- model-smoke {spec['service']}")
+    project = find_project(client, target["project"])
+    environment = (
+        find_environment(client, project["uuid"], target["environment"])
+        if project
+        else None
+    )
+    if project is None or environment is None:
+        emit("    project or environment absent; nothing to call")
+        emit("RESULT model-smoke failed application=absent")
+        return EXIT_FAILED
+
+    application = find_application(
+        applications_in(client, environment), target["resource_name"]
+    )
+    if application is None:
+        emit(f"    application {target['resource_name']}: ABSENT")
+        emit("RESULT model-smoke failed application=absent")
+        return EXIT_FAILED
+
+    uuid = str(application["uuid"])
+    emit(
+        f"    application {target['resource_name']}: uuid={uuid} "
+        f"state={application.get('status')}"
+    )
+
+    call_id = model_smoke_call_id(now)
+    command = model_smoke_command(call_id)
+    if len(command) > MODEL_SMOKE_COMMAND_LIMIT:
+        raise Abort(
+            f"the model-smoke command is {len(command)} characters and the "
+            f"endpoint's measured bound is {MODEL_SMOKE_COMMAND_LIMIT}; "
+            "refusing to send one that will be refused"
+        )
+    emit(
+        f"    call_id={call_id} operation={MODEL_SMOKE_OPERATION} "
+        f"caller={MODEL_SMOKE_CALLER} input={MODEL_SMOKE_INPUT!r} "
+        f"command={len(command)} chars"
+    )
+
+    task_uuid, disposition = converge_readiness_task(
+        client, uuid, command, MODEL_SMOKE_TASK_NAME
+    )
+    emit(f"    model task {MODEL_SMOKE_TASK_NAME}: {disposition} uuid={task_uuid}")
+
+    before = executions_snapshot(list_executions(client, uuid, task_uuid))
+    emit(f"    executions already recorded: {before[0]}")
+
+    armed = write_readiness_task(
+        client,
+        uuid,
+        task_uuid,
+        readiness_task_body(command, armed=True, name=MODEL_SMOKE_TASK_NAME),
+        MODEL_SMOKE_TASK_NAME,
+    )
+    if not task_is_armed(armed):
+        raise Abort(
+            "the model task did not arm; refusing to wait for a call that "
+            "cannot happen"
+        )
+    emit(
+        f"    armed at {READINESS_ARMED_FREQUENCY} and waiting for Coolify's "
+        "scheduler; it will be returned to rest either way"
+    )
+
+    try:
+        execution, answer, reason = await_probe_answer(
+            client, uuid, task_uuid, before, sleep, MODEL_SMOKE_MARKER
+        )
+    finally:
+        at_rest = disarm_readiness_task(
+            client, uuid, task_uuid, command, MODEL_SMOKE_TASK_NAME
+        )
+        if at_rest:
+            emit("    returned to rest: disabled, and scheduled for a leap day.")
+        else:
+            emit("")
+            emit(
+                f"    COULD NOT DISARM the model task {task_uuid} on application "
+                f"{uuid}. It is still enabled at {READINESS_ARMED_FREQUENCY} and "
+                "will call the model every minute until it is disabled. This "
+                "spends money and needs a hand now: PATCH /applications/"
+                f"{uuid}/scheduled-tasks/{task_uuid} with enabled=false, or run "
+                "this operation again, which disarms before anything else."
+            )
+
+    if not at_rest:
+        emit("RESULT model-smoke failed model=undetermined reason=task_left_armed")
+        return EXIT_FAILED
+
+    if execution is None:
+        emit("")
+        emit(
+            "    no new execution was recorded while the task was armed, so the "
+            "call did not run. This says nothing about the provider either way."
+            if reason != "unidentifiable_execution"
+            else "    an execution appeared but the reply carries nothing that "
+            "tells it apart from the ones already there, so which row is its "
+            "answer cannot be established."
+        )
+        emit(f"RESULT model-smoke failed model=undetermined reason={reason}")
+        return EXIT_FAILED
+
+    if answer is None:
+        emit("")
+        emit(f"    the execution finished but carries no {MODEL_SMOKE_MARKER} "
+             "marker, so the call did not run to completion inside the "
+             "container. The captured output follows, because when this fails "
+             "the reason is in it -- most often a provider credential the "
+             "container holds but cannot use.")
+        emit_captured_output(execution.get("message"), known=(uuid,))
+        emit("RESULT model-smoke failed model=undetermined reason=no_marker")
+        return EXIT_FAILED
+
+    fields = model_smoke_fields(answer)
+    for name in MODEL_SMOKE_REPORTED_FIELDS:
+        if name in fields:
+            emit(f"    {name}={fields[name]}")
+    emit_captured_output(answer, known=(uuid,))
+
+    status = fields.get("status", "")
+    if status != "succeeded":
+        emit("")
+        emit(
+            "    the gateway answered, so the request reached it and the call "
+            f"was recorded, but its status is {status or 'unreported'} rather "
+            "than succeeded. That is the gateway's own verdict on the provider "
+            "call, not a network or placement problem."
+        )
+        emit(f"RESULT model-smoke failed model=no status={status or 'unreported'}")
+        return EXIT_FAILED
+
+    emit("")
+    emit(
+        "    The pinned model answered. This is the provider proof: the call "
+        "left the container, reached Vertex in the declared region, returned "
+        "an output that passed the operation's schema, and was written to the "
+        "cost ledger. No credential was printed and no personal data was sent."
+    )
+    emit(
+        "RESULT model-smoke ok model=yes "
+        f"status=succeeded provider={fields.get('provider', 'unreported')} "
+        f"model_id={fields.get('model', 'unreported')} call_id={call_id}"
+    )
     return EXIT_OK
 
 
@@ -4512,6 +4845,8 @@ def run(environ: dict) -> int:
         return operate_service_resolve(client, spec)
     if operation == "peer-diagnose":
         return operate_peer_diagnose(client, spec)
+    if operation == "service-diagnose":
+        return operate_service_diagnose(client, spec)
     if operation == "diagnose":
         return operate_diagnose(client, spec)
     if operation == "networks":
@@ -4526,6 +4861,8 @@ def run(environ: dict) -> int:
         )
     if operation == "scheduler-check":
         return operate_scheduler_check(client, spec)
+    if operation == "model-smoke":
+        return operate_model_smoke(client, spec)
     return operate_deploy(
         client,
         spec,

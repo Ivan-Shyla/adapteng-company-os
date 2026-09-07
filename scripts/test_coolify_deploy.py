@@ -2244,11 +2244,13 @@ class EntryPointTests(unittest.TestCase):
                 "peer-resolve",
                 "service-resolve",
                 "peer-diagnose",
+                "service-diagnose",
                 "diagnose",
                 "networks",
                 "backup-now",
                 "backup-check",
                 "scheduler-check",
+                "model-smoke",
             },
         )
         workflow = (
@@ -3027,6 +3029,179 @@ class VerifyTests(unittest.TestCase):
         self.assertIsNone(driver.read_marker({"status": 200}))
 
 
+class ModelSmokeTests(unittest.TestCase):
+    """The first live model call, and the guards that make it safe to offer.
+
+    Everything else in this driver is free to run twice. This one spends money
+    and calls an external provider, so the tests that matter most here are not
+    about the happy path: they are about the task never being left armed, a
+    failure never being reported as a success, and the command never carrying
+    anything that could reach the shell.
+    """
+
+    SUCCESS = (
+        "AEMODEL GatewayResponse(call_id='smk-20260907T235959Z', "
+        "run_id='smk-20260907T235959Z', operation='classify', "
+        "status='succeeded', output={'label': 'billing', 'confidence': 0.82}, "
+        "input_tokens=14, output_tokens=21, estimated_eur='0.000012', "
+        "actual_eur='0.000009', price_version='2026-07-27', "
+        "schema_status='valid', provider='vertex-ai', "
+        "model='gemini-3.1-flash-lite', region='eu', "
+        "day_remaining_eur='0.999991')\n"
+    )
+
+    def real_spec(self):
+        return driver.load_spec(driver.spec_path(RESOURCE))
+
+    def instance(self, message: str | None = None) -> "ReadinessInstance":
+        instance = ReadinessInstance()
+        instance.task_name = driver.MODEL_SMOKE_TASK_NAME
+        instance.next_execution = {
+            "status": "success",
+            "message": self.SUCCESS if message is None else message,
+        }
+        return instance
+
+    def run_smoke(self, instance, spec=None):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_model_smoke(
+                instance, spec or self.real_spec(), sleep=lambda _seconds: None
+            )
+        return code, buffer.getvalue()
+
+    def test_a_succeeded_response_is_the_provider_proof(self) -> None:
+        code, output = self.run_smoke(self.instance())
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("RESULT model-smoke ok model=yes", output)
+        self.assertIn("provider=vertex-ai", output)
+        self.assertIn("model_id=gemini-3.1-flash-lite", output)
+
+    def test_the_task_is_returned_to_rest_after_a_successful_call(self) -> None:
+        """An armed model task bills every minute, so resting is the point."""
+
+        instance = self.instance()
+        code, _ = self.run_smoke(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertEqual(len(instance.tasks), 1)
+        self.assertIs(instance.tasks[0]["enabled"], False)
+        self.assertEqual(
+            instance.tasks[0]["frequency"], driver.READINESS_TASK_FREQUENCY
+        )
+
+    def test_the_task_is_returned_to_rest_even_when_the_call_fails(self) -> None:
+        instance = self.instance("AEMODEL GatewayResponse(status='failed')\n")
+        code, _ = self.run_smoke(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIs(instance.tasks[0]["enabled"], False)
+
+    def test_a_task_that_will_not_disarm_is_reported_loudly_and_fails(self) -> None:
+        instance = self.instance()
+        instance.refuse_disarm_times = -1
+        code, output = self.run_smoke(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("COULD NOT DISARM", output)
+        self.assertIn("spends money", output)
+        self.assertIn("reason=task_left_armed", output)
+
+    def test_a_failed_status_is_never_reported_as_a_working_model(self) -> None:
+        instance = self.instance(
+            "AEMODEL GatewayResponse(status='failed', provider='vertex-ai')\n"
+        )
+        code, output = self.run_smoke(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("RESULT model-smoke failed model=no status=failed", output)
+        self.assertNotIn("RESULT model-smoke ok", output)
+
+    def test_a_missing_marker_prints_what_the_container_actually_said(self) -> None:
+        """The provider failure mode lands here, so the output must survive.
+
+        A gateway that is running, ready and correctly configured still cannot
+        call Vertex if its mounted credential lacks the prediction role. That
+        arrives as a traceback rather than a response, and the reason is only
+        in the captured output.
+        """
+
+        instance = self.instance(
+            "Traceback (most recent call last):\n"
+            "google.auth.exceptions.RefreshError: invalid_grant\n"
+        )
+        code, output = self.run_smoke(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reason=no_marker", output)
+        self.assertIn("RefreshError", output)
+
+    def test_no_execution_is_undetermined_rather_than_a_broken_provider(self) -> None:
+        instance = self.instance()
+        instance.next_execution = None
+        code, output = self.run_smoke(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("model=undetermined reason=no_execution", output)
+
+    def test_the_command_carries_nothing_that_could_reach_the_shell(self) -> None:
+        """Coolify runs this as docker exec <container> sh -c '<command>'."""
+
+        command = driver.model_smoke_command(driver.model_smoke_call_id())
+        self.assertNotIn("'", command)
+        self.assertNotIn("$", command)
+        self.assertNotIn("`", command)
+        self.assertNotIn("\n", command)
+        self.assertEqual(command.count('"'), 2)
+
+    def test_the_command_stays_under_the_measured_length_bound(self) -> None:
+        """245 accepted and 300 refused, measured rather than assumed."""
+
+        command = driver.model_smoke_command(driver.model_smoke_call_id())
+        self.assertLessEqual(len(command), driver.MODEL_SMOKE_COMMAND_LIMIT)
+
+    def test_the_call_id_changes_between_runs_so_a_replay_cannot_pass(self) -> None:
+        from datetime import datetime, timezone
+
+        first = driver.model_smoke_call_id(
+            datetime(2026, 9, 7, 23, 59, 59, tzinfo=timezone.utc)
+        )
+        second = driver.model_smoke_call_id(
+            datetime(2026, 9, 8, 0, 0, 0, tzinfo=timezone.utc)
+        )
+        self.assertEqual(first, "smk-20260907T235959Z")
+        self.assertNotEqual(first, second)
+
+    def test_it_uses_its_own_task_and_never_disturbs_the_readiness_probe(self) -> None:
+        instance = self.instance()
+        self.run_smoke(instance)
+        self.assertEqual(
+            [task["name"] for task in instance.tasks], [driver.MODEL_SMOKE_TASK_NAME]
+        )
+
+    def test_the_input_is_synthetic_and_carries_no_space(self) -> None:
+        """A space would split one argv entry into two, and the command cannot quote."""
+
+        self.assertNotIn(" ", driver.MODEL_SMOKE_INPUT)
+        self.assertRegex(driver.MODEL_SMOKE_CALLER, r"^[a-z][a-z0-9._:-]{1,63}$")
+
+    def test_the_field_reader_reports_only_what_it_actually_found(self) -> None:
+        self.assertEqual(driver.model_smoke_fields(""), {})
+        self.assertEqual(
+            driver.model_smoke_fields("status='succeeded'")["status"], "succeeded"
+        )
+        self.assertNotIn("provider", driver.model_smoke_fields("status='succeeded'"))
+
+    def test_a_command_over_the_bound_is_refused_before_it_is_sent(self) -> None:
+        instance = self.instance()
+        original = driver.MODEL_SMOKE_COMMAND_LIMIT
+        driver.MODEL_SMOKE_COMMAND_LIMIT = 10
+        try:
+            with self.assertRaises(driver.Abort):
+                self.run_smoke(instance)
+        finally:
+            driver.MODEL_SMOKE_COMMAND_LIMIT = original
+
+    def test_it_never_issues_a_delete(self) -> None:
+        instance = self.instance()
+        self.run_smoke(instance)
+        self.assertEqual([m for m, _ in instance.calls if m == "DELETE"], [])
+
+
 class PeerInstance(ReadinessInstance):
     """A Coolify instance holding the service *and* a peer to probe from.
 
@@ -3341,6 +3516,122 @@ class PeerVerifyTests(unittest.TestCase):
         self.assertEqual(
             [m for m, _p in instance.writes() if m == "DELETE"], []
         )
+
+
+class ServiceDiagnoseTests(unittest.TestCase):
+    """The command bound on the service, measured instead of inherited.
+
+    Every probe in this driver is sized against 245 characters, which was
+    measured on the peer and then assumed to hold for the gateway. The two are
+    different application records and nothing established that they share a
+    limit, so the number that constrains the model call is an assumption. These
+    tests cover the instrument that replaces it with a measurement.
+    """
+
+    def real_spec(self):
+        return driver.load_spec(driver.spec_path(RESOURCE))
+
+    def test_the_ladder_rises_in_length(self) -> None:
+        """Bracketing requires monotone rungs, exactly as for the peer."""
+
+        lengths = [len(c) for _label, c in driver.service_ladder(self.real_spec())]
+        self.assertEqual(lengths, sorted(lengths))
+        self.assertLess(lengths[0], 40)
+
+    def test_the_ladder_reaches_well_past_the_peer_bound(self) -> None:
+        """A ladder that stopped at 245 could only confirm what is known.
+
+        The question is whether the gateway accepts more than the peer did, so
+        the rungs have to climb far enough that "more" is actually offered.
+        """
+
+        lengths = [len(c) for _label, c in driver.service_ladder(self.real_spec())]
+        self.assertGreater(max(lengths), 4 * driver.PEER_COMMAND_LIMIT)
+
+    def test_the_ladder_includes_commands_this_application_has_accepted(self) -> None:
+        """Otherwise a refusal cannot be told from "this app takes no tasks"."""
+
+        rungs = dict(driver.service_ladder(self.real_spec()))
+        self.assertIn("readiness-shaped", rungs)
+        self.assertIn("model-smoke-shaped", rungs)
+        self.assertLessEqual(
+            len(rungs["readiness-shaped"]), driver.PEER_COMMAND_LIMIT
+        )
+
+    def test_filler_rungs_differ_only_in_padding(self) -> None:
+        """Length has to be separable from content or the answer is ambiguous."""
+
+        rungs = dict(driver.service_ladder(self.real_spec()))
+        short, long = rungs["filler-450"], rungs["filler-700"]
+        self.assertTrue(long.startswith(short))
+        self.assertEqual(set(long[len(short):]), {"x"})
+
+    def test_it_measures_the_service_and_not_the_peer(self) -> None:
+        """The whole point is that these are different applications.
+
+        A driver that wrote to the peer here would re-measure the number that
+        is already known and report it as the gateway's.
+        """
+
+        instance = PeerInstance()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_service_diagnose(instance, self.real_spec())
+        self.assertEqual(code, driver.EXIT_OK)
+        paths = [p for m, p in instance.writes() if "scheduled-tasks" in p]
+        self.assertTrue(paths)
+        for path in paths:
+            self.assertIn("/applications/app-1/", path)
+            self.assertNotIn("/applications/app-2/", path)
+
+    def test_it_never_arms_anything(self) -> None:
+        """It asks what the API accepts, not what the container does."""
+
+        instance = PeerInstance()
+        with redirect_stdout(io.StringIO()):
+            driver.operate_service_diagnose(instance, self.real_spec())
+        self.assertTrue(instance.tasks)
+        for task in instance.tasks:
+            self.assertIs(task["enabled"], False)
+            self.assertEqual(task["frequency"], driver.READINESS_TASK_FREQUENCY)
+        self.assertEqual(instance.executions, [])
+
+    def test_it_uses_its_own_task_name_so_it_cannot_disturb_the_probes(self) -> None:
+        """Sharing a name with verify or model-smoke would rewrite their command.
+
+        Those tasks are armed by other operations; a diagnostic that reused the
+        name would leave a padded echo where a real probe belonged.
+        """
+
+        instance = PeerInstance()
+        with redirect_stdout(io.StringIO()):
+            driver.operate_service_diagnose(instance, self.real_spec())
+        self.assertEqual(
+            [item["name"] for item in instance.tasks],
+            [driver.SERVICE_LADDER_TASK_NAME],
+        )
+        self.assertNotIn(
+            driver.SERVICE_LADDER_TASK_NAME,
+            {driver.PEER_LADDER_TASK_NAME, driver.MODEL_SMOKE_TASK_NAME},
+        )
+
+    def test_it_leaves_the_task_holding_a_harmless_command(self) -> None:
+        """A padded 1000-character echo left at rest is litter with no meaning."""
+
+        instance = PeerInstance()
+        with redirect_stdout(io.StringIO()):
+            driver.operate_service_diagnose(instance, self.real_spec())
+        self.assertEqual(
+            instance.tasks[0]["command"], driver.SERVICE_LADDER_TRIVIAL
+        )
+
+    def test_it_deletes_nothing(self) -> None:
+        """The driver refuses DELETE everywhere; this path is no exception."""
+
+        instance = PeerInstance()
+        with redirect_stdout(io.StringIO()):
+            driver.operate_service_diagnose(instance, self.real_spec())
+        self.assertEqual([m for m, _p in instance.writes() if m == "DELETE"], [])
 
 
 class PeerToolsInstance(PeerInstance):
