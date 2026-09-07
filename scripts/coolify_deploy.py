@@ -2762,12 +2762,18 @@ MODEL_SMOKE_MARKER = "AEMODEL"
 # and the cost ledger write.
 MODEL_SMOKE_OPERATION = "classify"
 # Must match _CALLER_RE in the service's app/models.py: ^[a-z][a-z0-9._:-]{1,63}$
-MODEL_SMOKE_CALLER = "ae.smoke"
+# Shortened from ae.smoke for the two characters the run_id needed.
+MODEL_SMOKE_CALLER = "ae.smk"
 # Synthetic, non-personal, and carrying no space on purpose. The command cannot
 # quote anything -- Coolify escapes single quotes and the program already sits
 # inside the only pair of double quotes available -- so every argument arrives
 # bare through argv, and a space would split one argument into two.
-MODEL_SMOKE_INPUT = "invoice_overdue"
+#
+# It was invoice_overdue until the run_id had to be carried as well. Binding the
+# call to a real ledger run costs fifteen characters and there were six, so the
+# input gave up eight of them. What it classifies does not matter here; that the
+# whole path runs does.
+MODEL_SMOKE_INPUT = "overdue"
 # The same measured bound as the peer probe. It is not a guess in either place:
 # the scheduled-task endpoint accepted 245 characters and refused 300, and the
 # readiness command this instance has accepted repeatedly is exactly 245. A test
@@ -2784,8 +2790,8 @@ MODEL_SMOKE_COMMAND = (
     'python -c "'
     "import os,sys,app.models as A,app.company_os_model_proof as M;v=sys.argv;"
     "print(v[1],M._build_gateway(os.environ).handle("
-    "A.GatewayRequest(v[2],v[2],v[3],v[4],v[5])))"
-    '" ' + MODEL_SMOKE_MARKER + " {call_id} " + MODEL_SMOKE_OPERATION
+    "A.GatewayRequest(v[2],v[3],v[4],v[5],v[6])))"
+    '" ' + MODEL_SMOKE_MARKER + " {call_id} {run_id} " + MODEL_SMOKE_OPERATION
     + " " + MODEL_SMOKE_CALLER + " " + MODEL_SMOKE_INPUT
 )
 
@@ -2804,8 +2810,21 @@ def model_smoke_call_id(now=None) -> str:
     return f"smk-{stamp}"
 
 
-def model_smoke_command(call_id: str) -> str:
-    return MODEL_SMOKE_COMMAND.format(call_id=call_id)
+def model_smoke_command(call_id: str, run_id: str | None = None) -> str:
+    """Build the call, bound to a run that exists.
+
+    The first live attempt sent the call_id as the run_id too, and the gateway
+    refused it with 'unknown run_id' before Vertex was ever contacted: every
+    call carries a foreign key into agent_run, and nothing in production was
+    creating rows there. open-run creates that row; this names it.
+
+    The default is resolved here rather than in the signature because the run
+    is defined further down, with the operation that opens it.
+    """
+
+    return MODEL_SMOKE_COMMAND.format(
+        call_id=call_id, run_id=run_id or RUN_OPEN_RUN_ID
+    )
 
 
 def readiness_command(spec: dict) -> str:

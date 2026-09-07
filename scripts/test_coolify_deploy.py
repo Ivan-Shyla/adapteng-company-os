@@ -3151,6 +3151,26 @@ class ModelSmokeTests(unittest.TestCase):
         self.assertNotIn("\n", command)
         self.assertEqual(command.count('"'), 2)
 
+    def test_the_call_names_the_run_that_open_run_creates(self) -> None:
+        """These two must not drift apart.
+
+        The gateway checks run_id against agent_run before it contacts the
+        provider. If this command names a run that open-run does not create,
+        every call fails on 'unknown run_id' -- which is exactly how the first
+        live attempt failed, when the call sent its own call_id as the run.
+        """
+
+        command = driver.model_smoke_command(driver.model_smoke_call_id())
+        self.assertIn(driver.RUN_OPEN_RUN_ID, command)
+        self.assertIn(driver.RUN_OPEN_RUN_ID, driver.RUN_OPEN_STATEMENTS[1][1])
+
+    def test_the_call_id_and_the_run_id_are_not_the_same_argument(self) -> None:
+        """They are different keys: one is idempotency, the other is lineage."""
+
+        command = driver.model_smoke_command("smk-fixed")
+        self.assertIn("v[2],v[3]", command)
+        self.assertNotIn("v[2],v[2]", command)
+
     def test_the_command_stays_under_the_measured_length_bound(self) -> None:
         """245 accepted and 300 refused, measured rather than assumed."""
 
