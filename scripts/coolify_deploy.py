@@ -74,6 +74,7 @@ OPERATIONS = (
     "backup-now",
     "backup-check",
     "scheduler-check",
+    "ledger-read",
     "model-smoke",
 )
 FORBIDDEN_METHODS = frozenset({"DELETE"})
@@ -3264,6 +3265,215 @@ def model_smoke_fields(answer: str) -> dict[str, str]:
     return found
 
 
+# --- reading the run ledger ---
+
+# Every model call must bind to a run_id that already exists in agent_run:
+# migration 008 makes the reference a foreign key and ai_gateway_reserve_call
+# raises 'unknown run_id' when it does not resolve. The first live call failed
+# there, and the service that owns run creation -- adapteng-run-ledger -- is not
+# deployed. Before building a way to open a run, two facts decide whether
+# anything needs building: whether a run already exists that a call can reuse,
+# and whether this database role is even permitted to insert one.
+#
+# Both questions are reads, and that matters. The shortest correct insert into
+# agent_run is 350 characters and into agent_task 288; the scheduled-task
+# endpoint refuses anything at 300, measured on this application. So the
+# channel that can ask these questions provably cannot answer them by writing,
+# which is why this operation is a read and carries a test saying so.
+LEDGER_READ_TASK_NAME = "adapteng-ledger-read"
+LEDGER_READ_MARKER = "AELEDG"
+# The connection string is a secret and is already in the container's
+# environment. Naming the variable rather than the value keeps it out of the
+# command, out of the Coolify task record and out of the run log.
+LEDGER_DSN_VARIABLE = "AI_GATEWAY_DATABASE_URL"
+# Same construction rules as every other probe in this file: one line, no single
+# quote, no dollar, no backtick, no double quote inside the program, and no
+# space inside any argument. The last rule is why the statement is passed as
+# separate argv words and rejoined with chr(32) -- a quoted string is not
+# available, so the words arrive bare and are put back together in-process.
+LEDGER_READ_COMMAND = (
+    'python -c "'
+    "import os,sys,psycopg as P;v=sys.argv;"
+    "print(v[1],P.connect(os.environ[v[2]]).execute(chr(32).join(v[3:])).fetchall())"
+    '" ' + LEDGER_READ_MARKER + " " + LEDGER_DSN_VARIABLE + " {sql}"
+)
+# A statement that needs a value carries it as a bound parameter rather than a
+# literal, because a literal would need quotes this channel cannot send. The
+# count of parameters is passed first so the program knows where they end and
+# the statement begins.
+LEDGER_PARAM_COMMAND = (
+    'python -c "'
+    "import os,sys,psycopg as P;v=sys.argv;n=int(v[3]);"
+    "print(v[1],P.connect(os.environ[v[2]]).execute("
+    "chr(32).join(v[4+n:]),v[4:4+n]).fetchall())"
+    '" ' + LEDGER_READ_MARKER + " " + LEDGER_DSN_VARIABLE + " {count} {params} {sql}"
+)
+# Committed in full so review sees exactly what runs against production. Both
+# are read-only, both name their columns rather than selecting everything, and
+# neither returns anything a person wrote: agent_run holds identifiers, a
+# status and counters.
+LEDGER_QUERIES = (
+    (
+        "existing-runs",
+        "select run_id,task_id,status from agent_run order by started_at desc limit 3",
+        (),
+    ),
+    (
+        "run-insert-privilege",
+        "select has_table_privilege(user,%s,%s)",
+        ("agent_run", "INSERT"),
+    ),
+    (
+        "task-insert-privilege",
+        "select has_table_privilege(user,%s,%s)",
+        ("agent_task", "INSERT"),
+    ),
+)
+
+
+def ledger_command(sql: str, params: tuple = ()) -> str:
+    """Assemble one committed query into a command this endpoint will accept."""
+
+    if not params:
+        return LEDGER_READ_COMMAND.format(sql=sql)
+    return LEDGER_PARAM_COMMAND.format(
+        count=len(params), params=" ".join(params), sql=sql
+    )
+
+
+def probe_once(client: Client, uuid: str, task_name: str, command: str,
+               marker: str, sleep) -> tuple:
+    """Run one command inside a running container and bring the task to rest.
+
+    Coolify offers no way to execute a scheduled task on demand, so the only
+    route in is to arm one at every-minute, wait for the scheduler, and read
+    the execution it records. Arming a task against production is the part that
+    has to be safe under failure: the disarm sits in a finally, so a command
+    that raises still stops repeating.
+
+    Returns (execution, answer, reason, at_rest). A caller that gets at_rest
+    False has a task still firing every minute and must say so loudly.
+    """
+
+    if len(command) > PEER_COMMAND_LIMIT:
+        raise Abort(
+            f"the {task_name} command is {len(command)} characters and the "
+            f"endpoint's measured bound is {PEER_COMMAND_LIMIT}; refusing to "
+            "send one that will be refused"
+        )
+
+    task_uuid, disposition = converge_readiness_task(client, uuid, command, task_name)
+    emit(f"    task {task_name}: {disposition} uuid={task_uuid}")
+
+    before = executions_snapshot(list_executions(client, uuid, task_uuid))
+    armed = write_readiness_task(
+        client,
+        uuid,
+        task_uuid,
+        readiness_task_body(command, armed=True, name=task_name),
+        task_name,
+    )
+    if not task_is_armed(armed):
+        raise Abort(
+            f"the {task_name} task did not arm; refusing to wait for an answer "
+            "that cannot arrive"
+        )
+
+    try:
+        execution, answer, reason = await_probe_answer(
+            client, uuid, task_uuid, before, sleep, marker
+        )
+    finally:
+        at_rest = disarm_readiness_task(client, uuid, task_uuid, command, task_name)
+        if not at_rest:
+            emit("")
+            emit(
+                f"    COULD NOT DISARM {task_name} ({task_uuid}) on application "
+                f"{uuid}. It is still enabled at {READINESS_ARMED_FREQUENCY} and "
+                "will keep running every minute until it is disabled: PATCH "
+                f"/applications/{uuid}/scheduled-tasks/{task_uuid} with "
+                "enabled=false, or run this operation again, which disarms first."
+            )
+
+    return execution, answer, reason, at_rest
+
+
+def operate_ledger_read(client: Client, spec: dict, sleep=None) -> int:
+    """Ask the run ledger the two questions that decide the next step.
+
+    This changes nothing. It exists because the alternative to asking is
+    guessing, and the guess would be expensive either way: building a run-
+    opening channel that was never needed, or assuming a run can be opened by a
+    role that has no privilege to open one.
+    """
+
+    import time
+
+    sleep = sleep or time.sleep
+    target = spec["target"]
+    emit(f"--- ledger-read {spec['service']}")
+    project = find_project(client, target["project"])
+    environment = (
+        find_environment(client, project["uuid"], target["environment"])
+        if project
+        else None
+    )
+    if project is None or environment is None:
+        emit("    project or environment absent; nothing to read")
+        emit("RESULT ledger-read failed application=absent")
+        return EXIT_FAILED
+
+    application = find_application(
+        applications_in(client, environment), target["resource_name"]
+    )
+    if application is None:
+        emit(f"    application {target['resource_name']}: ABSENT")
+        emit("RESULT ledger-read failed application=absent")
+        return EXIT_FAILED
+
+    uuid = str(application["uuid"])
+    emit(
+        f"    application {target['resource_name']}: uuid={uuid} "
+        f"state={application.get('status')}"
+    )
+
+    answers: dict[str, str] = {}
+    for label, sql, params in LEDGER_QUERIES:
+        command = ledger_command(sql, params)
+        emit("")
+        emit(f"    {label}: {sql} ({len(command)} chars)")
+        execution, answer, reason, at_rest = probe_once(
+            client, uuid, LEDGER_READ_TASK_NAME, command, LEDGER_READ_MARKER, sleep
+        )
+        if not at_rest:
+            emit(f"RESULT ledger-read failed reason=task_left_armed at={label}")
+            return EXIT_FAILED
+        if execution is None:
+            emit(f"    no execution was recorded, so the query did not run ({reason})")
+            emit(f"RESULT ledger-read failed reason={reason} at={label}")
+            return EXIT_FAILED
+        if answer is None:
+            emit(
+                f"    the execution finished but carries no {LEDGER_READ_MARKER} "
+                "marker, so the query did not complete. The captured output "
+                "follows, because the reason is in it."
+            )
+            emit_captured_output(execution.get("message"), known=(uuid,))
+            emit(f"RESULT ledger-read failed reason=no_marker at={label}")
+            return EXIT_FAILED
+        answers[label] = answer
+        emit_captured_output(answer, known=(uuid,))
+
+    emit("")
+    emit(
+        "    Both questions were answered by the database itself. A run listed "
+        "above can be reused by a model call; an insert privilege of True means "
+        "a run can be opened without deploying the ledger service."
+    )
+    emit(f"RESULT ledger-read ok queries={len(answers)}")
+    return EXIT_OK
+
+
 def operate_model_smoke(client: Client, spec: dict, sleep=None, now=None) -> int:
     """Ask the pinned model one synthetic question, from inside the container.
 
@@ -4861,6 +5071,8 @@ def run(environ: dict) -> int:
         )
     if operation == "scheduler-check":
         return operate_scheduler_check(client, spec)
+    if operation == "ledger-read":
+        return operate_ledger_read(client, spec)
     if operation == "model-smoke":
         return operate_model_smoke(client, spec)
     return operate_deploy(

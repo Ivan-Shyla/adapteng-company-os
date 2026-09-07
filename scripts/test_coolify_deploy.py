@@ -23,6 +23,7 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 try:
     from scripts import coolify_deploy as driver
@@ -2250,6 +2251,7 @@ class EntryPointTests(unittest.TestCase):
                 "backup-now",
                 "backup-check",
                 "scheduler-check",
+                "ledger-read",
                 "model-smoke",
             },
         )
@@ -3516,6 +3518,141 @@ class PeerVerifyTests(unittest.TestCase):
         self.assertEqual(
             [m for m, _p in instance.writes() if m == "DELETE"], []
         )
+
+
+class LedgerReadTests(unittest.TestCase):
+    """Two read-only questions asked through a channel that cannot write.
+
+    The gateway refuses a call whose run_id is not in agent_run. Before
+    building a way to open a run, two facts decide whether anything needs
+    building at all -- and both of them fit the measured command bound while
+    the inserts do not. These tests hold that boundary: this operation reads.
+    """
+
+    def test_every_query_fits_the_measured_bound(self) -> None:
+        """Over the bound the endpoint answers HTTP 500 with no reason to read.
+
+        245 was accepted and 300 refused on this application on 2026-09-07. A
+        query that grew past it would fail in a way that looks like an outage.
+        """
+
+        for label, sql, params in driver.LEDGER_QUERIES:
+            with self.subTest(label):
+                command = driver.ledger_command(sql, params)
+                self.assertLessEqual(len(command), driver.PEER_COMMAND_LIMIT)
+
+    def test_no_query_can_change_anything(self) -> None:
+        """The one guarantee that makes this safe to run against production."""
+
+        for label, sql, _params in driver.LEDGER_QUERIES:
+            with self.subTest(label):
+                lowered = sql.lower()
+                for verb in ("insert into", "update ", "delete", "drop", "alter",
+                             "truncate", "grant"):
+                    self.assertNotIn(verb, lowered)
+
+    def test_no_query_selects_every_column(self) -> None:
+        """agent_run holds no free text today, and a wildcard would not know it.
+
+        Naming columns keeps whatever a later migration adds to the table from
+        being exported by a query written before it existed.
+        """
+
+        for label, sql, _params in driver.LEDGER_QUERIES:
+            with self.subTest(label):
+                self.assertNotIn("*", sql)
+
+    def test_commands_carry_nothing_the_shell_would_touch(self) -> None:
+        """Coolify escapes single quotes and sh expands dollars and backticks."""
+
+        for label, sql, params in driver.LEDGER_QUERIES:
+            with self.subTest(label):
+                command = driver.ledger_command(sql, params)
+                for character in ("'", "$", "`", "\n"):
+                    self.assertNotIn(character, command)
+
+    def test_parameters_keep_values_out_of_the_statement(self) -> None:
+        """Naming a table inline would need quotes this channel cannot send.
+
+        Binding it as a parameter is both the only way to pass it and the
+        reason a value can never be read back as SQL.
+        """
+
+        command = driver.ledger_command(
+            "select has_table_privilege(user,%s,%s)", ("agent_run", "INSERT")
+        )
+        self.assertIn(" 2 agent_run INSERT ", command)
+        self.assertIn("%s", command)
+
+    def test_it_reads_the_connection_string_from_the_environment(self) -> None:
+        """A DSN in the command would be written into the Coolify task record."""
+
+        command = driver.ledger_command(*driver.LEDGER_QUERIES[0][1:])
+        self.assertIn("os.environ", command)
+        self.assertIn(driver.LEDGER_DSN_VARIABLE, command)
+        self.assertNotIn("postgres://", command)
+        self.assertNotIn("postgresql://", command)
+
+    def test_it_asks_both_deciding_questions(self) -> None:
+        """Either answer alone leaves the next step undecided.
+
+        A run needs a task, so a role that can insert one and not the other
+        still cannot open a run -- the two privileges are asked separately
+        because a single statement asking both is 291 characters and the
+        endpoint refuses it.
+        """
+
+        labels = [label for label, _sql, _params in driver.LEDGER_QUERIES]
+        self.assertIn("existing-runs", labels)
+        self.assertIn("run-insert-privilege", labels)
+        self.assertIn("task-insert-privilege", labels)
+
+
+class ProbeOnceTests(unittest.TestCase):
+    """The arm, wait and disarm sequence, written once instead of per probe.
+
+    An armed task runs against production every minute. The property worth a
+    test is that it is disarmed even when the wait fails, which is the thing a
+    copied version eventually gets wrong.
+    """
+
+    def test_it_refuses_a_command_over_the_measured_bound(self) -> None:
+        """Sending one produces HTTP 500 and no field-level reason to read."""
+
+        instance = ReadinessInstance()
+        with self.assertRaises(driver.Abort):
+            with redirect_stdout(io.StringIO()):
+                driver.probe_once(
+                    instance,
+                    "app-1",
+                    driver.LEDGER_READ_TASK_NAME,
+                    "x" * (driver.PEER_COMMAND_LIMIT + 1),
+                    driver.LEDGER_READ_MARKER,
+                    lambda _s: None,
+                )
+        self.assertEqual(instance.tasks, [])
+
+    def test_it_disarms_even_when_the_wait_raises(self) -> None:
+        """Otherwise a failure leaves a command running every minute."""
+
+        instance = ReadinessInstance()
+
+        def explode(*_args, **_kwargs):
+            raise RuntimeError("boom")
+
+        with mock.patch.object(driver, "await_probe_answer", explode):
+            with self.assertRaises(RuntimeError):
+                with redirect_stdout(io.StringIO()):
+                    driver.probe_once(
+                        instance,
+                        "app-1",
+                        driver.LEDGER_READ_TASK_NAME,
+                        "echo " + driver.LEDGER_READ_MARKER,
+                        driver.LEDGER_READ_MARKER,
+                        lambda _s: None,
+                    )
+        self.assertTrue(instance.tasks)
+        self.assertIs(instance.tasks[-1]["enabled"], False)
 
 
 class ServiceDiagnoseTests(unittest.TestCase):
