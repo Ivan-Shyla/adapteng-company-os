@@ -1,0 +1,67 @@
+name: Production host command
+
+# The two workflows that could reach the production host -- gateway-readiness
+# and postgres-runtime-role -- both run on [self-hosted, adapteng-ops], and that
+# runner has been exited:unhealthy since the ops-runner registration failed with
+# a 401. Both are stranded, and with them every operation that needs to touch
+# the database.
+#
+# Coolify's scheduled-task endpoint is the other way into a container, and it
+# was measured on 2026-09-07 against both the peer and the gateway: 245
+# characters accepted, 300 refused with HTTP 500. A SQL statement does not fit.
+# That is a physical limit, not a preference.
+#
+# This uses the PROD_SSH_* secrets that were already provisioned in this
+# repository and that nothing consumed. The command is never taken from the
+# dispatch input: the operation names one of a fixed set of constants in
+# scripts/prod_ssh.py, so what can run in production is what is written in a
+# reviewed file.
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Which committed operation to run on the host
+        required: true
+        type: choice
+        options:
+          - containers
+          - ledger-status
+          - open-smoke-run
+      run_id:
+        description: Run id to open, for open-smoke-run only
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialised: two of these writing to the ledger at once would be a race for
+  # no benefit, and the operations are short.
+  group: prod-ssh
+  cancel-in-progress: false
+
+jobs:
+  remote:
+    name: Host ${{ inputs.operation }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Run the committed operation on the production host
+        env:
+          PROD_SSH_HOST: ${{ vars.PROD_SSH_HOST }}
+          PROD_SSH_PORT: ${{ vars.PROD_SSH_PORT }}
+          PROD_SSH_USER: ${{ vars.PROD_SSH_USER }}
+          PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          PROD_SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          python scripts/prod_ssh.py \
+            --operation "${{ inputs.operation }}" \
+            --run-id "${{ inputs.run_id }}"
