@@ -214,6 +214,51 @@ jobs:
           echo "Probe object is gone: B2 answered 404 for it."
           echo "Write, read and delete all work against the backup bucket."
 
+      - name: Report what the configured repository prefix actually holds
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.PGBACKREST_REPO1_S3_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PGBACKREST_REPO1_S3_KEY_SECRET }}
+          AWS_DEFAULT_REGION: ${{ vars.PGBACKREST_REPO1_S3_REGION }}
+          AWS_DEFAULT_OUTPUT: json
+          BUCKET: ${{ vars.PGBACKREST_REPO1_S3_BUCKET }}
+          ENDPOINT: ${{ vars.PGBACKREST_REPO1_S3_ENDPOINT }}
+          REPO1_PATH: ${{ vars.PGBACKREST_REPO1_PATH }}
+        run: |
+          set -euo pipefail
+          # `PGBACKREST_REPO1_PATH` is live configuration, and a correction to it
+          # is safe only when the prefix it currently names holds no repository
+          # content -- repointing away from populated storage orphans backups
+          # silently, and no pgBackRest command reports that. This step is the
+          # measurement that decision needs, and it is read-only: it lists, it
+          # counts, and it writes nothing.
+          #
+          # Only counts and the prefix names B2 itself returns are printed. The
+          # configured value arrives from the repository variable, so this file
+          # still names no live resource.
+          endpoint="https://$ENDPOINT"
+          configured="${REPO1_PATH#/}"
+
+          held=$(aws s3api list-objects-v2 --endpoint-url "$endpoint" \
+            --bucket "$BUCKET" --prefix "$configured/" \
+            --query 'length(Contents || `[]`)' --output text)
+          echo "Objects under the configured repository prefix: $held"
+
+          # The top-level prefixes answer the second half of the question: if the
+          # configured prefix is empty, is there a differently spelled sibling
+          # that is not? `--delimiter /` returns prefix names only, never object
+          # contents.
+          echo "Top-level prefixes present in the bucket:"
+          aws s3api list-objects-v2 --endpoint-url "$endpoint" \
+            --bucket "$BUCKET" --delimiter / \
+            --query 'CommonPrefixes[].Prefix' --output text \
+            | tr '\t' '\n' | sed 's/^/    /'
+
+          if [ "$held" = "0" ]; then
+            echo "The configured prefix holds no repository content."
+          else
+            echo "::warning title=Configured prefix holds content::Repointing PGBACKREST_REPO1_PATH would orphan $held object(s)."
+          fi
+
       - name: Remove the probe object if the round trip did not
         if: always()
         env:
