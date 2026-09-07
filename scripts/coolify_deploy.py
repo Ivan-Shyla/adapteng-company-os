@@ -3464,19 +3464,24 @@ LEDGER_STAGE_PATH = "/tmp/ae-ledger.sql"
 LEDGER_QUOTE_STANDIN = "~"
 LEDGER_WRITE_COMMAND = (
     'python -c "'
-    "import sys;v=sys.argv;open(v[2],v[3]).write(chr(32).join(v[4:])+chr(32));"
-    "print(v[1])"
+    "import sys;v=sys.argv;"
+    "print(v[1],open(v[2],v[3]).write(chr(32).join(v[4:])+chr(32)))"
     '" ' + LEDGER_READ_MARKER + " " + LEDGER_STAGE_PATH + " {mode} {chunk}"
 )
 LEDGER_EXEC_COMMAND = (
     'python -c "'
     "import os,sys,psycopg as P;v=sys.argv;c=P.connect(os.environ[v[2]]);"
-    "c.execute(open(v[3]).read().replace(chr(126),chr(39)));c.commit();print(v[1])"
+    "r=c.execute(open(v[3]).read().replace(chr(126),chr(39))).rowcount;"
+    "c.commit();print(v[1],r)"
     '" ' + LEDGER_READ_MARKER + " {dsn} " + LEDGER_STAGE_PATH
 )
 # One task and one run, named so that a second attempt is the same row rather
 # than a new one. Both carry "on conflict do nothing", which is what makes this
 # safe to retry after a failure partway through.
+# 245 was accepted and 300 refused; where in between the endpoint turns over
+# was never measured. Staging is the one place where a longer command buys
+# nothing -- an extra write costs a minute -- so it keeps clear of the edge.
+LEDGER_WRITE_MARGIN = 10
 RUN_OPEN_TASK_ID = "ae-smoke-task-1"
 RUN_OPEN_RUN_ID = "ae-smoke-run-1"
 RUN_OPEN_STATEMENTS = (
@@ -3590,7 +3595,7 @@ def operate_open_run(client: Client, spec: dict, sleep=None) -> int:
             return EXIT_FAILED
         emit(f"    using {dsn}")
 
-        budget = PEER_COMMAND_LIMIT - len(
+        budget = PEER_COMMAND_LIMIT - LEDGER_WRITE_MARGIN - len(
             LEDGER_WRITE_COMMAND.format(mode="w", chunk="")
         )
         for label, sql in RUN_OPEN_STATEMENTS:

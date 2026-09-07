@@ -3769,7 +3769,7 @@ class OpenRunTests(unittest.TestCase):
     def test_every_staged_statement_fits_the_channel_it_is_written_with(self) -> None:
         """The budget is the endpoint bound minus the writer around the chunk."""
 
-        budget = driver.PEER_COMMAND_LIMIT - len(
+        budget = driver.PEER_COMMAND_LIMIT - driver.LEDGER_WRITE_MARGIN - len(
             driver.LEDGER_WRITE_COMMAND.format(mode="w", chunk="")
         )
         self.assertGreater(budget, 0)
@@ -3777,7 +3777,9 @@ class OpenRunTests(unittest.TestCase):
             with self.subTest(label):
                 for chunk in driver.stage_chunks(sql, budget):
                     command = driver.LEDGER_WRITE_COMMAND.format(mode="w", chunk=chunk)
-                    self.assertLessEqual(len(command), driver.PEER_COMMAND_LIMIT)
+                    self.assertLessEqual(
+                        len(command), driver.PEER_COMMAND_LIMIT - driver.LEDGER_WRITE_MARGIN
+                    )
 
     def test_the_executing_command_fits_and_names_no_secret(self) -> None:
         """It only has to name the file and the variable, so it stays short."""
@@ -3791,6 +3793,24 @@ class OpenRunTests(unittest.TestCase):
         """Nothing this operation writes should outlive the container."""
 
         self.assertTrue(driver.LEDGER_STAGE_PATH.startswith("/tmp/"))
+
+    def test_every_command_says_something_after_the_marker(self) -> None:
+        """A bare marker reads as no answer at all.
+
+        read_marker returns the text following the marker and treats an empty
+        remainder as absence, which is the right rule -- it is what stops a
+        shell error from being read as a verdict. The first live staging
+        attempt printed only the marker, so a write that had in fact succeeded
+        was reported as unanswered. Every command therefore has to report a
+        value: the writer returns the characters written, the executor the
+        rows affected.
+        """
+
+        templates = (driver.LEDGER_WRITE_COMMAND, driver.LEDGER_EXEC_COMMAND)
+        for template in templates:
+            with self.subTest(template[:40]):
+                self.assertIn(f"print(v[1],", template)
+                self.assertNotIn("print(v[1])", template)
 
     def test_the_quote_standin_never_collides_with_the_statement(self) -> None:
         """Every ~ is turned into a quote, so a real ~ would be corrupted."""
