@@ -1,42 +1,58 @@
 # Platform v1 — release command center
 
-## Operational checkpoint — 2026-09-05
+## Operational checkpoint — 2026-09-07
 
-This checkpoint controls the next execution. The longer 2026-08-13 GitHub-only
-review below is retained as historical evidence, not as the current task queue.
-When facts conflict, use this order: freshly observed provider runtime, current
-repository `main`, this checkpoint, then the older review.
+This checkpoint controls the next execution and supersedes the 2026-09-05 one
+retained below it. The longer 2026-08-13 GitHub-only review further below is
+historical evidence, not the current task queue. When facts conflict, use this
+order: freshly observed provider runtime, current repository `main`, this
+checkpoint, then the older material.
 
 ### Evidence boundary
 
-- **GITHUB-VERIFIED:** public `adapteng-company-os` `main` has moved from
-  `7805545dbb3f509bafafc341400c8169698bf1f4` to
-  `5774be96d81560cdff540f939dcabf14795f17cd` by a clean fast-forward of one
-  commit (`docs: record L1 checkpoint and execution authority (#226)`). Draft
-  PR #222 remains open and is unrelated to the L1 runtime path.
-- **OWNER-SUPPLIED EXECUTION EVIDENCE:** the latest Coolify/n8n/GitHub results
-  supplied by Ivan are recorded below. This recording session could not access
-  the private implementation repositories or provider consoles, so the next
-  connected agent must re-read them before changing the state.
-- **HISTORICAL BASELINE ONLY:** the supplied n8n health check and migration
-  audit are dated 2026-06-22; the architecture documents are dated
-  2026-06-25/26. The inventory contains 83 original workflow rows plus 9
-  restored inactive helpers in the later archive. None of those counts may be
-  treated as current without a live n8n read.
-- **UNKNOWN:** `n8n-selfhosted`'s own Docker network membership remains the one
-  unresolved runtime fact, because the Coolify API could not be queried. Private
-  repository heads, credential presence and the adapter's alias/port were
-  re-read on 2026-09-05 and are recorded in the verification table below.
+- **GITHUB-VERIFIED (2026-09-07):** the five authoritative heads are
+  `adapteng-company-os` `95bbe299d98de585b5a305477bd011ea9a9a86ce`,
+  `adapteng-automation-platform` `9957271a267ececd41abd09c22243d35fe87416f`,
+  `adapteng-website` `cd17a2969041ed68cb336150182df544c73c6a46`,
+  `adapteng-marketing` `9afaf96db1024685652383bbf825fc2994da13bc` and
+  `ai-dev-loop-control-plane` `327fc4b63ec60afc8a8a6c3169d062a58d9eb4da`.
+  Company OS open PRs are #222 (draft, unchanged) and #237.
+- **LIVE-VERIFIED (2026-09-07):** the Coolify control plane is down. Every path
+  on `coolify.adapteng.com` answered `502`, including the web UI root and a
+  static asset, so the failure is the application container rather than the API
+  surface. The edge proxy answers, and the workloads behind it are healthy:
+  `n8n.adapteng.com/healthz` `200`, `n8n.adapteng.com/rest/login` `401` and
+  `adapteng.com` `200`. Company OS run `34099598085` reproduces the same `502`
+  from inside the network.
+- **LIVE-VERIFIED (2026-09-07):** the object store holds no pgBackRest
+  repository. Run `34100219296` counted `0` objects under the configured
+  repository prefix, and the only populated top-level prefixes were
+  `data/coolify`, one self-created probe object and
+  `postgres-physical-backup/validation` — none of which has the `archive/` or
+  `backup/` children that identify a pgBackRest repository. **No production
+  backup exists offsite.** This is now measured rather than inferred.
+- **LIVE-VERIFIED (2026-09-07):** `PGBACKREST_REPO1_PATH` was corrected to the
+  hyphenated `/adapteng-ops` that the fail-closed guard, the stanza name and the
+  runbook all require. The guard was not relaxed. Run `34100426430` re-ran the
+  full disposable rehearsal afterwards and concluded success, so the corrected
+  value breaks nothing.
+- **UNKNOWN:** every Coolify-dependent fact — deployed revision, application
+  configuration, build context and network membership — is unreadable while the
+  control plane is down.
 
 ### Current verdict
 
 | Layer | Verdict | Latest evidence |
 |---|---|---|
-| Repository development | **GO** | Company OS `main` is reachable and current public history is intact. |
+| Repository development | **GO** | All five authoritative heads current and green. |
 | L1 authorization | **GO** | Owner-authoritative runtime policy permits existing access, reversible provider configuration, green ordinary PR merges and one bounded internal model proof. |
 | L1 end-to-end runtime | **GO** | Proven live on 2026-09-06: workflow `65ATNbi5sColtnp0` on self-hosted `n8n.adapteng.com`, execution `26` succeeded with all five checks — `200`, `200`, `200`, `401`, `403` — reading 3 allowlisted records with zero writes. |
-| L2 controlled business writes | **NOT PROVEN** | Do not infer L2 from a healthy adapter or repository CI. |
+| L2 controlled business writes | **NOT PROVEN** | The isolated WEB-002 T1–T4 lane passed (run `34058980920`), but production cutover is blocked on a trusted backup, and the production consumer still has zero executions. |
 | L3 autonomous external action | **NOT AUTHORIZED** | External send/publish, DNS, destructive production action and unbounded spend remain explicit owner gates. |
+
+---
+
+## Operational checkpoint — 2026-09-05 (superseded by the 2026-09-07 checkpoint above)
 
 Authorization and operation were deliberately separate. Both are now satisfied for
 L1: the live read path and one useful internal result completed successfully on the
@@ -166,7 +182,26 @@ value is pasted into chat or committed.
 
 ### Completion target
 
-Platform v1 becomes **L1 OPERATIONAL** when all of the following are evidenced:
+The L1 completion target below was **met on 2026-09-06** and is retained only as
+the record of what was accepted. The current target is Platform v1 controlled
+production, whose remaining gates are:
+
+1. the Coolify control plane is restored, so deployment revision, configuration
+   and rollback become readable again;
+2. one production `adapteng_ops` full backup exists in the offsite repository
+   and one isolated restore into a disposable target passes;
+3. the compromised Baserow token is rotated and the old value is proven to fail;
+4. the WEB-002 production cutover runs after explicit owner approval, with one
+   non-PII canary and a tested `mode=legacy` rollback;
+5. one governed Vertex model call passes schema, cost-ledger and approval
+   checks;
+6. one corporate Shared Drive to Baserow/Postgres canary passes without
+   personal Drive authority.
+
+Configuration agreement for gate 2 was closed on 2026-09-07; the backup itself
+was not, and no repository content exists under any prefix.
+
+**Met on 2026-09-06 — historical L1 acceptance criteria:**
 
 1. n8n reaches the adapter on a verified internal address;
 2. the five HTTP contract checks return `200/200/200/401/403` as applicable;
@@ -216,6 +251,19 @@ repeated) · `OWNER-ATTESTED` (owner's manual check, not reproducible from GitHu
 
 **Freeze respected.** `adapteng-automation-platform` was read only: no branch,
 push, rebase, rerun, comment or edit of PR #121 occurred.
+
+---
+
+---
+
+# HISTORICAL — 2026-08-13 GitHub-only review
+
+**Everything from this point to the end of the file is the 2026-08-13 command
+center, retained as evidence of how the current position was reached. It is
+not the active queue and its verdicts, blocker IDs and next actions are
+superseded by the 2026-09-07 checkpoint at the top of this file.** Several of
+its blockers have since been closed or withdrawn. Read it for the reasoning
+behind a decision, never to choose the next task.
 
 ---
 

@@ -1,11 +1,11 @@
 # Platform v1 — activation path
 
-- **observed_at:** 2026-09-06 20:56 (UTC)
-- **Evidence:** live authenticated reads of the self-hosted n8n API, one live
-  T1–T4 evidence run in `adapteng-website` that passed in full (`34058980920`),
-  direct probes of the isolated evidence lane, two authorized read-only Coolify
-  probes, the GitHub API for five repositories, and deployed source in
-  `adapteng-website`.
+- **observed_at:** 2026-09-07 08:30 (UTC)
+- **Evidence:** live unauthenticated probes of the Coolify, n8n and website
+  edges, two live object-store inventory runs (`34100219296`) and one full
+  disposable backup rehearsal (`34100426430`) in `adapteng-company-os`, one
+  read-only internal Coolify probe (`34099598085`), and the GitHub API for five
+  repositories.
 - **Purpose:** state what actually runs today and give the shortest honest route
   to a platform that processes real work. This is a build plan, not an audit.
 
@@ -69,6 +69,38 @@ One owner-dispatched GitHub Actions run activates the end-to-end lead flow:
 | `confirm_cutover` | `true` | Owner decision |
 | `consumer_idempotency_approved` | **`true`** | Verified 2026-09-06; see below |
 | `preflight_evidence_ref` | `WEB002-T1-T4:cd17a2969041ed68cb336150182df544c73c6a46:34058980920` | Set 2026-09-06 from a T1–T4 run that passed in full; equals repository variable `AE_LEAD_WEB002_PREFLIGHT_EVIDENCE_REF` and binds the dispatch commit |
+
+**A fourth gate exists and is not an input.** Verified live on 2026-09-07 in the
+workflow at website `main`: an active mode also requires the repository variable
+`AE_LEAD_INTAKE_CUTOVER_APPROVED=true`, checked separately from the three
+preflight attestation variables, which do **not** substitute for it. It is
+currently absent, which is correct. It is a one-shot switch: set it immediately
+before the approved dispatch and return it to `false` or remove it immediately
+afterwards.
+
+### Cutover approval package — prepared 2026-09-07, not yet executable
+
+Presented for approval only. **Do not** set the approval variable, dispatch the
+workflow or submit a canary until items 1–4 of the consolidated owner queue in
+[`../owner/action-items.md`](../owner/action-items.md) are done and Ivan replies
+with the exact phrase below.
+
+| Item | Value |
+|---|---|
+| Website revision to dispatch from | `cd17a2969041ed68cb336150182df544c73c6a46` (current `main`, unchanged since the evidence run) |
+| Preflight evidence | Run `34058980920`, T1–T4 all passed, artifact digest `29f53422…`, approved at `2026-09-06T20:46:15.072Z` |
+| Consumer | `WEB-002 Lead Intake (governed)`, `05ytz5If9kHUOYuA`, 16 nodes, active, **0 executions to date** |
+| Trusted backup | **MISSING.** No pgBackRest repository exists in the bucket under any prefix (measured, run `34100219296`). This is the one hard blocker. |
+| Baserow token rotation | **NOT DONE.** `baserow-company-os-primary` is still the compromised token. |
+| Planned dispatch inputs | The four in the table above, plus `AE_LEAD_INTAKE_CUTOVER_APPROVED=true` set immediately before and cleared immediately after |
+| Expected production writes from one canary | Exactly one identity reservation and one effect per governed entity — Organization, Person, Opportunity, one-day Action — all four carrying one idempotency key. Four rows, no more. |
+| Duplicate submission | Same identity replayed must return `409` and create no second effect |
+| Monitoring window | 60 minutes after the canary, watching for 4xx/5xx, held or dead-lettered items and delivery ambiguity |
+| Abort thresholds | Any lost lead, any duplicate effect, any ambiguous hold, or any write/response contract violation |
+| Rollback | Re-dispatch the same workflow with `mode=legacy`, which restores the MM-18 route. Evidence rows and synthetic records are **not** deleted by rollback; they are reported for separately approved cleanup. |
+| Source-entry safety | Fluent Forms retains the source entry if delivery fails, so a failed cutover does not lose the lead |
+
+**Required approval phrase:** `APPROVE WEB-002 CUTOVER + ONE NON-PII CANARY`
 
 ### Why idempotency can be approved
 
@@ -206,6 +238,30 @@ This gate was not reached on 2026-09-06. The T1–T4 lane writes only to an
 isolated n8n Data Table, so it needs no production backup; the backup
 requirement applies to the cutover itself, which did not start.
 
+**Configuration agreement closed 2026-09-07; the backup itself did not.** Two
+facts were established by measurement rather than inference:
+
+- `PGBACKREST_REPO1_PATH` was corrected from the underscore spelling to
+  `/adapteng-ops`, which is what `scripts/postgres_restore_guard.py` line 472,
+  the stanza pinned at line 470 and the runbook configuration block all require.
+  The guard was not relaxed. Run `34100426430` re-ran the full disposable
+  rehearsal afterwards and concluded success.
+- The change was proven safe first. Run `34100219296` counted `0` objects under
+  the previously configured prefix and listed every populated top-level prefix
+  in the bucket: `data/coolify`, one self-created probe object, and
+  `postgres-physical-backup/validation`. **None has the `archive/` or `backup/`
+  children that identify a pgBackRest repository**, so nothing was orphaned —
+  and, more importantly, no production backup exists anywhere in that bucket
+  under any spelling. The previous "no evidenced backup" position is now a
+  measurement rather than an absence of evidence.
+
+What remains is the backup itself, and it is owner-only for the reason stated
+above: no production database credential exists in this repository, so no
+workflow can reach the production cluster. The Backblaze lifecycle rules and the
+application-key prefix restriction also still need re-scoping to the corrected
+value; a rule left on a stale prefix silently stops expiring hidden versions and
+no pgBackRest command reports it.
+
 ---
 
 ## 3. The AI layer
@@ -272,20 +328,37 @@ it delivers. Separating the two honestly:
    PR #131 and website PR #187 are merged, the live lane carries the corrected
    validator with no structural difference from the reviewed artifact, and the
    T1–T4 evidence run passed in full.
-2. Correct the pgBackRest repository prefix so a production restore can start,
-   then configure or evidence the production backup and verify one isolated
-   restore. This is now the **only** substantive gate before live writes (B-4).
-   The configured prefix uses an underscore; `scripts/postgres_restore_guard.py`
-   pins the hyphenated form and fails closed on any difference. Whichever value
-   is settled on, the object-storage lifecycle rules and the application-key
-   prefix restriction must be re-scoped to match it. See issue 32.
-3. Repoint the Coolify application for `n8n-self-hosted` from
-   `palinaruban-repo-status-review` to `main`. That branch is 82 commits behind
-   with a head dated 2026-07-24 (B-3).
-4. Restore the Coolify control-plane API. Authorized read-only probes answered
-   502 on 2026-09-05 and again on 2026-09-06, so deployment revision and
-   network-alias questions currently have no read path. Deployed applications
-   are unaffected: the self-hosted n8n API answered 200 throughout.
+2. ~~Correct the pgBackRest repository prefix.~~ **Done 2026-09-07 by the
+   agent.** `PGBACKREST_REPO1_PATH` is now `/adapteng-ops`, matching the
+   fail-closed guard, the stanza and the runbook; the guard was not relaxed and
+   the disposable rehearsal still passes (`34100426430`). What remains of B-4 is
+   the backup itself: run one production full backup of `adapteng_ops` and one
+   isolated restore per `runbooks/backup-and-restore.md`. This is owner-only
+   because no production database credential exists in this repository. Run
+   `34100219296` established by direct measurement that **no pgBackRest
+   repository exists in the bucket under any prefix**. The Backblaze lifecycle
+   rules and application-key prefix restriction must also be re-scoped to
+   `/adapteng-ops`. See issue 32.
+3. Restore the Coolify control plane. **Re-diagnosed 2026-09-07: the
+   application container is down, not merely its API.** Every path on
+   `coolify.adapteng.com` returns 502, including the web UI root and a static
+   asset, while the edge proxy answers and every workload behind it stays
+   healthy — `n8n.adapteng.com/healthz` 200, `/rest/login` 401, `adapteng.com`
+   200. The fix is a container restart on the host; diagnose before upgrading
+   and do not assume the deployed applications are down. This now precedes the
+   source repoint below, because deployment revision, build context and network
+   membership are all unreadable until it is back.
+4. Repoint the Coolify application for `n8n-self-hosted` from
+   `palinaruban-repo-status-review` to `main` (B-3) — **but not blindly.** The
+   histories have diverged rather than simply fallen behind: `main` carries 83
+   unique commits and the old branch 35. `deploy/coolify/docker-compose.n8n.yml`
+   and `.env.example` are byte-equivalent between the refs, which is not enough
+   to prove the whole build context is. Identify the resource type, build
+   context and deployed revision first, classify every branch-only runtime
+   change as merged, obsolete or still required, snapshot the rollback ref, and
+   confirm the n8n database and its separately stored encryption key are
+   recoverable before redeploying. An export without the encryption key is not
+   a credential backup. Never merge the old branch wholesale into `main`.
 
 **Agent-executable once authorised:**
 

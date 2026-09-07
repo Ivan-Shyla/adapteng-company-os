@@ -8,12 +8,34 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
 
 ---
 
-## Setup queue by next mission — 2026-09-06
+## Consolidated owner actions — 2026-09-07
 
-Ordered by dependency. Everything above the line in each block must be done
-before the mission below it can run. Enter every value directly in the named
-provider UI. Never paste a value into a chat, an issue, a pull request or any
-file in this repository.
+This is the current, authoritative owner queue and it supersedes the
+2026-09-06 setup queue below. Everything an agent could do without you has
+been done; these six items are the ones that need your hands. Enter every
+value directly in the named provider UI. Never paste a value into chat, an
+issue, a pull request or any file in this repository.
+
+Two items from the previous queue were closed by the agent on 2026-09-07 and
+need nothing from you: the `PGBACKREST_REPO1_PATH` variable was corrected to
+`/adapteng-ops`, and the safety of that change was measured first.
+
+| # | Priority | Provider / screen | Name or setting | Exact action | Minimum scope | Verification | Blocks |
+|---|---|---|---|---|---|---|---|
+| 1 | 🔴 | Hetzner host shell (SSH) | Coolify application container | Restart the Coolify container. Every path on `coolify.adapteng.com` returns `502` while the edge proxy and all workloads stay healthy, so the control-plane container is down rather than the host. Diagnose before upgrading. | Host shell, no configuration change | `GET https://coolify.adapteng.com/api/v1/version` returns `200`, then re-run the **AI Gateway readiness** workflow (`probe`) and see it get past `GET /projects` | Deployment revision reads, Coolify source reconciliation, deploy rollback, network membership reads |
+| 2 | 🔴 | Baserow → My settings → Database tokens | `baserow-company-os-primary` | Revoke it and issue a least-privilege replacement, then install the new value only in the adapter runtime secret store. Its literal value exists in Git history, so it must be treated as public. Do not rewrite history. | Only the tables the adapter writes; no admin rights | The old token returns `401`, and the adapter's `/v1/schema/system` still returns `200` with the new one | WEB-002 production cutover |
+| 3 | 🔴 | Hetzner host shell (SSH) | Production `adapteng_ops` full backup | Run the production backup and one isolated restore per `runbooks/backup-and-restore.md`. No production database credential exists in this repository by design, so no workflow can do this. The bucket currently holds no pgBackRest repository at all. | Host shell plus the existing pgBackRest configuration | `pgbackrest check` passes and `verify` reports exactly `status: ok`; the restore starts in a disposable target and passes the runbook's catalog checks | WEB-002 cutover, issue #32 closure, Platform v1 acceptance |
+| 4 | 🟠 | Backblaze B2 → Buckets → Lifecycle rules, and Application Keys | Lifecycle rule scope and key prefix restriction | Re-scope both to `/adapteng-ops`, matching the corrected variable. Keep the 35-day hidden-version deletion and 7-day unfinished-large-file cancellation unless policy has changed. A rule left on a stale prefix silently stops expiring versions and no pgBackRest command reports it. | The backup bucket only | The rule lists the corrected prefix, and the next backup's hidden versions expire on schedule | Retention correctness and storage cost, not the backup itself |
+| 5 | 🟡 | Google Cloud → IAM, and the gateway runtime store | Vertex prediction role + caller-token reference | Grant the existing service account prediction-only Vertex permission, enable the Vertex AI API, confirm non-zero EU regional quota, and make the caller-token reference available to the intended internal caller. | `roles/aiplatform.user` on that project only; no broader IAM | One bounded gateway call returns a model response, an unauthenticated call still fails, and the run ledger records model and token totals | The first governed model proof |
+| 6 | 🟡 | GitHub → `adapteng-automation-platform` → Environments | Drive-bridge replay database reference | Bind it at **environment** scope, not repository-wide. Most references in that repository already live at environment scope. | The single environment that runs the Drive bridge | The Drive canary workflow resolves the reference and the replay layer connects | The corporate Drive daily-loop canary |
+
+**Not on this list on purpose.** The WEB-002 cutover approval is a decision, not
+a setup step. When items 1–4 are done, the agent will hand you one approval
+package; you reply with the exact phrase it asks for and it runs the cutover.
+
+---
+
+## Setup queue by next mission — 2026-09-06 (superseded by the 2026-09-07 consolidated queue above)
 
 ### Mission 1 — production backup, then WEB-002 cutover
 

@@ -1,5 +1,25 @@
 # Execution program
 
+> **Status banner — 2026-09-07.** This program was written to reach a deployed,
+> healthy AI Gateway and one governed Vertex inference. **The deployment half is
+> done.** The `ai-gateway` service is live and internally verified: a read-only
+> probe from inside the private network returned `200` from both `/health` and
+> `/ready`, the latter being database-backed. WS-5's objective is therefore met,
+> and the workstreams below that describe deploying it are history rather than
+> the queue.
+>
+> What remains from this program is **WS-8 alone** — the first governed model
+> call — and it is blocked on owner setup, not on any workstream here: the
+> Vertex prediction role, the Vertex AI API enablement, EU regional quota, and
+> the caller-token reference reaching the intended internal caller. Those are
+> item 5 of the consolidated owner queue in
+> [`../owner/action-items.md`](../owner/action-items.md).
+>
+> For the current platform queue use
+> [`release-v1.md`](release-v1.md) and [`activation-path.md`](activation-path.md).
+> Read the rest of this file for the reasoning behind a decision, not to choose
+> the next task.
+
 Current workstreams to reach a deployed, healthy AI Gateway and then exactly one
 governed Vertex inference.
 
