@@ -1355,7 +1355,7 @@ def report_databases(client: Client) -> None:
         emit(f"        internal address: {address_of(item.get('internal_db_url'))}")
         emit(f"        external address: {address_of(item.get('external_db_url'))}")
         emit(f"        keys: {sorted(item)}")
-        report_database_backups(item)
+        report_database_backups(client, item)
 
 
 # Names, schedules and outcomes only. A backup configuration carries the
@@ -1372,7 +1372,7 @@ SAFE_BACKUP_FIELDS = (
 )
 
 
-def report_database_backups(database: dict) -> None:
+def report_database_backups(client: Client, database: dict) -> None:
     """Say whether this database is scheduled to be backed up, and when it last was.
 
     A running database and a working backup are different facts, and the second
@@ -1402,6 +1402,7 @@ def report_database_backups(database: dict) -> None:
         executions = config.get("executions")
         if not isinstance(executions, list) or not executions:
             emit("            executions: none reported on this object")
+            probe_backup_execution_sources(client, database, config)
             continue
         ordered = sorted(
             (row for row in executions if isinstance(row, dict)),
@@ -1415,6 +1416,43 @@ def report_database_backups(database: dict) -> None:
                 f"{row.get('created_at')} status={row.get('status')} "
                 f"size={row.get('size')} message={clip(str(row.get('message') or ''), 120)}"
             )
+
+
+def probe_backup_execution_sources(client: Client, database: dict, config: dict) -> None:
+    """Report which endpoint, if any, this instance answers backup history on.
+
+    The database object names a schedule but carries no run history, so a
+    schedule that has quietly stopped producing files looks exactly like one
+    that is working. Coolify has moved this history between paths across
+    versions, so rather than assume one, this asks each candidate and reports
+    which answered. Every request is a GET; nothing is triggered or changed.
+    """
+
+    database_uuid = str(database.get("uuid") or "")
+    backup_uuid = str(config.get("uuid") or "")
+    if not database_uuid or not backup_uuid:
+        return
+    candidates = (
+        f"/databases/{database_uuid}/backups/{backup_uuid}/executions",
+        f"/databases/{database_uuid}/backups/{backup_uuid}",
+        f"/databases/{database_uuid}/backups",
+    )
+    emit("            backup history probe (read-only):")
+    for path in candidates:
+        parsed = call(client, "GET", path, allow_absent=True)
+        emit(f"              GET {path} -> {describe_probe_result(parsed)}")
+
+
+def describe_probe_result(parsed: object) -> str:
+    """Summarise a probe answer by shape, never by content."""
+
+    if parsed is None:
+        return "absent"
+    if isinstance(parsed, list):
+        return f"list of {len(parsed)}"
+    if isinstance(parsed, dict):
+        return f"object with keys {sorted(parsed)[:12]}"
+    return type(parsed).__name__
 
 
 SAFE_STORAGE_FIELDS = (
