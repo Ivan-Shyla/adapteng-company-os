@@ -13,6 +13,7 @@ makes no writes on a second run, and no operation can reach a removal endpoint.
 
 from __future__ import annotations
 
+import base64
 import copy
 import datetime
 import hashlib
@@ -2253,6 +2254,7 @@ class EntryPointTests(unittest.TestCase):
                 "scheduler-check",
                 "ledger-read",
                 "open-run",
+                "vertex-why",
                 "model-smoke",
             },
         )
@@ -3857,6 +3859,77 @@ class OpenRunTests(unittest.TestCase):
         for command in commands:
             with self.subTest(command[:40]):
                 self.assertLess(len(command), driver.PEER_COMMAND_LIMIT - 20)
+
+
+class VertexWhyTests(unittest.TestCase):
+    """Reading the answer the gateway threw away.
+
+    The value of this operation is entirely in it being a question. If it can
+    generate, it can be billed; if it can be billed, it is no longer a free
+    diagnostic and would not be safe to run while the reason is unknown.
+    """
+
+    def test_the_staged_program_is_valid_python(self) -> None:
+        """A syntax error would only surface a minute later, in production."""
+
+        compile(driver.VERTEX_WHY_PROGRAM, "<vertex-why>", "exec")
+
+    def test_it_only_asks_and_never_generates(self) -> None:
+        """A GET on the model resource tests authorization without billing."""
+
+        self.assertIn(".get(", driver.VERTEX_WHY_PROGRAM)
+        for billable in ("generateContent", ":predict", ".post("):
+            self.assertNotIn(billable, driver.VERTEX_WHY_PROGRAM)
+
+    def test_it_reports_the_status_rather_than_deciding_what_it_means(self) -> None:
+        """The body names the fix; classifying it here would only lose it."""
+
+        self.assertIn("resp.status_code", driver.VERTEX_WHY_PROGRAM)
+        self.assertIn("resp.text", driver.VERTEX_WHY_PROGRAM)
+
+    def test_it_answers_even_when_the_credential_cannot_be_built(self) -> None:
+        """A traceback carries no marker and would read as no answer at all."""
+
+        self.assertIn("adc_failed", driver.VERTEX_WHY_PROGRAM)
+        self.assertIn("transport", driver.VERTEX_WHY_PROGRAM)
+
+    def test_the_encoded_program_carries_nothing_the_shell_reads(self) -> None:
+        """This is the whole reason for base64: the alphabet is inert.
+
+        The program contains quotes, parentheses and newlines, every one of
+        which broke a bare command earlier in this file's history.
+        """
+
+        for chunk in driver.stage_program(driver.VERTEX_WHY_PROGRAM):
+            with self.subTest(chunk[:24]):
+                self.assertRegex(chunk, r"^[A-Za-z0-9+/=]+$")
+
+    def test_every_write_fits_the_channel(self) -> None:
+        for chunk in driver.stage_program(driver.VERTEX_WHY_PROGRAM):
+            command = driver.LEDGER_WRITE_COMMAND.format(mode="a", chunk=chunk)
+            with self.subTest(len(command)):
+                self.assertLessEqual(
+                    len(command), driver.PEER_COMMAND_LIMIT - driver.LEDGER_WRITE_MARGIN
+                )
+
+    def test_the_staged_pieces_reassemble_into_the_program(self) -> None:
+        """Spaces land between the chunks; b64decode has to survive them."""
+
+        staged = " ".join(driver.stage_program(driver.VERTEX_WHY_PROGRAM))
+        restored = base64.b64decode(staged).decode("utf-8")
+        self.assertEqual(restored, driver.VERTEX_WHY_PROGRAM)
+
+    def test_the_runner_fits_and_names_the_staged_file(self) -> None:
+        self.assertLessEqual(
+            len(driver.PROBE_EXEC_COMMAND), driver.PEER_COMMAND_LIMIT
+        )
+        self.assertIn(driver.PROBE_STAGE_PATH, driver.PROBE_EXEC_COMMAND)
+        self.assertTrue(driver.PROBE_STAGE_PATH.startswith("/tmp/"))
+
+    def test_the_program_prints_the_marker_the_runner_waits_for(self) -> None:
+        """The runner prints nothing itself, so the program has to."""
+
+        self.assertIn(f'"{driver.PROBE_MARKER}"', driver.VERTEX_WHY_PROGRAM)
 
 
 class ServiceDiagnoseTests(unittest.TestCase):

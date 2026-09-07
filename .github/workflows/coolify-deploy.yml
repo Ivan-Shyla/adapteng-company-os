@@ -71,6 +71,7 @@ on:
           - scheduler-check
           - ledger-read
           - open-run
+          - vertex-why
           - model-smoke
       service:
         description: "Spec file under deploy/, named without its extension"

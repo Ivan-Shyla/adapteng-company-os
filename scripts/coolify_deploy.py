@@ -26,6 +26,7 @@ non-zero exit, so a partial apply can never be mistaken for a converged one.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -76,6 +77,7 @@ OPERATIONS = (
     "scheduler-check",
     "ledger-read",
     "open-run",
+    "vertex-why",
     "model-smoke",
 )
 FORBIDDEN_METHODS = frozenset({"DELETE"})
@@ -3654,6 +3656,132 @@ def operate_open_run(client: Client, spec: dict, sleep=None) -> int:
     return EXIT_OK
 
 
+# --- asking Vertex why ---
+
+# The call reached the provider. ADC built a session, the request was signed and
+# sent, the response host was verified, and Vertex answered 403 -- which the
+# gateway records as unbilled and then discards. The body it discarded is the
+# only thing that distinguishes "the API is not enabled" from "this identity
+# lacks the role" from "the project has no billing account", and those have
+# three different owner actions.
+#
+# Reading it needs more than 245 characters of program, so the program stops
+# travelling in the command. It is base64-encoded and staged into a file the
+# same way the SQL was, and the command only decodes and runs it. Base64 is
+# what makes this general: its alphabet is letters, digits, plus, slash and
+# equals, none of which the shell touches, so the staged program is free to
+# contain quotes, parentheses and newlines that a bare command cannot carry.
+PROBE_STAGE_PATH = "/tmp/ae-probe.b64"
+PROBE_MARKER = "AEPROBE"
+PROBE_EXEC_COMMAND = (
+    'python -c "'
+    "import sys,base64 as B;v=sys.argv;exec(B.b64decode(open(v[2]).read()))"
+    '" ' + PROBE_MARKER + " " + PROBE_STAGE_PATH
+)
+# b64decode discards characters outside its alphabet by default, which is why
+# the spaces the writer puts between chunks do not have to be cleaned up first.
+VERTEX_WHY_PROGRAM = '''
+import google.auth as G
+from google.auth.transport.requests import AuthorizedSession as S
+
+M = "AEPROBE"
+try:
+    creds, proj = G.default()
+except Exception as e:
+    print(M, "adc_failed", type(e).__name__, str(e)[:200])
+    raise SystemExit(0)
+url = ("https://aiplatform.eu.rep.googleapis.com/v1/projects/" + str(proj)
+       + "/locations/eu/publishers/google/models/gemini-3.1-flash-lite")
+try:
+    resp = S(creds).get(url, timeout=20)
+except Exception as e:
+    print(M, "transport", type(e).__name__, str(e)[:200])
+    raise SystemExit(0)
+print(M, "status", resp.status_code,
+      "identity", getattr(creds, "service_account_email", None),
+      "body", " ".join(resp.text.split())[:500])
+'''
+
+
+def stage_program(source: str) -> list[str]:
+    """Encode a program into pieces the command channel can carry."""
+
+    encoded = base64.b64encode(source.encode("utf-8")).decode("ascii")
+    budget = PEER_COMMAND_LIMIT - LEDGER_WRITE_MARGIN - len(
+        LEDGER_WRITE_COMMAND.format(mode="w", chunk="")
+    )
+    return [encoded[at : at + budget] for at in range(0, len(encoded), budget)]
+
+
+def operate_vertex_why(client: Client, spec: dict, sleep=None) -> int:
+    """Read the answer Vertex gave that the gateway threw away.
+
+    This sends no generation request and cannot be billed: it asks for the
+    model's own description, which is the same authorization surface the call
+    failed on. A 403 here with a body naming a disabled API, a missing role or
+    an unlinked billing account is the owner action, stated exactly.
+    """
+
+    import time
+
+    sleep = sleep or time.sleep
+    target = spec["target"]
+    emit(f"--- vertex-why {spec['service']}")
+    project = find_project(client, target["project"])
+    environment = (
+        find_environment(client, project["uuid"], target["environment"])
+        if project
+        else None
+    )
+    if project is None or environment is None:
+        emit("    project or environment absent")
+        emit("RESULT vertex-why failed application=absent")
+        return EXIT_FAILED
+
+    application = find_application(applications_in(client, environment), spec["service"])
+    if application is None:
+        emit(f"    application {spec['service']}: ABSENT")
+        emit("RESULT vertex-why failed application=absent")
+        return EXIT_FAILED
+
+    uuid = str(application["uuid"])
+    emit(f"    application {spec['service']}: uuid={uuid}")
+
+    def ask(command: str, note: str, marker: str) -> str:
+        emit("")
+        emit(f"    {note} ({len(command)} chars)")
+        execution, answer, reason, at_rest = probe_once(
+            client, uuid, LEDGER_READ_TASK_NAME, command, marker, sleep
+        )
+        if not at_rest:
+            raise Abort("the probe task could not be disarmed")
+        if answer is None:
+            emit_captured_output((execution or {}).get("message"), known=(uuid,))
+            raise Abort(f"no answer from {note} ({reason or 'no_marker'})")
+        return answer
+
+    try:
+        chunks = stage_program(VERTEX_WHY_PROGRAM)
+        emit(f"    staging the probe in {len(chunks)} writes")
+        for index, chunk in enumerate(chunks):
+            mode = "w" if index == 0 else "a"
+            ask(
+                LEDGER_WRITE_COMMAND.format(mode=mode, chunk=chunk),
+                f"write {index + 1}/{len(chunks)}",
+                LEDGER_READ_MARKER,
+            )
+        answer = ask(PROBE_EXEC_COMMAND, "asking Vertex", PROBE_MARKER)
+    except Abort as failure:
+        emit(f"    {failure}")
+        emit("RESULT vertex-why failed reason=aborted")
+        return EXIT_FAILED
+
+    emit("")
+    emit_captured_output(answer, known=(uuid,))
+    emit("RESULT vertex-why ok")
+    return EXIT_OK
+
+
 def operate_ledger_read(client: Client, spec: dict, sleep=None) -> int:
     """Ask a container's database role whether it could open a run.
 
@@ -5356,6 +5484,8 @@ def run(environ: dict) -> int:
         return operate_ledger_read(client, spec)
     if operation == "open-run":
         return operate_open_run(client, spec)
+    if operation == "vertex-why":
+        return operate_vertex_why(client, spec)
     if operation == "model-smoke":
         return operate_model_smoke(client, spec)
     return operate_deploy(
