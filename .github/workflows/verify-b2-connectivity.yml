@@ -269,6 +269,33 @@ jobs:
                   | tr '\t' '\n' | while read -r child; do
                       [ -n "$child" ] || continue
                       printf '        %s\n' "$child"
+                      # One level further still. A child name alone cannot say
+                      # whether a populated prefix is a recoverable database
+                      # backup or unrelated storage that happens to sit in the
+                      # same bucket, and that distinction is the whole question
+                      # the backup gate turns on. Grandchild names and a count
+                      # settle it without reading a single object.
+                      gcount=$(aws s3api list-objects-v2 --endpoint-url "$endpoint" \
+                        --bucket "$BUCKET" --prefix "$child" --no-paginate \
+                        --query 'length(Contents || `[]`)' --output text)
+                      printf '            objects (first page): %s\n' "$gcount"
+                      aws s3api list-objects-v2 --endpoint-url "$endpoint" \
+                        --bucket "$BUCKET" --prefix "$child" --delimiter / \
+                        --query 'CommonPrefixes[].Prefix' --output text \
+                        | tr '\t' '\n' | while read -r grandchild; do
+                            [ -n "$grandchild" ] || continue
+                            printf '            %s\n' "$grandchild"
+                          done
+                      # Newest key names under this child, which is how a dated
+                      # dump series announces itself. Names and timestamps only.
+                      aws s3api list-objects-v2 --endpoint-url "$endpoint" \
+                        --bucket "$BUCKET" --prefix "$child" --no-paginate \
+                        --query 'reverse(sort_by(Contents || `[]`, &LastModified))[:3].[LastModified,Size,Key]' \
+                        --output text \
+                        | while read -r modified size key; do
+                            [ -n "$key" ] || continue
+                            printf '            newest: %s %s bytes %s\n' "$modified" "$size" "$key"
+                          done
                     done
               done
 
