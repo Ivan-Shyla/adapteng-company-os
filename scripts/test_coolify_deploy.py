@@ -3597,15 +3597,39 @@ class LedgerReadTests(unittest.TestCase):
         """Either answer alone leaves the next step undecided.
 
         A run needs a task, so a role that can insert one and not the other
-        still cannot open a run -- the two privileges are asked separately
+        still cannot open a run. The two privileges are asked separately
         because a single statement asking both is 291 characters and the
-        endpoint refuses it.
+        endpoint refuses it -- the bound test above caught that.
         """
 
         labels = [label for label, _sql, _params in driver.LEDGER_QUERIES]
-        self.assertIn("existing-runs", labels)
+        self.assertIn("identity", labels)
         self.assertIn("run-insert-privilege", labels)
         self.assertIn("task-insert-privilege", labels)
+
+    def test_the_environment_probe_reports_names_and_never_values(self) -> None:
+        """Discovering which variable holds a DSN must not read the DSN.
+
+        The program iterates os.environ, which yields keys, and the suffix test
+        is applied to the key. A value never enters what is printed.
+        """
+
+        command = driver.LEDGER_ENV_COMMAND
+        self.assertIn("for k in os.environ", command)
+        self.assertNotIn("os.environ[", command)
+        self.assertLessEqual(len(command), driver.PEER_COMMAND_LIMIT)
+
+    def test_it_prefers_a_database_variable_over_any_other_url(self) -> None:
+        """Containers carry several _URL variables and only one is a database."""
+
+        answer = "AELEDG ['AI_GATEWAY_BASE_URL', 'ADAPTER_DATABASE_URL', 'N8N_URL']"
+        self.assertEqual(driver.ledger_dsn_variable(answer), "ADAPTER_DATABASE_URL")
+
+    def test_it_reports_no_variable_rather_than_guessing_one(self) -> None:
+        """A wrong guess would connect somewhere unintended, or look like a bug."""
+
+        self.assertIsNone(driver.ledger_dsn_variable("AELEDG []"))
+        self.assertIsNone(driver.ledger_dsn_variable(""))
 
 
 class ProbeOnceTests(unittest.TestCase):

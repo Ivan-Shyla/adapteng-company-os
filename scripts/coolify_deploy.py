@@ -3282,10 +3282,35 @@ def model_smoke_fields(answer: str) -> dict[str, str]:
 # which is why this operation is a read and carries a test saying so.
 LEDGER_READ_TASK_NAME = "adapteng-ledger-read"
 LEDGER_READ_MARKER = "AELEDG"
+# The gateway was asked on 2026-09-07 by run 34164549392 and answered:
+#
+#   psycopg.errors.InsufficientPrivilege: permission denied for table agent_run
+#
+# So the gateway's role holds no direct privilege on the ledger at all, not even
+# SELECT. That is migration 008 working as written -- it REVOKEs table DML and
+# leaves runtime callers only EXECUTE on seven SECURITY DEFINER functions, none
+# of which opens a run. Re-asking the gateway would only repeat that answer.
+#
+# The open question is whether some other container in the same database holds a
+# role that can. The Baserow adapter performs governed upserts, so it connects
+# with write privileges somewhere; whether those reach the run ledger is exactly
+# what decides between "open a run from inside the perimeter" and "this needs
+# the owner to deploy the run-ledger service".
+LEDGER_SUBJECTS = (("adapteng-baserow-adapter", None),)
 # The connection string is a secret and is already in the container's
 # environment. Naming the variable rather than the value keeps it out of the
 # command, out of the Coolify task record and out of the run log.
 LEDGER_DSN_VARIABLE = "AI_GATEWAY_DATABASE_URL"
+# Which variable holds it differs per service, so it is discovered rather than
+# assumed -- by listing variable NAMES that look like a connection string. No
+# value is ever read. A name that ends in _URL or _DSN is a connection string by
+# convention, and the convention is all this needs.
+LEDGER_ENV_COMMAND = (
+    'python -c "'
+    "import os,sys;v=sys.argv;"
+    "print(v[1],[k for k in os.environ if k.endswith(v[2]) or k.endswith(v[3])])"
+    '" ' + LEDGER_READ_MARKER + " _URL _DSN"
+)
 # Same construction rules as every other probe in this file: one line, no single
 # quote, no dollar, no backtick, no double quote inside the program, and no
 # space inside any argument. The last rule is why the statement is passed as
@@ -3295,7 +3320,7 @@ LEDGER_READ_COMMAND = (
     'python -c "'
     "import os,sys,psycopg as P;v=sys.argv;"
     "print(v[1],P.connect(os.environ[v[2]]).execute(chr(32).join(v[3:])).fetchall())"
-    '" ' + LEDGER_READ_MARKER + " " + LEDGER_DSN_VARIABLE + " {sql}"
+    '" ' + LEDGER_READ_MARKER + " {dsn} {sql}"
 )
 # A statement that needs a value carries it as a bound parameter rather than a
 # literal, because a literal would need quotes this channel cannot send. The
@@ -3306,38 +3331,29 @@ LEDGER_PARAM_COMMAND = (
     "import os,sys,psycopg as P;v=sys.argv;n=int(v[3]);"
     "print(v[1],P.connect(os.environ[v[2]]).execute("
     "chr(32).join(v[4+n:]),v[4:4+n]).fetchall())"
-    '" ' + LEDGER_READ_MARKER + " " + LEDGER_DSN_VARIABLE + " {count} {params} {sql}"
+    '" ' + LEDGER_READ_MARKER + " {dsn} {count} {params} {sql}"
 )
-# Committed in full so review sees exactly what runs against production. Both
-# are read-only, both name their columns rather than selecting everything, and
-# neither returns anything a person wrote: agent_run holds identifiers, a
-# status and counters.
+# Committed in full so review sees exactly what runs against production. All are
+# read-only, none selects every column, and none returns anything a person
+# wrote: agent_run holds identifiers, a status and counters.
 LEDGER_QUERIES = (
-    (
-        "existing-runs",
-        "select run_id,task_id,status from agent_run order by started_at desc limit 3",
-        (),
-    ),
-    (
-        "run-insert-privilege",
-        "select has_table_privilege(user,%s,%s)",
-        ("agent_run", "INSERT"),
-    ),
-    (
-        "task-insert-privilege",
-        "select has_table_privilege(user,%s,%s)",
-        ("agent_task", "INSERT"),
-    ),
+    # Which role this container connects as. It is what turns "permission
+    # denied" from a dead end into a specific thing to grant.
+    ("identity", "select user,current_database()", ()),
+    ("run-insert-privilege", "select has_table_privilege(user,%s,%s)",
+     ("agent_run", "INSERT")),
+    ("task-insert-privilege", "select has_table_privilege(user,%s,%s)",
+     ("agent_task", "INSERT")),
 )
 
 
-def ledger_command(sql: str, params: tuple = ()) -> str:
+def ledger_command(sql: str, params: tuple = (), dsn: str = LEDGER_DSN_VARIABLE) -> str:
     """Assemble one committed query into a command this endpoint will accept."""
 
     if not params:
-        return LEDGER_READ_COMMAND.format(sql=sql)
+        return LEDGER_READ_COMMAND.format(sql=sql, dsn=dsn)
     return LEDGER_PARAM_COMMAND.format(
-        count=len(params), params=" ".join(params), sql=sql
+        count=len(params), params=" ".join(params), sql=sql, dsn=dsn
     )
 
 
@@ -3398,13 +3414,32 @@ def probe_once(client: Client, uuid: str, task_name: str, command: str,
     return execution, answer, reason, at_rest
 
 
+def ledger_dsn_variable(answer: str) -> str | None:
+    """Pick the connection-string variable out of a list of variable names.
+
+    The probe prints names only. Choosing here rather than in the container
+    keeps the choice reviewable and keeps the command short enough to send.
+    """
+
+    names = re.findall(r"[A-Z][A-Z0-9_]*(?:_URL|_DSN)", answer or "")
+    for name in names:
+        if "DATABASE" in name or "POSTGRES" in name or name.startswith("DB_"):
+            return name
+    return names[0] if names else None
+
+
 def operate_ledger_read(client: Client, spec: dict, sleep=None) -> int:
-    """Ask the run ledger the two questions that decide the next step.
+    """Ask a container's database role whether it could open a run.
 
     This changes nothing. It exists because the alternative to asking is
-    guessing, and the guess would be expensive either way: building a run-
-    opening channel that was never needed, or assuming a run can be opened by a
-    role that has no privilege to open one.
+    guessing, and both guesses are expensive: building a run-opening channel
+    that was never needed, or assuming a role can open a run when it cannot.
+
+    The gateway has already answered -- permission denied on agent_run, which
+    is migration 008 working as designed. What is asked here is whether any
+    other container in the same database holds a role that can, because that is
+    the difference between finishing this from inside the perimeter and handing
+    the owner a deployment.
     """
 
     import time
@@ -3423,54 +3458,74 @@ def operate_ledger_read(client: Client, spec: dict, sleep=None) -> int:
         emit("RESULT ledger-read failed application=absent")
         return EXIT_FAILED
 
-    application = find_application(
-        applications_in(client, environment), target["resource_name"]
-    )
-    if application is None:
-        emit(f"    application {target['resource_name']}: ABSENT")
-        emit("RESULT ledger-read failed application=absent")
-        return EXIT_FAILED
-
-    uuid = str(application["uuid"])
-    emit(
-        f"    application {target['resource_name']}: uuid={uuid} "
-        f"state={application.get('status')}"
-    )
-
-    answers: dict[str, str] = {}
-    for label, sql, params in LEDGER_QUERIES:
-        command = ledger_command(sql, params)
+    applications = applications_in(client, environment)
+    asked = 0
+    for subject, known_dsn in LEDGER_SUBJECTS:
         emit("")
-        emit(f"    {label}: {sql} ({len(command)} chars)")
-        execution, answer, reason, at_rest = probe_once(
-            client, uuid, LEDGER_READ_TASK_NAME, command, LEDGER_READ_MARKER, sleep
-        )
-        if not at_rest:
-            emit(f"RESULT ledger-read failed reason=task_left_armed at={label}")
+        application = find_application(applications, subject)
+        if application is None:
+            emit(f"    application {subject}: ABSENT")
+            emit(f"RESULT ledger-read failed application=absent subject={subject}")
             return EXIT_FAILED
-        if execution is None:
-            emit(f"    no execution was recorded, so the query did not run ({reason})")
-            emit(f"RESULT ledger-read failed reason={reason} at={label}")
-            return EXIT_FAILED
-        if answer is None:
-            emit(
-                f"    the execution finished but carries no {LEDGER_READ_MARKER} "
-                "marker, so the query did not complete. The captured output "
-                "follows, because the reason is in it."
+
+        uuid = str(application["uuid"])
+        emit(f"    application {subject}: uuid={uuid} state={application.get('status')}")
+
+        dsn = known_dsn
+        if dsn is None:
+            emit(f"    discovering which variable holds {subject}'s connection string")
+            _execution, answer, reason, at_rest = probe_once(
+                client, uuid, LEDGER_READ_TASK_NAME, LEDGER_ENV_COMMAND,
+                LEDGER_READ_MARKER, sleep,
             )
-            emit_captured_output(execution.get("message"), known=(uuid,))
-            emit(f"RESULT ledger-read failed reason=no_marker at={label}")
-            return EXIT_FAILED
-        answers[label] = answer
-        emit_captured_output(answer, known=(uuid,))
+            if not at_rest:
+                emit("RESULT ledger-read failed reason=task_left_armed")
+                return EXIT_FAILED
+            if answer is None:
+                emit(f"    no answer from {subject} ({reason})")
+                emit(f"RESULT ledger-read failed reason={reason} subject={subject}")
+                return EXIT_FAILED
+            emit_captured_output(answer, known=(uuid,))
+            dsn = ledger_dsn_variable(answer)
+            if dsn is None:
+                emit(f"    {subject} carries no variable that names a connection")
+                emit(f"RESULT ledger-read failed reason=no_dsn subject={subject}")
+                return EXIT_FAILED
+            emit(f"    using {dsn}")
+
+        for label, sql, params in LEDGER_QUERIES:
+            command = ledger_command(sql, params, dsn)
+            emit("")
+            emit(f"    {subject} {label}: {sql} ({len(command)} chars)")
+            execution, answer, reason, at_rest = probe_once(
+                client, uuid, LEDGER_READ_TASK_NAME, command,
+                LEDGER_READ_MARKER, sleep,
+            )
+            if not at_rest:
+                emit("RESULT ledger-read failed reason=task_left_armed")
+                return EXIT_FAILED
+            if answer is None:
+                emit(
+                    f"    the execution carries no {LEDGER_READ_MARKER} marker, so "
+                    "the query did not complete. The captured output follows, "
+                    "because the reason is in it."
+                )
+                emit_captured_output(
+                    (execution or {}).get("message"), known=(uuid,)
+                )
+                emit(f"RESULT ledger-read failed reason={reason} at={label}")
+                return EXIT_FAILED
+            emit_captured_output(answer, known=(uuid,))
+            asked += 1
 
     emit("")
     emit(
-        "    Both questions were answered by the database itself. A run listed "
-        "above can be reused by a model call; an insert privilege of True means "
-        "a run can be opened without deploying the ledger service."
+        "    A True above means a run can be opened from inside the perimeter "
+        "and the first model call is one command away. A False means the run "
+        "ledger has no writer deployed, which is an owner action, not a "
+        "workaround."
     )
-    emit(f"RESULT ledger-read ok queries={len(answers)}")
+    emit(f"RESULT ledger-read ok queries={asked}")
     return EXIT_OK
 
 
