@@ -85,6 +85,24 @@ production_backup_state_2026_09_07:
       schedule left alone does not recover; without intervention the on-demand
       2026-09-07 backup would have been the last one.
     repair: owner action 7 — restart Coolify's scheduler on the host
+  docker_cleanup_state:
+    evidence_class: LIVE-VERIFIED
+    observed_at: 2026-09-07T18:20Z
+    workflow_run: 34150535505
+    configured_frequency: "0 0 * * *"
+    configured_threshold_percent: 80
+    last_run: 2026-08-27T00:00:11Z
+    note: configured terms are simply not being applied while the scheduler is stalled
+  host_disk_state:
+    evidence_class: UNKNOWN
+    high_disk_usage_notification_sent: null
+    reasoning: >-
+      Reads null rather than false. Coolify sets that flag from a scheduled
+      check, so with the scheduler stalled it cannot report a filling disk any
+      more than the schedule could take a backup. A quiet disk alarm and a dead
+      disk alarm are indistinguishable from here, which is the same shape as the
+      backup incident. Disk state is host-side and no repository evidence can
+      settle it.
   daily_backup_stopgap:
     workflow: .github/workflows/backup-daily.yml
     schedule: "0 2 * * *"
