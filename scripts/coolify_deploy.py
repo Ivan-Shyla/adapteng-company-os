@@ -1441,6 +1441,36 @@ def probe_backup_execution_sources(client: Client, database: dict, config: dict)
     for path in candidates:
         parsed = call(client, "GET", path, allow_absent=True)
         emit(f"              GET {path} -> {describe_probe_result(parsed)}")
+        rows = parsed.get("executions") if isinstance(parsed, dict) else None
+        if isinstance(rows, list):
+            report_backup_executions(rows)
+
+
+def report_backup_executions(rows: list) -> None:
+    """Print the most recent backup outcomes, which is what dates the recovery point.
+
+    A backup that fails is only a discovered problem once someone compares the
+    newest successful run against today. That comparison is the whole point of
+    printing this, so the outcome and its own timestamp are what appear, never
+    the dump.
+    """
+
+    ordered = sorted(
+        (row for row in rows if isinstance(row, dict)),
+        key=lambda row: str(row.get("created_at") or ""),
+        reverse=True,
+    )
+    if not ordered:
+        emit("                no runs recorded")
+        return
+    emit(f"                runs recorded: {len(ordered)}")
+    for row in ordered[:8]:
+        emit(
+            "                "
+            f"{row.get('created_at')} status={row.get('status')} "
+            f"size={row.get('size')} "
+            f"message={clip(redact(str(row.get('message') or '')), 160)}"
+        )
 
 
 def describe_probe_result(parsed: object) -> str:
