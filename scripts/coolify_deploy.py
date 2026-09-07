@@ -3339,11 +3339,18 @@ LEDGER_PARAM_COMMAND = (
 LEDGER_QUERIES = (
     # Which role this container connects as. It is what turns "permission
     # denied" from a dead end into a specific thing to grant.
-    ("identity", "select user,current_database()", ()),
-    ("run-insert-privilege", "select has_table_privilege(user,%s,%s)",
-     ("agent_run", "INSERT")),
-    ("task-insert-privilege", "select has_table_privilege(user,%s,%s)",
-     ("agent_task", "INSERT")),
+    ("identity", "select user", ()),
+    # Asked through the catalog rather than has_table_privilege because that
+    # call needs parentheses, and sh parses this command line before python
+    # ever sees it: a bare ( is a shell syntax error. relacl is also the more
+    # useful answer -- it is the whole access list, so it names every role that
+    # holds anything on the table, not just whether one guess was right.
+    ("agent-acl", "select relname,relacl from pg_class where relname~%s", ("agent_",)),
+    # pg_tables reports the owner as a name rather than an oid, which saves a
+    # second lookup. A NULL relacl above means nobody but the owner holds
+    # anything on the table, so who the owner is decides the question.
+    ("agent-owner",
+     "select tableowner from pg_tables where tablename~%s", ("agent",)),
 )
 
 
@@ -3419,13 +3426,21 @@ def ledger_dsn_variable(answer: str) -> str | None:
 
     The probe prints names only. Choosing here rather than in the container
     keeps the choice reviewable and keeps the command short enough to send.
+
+    A _DSN suffix outranks everything: it means a connection string and nothing
+    else, while _URL is used for every HTTP base in the environment. The
+    adapter carries BASEROW_BASE_URL, ID_ALLOCATOR_DSN and COOLIFY_URL, and
+    ranking _URL first picked the Baserow API.
     """
 
     names = re.findall(r"[A-Z][A-Z0-9_]*(?:_URL|_DSN)", answer or "")
     for name in names:
-        if "DATABASE" in name or "POSTGRES" in name or name.startswith("DB_"):
+        if name.endswith("_DSN"):
             return name
-    return names[0] if names else None
+    for name in names:
+        if "DATABASE" in name or "POSTGRES" in name:
+            return name
+    return None
 
 
 def operate_ledger_read(client: Client, spec: dict, sleep=None) -> int:

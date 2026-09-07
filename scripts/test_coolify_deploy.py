@@ -3548,7 +3548,7 @@ class LedgerReadTests(unittest.TestCase):
             with self.subTest(label):
                 lowered = sql.lower()
                 for verb in ("insert into", "update ", "delete", "drop", "alter",
-                             "truncate", "grant"):
+                             "truncate", "grant "):
                     self.assertNotIn(verb, lowered)
 
     def test_no_query_selects_every_column(self) -> None:
@@ -3563,13 +3563,21 @@ class LedgerReadTests(unittest.TestCase):
                 self.assertNotIn("*", sql)
 
     def test_commands_carry_nothing_the_shell_would_touch(self) -> None:
-        """Coolify escapes single quotes and sh expands dollars and backticks."""
+        """sh parses this line before python sees it, and a bare ( ends the run.
+
+        The parenthesis rule was learned the hard way: current_database() and
+        has_table_privilege(...) both produced `sh: 1: Syntax error: "("
+        unexpected` against a live container. Quotes, dollars and backticks
+        were already known; parentheses now sit with them.
+        """
 
         for label, sql, params in driver.LEDGER_QUERIES:
             with self.subTest(label):
                 command = driver.ledger_command(sql, params)
                 for character in ("'", "$", "`", "\n"):
                     self.assertNotIn(character, command)
+                for character in ("(", ")", "&", ";", "|", "<", ">"):
+                    self.assertNotIn(character, sql)
 
     def test_parameters_keep_values_out_of_the_statement(self) -> None:
         """Naming a table inline would need quotes this channel cannot send.
@@ -3578,10 +3586,8 @@ class LedgerReadTests(unittest.TestCase):
         reason a value can never be read back as SQL.
         """
 
-        command = driver.ledger_command(
-            "select has_table_privilege(user,%s,%s)", ("agent_run", "INSERT")
-        )
-        self.assertIn(" 2 agent_run INSERT ", command)
+        command = driver.ledger_command("select x from y where n=%s", ("agent_run",))
+        self.assertIn(" 1 agent_run ", command)
         self.assertIn("%s", command)
 
     def test_it_reads_the_connection_string_from_the_environment(self) -> None:
@@ -3604,8 +3610,8 @@ class LedgerReadTests(unittest.TestCase):
 
         labels = [label for label, _sql, _params in driver.LEDGER_QUERIES]
         self.assertIn("identity", labels)
-        self.assertIn("run-insert-privilege", labels)
-        self.assertIn("task-insert-privilege", labels)
+        self.assertIn("agent-acl", labels)
+        self.assertIn("agent-owner", labels)
 
     def test_the_environment_probe_reports_names_and_never_values(self) -> None:
         """Discovering which variable holds a DSN must not read the DSN.
@@ -3619,15 +3625,30 @@ class LedgerReadTests(unittest.TestCase):
         self.assertNotIn("os.environ[", command)
         self.assertLessEqual(len(command), driver.PEER_COMMAND_LIMIT)
 
-    def test_it_prefers_a_database_variable_over_any_other_url(self) -> None:
-        """Containers carry several _URL variables and only one is a database."""
+    def test_a_dsn_suffix_outranks_every_url(self) -> None:
+        """The adapter's real environment, which defeated the first ranking.
 
-        answer = "AELEDG ['AI_GATEWAY_BASE_URL', 'ADAPTER_DATABASE_URL', 'N8N_URL']"
-        self.assertEqual(driver.ledger_dsn_variable(answer), "ADAPTER_DATABASE_URL")
+        _URL names every HTTP base in these containers; _DSN means a connection
+        string and nothing else. Ranking _URL first picked the Baserow API.
+        """
+
+        answer = "AELEDG ['BASEROW_BASE_URL', 'ID_ALLOCATOR_DSN', 'COOLIFY_URL']"
+        self.assertEqual(driver.ledger_dsn_variable(answer), "ID_ALLOCATOR_DSN")
+
+    def test_a_named_database_url_is_accepted_when_no_dsn_exists(self) -> None:
+        """The gateway spells it AI_GATEWAY_DATABASE_URL, with no _DSN present."""
+
+        answer = "AELEDG ['AI_GATEWAY_DATABASE_URL', 'COOLIFY_URL']"
+        self.assertEqual(driver.ledger_dsn_variable(answer), "AI_GATEWAY_DATABASE_URL")
 
     def test_it_reports_no_variable_rather_than_guessing_one(self) -> None:
-        """A wrong guess would connect somewhere unintended, or look like a bug."""
+        """Connecting to a guessed endpoint is worse than reporting unknown.
 
+        A bare COOLIFY_URL is an HTTP base, and treating it as a database
+        produces an error that reads like the database is broken.
+        """
+
+        self.assertIsNone(driver.ledger_dsn_variable("AELEDG ['COOLIFY_URL']"))
         self.assertIsNone(driver.ledger_dsn_variable("AELEDG []"))
         self.assertIsNone(driver.ledger_dsn_variable(""))
 
