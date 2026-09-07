@@ -1355,6 +1355,66 @@ def report_databases(client: Client) -> None:
         emit(f"        internal address: {address_of(item.get('internal_db_url'))}")
         emit(f"        external address: {address_of(item.get('external_db_url'))}")
         emit(f"        keys: {sorted(item)}")
+        report_database_backups(item)
+
+
+# Names, schedules and outcomes only. A backup configuration carries the
+# destination credential, so nothing outside this allowlist is printed.
+SAFE_BACKUP_FIELDS = (
+    "uuid",
+    "enabled",
+    "frequency",
+    "save_s3",
+    "database_name",
+    "dumpall",
+    "created_at",
+    "updated_at",
+)
+
+
+def report_database_backups(database: dict) -> None:
+    """Say whether this database is scheduled to be backed up, and when it last was.
+
+    A running database and a working backup are different facts, and the second
+    one fails quietly: a schedule that stops producing files leaves the instance
+    healthy and the dashboard green while the recovery point silently ages. The
+    only way that becomes visible is to read the schedule and its most recent
+    executions together, so that is what this prints.
+
+    Field names and outcomes only. The destination credential lives on the same
+    object and is never among the fields printed.
+    """
+
+    configs = database.get("backup_configs")
+    if not isinstance(configs, list) or not configs:
+        emit("        scheduled backups: none configured")
+        return
+    emit(f"        scheduled backups: {len(configs)}")
+    for config in configs:
+        if not isinstance(config, dict):
+            continue
+        shown = " ".join(
+            f"{name}={config.get(name)}"
+            for name in SAFE_BACKUP_FIELDS
+            if config.get(name) is not None
+        )
+        emit(f"          - {shown}")
+        executions = config.get("executions")
+        if not isinstance(executions, list) or not executions:
+            emit("            executions: none reported on this object")
+            continue
+        ordered = sorted(
+            (row for row in executions if isinstance(row, dict)),
+            key=lambda row: str(row.get("created_at") or ""),
+            reverse=True,
+        )
+        emit(f"            executions reported: {len(ordered)}")
+        for row in ordered[:5]:
+            emit(
+                "            "
+                f"{row.get('created_at')} status={row.get('status')} "
+                f"size={row.get('size')} message={clip(str(row.get('message') or ''), 120)}"
+            )
 
 
 SAFE_STORAGE_FIELDS = (
