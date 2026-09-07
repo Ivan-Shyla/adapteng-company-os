@@ -23,6 +23,13 @@ name: Coolify deploy
 # output is masked by shape before it is printed, because it is the one thing
 # this workflow prints that it did not construct.
 #
+# backup-now runs the database's already-declared backup schedule once and waits
+# for a run newer than the one that was there before. It adds a backup and
+# nothing else: it creates no schedule, edits no configuration and reads no
+# dump, so it cannot back up something that was never configured to be backed
+# up. It exists because a schedule that stops firing records no failure, which
+# leaves the recovery point ageing behind a green dashboard.
+#
 # The access value is passed through the environment and is never printed. The
 # base address comes from a repository variable, so neither is written into a
 # file in this repository.
@@ -48,6 +55,7 @@ on:
           - peer-diagnose
           - diagnose
           - networks
+          - backup-now
       service:
         description: "Spec file under deploy/, named without its extension"
         required: true

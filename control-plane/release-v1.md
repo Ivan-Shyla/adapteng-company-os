@@ -1,12 +1,105 @@
 # Platform v1 — release command center
 
-## Operational checkpoint — 2026-09-07
+## Operational checkpoint — 2026-09-07 17:05 UTC
 
-This checkpoint controls the next execution and supersedes the 2026-09-05 one
-retained below it. The longer 2026-08-13 GitHub-only review further below is
-historical evidence, not the current task queue. When facts conflict, use this
-order: freshly observed provider runtime, current repository `main`, this
-checkpoint, then the older material.
+This checkpoint controls the next execution and supersedes the 2026-09-07
+08:30 one retained below it. When facts conflict, use this order: freshly
+observed provider runtime, current repository `main`, this checkpoint, then
+the older material.
+
+### What changed since 08:30
+
+Two of the three findings recorded this morning have been overtaken by events,
+and one of them was wrong in a way worth stating plainly.
+
+- **Coolify is back.** `coolify.adapteng.com/api/health` answers `200` and the
+  control-plane reads work again. Every Coolify-dependent fact that was
+  `UNKNOWN` at 08:30 is now readable.
+- **The "no production backup exists" finding was wrong.** It was measured
+  correctly and interpreted incorrectly. The morning run looked for a
+  *pgBackRest* repository, found none, and concluded there was no backup. There
+  is no pgBackRest repository — but the `adapteng_ops` database has a
+  Coolify-native `pg_dump` schedule that had already run **25 consecutive times
+  with `status=success`**, the newest on 2026-08-27, all 175419 bytes, under
+  `data/coolify/backups/databases/`. Absence of the expected mechanism was read
+  as absence of the capability.
+- **Why it stopped is the part that matters.** Not one run failed. The runs
+  simply stopped being attempted when the Coolify scheduler stopped with the
+  Coolify container. A backup that fails records an error; a backup that stops
+  records nothing at all, so the recovery point aged eleven days while the
+  schedule still read `enabled` and every workload stayed healthy. This is the
+  failure mode that monitoring based on error rates cannot see.
+
+### Evidence boundary
+
+- **GITHUB-VERIFIED (2026-09-07 17:05):** the five authoritative heads are
+  `adapteng-company-os` `afbd31988d89da0328aa2b8a78eb3090383200aa`,
+  `adapteng-automation-platform` `9957271a267ececd41abd09c22243d35fe87416f`
+  (frozen, PR #121 open and unchanged),
+  `adapteng-website` `badfbb95f658` (moved from `cd17a2969041` by the legal
+  operator migration, PR #188; the lead producer and
+  `configure-lead-intake.yml` are untouched, so the T1–T4 preflight evidence
+  carries forward even though its pinned revision is now stale),
+  `adapteng-marketing` `9afaf96db1024685652383bbf825fc2994da13bc` and
+  `ai-dev-loop-control-plane` `327fc4b63ec60afc8a8a6c3169d062a58d9eb4da`.
+- **LIVE-VERIFIED (2026-09-07 16:56):** a production backup ran on demand and
+  succeeded. Run `34145513370` triggered the database's own declared schedule
+  through the documented `backup_now` flag; execution `2026-09-07T16:56:58Z`
+  recorded `status=success`, `size=175419`. Run `34145654909` then found the
+  object in Backblaze B2 at `16:57:03Z`, same size, under the Coolify backup
+  prefix. **The recovery point is current.** The schedule was not modified: its
+  `updated_at` still reads `2026-08-03`, and it still reads
+  `enabled=True frequency=0 2 * * * save_s3=True`.
+- **LIVE-VERIFIED (2026-09-07 16:45):** the `ai-gateway` application had drifted
+  from its reviewed spec on two settings, and one of them was a live control
+  hole: `is_auto_deploy_enabled` was stored `true` against a declared `false`,
+  so any merge to `adapteng-automation-platform` `main` — the repository frozen
+  for the PR #121 ceremony — would have released to production unreviewed.
+  Run `34144313499` reconciled both settings and read the state back.
+- **LIVE-VERIFIED (2026-09-07 16:30):** the `ops-runner` container is
+  `exited:unhealthy` and its registration read answers `HTTP 401`. Run
+  `34143986885`. `scripts/ops_runner.py` mints a runner registration from
+  `RULESET_ADMIN_TOKEN`, so that expired credential is the single reason every
+  `runs-on: [self-hosted, adapteng-ops]` workflow now queues with no runner.
+- **UNVERIFIED:** whether the Coolify scheduler has resumed firing on its own.
+  The on-demand run proves the backup path works; it does not prove the timer
+  recovered. The next unattended run is due at 02:00 UTC and
+  `coolify-deploy.yml operation=inspect` now prints the newest recorded run.
+- **UNVERIFIED:** restore. No dump from this series has ever been restored. The
+  only restore evidence in the bucket is the 2026-08-03 rehearsal against the
+  disposable `adapteng_ops_test` stanza, which is not production data.
+
+### Current verdict
+
+| Layer | Verdict | Latest evidence |
+|---|---|---|
+| Repository development | **GO** | All five authoritative heads current and green. |
+| L1 authorization | **GO** | Owner-authoritative runtime policy permits existing access, reversible provider configuration, green ordinary PR merges and one bounded internal model proof. |
+| L1 end-to-end runtime | **GO** | Proven live on 2026-09-06: workflow `65ATNbi5sColtnp0` on self-hosted `n8n.adapteng.com`, execution `26` succeeded with all five checks — `200`, `200`, `200`, `401`, `403` — reading 3 allowlisted records with zero writes. |
+| L2 controlled business writes | **NOT PROVEN** | The isolated WEB-002 T1–T4 lane passed (run `34058980920`) and the backup half of the durability gate now holds, but **restore is still unproven**, the Baserow token in Git history is still live, and the production consumer still has zero executions. |
+| L3 autonomous external action | **NOT AUTHORIZED** | External send/publish, DNS, destructive production action and unbounded spend remain explicit owner gates. |
+
+### The durability gate, stated precisely
+
+The gate is "production backup **plus isolated restore**". It is now half
+closed, and the two halves are not interchangeable.
+
+| Half | State | Evidence |
+|---|---|---|
+| A recoverable production backup exists offsite | **HOLDS** | `2026-09-07T16:56:58Z` `status=success`; object in B2 at `16:57:03Z`, 175419 bytes; 25 prior successes in the same series |
+| That backup has been restored and checked | **DOES NOT HOLD** | Never attempted against production data. Blocked host-side behind `RULESET_ADMIN_TOKEN` |
+
+A dump nobody has restored is an assumption, not a recovery point, so the
+cutover stays gated. But the blocker is now a specific expired token and one
+drill, not a missing capability.
+
+---
+
+## Operational checkpoint — 2026-09-07 08:30 (superseded by the 17:05 checkpoint above)
+
+This checkpoint is retained because two of its live findings were overtaken
+within the day and the correction is instructive; see "What changed since
+08:30" above before relying on anything below.
 
 ### Evidence boundary
 

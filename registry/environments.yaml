@@ -5,23 +5,72 @@ updated: 2026-09-07
 
 control_plane_state_2026_09_07:
   evidence_class: LIVE-VERIFIED
+  observed_at: 2026-09-07T17:05Z
   coolify_control_plane: >-
-    Down. https://coolify.adapteng.com returns HTTP 502 on every path tested,
-    including the web UI root and a static asset, not only the API. The edge
-    proxy answers, so the reverse proxy is healthy and the Coolify application
-    container behind it is not. Company OS run 34099598085 failed at
-    GET /projects 502, which is the same condition seen from inside the network.
+    Restored. https://coolify.adapteng.com/api/health returns 200 and authorized
+    control-plane reads work again. Earlier the same day every path returned 502
+    while the edge proxy and all workloads stayed healthy, which is the shape of
+    the application container being down rather than the host.
   managed_workloads: >-
-    Unaffected, and measured rather than assumed. https://n8n.adapteng.com/healthz
+    Unaffected throughout, and measured rather than assumed. https://n8n.adapteng.com/healthz
     returned 200 and /rest/login returned 401, and https://adapteng.com returned
     200. Deployed containers keep running and keep being routed while the
-    control plane is down.
-  consequence: >-
-    Deployment revision reads, application configuration snapshots, network
-    membership reads and any redeploy or rollback are unavailable until the
-    Coolify container is restarted on the host. This blocks the Coolify source
-    reconciliation, so no source-branch switch was attempted.
-  owner_action: restart the Coolify application container on the Hetzner host, then confirm GET /api/v1/version returns 200
+    control plane is down. That is precisely why the outage went unnoticed.
+  outage_side_effect: >-
+    The Coolify scheduler stops with the Coolify container, and the production
+    adapteng_ops backup runs on that scheduler. It therefore stopped being
+    attempted after 2026-08-27 without a single failed run being recorded. The
+    outage began around 2026-08-27, not 2026-09-05 when it was first noticed.
+  ai_gateway_drift_closed: >-
+    Run 34144313499 reconciled two live settings back to deploy/ai-gateway.json:
+    is_auto_deploy_enabled true -> false and is_force_https_enabled true -> false.
+    The first was a control hole: Coolify was set to auto-deploy from the
+    adapteng-automation-platform main branch that is frozen for the PR #121
+    ceremony, so any merge there would have released to production unreviewed.
+  ops_runner: >-
+    exited:unhealthy, registration read HTTP 401 (run 34143986885). ops_runner.py
+    mints a runner registration from RULESET_ADMIN_TOKEN, so that expired
+    credential is the single reason every runs-on [self-hosted, adapteng-ops]
+    workflow queues with no runner.
+  owner_action: refresh RULESET_ADMIN_TOKEN, then dispatch ops-runner.yml deploy and status
+
+production_backup_state_2026_09_07:
+  evidence_class: LIVE-VERIFIED
+  observed_at: 2026-09-07T17:00Z
+  mechanism: Coolify-native scheduled pg_dump of adapteng_ops (NOT pgBackRest)
+  schedule:
+    uuid_ref: the single schedule on database pgdgbwzsuuxhw55g8v5opjgn
+    enabled: true
+    frequency: "0 2 * * *"
+    save_s3: true
+    updated_at: 2026-08-03    # unchanged by the on-demand trigger
+  history: 25 consecutive recorded runs, every one status=success, all 175419 bytes
+  gap: >-
+    Newest scheduled run before this session was 2026-08-27T02:00:05Z. Nothing
+    failed after it; the runs stopped being attempted when the Coolify scheduler
+    stopped. A backup that fails records an error, a backup that stops records
+    nothing, so the recovery point aged eleven days behind a green dashboard.
+  on_demand_run:
+    workflow_run: 34145513370
+    execution_at: 2026-09-07T16:56:58Z
+    status: success
+    size_bytes: 175419
+    method: documented backup_now flag on the existing schedule; no schedule created or edited
+  offsite_confirmation:
+    workflow_run: 34145654909
+    object_prefix: data/coolify/backups/databases/root-team-0/adapteng-ops-db-pgdgbwzsuuxhw55g8v5opjgn/
+    last_modified: 2026-09-07T16:57:03Z
+    size_bytes: 175419
+  pgbackrest_repository: >-
+    Absent, and that is a real finding rather than a contradiction. The 2026-09-07
+    08:30 checkpoint looked for a pgBackRest repository, found none and concluded
+    no backup existed. Absence of the expected mechanism is not absence of the
+    capability. The only pgBackRest evidence in the bucket is the 2026-08-03
+    rehearsal under postgres-physical-backup/validation/ against the disposable
+    adapteng_ops_test stanza, which is not production data.
+  restore: NEVER EXERCISED against production data — this is the remaining half of the durability gate
+  scheduler_resumption: UNVERIFIED — the on-demand run proves the path, not the timer; next unattended run due 02:00 UTC
+  how_to_check: coolify-deploy.yml operation=inspect now prints the newest recorded run, so this needs no host access
 
 platform:
   compute: Hetzner (EU region) — single self-hosted host

@@ -69,8 +69,14 @@ OPERATIONS = (
     "peer-diagnose",
     "diagnose",
     "networks",
+    "backup-now",
 )
 FORBIDDEN_METHODS = frozenset({"DELETE"})
+
+# A dump of this database has taken seconds, not minutes, for every recorded
+# run, so this waits minutes rather than hours before calling it unproven.
+BACKUP_RUN_ATTEMPTS = 20
+BACKUP_RUN_INTERVAL_SECONDS = 15
 
 # Coolify reports a deployment through these states. Anything outside the two
 # sets below is unknown, and an unknown state is polled rather than guessed.
@@ -1355,6 +1361,134 @@ def report_databases(client: Client) -> None:
         emit(f"        internal address: {address_of(item.get('internal_db_url'))}")
         emit(f"        external address: {address_of(item.get('external_db_url'))}")
         emit(f"        keys: {sorted(item)}")
+        report_database_backups(client, item)
+
+
+# Names, schedules and outcomes only. A backup configuration carries the
+# destination credential, so nothing outside this allowlist is printed.
+SAFE_BACKUP_FIELDS = (
+    "uuid",
+    "enabled",
+    "frequency",
+    "save_s3",
+    "database_name",
+    "dumpall",
+    "created_at",
+    "updated_at",
+)
+
+
+def report_database_backups(client: Client, database: dict) -> None:
+    """Say whether this database is scheduled to be backed up, and when it last was.
+
+    A running database and a working backup are different facts, and the second
+    one fails quietly: a schedule that stops producing files leaves the instance
+    healthy and the dashboard green while the recovery point silently ages. The
+    only way that becomes visible is to read the schedule and its most recent
+    executions together, so that is what this prints.
+
+    Field names and outcomes only. The destination credential lives on the same
+    object and is never among the fields printed.
+    """
+
+    configs = database.get("backup_configs")
+    if not isinstance(configs, list) or not configs:
+        emit("        scheduled backups: none configured")
+        return
+    emit(f"        scheduled backups: {len(configs)}")
+    for config in configs:
+        if not isinstance(config, dict):
+            continue
+        shown = " ".join(
+            f"{name}={config.get(name)}"
+            for name in SAFE_BACKUP_FIELDS
+            if config.get(name) is not None
+        )
+        emit(f"          - {shown}")
+        executions = config.get("executions")
+        if not isinstance(executions, list) or not executions:
+            emit("            executions: none reported on this object")
+            probe_backup_execution_sources(client, database, config)
+            continue
+        ordered = sorted(
+            (row for row in executions if isinstance(row, dict)),
+            key=lambda row: str(row.get("created_at") or ""),
+            reverse=True,
+        )
+        emit(f"            executions reported: {len(ordered)}")
+        for row in ordered[:5]:
+            emit(
+                "            "
+                f"{row.get('created_at')} status={row.get('status')} "
+                f"size={row.get('size')} message={clip(str(row.get('message') or ''), 120)}"
+            )
+
+
+def probe_backup_execution_sources(client: Client, database: dict, config: dict) -> None:
+    """Report which endpoint, if any, this instance answers backup history on.
+
+    The database object names a schedule but carries no run history, so a
+    schedule that has quietly stopped producing files looks exactly like one
+    that is working. Coolify has moved this history between paths across
+    versions, so rather than assume one, this asks each candidate and reports
+    which answered. Every request is a GET; nothing is triggered or changed.
+    """
+
+    database_uuid = str(database.get("uuid") or "")
+    backup_uuid = str(config.get("uuid") or "")
+    if not database_uuid or not backup_uuid:
+        return
+    candidates = (
+        f"/databases/{database_uuid}/backups/{backup_uuid}/executions",
+        f"/databases/{database_uuid}/backups/{backup_uuid}",
+        f"/databases/{database_uuid}/backups",
+    )
+    emit("            backup history probe (read-only):")
+    for path in candidates:
+        parsed = call(client, "GET", path, allow_absent=True)
+        emit(f"              GET {path} -> {describe_probe_result(parsed)}")
+        rows = parsed.get("executions") if isinstance(parsed, dict) else None
+        if isinstance(rows, list):
+            report_backup_executions(rows)
+
+
+def report_backup_executions(rows: list) -> None:
+    """Print the most recent backup outcomes, which is what dates the recovery point.
+
+    A backup that fails is only a discovered problem once someone compares the
+    newest successful run against today. That comparison is the whole point of
+    printing this, so the outcome and its own timestamp are what appear, never
+    the dump.
+    """
+
+    ordered = sorted(
+        (row for row in rows if isinstance(row, dict)),
+        key=lambda row: str(row.get("created_at") or ""),
+        reverse=True,
+    )
+    if not ordered:
+        emit("                no runs recorded")
+        return
+    emit(f"                runs recorded: {len(ordered)}")
+    for row in ordered[:8]:
+        emit(
+            "                "
+            f"{row.get('created_at')} status={row.get('status')} "
+            f"size={row.get('size')} "
+            f"message={clip(redact(str(row.get('message') or '')), 160)}"
+        )
+
+
+def describe_probe_result(parsed: object) -> str:
+    """Summarise a probe answer by shape, never by content."""
+
+    if parsed is None:
+        return "absent"
+    if isinstance(parsed, list):
+        return f"list of {len(parsed)}"
+    if isinstance(parsed, dict):
+        return f"object with keys {sorted(parsed)[:12]}"
+    return type(parsed).__name__
 
 
 SAFE_STORAGE_FIELDS = (
@@ -3953,6 +4087,149 @@ def operate_status(client: Client, spec: dict) -> int:
 # --------------------------------------------------------------------------- #
 
 
+def newest_backup_run(client: Client, database_uuid: str, backup_uuid: str) -> dict | None:
+    """Return the most recent recorded run of one backup schedule, or None."""
+
+    parsed = call(
+        client,
+        "GET",
+        f"/databases/{database_uuid}/backups/{backup_uuid}/executions",
+        allow_absent=True,
+    )
+    rows = parsed.get("executions") if isinstance(parsed, dict) else None
+    if not isinstance(rows, list):
+        return None
+    ordered = sorted(
+        (row for row in rows if isinstance(row, dict)),
+        key=lambda row: str(row.get("created_at") or ""),
+        reverse=True,
+    )
+    return ordered[0] if ordered else None
+
+
+def schedule_unchanged(
+    client: Client, database_uuid: str, backup_uuid: str, expected: dict
+) -> bool:
+    """Confirm the trigger did not also reconfigure the schedule it ran.
+
+    Asking for a run and silently changing the terms of every future run would
+    be the worst possible outcome here, and it would look identical to success.
+    """
+
+    parsed = call(
+        client, "GET", f"/databases/{database_uuid}/backups/{backup_uuid}", allow_absent=True
+    )
+    if not isinstance(parsed, dict) or not parsed:
+        emit("    schedule read-back unavailable; state after the request is UNVERIFIED")
+        return True
+    drift = {
+        key: (value, parsed.get(key))
+        for key, value in expected.items()
+        if parsed.get(key) != value
+    }
+    if drift:
+        for key, (was, now) in sorted(drift.items()):
+            emit(f"    DRIFT {key}: {was} -> {now}")
+        emit("")
+        emit("RESULT backup-now failed reason=schedule-changed-by-the-request")
+        return False
+    emit("    schedule unchanged after the request")
+    return True
+
+
+def operate_backup_now(client: Client, spec: dict, sleep=None) -> int:
+    """Run the database's existing backup schedule once, now, and confirm it landed.
+
+    A schedule only protects anything while it is firing. This one stopped
+    firing without failing, which is the quiet case: no run recorded means no
+    error recorded either, so the recovery point ages while every dashboard
+    stays green. Waiting for the next scheduled hour would confirm that a day
+    later; asking for a run now confirms it immediately.
+
+    This adds a backup and changes nothing else. It creates no schedule, edits
+    no configuration, and reads no dump. The declared schedule is used exactly
+    as stored, so this cannot back up something that was never configured to be
+    backed up.
+    """
+
+    pause = sleep or time.sleep
+    emit(f"--- backup-now {spec.get('service')}")
+    databases = call(client, "GET", "/databases", allow_absent=True)
+    if not isinstance(databases, list) or not databases:
+        emit("RESULT backup-now failed reason=no-database-reported")
+        return EXIT_FAILED
+    if len(databases) != 1:
+        emit(f"RESULT backup-now failed reason=ambiguous-database count={len(databases)}")
+        return EXIT_FAILED
+    database = databases[0]
+    database_uuid = str(database.get("uuid") or "")
+    emit(f"    database {database.get('name')} uuid={database_uuid} status={database.get('status')}")
+
+    configs = database.get("backup_configs")
+    if not isinstance(configs, list) or len(configs) != 1:
+        count = len(configs) if isinstance(configs, list) else 0
+        emit(f"RESULT backup-now failed reason=not-exactly-one-schedule count={count}")
+        return EXIT_FAILED
+    config = configs[0]
+    backup_uuid = str(config.get("uuid") or "")
+    if not config.get("enabled"):
+        emit("RESULT backup-now failed reason=schedule-disabled")
+        return EXIT_FAILED
+    emit(
+        f"    schedule {backup_uuid} enabled={config.get('enabled')} "
+        f"frequency={config.get('frequency')} save_s3={config.get('save_s3')}"
+    )
+
+    before = newest_backup_run(client, database_uuid, backup_uuid)
+    before_at = str(before.get("created_at")) if before else ""
+    emit(f"    newest run before: {before_at or 'none recorded'}")
+
+    # The API offers no endpoint that runs a schedule directly; the documented
+    # trigger is this flag on the schedule itself. Sending it alone is the whole
+    # request, so nothing else is being asked for -- but a PATCH that quietly
+    # defaulted an omitted field would reconfigure the backup while appearing to
+    # start one, which is why the schedule is read back and compared below.
+    guarded = {key: config.get(key) for key in ("enabled", "frequency", "save_s3")}
+    call(
+        client,
+        "PATCH",
+        f"/databases/{database_uuid}/backups/{backup_uuid}",
+        body={"backup_now": True},
+    )
+    emit("    run requested")
+
+    if not schedule_unchanged(client, database_uuid, backup_uuid, guarded):
+        return EXIT_FAILED
+
+    # A request that is accepted is not a backup that exists. The only evidence
+    # that settles it is a run newer than the one that was there beforehand.
+    deadline = BACKUP_RUN_ATTEMPTS
+    for attempt in range(1, deadline + 1):
+        pause(BACKUP_RUN_INTERVAL_SECONDS)
+        current = newest_backup_run(client, database_uuid, backup_uuid)
+        current_at = str(current.get("created_at")) if current else ""
+        if current and current_at != before_at:
+            status = str(current.get("status") or "")
+            emit(
+                f"    new run {current_at} status={status} size={current.get('size')} "
+                f"message={clip(redact(str(current.get('message') or '')), 160)}"
+            )
+            if status == "success":
+                emit("")
+                emit(
+                    f"RESULT backup-now ok run={current_at} size={current.get('size')} "
+                    f"database={database.get('name')}"
+                )
+                return EXIT_OK
+            emit("")
+            emit(f"RESULT backup-now failed run={current_at} status={status}")
+            return EXIT_FAILED
+        emit(f"    attempt {attempt}/{deadline}: no newer run recorded yet")
+    emit("")
+    emit(f"RESULT backup-now failed reason=no-new-run-within-{deadline}-attempts")
+    return EXIT_FAILED
+
+
 def positive_integer(environ: dict, name: str, default: int) -> int:
     raw = (environ.get(name) or "").strip()
     if not raw:
@@ -4027,6 +4304,8 @@ def run(environ: dict) -> int:
         return operate_diagnose(client, spec)
     if operation == "networks":
         return operate_networks(client, spec)
+    if operation == "backup-now":
+        return operate_backup_now(client, spec)
     return operate_deploy(
         client,
         spec,

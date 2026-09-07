@@ -144,8 +144,29 @@ class FakeInstance:
                 "image": "postgres:16-alpine",
                 "internal_db_url": "postgresql://postgres:s3cr3t-not-for-a-log@adapteng-postgres:5432/postgres",
                 "postgres_password": "s3cr3t-not-for-a-log",
+                # A schedule with no run history is the shape production
+                # reports, and it is exactly the shape that hides a stopped
+                # backup, so the fixture reproduces it rather than a friendlier
+                # object that would never exercise the history lookup.
+                "backup_configs": [
+                    {
+                        "uuid": "bkp-1",
+                        "enabled": True,
+                        "frequency": "0 2 * * *",
+                        "save_s3": True,
+                        "s3_secret_key": "not-for-a-log-either",
+                    }
+                ],
             }
         ]
+        # What the executions endpoint reports. A requested run appends here,
+        # which is what lets a test tell an accepted request apart from a
+        # backup that actually exists.
+        self.backup_runs: list[dict] = [
+            {"created_at": "2026-08-27T02:00:05+00:00", "status": "success", "size": 175419}
+        ]
+        self.backup_run_outcome = "success"
+        self.backup_patch_resets_schedule = False
         self.environment_entries: dict[str, list[dict]] = {}
         # Same reasoning as the database fixture above: the file body is the
         # part that must never be reported, so it has to be present here or the
@@ -230,6 +251,12 @@ class FakeInstance:
             return 200, copy.deepcopy(self.databases)
         if path == "/applications":
             return 200, copy.deepcopy(self.applications)
+        match = re.fullmatch(r"/databases/([^/]+)/backups/([^/]+)/executions", path)
+        if match:
+            return 200, {"executions": copy.deepcopy(self.backup_runs)}
+        match = re.fullmatch(r"/databases/([^/]+)/backups/([^/]+)", path)
+        if match:
+            return 200, copy.deepcopy(self.databases[0]["backup_configs"][0])
         match = re.fullmatch(r"/projects/([^/]+)/environments", path)
         if match:
             return 200, copy.deepcopy(self.environments.get(match.group(1), []))
@@ -355,6 +382,24 @@ class FakeInstance:
         return 201, {"uuid": record["uuid"]}
 
     def _patch(self, path, body, query):
+        match = re.fullmatch(r"/databases/([^/]+)/backups/([^/]+)", path)
+        if match:
+            config = self.databases[0]["backup_configs"][0]
+            # Production semantics: the flag asks for a run and is not stored.
+            # The fixture also reproduces the failure this guards against, so a
+            # test can prove the read-back comparison would actually catch it.
+            if body.get("backup_now"):
+                if self.backup_patch_resets_schedule:
+                    config["frequency"] = "0 0 * * 0"
+                self.backup_runs.insert(
+                    0,
+                    {
+                        "created_at": "2026-09-07T18:40:11+00:00",
+                        "status": self.backup_run_outcome,
+                        "size": 175419,
+                    },
+                )
+            return 200, {"message": "Backup updated"}
         match = re.fullmatch(r"/applications/([^/]+)/envs", path)
         if match:
             for entry in self.environment_entries.get(match.group(1), []):
@@ -2178,6 +2223,7 @@ class EntryPointTests(unittest.TestCase):
                 "peer-diagnose",
                 "diagnose",
                 "networks",
+                "backup-now",
             },
         )
         workflow = (
@@ -4597,6 +4643,108 @@ class NetworkPlacementTests(unittest.TestCase):
             code = driver.operate_networks(instance, self.real_spec())
         self.assertEqual(code, driver.EXIT_FAILED)
         self.assertIn("RESULT networks failed application=absent", buffer.getvalue())
+
+
+class BackupNowTests(unittest.TestCase):
+    """A requested backup is only evidence once a newer run is recorded.
+
+    The production failure this guards against is not a backup that errored.
+    It is a backup that stopped being attempted: the schedule still reads
+    enabled, the database still reads healthy, and nothing anywhere records a
+    problem while the recovery point ages. So the assertions below care much
+    less about the request being accepted than about what is on the instance
+    afterwards.
+    """
+
+    def setUp(self) -> None:
+        driver.reset_redactions()
+        self.addCleanup(driver.reset_redactions)
+
+    def run_backup(self, instance) -> tuple[int, str]:
+        spec = driver.load_spec(driver.spec_path(RESOURCE))
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_backup_now(instance, spec, sleep=lambda _seconds: None)
+        return code, buffer.getvalue()
+
+    def test_a_recorded_newer_run_is_the_evidence(self) -> None:
+        instance = FakeInstance()
+        code, report = self.run_backup(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("RESULT backup-now ok", report)
+        self.assertIn("2026-09-07T18:40:11+00:00", report)
+        self.assertIn("newest run before: 2026-08-27T02:00:05+00:00", report)
+
+    def test_it_requests_the_run_and_writes_nothing_else(self) -> None:
+        """The whole point is that this adds a backup and touches no state."""
+
+        instance = FakeInstance()
+        self.run_backup(instance)
+        self.assertEqual(
+            instance.writes(),
+            [("PATCH", "/databases/db-1/backups/bkp-1")],
+        )
+        bodies = [body for method, path, body in instance.call_bodies if method == "PATCH"]
+        self.assertEqual(bodies, [{"backup_now": True}])
+
+    def test_a_request_that_also_reconfigured_the_schedule_fails(self) -> None:
+        """Changing every future run while appearing to start one is the worst case."""
+
+        instance = FakeInstance()
+        instance.backup_patch_resets_schedule = True
+        code, report = self.run_backup(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reason=schedule-changed-by-the-request", report)
+        self.assertIn("DRIFT frequency: 0 2 * * * -> 0 0 * * 0", report)
+
+    def test_an_accepted_request_that_records_no_run_fails(self) -> None:
+        """Coolify answering 200 is not a dump on the object store."""
+
+        instance = FakeInstance()
+        instance._patch = lambda path, body, query: (200, {"message": "Backup updated"})
+        code, report = self.run_backup(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reason=no-new-run-within", report)
+
+    def test_a_new_run_that_failed_is_reported_as_a_failure(self) -> None:
+        instance = FakeInstance()
+        instance.backup_run_outcome = "failed"
+        code, report = self.run_backup(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("RESULT backup-now failed", report)
+        self.assertIn("status=failed", report)
+
+    def test_a_disabled_schedule_stops_before_requesting_anything(self) -> None:
+        instance = FakeInstance()
+        instance.databases[0]["backup_configs"][0]["enabled"] = False
+        code, report = self.run_backup(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reason=schedule-disabled", report)
+        self.assertEqual(instance.writes(), [])
+
+    def test_an_absent_schedule_is_refused_rather_than_created(self) -> None:
+        """Creating a schedule here would back up on terms nobody reviewed."""
+
+        instance = FakeInstance()
+        instance.databases[0]["backup_configs"] = []
+        code, report = self.run_backup(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reason=not-exactly-one-schedule", report)
+        self.assertEqual(instance.writes(), [])
+
+    def test_more_than_one_database_stops_rather_than_guessing(self) -> None:
+        instance = FakeInstance()
+        instance.databases.append(dict(instance.databases[0], uuid="db-2", name="other"))
+        code, report = self.run_backup(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reason=ambiguous-database", report)
+        self.assertEqual(instance.writes(), [])
+
+    def test_the_report_carries_no_credential_from_the_schedule(self) -> None:
+        instance = FakeInstance()
+        _code, report = self.run_backup(instance)
+        self.assertNotIn("s3cr3t-not-for-a-log", report)
+        self.assertNotIn("not-for-a-log-either", report)
 
 
 if __name__ == "__main__":
