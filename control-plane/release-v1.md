@@ -61,12 +61,16 @@ and one of them was wrong in a way worth stating plainly.
   `34143986885`. `scripts/ops_runner.py` mints a runner registration from
   `RULESET_ADMIN_TOKEN`, so that expired credential is the single reason every
   `runs-on: [self-hosted, adapteng-ops]` workflow now queues with no runner.
-- **UNVERIFIED:** whether the Coolify scheduler has resumed firing on its own.
-  The on-demand run proves the backup path works; it does not prove the timer
-  recovered. The next unattended run is due at 02:00 UTC, and the **Backup
-  freshness** workflow (`backup-freshness.yml`, 03:00 UTC daily) now ages the
-  newest successful run and fails past 48 hours. If the scheduler did not
-  resume, that check reports it without anyone having to look.
+- **LIVE-VERIFIED (2026-09-07 17:55): the Coolify scheduler is not running, and
+  it is not the backup schedule that is broken.** Run `34149316035` read the
+  history of Docker cleanup — the other thing Coolify runs on a timer, and one
+  nobody triggers by hand. Its newest run is `2026-08-27T00:00:11Z`, two hours
+  *before* the last backup at `2026-08-27T02:00:05Z`. Both timers stopped the
+  same day and neither has fired in the 11.7 days since, while the API answers,
+  deployments run on demand and every workload reads healthy. So the schedule
+  was never the fault: scheduled work as a whole is dead, and a schedule left
+  alone does not recover. Without intervention the 2026-09-07 backup taken by
+  hand would have been the last one.
 - **UNVERIFIED:** restore. No dump from this series has ever been restored. The
   only restore evidence in the bucket is the 2026-08-03 rehearsal against the
   disposable `adapteng_ops_test` stanza, which is not production data.
@@ -94,6 +98,27 @@ closed, and the two halves are not interchangeable.
 A dump nobody has restored is an assumption, not a recovery point, so the
 cutover stays gated. But the blocker is now a specific expired token and one
 drill, not a missing capability.
+
+### Keeping the backup half closed while the scheduler is down
+
+The scheduler being dead rather than merely late changes what "the recovery
+point is current" is worth. It was true at 16:56 UTC and would have decayed
+from then on, because nothing was going to take the next one.
+
+Three workflows now cover this, deliberately kept apart:
+
+| Workflow | Time | Role |
+|---|---|---|
+| `backup-daily.yml` | 02:00 UTC | **Stopgap.** Asks Coolify to run the schedule it already declares, from the one scheduler in this system that works. Defines no second schedule and changes no existing one. |
+| `backup-freshness.yml` | 03:00 UTC | The gate. Reads the scheduler pulse for the cause, then fails if the newest success is older than 48 hours. |
+| `coolify-deploy.yml scheduler-check` | on demand | The read that produced the finding above. GET-only. |
+
+The backup and the check are separate jobs on purpose. A single job that took
+the backup and then aged it could never fail, and the alarm would be worthless.
+
+`backup-daily.yml` is a stopgap and is meant to be deleted once the Coolify
+scheduler is repaired — at which point the two would both fire and the daily
+recovery point would simply be taken twice.
 
 ---
 

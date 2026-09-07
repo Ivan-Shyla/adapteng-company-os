@@ -1,0 +1,55 @@
+# Take the daily production backup, because the scheduler that used to take it
+# is not running.
+#
+# THIS IS A STOPGAP. Delete it once the Coolify scheduler is repaired.
+#
+# On 2026-09-07 the scheduler was measured, not guessed: Coolify's two timers
+# both stopped on 2026-08-27 within two hours of each other -- docker cleanup at
+# 00:00:11Z and the adapteng_ops backup at 02:00:05Z -- and neither has fired
+# since. The Coolify API answers, deployments run on demand and every workload
+# reads healthy, so nothing looks wrong; only scheduled work is dead. A schedule
+# that is left alone therefore does not recover, and the 2026-09-07 backup taken
+# by hand would have been the last one.
+#
+# So the backup is driven from the one scheduler in this system that is known to
+# work. This asks Coolify to run the schedule that is already declared; it does
+# not define a second schedule, change the existing one, or copy any data into
+# GitHub. The driver refuses to proceed if the trigger alters the schedule it
+# ran, so the terms of every future run cannot drift underneath this.
+#
+# Deliberately a separate workflow from the freshness check an hour later. If
+# one job both took the backup and aged it, the check could never fail and the
+# alarm would be worthless.
+name: Daily production backup
+
+on:
+  workflow_dispatch:
+  schedule:
+    # The window the Coolify schedule itself declares, so the recovery point
+    # keeps the shape it had before the scheduler stopped.
+    - cron: "0 2 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: Run the declared production backup schedule
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - name: Ask Coolify to run the declared backup now
+        env:
+          COOLIFY_API_CREDENTIAL: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_BASE_URL: ${{ vars.COOLIFY_URL }}
+          OPERATION: backup-now
+          SERVICE: ai-gateway
+        run: python scripts/coolify_deploy.py

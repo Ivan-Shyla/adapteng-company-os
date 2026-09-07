@@ -57,6 +57,7 @@ on:
           - networks
           - backup-now
           - backup-check
+          - scheduler-check
       service:
         description: "Spec file under deploy/, named without its extension"
         required: true
