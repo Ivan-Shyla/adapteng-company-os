@@ -166,6 +166,7 @@ class FakeInstance:
             {"created_at": "2026-08-27T02:00:05+00:00", "status": "success", "size": 175419}
         ]
         self.backup_run_outcome = "success"
+        self.backup_patch_resets_schedule = False
         self.environment_entries: dict[str, list[dict]] = {}
         # Same reasoning as the database fixture above: the file body is the
         # part that must never be reported, so it has to be present here or the
@@ -253,6 +254,9 @@ class FakeInstance:
         match = re.fullmatch(r"/databases/([^/]+)/backups/([^/]+)/executions", path)
         if match:
             return 200, {"executions": copy.deepcopy(self.backup_runs)}
+        match = re.fullmatch(r"/databases/([^/]+)/backups/([^/]+)", path)
+        if match:
+            return 200, copy.deepcopy(self.databases[0]["backup_configs"][0])
         match = re.fullmatch(r"/projects/([^/]+)/environments", path)
         if match:
             return 200, copy.deepcopy(self.environments.get(match.group(1), []))
@@ -311,17 +315,6 @@ class FakeInstance:
             return 201, {"uuid": record["uuid"]}
         if path in {"/applications/private-github-app", "/applications/public"}:
             return self._create_application(body)
-        match = re.fullmatch(r"/databases/([^/]+)/backups/([^/]+)/execute", path)
-        if match:
-            self.backup_runs.insert(
-                0,
-                {
-                    "created_at": "2026-09-07T18:40:11+00:00",
-                    "status": self.backup_run_outcome,
-                    "size": 175419,
-                },
-            )
-            return 200, {"message": "Backup started"}
         match = re.fullmatch(r"/applications/([^/]+)/envs", path)
         if match:
             self.environment_entries.setdefault(match.group(1), []).append(
@@ -389,6 +382,24 @@ class FakeInstance:
         return 201, {"uuid": record["uuid"]}
 
     def _patch(self, path, body, query):
+        match = re.fullmatch(r"/databases/([^/]+)/backups/([^/]+)", path)
+        if match:
+            config = self.databases[0]["backup_configs"][0]
+            # Production semantics: the flag asks for a run and is not stored.
+            # The fixture also reproduces the failure this guards against, so a
+            # test can prove the read-back comparison would actually catch it.
+            if body.get("backup_now"):
+                if self.backup_patch_resets_schedule:
+                    config["frequency"] = "0 0 * * 0"
+                self.backup_runs.insert(
+                    0,
+                    {
+                        "created_at": "2026-09-07T18:40:11+00:00",
+                        "status": self.backup_run_outcome,
+                        "size": 175419,
+                    },
+                )
+            return 200, {"message": "Backup updated"}
         match = re.fullmatch(r"/applications/([^/]+)/envs", path)
         if match:
             for entry in self.environment_entries.get(match.group(1), []):
@@ -4671,14 +4682,26 @@ class BackupNowTests(unittest.TestCase):
         self.run_backup(instance)
         self.assertEqual(
             instance.writes(),
-            [("POST", "/databases/db-1/backups/bkp-1/execute")],
+            [("PATCH", "/databases/db-1/backups/bkp-1")],
         )
+        bodies = [body for method, path, body in instance.call_bodies if method == "PATCH"]
+        self.assertEqual(bodies, [{"backup_now": True}])
+
+    def test_a_request_that_also_reconfigured_the_schedule_fails(self) -> None:
+        """Changing every future run while appearing to start one is the worst case."""
+
+        instance = FakeInstance()
+        instance.backup_patch_resets_schedule = True
+        code, report = self.run_backup(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("reason=schedule-changed-by-the-request", report)
+        self.assertIn("DRIFT frequency: 0 2 * * * -> 0 0 * * 0", report)
 
     def test_an_accepted_request_that_records_no_run_fails(self) -> None:
         """Coolify answering 200 is not a dump on the object store."""
 
         instance = FakeInstance()
-        instance._post = lambda path, body, query: (200, {"message": "Backup started"})
+        instance._patch = lambda path, body, query: (200, {"message": "Backup updated"})
         code, report = self.run_backup(instance)
         self.assertEqual(code, driver.EXIT_FAILED)
         self.assertIn("reason=no-new-run-within", report)

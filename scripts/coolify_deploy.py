@@ -4107,6 +4107,36 @@ def newest_backup_run(client: Client, database_uuid: str, backup_uuid: str) -> d
     return ordered[0] if ordered else None
 
 
+def schedule_unchanged(
+    client: Client, database_uuid: str, backup_uuid: str, expected: dict
+) -> bool:
+    """Confirm the trigger did not also reconfigure the schedule it ran.
+
+    Asking for a run and silently changing the terms of every future run would
+    be the worst possible outcome here, and it would look identical to success.
+    """
+
+    parsed = call(
+        client, "GET", f"/databases/{database_uuid}/backups/{backup_uuid}", allow_absent=True
+    )
+    if not isinstance(parsed, dict) or not parsed:
+        emit("    schedule read-back unavailable; state after the request is UNVERIFIED")
+        return True
+    drift = {
+        key: (value, parsed.get(key))
+        for key, value in expected.items()
+        if parsed.get(key) != value
+    }
+    if drift:
+        for key, (was, now) in sorted(drift.items()):
+            emit(f"    DRIFT {key}: {was} -> {now}")
+        emit("")
+        emit("RESULT backup-now failed reason=schedule-changed-by-the-request")
+        return False
+    emit("    schedule unchanged after the request")
+    return True
+
+
 def operate_backup_now(client: Client, spec: dict, sleep=None) -> int:
     """Run the database's existing backup schedule once, now, and confirm it landed.
 
@@ -4154,8 +4184,22 @@ def operate_backup_now(client: Client, spec: dict, sleep=None) -> int:
     before_at = str(before.get("created_at")) if before else ""
     emit(f"    newest run before: {before_at or 'none recorded'}")
 
-    call(client, "POST", f"/databases/{database_uuid}/backups/{backup_uuid}/execute")
+    # The API offers no endpoint that runs a schedule directly; the documented
+    # trigger is this flag on the schedule itself. Sending it alone is the whole
+    # request, so nothing else is being asked for -- but a PATCH that quietly
+    # defaulted an omitted field would reconfigure the backup while appearing to
+    # start one, which is why the schedule is read back and compared below.
+    guarded = {key: config.get(key) for key in ("enabled", "frequency", "save_s3")}
+    call(
+        client,
+        "PATCH",
+        f"/databases/{database_uuid}/backups/{backup_uuid}",
+        body={"backup_now": True},
+    )
     emit("    run requested")
+
+    if not schedule_unchanged(client, database_uuid, backup_uuid, guarded):
+        return EXIT_FAILED
 
     # A request that is accepted is not a backup that exists. The only evidence
     # that settles it is a run newer than the one that was there beforehand.
