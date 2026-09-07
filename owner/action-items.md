@@ -8,29 +8,52 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
 
 ---
 
-## Consolidated owner actions — 2026-09-07
+## Consolidated owner actions — 2026-09-07 (revised 17:05 UTC)
 
 This is the current, authoritative owner queue and it supersedes the
 2026-09-06 setup queue below. Everything an agent could do without you has
-been done; these six items are the ones that need your hands. Enter every
+been done; the items below are the ones that need your hands. Enter every
 value directly in the named provider UI. Never paste a value into chat, an
 issue, a pull request or any file in this repository.
 
-Two items from the previous queue were closed by the agent on 2026-09-07 and
-need nothing from you: the `PGBACKREST_REPO1_PATH` variable was corrected to
-`/adapteng-ops`, and the safety of that change was measured first.
+Four items from the earlier queues were closed by the agent and need nothing
+from you: `PGBACKREST_REPO1_PATH` was corrected to `/adapteng-ops` and the
+safety of that change was measured first; Coolify came back up and its
+control-plane reads work again; the `ai-gateway` application's live settings
+were reconciled to the reviewed spec; and **a production database backup was
+taken and verified on the object store**, closing an eleven-day gap.
+
+**What the backup finding actually was.** The previous entry here said the
+bucket held no backup at all. That was wrong, and the correction matters more
+than the fix. The `adapteng_ops` database has a Coolify-native `pg_dump`
+schedule that had already run **25 consecutive times without a single
+failure**, the last on 2026-08-27. It then stopped being *attempted*, because
+the Coolify scheduler stopped with the Coolify container. A backup that fails
+raises an error; a backup that stops raises nothing, so the recovery point
+aged for eleven days behind a green dashboard. The agent has since run the
+same declared schedule on demand (2026-09-07T16:56:58Z, `status=success`) and
+confirmed the object landed in Backblaze B2 at 16:57:03Z, 175419 bytes. The
+schedule itself is untouched and still reads `enabled=True 0 2 * * *`.
+
+So the remaining half of this gate is **restore**, not backup.
 
 | # | Priority | Provider / screen | Name or setting | Exact action | Minimum scope | Verification | Blocks |
 |---|---|---|---|---|---|---|---|
-| 1 | 🔴 | Hetzner host shell (SSH) | Coolify application container | Restart the Coolify container. Every path on `coolify.adapteng.com` returns `502` while the edge proxy and all workloads stay healthy, so the control-plane container is down rather than the host. Diagnose before upgrading. | Host shell, no configuration change | `GET https://coolify.adapteng.com/api/v1/version` returns `200`, then re-run the **AI Gateway readiness** workflow (`probe`) and see it get past `GET /projects` | Deployment revision reads, Coolify source reconciliation, deploy rollback, network membership reads |
-| 2 | 🔴 | Baserow → My settings → Database tokens | `baserow-company-os-primary` | Revoke it and issue a least-privilege replacement, then install the new value only in the adapter runtime secret store. Its literal value exists in Git history, so it must be treated as public. Do not rewrite history. | Only the tables the adapter writes; no admin rights | The old token returns `401`, and the adapter's `/v1/schema/system` still returns `200` with the new one | WEB-002 production cutover |
-| 3 | 🔴 | Hetzner host shell (SSH) | Production `adapteng_ops` full backup | Run the production backup and one isolated restore per `runbooks/backup-and-restore.md`. No production database credential exists in this repository by design, so no workflow can do this. The bucket currently holds no pgBackRest repository at all. | Host shell plus the existing pgBackRest configuration | `pgbackrest check` passes and `verify` reports exactly `status: ok`; the restore starts in a disposable target and passes the runbook's catalog checks | WEB-002 cutover, issue #32 closure, Platform v1 acceptance |
-| 4 | 🟠 | Backblaze B2 → Buckets → Lifecycle rules, and Application Keys | Lifecycle rule scope and key prefix restriction | Re-scope both to `/adapteng-ops`, matching the corrected variable. Keep the 35-day hidden-version deletion and 7-day unfinished-large-file cancellation unless policy has changed. A rule left on a stale prefix silently stops expiring versions and no pgBackRest command reports it. | The backup bucket only | The rule lists the corrected prefix, and the next backup's hidden versions expire on schedule | Retention correctness and storage cost, not the backup itself |
+| 1 | 🔴 | GitHub → repository secrets | `RULESET_ADMIN_TOKEN` | Refresh it. It now answers `401`, and it is the credential `ops_runner.py` uses to mint a runner registration, so the `ops-runner` container cannot re-register and sits `exited:unhealthy`. Every `runs-on: [self-hosted, adapteng-ops]` workflow queues forever with no runner. | That one token | Dispatch **Ops runner** with `operation=deploy`, then `status`, and see the container report `running:healthy` | Every host-side workflow, including the restore drill below |
+| 2 | 🔴 | Hetzner host shell (SSH), or the runner once item 1 is done | Isolated restore of the 2026-09-07 dump | Restore the verified dump into a disposable target and pass the catalog checks in `runbooks/backup-and-restore.md`. A dump that has never been restored is an untested assumption, and this one has never been restored. | A throwaway database; never the live one | The restore completes and the runbook's catalog checks pass against it | WEB-002 cutover, issue #32 closure, Platform v1 acceptance |
+| 3 | 🔴 | Baserow → My settings → Database tokens | `baserow-company-os-primary` | Revoke it and issue a least-privilege replacement, then install the new value only in the adapter runtime secret store. Its literal value exists in Git history, so it must be treated as public. Do not rewrite history. | Only the tables the adapter writes; no admin rights | The old token returns `401`, and the adapter's `/v1/schema/system` still returns `200` with the new one | WEB-002 production cutover |
+| 4 | 🟠 | Backblaze B2 → Buckets → Lifecycle rules, and Application Keys | Lifecycle rule scope and key prefix restriction | Re-scope both to `/adapteng-ops`, matching the corrected variable. Keep the 35-day hidden-version deletion and 7-day unfinished-large-file cancellation unless policy has changed. A rule left on a stale prefix silently stops expiring versions and no command reports it. | The backup bucket only | The rule lists the corrected prefix, and the next backup's hidden versions expire on schedule | Retention correctness and storage cost, not the backup itself |
 | 5 | 🟡 | Google Cloud → IAM, and the gateway runtime store | Vertex prediction role + caller-token reference | Grant the existing service account prediction-only Vertex permission, enable the Vertex AI API, confirm non-zero EU regional quota, and make the caller-token reference available to the intended internal caller. | `roles/aiplatform.user` on that project only; no broader IAM | One bounded gateway call returns a model response, an unauthenticated call still fails, and the run ledger records model and token totals | The first governed model proof |
 | 6 | 🟡 | GitHub → `adapteng-automation-platform` → Environments | Drive-bridge replay database reference | Bind it at **environment** scope, not repository-wide. Most references in that repository already live at environment scope. | The single environment that runs the Drive bridge | The Drive canary workflow resolves the reference and the replay layer connects | The corporate Drive daily-loop canary |
 
+**One thing to watch without acting on it.** The scheduler has not yet been
+observed firing on its own since Coolify returned; the on-demand run proves
+the backup path works, not that the timer resumed. The next unattended run is
+due at 02:00 UTC. `coolify-deploy.yml` with `operation=inspect` now prints the
+newest recorded run, so the check is one dispatch and needs no host access.
+
 **Not on this list on purpose.** The WEB-002 cutover approval is a decision, not
-a setup step. When items 1–4 are done, the agent will hand you one approval
+a setup step. When items 2–4 are done, the agent will hand you one approval
 package; you reply with the exact phrase it asks for and it runs the cutover.
 
 ---
