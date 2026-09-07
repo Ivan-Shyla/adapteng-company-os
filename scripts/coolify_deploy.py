@@ -68,6 +68,7 @@ OPERATIONS = (
     "peer-resolve",
     "service-resolve",
     "peer-diagnose",
+    "service-diagnose",
     "diagnose",
     "networks",
     "backup-now",
@@ -2309,6 +2310,17 @@ def peer_command(spec: dict) -> str:
 PEER_LADDER_TASK_NAME = "adapteng-peer-probe-acceptance"
 PEER_LADDER_TRIVIAL = "echo ADAPTENG_PEER trivial"
 
+# The same ladder, aimed at the service instead of the peer.
+#
+# The 245-character bound everything here is written against was measured on the
+# peer, and was then carried over to the gateway because it was the only number
+# available. That carry-over is an assumption, not evidence: the two
+# applications are different records, and nothing established that they share a
+# limit. Every command in this file is cramped by that unmeasured number, so it
+# is worth one read-mostly run to find out what the gateway itself accepts.
+SERVICE_LADDER_TASK_NAME = "adapteng-service-probe-acceptance"
+SERVICE_LADDER_TRIVIAL = "echo ADAPTENG_SERVICE trivial"
+
 
 def peer_ladder(spec: dict) -> list:
     """Rungs from trivially short to longer than the full probe, ascending.
@@ -2338,6 +2350,31 @@ def peer_ladder(spec: dict) -> list:
     # change when they are edited, and the first version of this list stopped
     # being ascending the moment one of them was shortened. Sorting keeps the
     # bracketing sound without depending on anyone re-checking the order.
+    return sorted(rungs, key=lambda rung: len(rung[1]))
+
+
+def service_ladder(spec: dict) -> list:
+    """Rungs for the service application, bracketing well past the peer bound.
+
+    Two rungs are real commands this application has already accepted, so a
+    refusal higher up cannot be read as "the gateway refuses tasks". The rest
+    is padding, which keeps length the only variable that moves.
+    """
+
+    def filler(size: int) -> str:
+        head = "echo ADAPTENG_SERVICE "
+        return head + "x" * (size - len(head))
+
+    rungs = [
+        ("trivial", filler(30)),
+        # Both known accepted on this application, from verify and model-smoke.
+        ("readiness-shaped", readiness_command(spec)),
+        ("model-smoke-shaped", model_smoke_command(model_smoke_call_id())),
+        ("filler-300", filler(300)),
+        ("filler-450", filler(450)),
+        ("filler-700", filler(700)),
+        ("filler-1000", filler(1000)),
+    ]
     return sorted(rungs, key=lambda rung: len(rung[1]))
 
 
@@ -2565,16 +2602,29 @@ def classify_probe_failure(message: object) -> tuple[str, str] | None:
     return None
 
 
-def operate_peer_diagnose(client: Client, spec: dict) -> int:
-    """Find what the scheduled-task endpoint will accept on the peer.
+def operate_peer_diagnose(client: Client, spec: dict, subject: str = "peer") -> int:
+    """Find what the scheduled-task endpoint will accept on one application.
 
     Read-mostly: it creates one task, rewrites it a few times, and leaves it
     disarmed. It never arms anything, so nothing executes in any container.
+
+    ``subject`` selects which application is measured. The peer was measured
+    first because it was the one refusing commands; the service is measured
+    because every command in this file is sized against the peer's number.
     """
 
     target = spec["target"]
-    peer_name = spec["network"]["peer_probe_application"]
-    emit(f"--- peer-diagnose {peer_name}")
+    if subject == "service":
+        peer_name = target["resource_name"]
+        ladder = service_ladder(spec)
+        task_name = SERVICE_LADDER_TASK_NAME
+        trivial = SERVICE_LADDER_TRIVIAL
+    else:
+        peer_name = spec["network"]["peer_probe_application"]
+        ladder = peer_ladder(spec)
+        task_name = PEER_LADDER_TASK_NAME
+        trivial = PEER_LADDER_TRIVIAL
+    emit(f"--- {subject}-diagnose {peer_name}")
 
     project = find_project(client, target["project"])
     environment = (
@@ -2590,23 +2640,23 @@ def operate_peer_diagnose(client: Client, spec: dict) -> int:
     peer = find_application(present, peer_name)
     service = find_application(present, target["resource_name"])
     if peer is None:
-        emit(f"    peer application {peer_name}: ABSENT")
+        emit(f"    {subject} application {peer_name}: ABSENT")
         return EXIT_FAILED
 
     peer_uuid = str(peer["uuid"])
-    emit(f"    peer {peer_name}: uuid={peer_uuid} state={peer.get('status')}")
-    if service is not None:
+    emit(f"    {subject} {peer_name}: uuid={peer_uuid} state={peer.get('status')}")
+    if service is not None and subject != "service":
         emit(
             f"    service {target['resource_name']}: uuid={service['uuid']} "
             f"state={service.get('status')}"
         )
 
-    existing = find_readiness_task(client, peer_uuid, PEER_LADDER_TASK_NAME)
+    existing = find_readiness_task(client, peer_uuid, task_name)
     task_uuid = str(existing["uuid"]) if existing else None
     results = []
 
-    for label, command in peer_ladder(spec):
-        body = readiness_task_body(command, armed=False, name=PEER_LADDER_TASK_NAME)
+    for label, command in ladder:
+        body = readiness_task_body(command, armed=False, name=task_name)
         if task_uuid is None:
             status, parsed = client.request(
                 "POST", f"/applications/{peer_uuid}/scheduled-tasks", body=body
@@ -2628,7 +2678,7 @@ def operate_peer_diagnose(client: Client, spec: dict) -> int:
         )
 
         if accepted and task_uuid is None:
-            found = find_readiness_task(client, peer_uuid, PEER_LADDER_TASK_NAME)
+            found = find_readiness_task(client, peer_uuid, task_name)
             if found is None:
                 emit("    the task was accepted but cannot be read back; stopping")
                 return EXIT_FAILED
@@ -2667,20 +2717,24 @@ def operate_peer_diagnose(client: Client, spec: dict) -> int:
             "and the earlier failure needs a different explanation."
         )
 
-    at_rest = readiness_task_body(
-        PEER_LADDER_TRIVIAL, armed=False, name=PEER_LADDER_TASK_NAME
-    )
+    at_rest = readiness_task_body(trivial, armed=False, name=task_name)
     client.request(
         "PATCH",
         f"/applications/{peer_uuid}/scheduled-tasks/{task_uuid}",
         body=at_rest,
     )
     emit(
-        f"    left one disabled task {PEER_LADDER_TASK_NAME} on {peer_name}, "
+        f"    left one disabled task {task_name} on {peer_name}, "
         "scheduled for a leap day and holding a harmless echo. It was never "
         "armed, so it has never run."
     )
     return EXIT_OK
+
+
+def operate_service_diagnose(client: Client, spec: dict) -> int:
+    """Measure the scheduled-task command bound on the service application."""
+
+    return operate_peer_diagnose(client, spec, subject="service")
 
 
 # --- the first live model call -----------------------------------------------
@@ -4791,6 +4845,8 @@ def run(environ: dict) -> int:
         return operate_service_resolve(client, spec)
     if operation == "peer-diagnose":
         return operate_peer_diagnose(client, spec)
+    if operation == "service-diagnose":
+        return operate_service_diagnose(client, spec)
     if operation == "diagnose":
         return operate_diagnose(client, spec)
     if operation == "networks":

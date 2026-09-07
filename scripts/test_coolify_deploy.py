@@ -2244,6 +2244,7 @@ class EntryPointTests(unittest.TestCase):
                 "peer-resolve",
                 "service-resolve",
                 "peer-diagnose",
+                "service-diagnose",
                 "diagnose",
                 "networks",
                 "backup-now",
@@ -3515,6 +3516,122 @@ class PeerVerifyTests(unittest.TestCase):
         self.assertEqual(
             [m for m, _p in instance.writes() if m == "DELETE"], []
         )
+
+
+class ServiceDiagnoseTests(unittest.TestCase):
+    """The command bound on the service, measured instead of inherited.
+
+    Every probe in this driver is sized against 245 characters, which was
+    measured on the peer and then assumed to hold for the gateway. The two are
+    different application records and nothing established that they share a
+    limit, so the number that constrains the model call is an assumption. These
+    tests cover the instrument that replaces it with a measurement.
+    """
+
+    def real_spec(self):
+        return driver.load_spec(driver.spec_path(RESOURCE))
+
+    def test_the_ladder_rises_in_length(self) -> None:
+        """Bracketing requires monotone rungs, exactly as for the peer."""
+
+        lengths = [len(c) for _label, c in driver.service_ladder(self.real_spec())]
+        self.assertEqual(lengths, sorted(lengths))
+        self.assertLess(lengths[0], 40)
+
+    def test_the_ladder_reaches_well_past_the_peer_bound(self) -> None:
+        """A ladder that stopped at 245 could only confirm what is known.
+
+        The question is whether the gateway accepts more than the peer did, so
+        the rungs have to climb far enough that "more" is actually offered.
+        """
+
+        lengths = [len(c) for _label, c in driver.service_ladder(self.real_spec())]
+        self.assertGreater(max(lengths), 4 * driver.PEER_COMMAND_LIMIT)
+
+    def test_the_ladder_includes_commands_this_application_has_accepted(self) -> None:
+        """Otherwise a refusal cannot be told from "this app takes no tasks"."""
+
+        rungs = dict(driver.service_ladder(self.real_spec()))
+        self.assertIn("readiness-shaped", rungs)
+        self.assertIn("model-smoke-shaped", rungs)
+        self.assertLessEqual(
+            len(rungs["readiness-shaped"]), driver.PEER_COMMAND_LIMIT
+        )
+
+    def test_filler_rungs_differ_only_in_padding(self) -> None:
+        """Length has to be separable from content or the answer is ambiguous."""
+
+        rungs = dict(driver.service_ladder(self.real_spec()))
+        short, long = rungs["filler-450"], rungs["filler-700"]
+        self.assertTrue(long.startswith(short))
+        self.assertEqual(set(long[len(short):]), {"x"})
+
+    def test_it_measures_the_service_and_not_the_peer(self) -> None:
+        """The whole point is that these are different applications.
+
+        A driver that wrote to the peer here would re-measure the number that
+        is already known and report it as the gateway's.
+        """
+
+        instance = PeerInstance()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_service_diagnose(instance, self.real_spec())
+        self.assertEqual(code, driver.EXIT_OK)
+        paths = [p for m, p in instance.writes() if "scheduled-tasks" in p]
+        self.assertTrue(paths)
+        for path in paths:
+            self.assertIn("/applications/app-1/", path)
+            self.assertNotIn("/applications/app-2/", path)
+
+    def test_it_never_arms_anything(self) -> None:
+        """It asks what the API accepts, not what the container does."""
+
+        instance = PeerInstance()
+        with redirect_stdout(io.StringIO()):
+            driver.operate_service_diagnose(instance, self.real_spec())
+        self.assertTrue(instance.tasks)
+        for task in instance.tasks:
+            self.assertIs(task["enabled"], False)
+            self.assertEqual(task["frequency"], driver.READINESS_TASK_FREQUENCY)
+        self.assertEqual(instance.executions, [])
+
+    def test_it_uses_its_own_task_name_so_it_cannot_disturb_the_probes(self) -> None:
+        """Sharing a name with verify or model-smoke would rewrite their command.
+
+        Those tasks are armed by other operations; a diagnostic that reused the
+        name would leave a padded echo where a real probe belonged.
+        """
+
+        instance = PeerInstance()
+        with redirect_stdout(io.StringIO()):
+            driver.operate_service_diagnose(instance, self.real_spec())
+        self.assertEqual(
+            [item["name"] for item in instance.tasks],
+            [driver.SERVICE_LADDER_TASK_NAME],
+        )
+        self.assertNotIn(
+            driver.SERVICE_LADDER_TASK_NAME,
+            {driver.PEER_LADDER_TASK_NAME, driver.MODEL_SMOKE_TASK_NAME},
+        )
+
+    def test_it_leaves_the_task_holding_a_harmless_command(self) -> None:
+        """A padded 1000-character echo left at rest is litter with no meaning."""
+
+        instance = PeerInstance()
+        with redirect_stdout(io.StringIO()):
+            driver.operate_service_diagnose(instance, self.real_spec())
+        self.assertEqual(
+            instance.tasks[0]["command"], driver.SERVICE_LADDER_TRIVIAL
+        )
+
+    def test_it_deletes_nothing(self) -> None:
+        """The driver refuses DELETE everywhere; this path is no exception."""
+
+        instance = PeerInstance()
+        with redirect_stdout(io.StringIO()):
+            driver.operate_service_diagnose(instance, self.real_spec())
+        self.assertEqual([m for m, _p in instance.writes() if m == "DELETE"], [])
 
 
 class PeerToolsInstance(PeerInstance):

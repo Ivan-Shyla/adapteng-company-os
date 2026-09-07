@@ -63,6 +63,7 @@ on:
           - peer-resolve
           - service-resolve
           - peer-diagnose
+          - service-diagnose
           - diagnose
           - networks
           - backup-now
