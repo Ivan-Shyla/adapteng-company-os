@@ -167,6 +167,12 @@ class FakeInstance:
         ]
         self.backup_run_outcome = "success"
         self.backup_patch_resets_schedule = False
+        # Coolify's other timer. Its newest run is what separates "this one
+        # schedule stopped" from "the scheduler stopped".
+        self.cleanup_runs: list[dict] = [
+            {"created_at": "2026-09-07T03:00:00+00:00", "status": "success"}
+        ]
+        self.cleanup_endpoint_present = True
         self.environment_entries: dict[str, list[dict]] = {}
         # Same reasoning as the database fixture above: the file body is the
         # part that must never be reported, so it has to be present here or the
@@ -254,6 +260,11 @@ class FakeInstance:
         match = re.fullmatch(r"/databases/([^/]+)/backups/([^/]+)/executions", path)
         if match:
             return 200, {"executions": copy.deepcopy(self.backup_runs)}
+        match = re.fullmatch(r"/servers/([^/]+)/docker-cleanup/executions", path)
+        if match:
+            if not self.cleanup_endpoint_present:
+                return 404, {"message": "Not found."}
+            return 200, {"executions": copy.deepcopy(self.cleanup_runs)}
         match = re.fullmatch(r"/databases/([^/]+)/backups/([^/]+)", path)
         if match:
             return 200, copy.deepcopy(self.databases[0]["backup_configs"][0])
@@ -2225,6 +2236,7 @@ class EntryPointTests(unittest.TestCase):
                 "networks",
                 "backup-now",
                 "backup-check",
+                "scheduler-check",
             },
         )
         workflow = (
@@ -4859,6 +4871,95 @@ class BackupCheckTests(unittest.TestCase):
         ]
         code, _report = self.check(instance, max_age_hours=4)
         self.assertEqual(code, driver.EXIT_FAILED)
+
+
+class SchedulerCheckTests(unittest.TestCase):
+    """Telling a stopped schedule apart from a stopped scheduler.
+
+    Both look the same from the backup history: no new runs. The difference
+    decides who fixes what, so the pulse is read from the one other thing
+    Coolify runs on a timer and nobody triggers by hand.
+    """
+
+    def setUp(self) -> None:
+        driver.reset_redactions()
+        self.addCleanup(driver.reset_redactions)
+
+    def check(self, instance, now="2026-09-07T18:00:00+00:00") -> tuple[int, str]:
+        spec = driver.load_spec(driver.spec_path(RESOURCE))
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_scheduler_check(
+                instance, spec, now=datetime.datetime.fromisoformat(now)
+            )
+        return code, buffer.getvalue()
+
+    def test_a_recent_cleanup_run_means_the_timer_is_alive(self) -> None:
+        instance = FakeInstance()
+        code, report = self.check(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("RESULT scheduler-check alive", report)
+        self.assertIn("pulse=15.0h", report)
+
+    def test_a_cleanup_run_as_old_as_the_backup_gap_reads_as_stalled(self) -> None:
+        """The case this exists for: both timers stopped on the same day."""
+
+        instance = FakeInstance()
+        instance.cleanup_runs = [
+            {"created_at": "2026-08-27T03:00:00+00:00", "status": "success"}
+        ]
+        code, report = self.check(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("RESULT scheduler-check stalled", report)
+
+    def test_an_absent_cleanup_history_is_unknown_rather_than_healthy(self) -> None:
+        """No reading is not a good reading, and must not be reported as one."""
+
+        instance = FakeInstance()
+        instance.cleanup_endpoint_present = False
+        code, report = self.check(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("RESULT scheduler-check unknown", report)
+        self.assertNotIn("alive", report)
+
+    def test_no_recorded_cleanup_run_is_also_unknown(self) -> None:
+        instance = FakeInstance()
+        instance.cleanup_runs = []
+        code, report = self.check(instance)
+        self.assertIn("RESULT scheduler-check unknown", report)
+
+    def test_an_unreadable_stamp_does_not_read_as_alive(self) -> None:
+        instance = FakeInstance()
+        instance.cleanup_runs = [{"created_at": "whenever", "status": "success"}]
+        code, report = self.check(instance)
+        self.assertIn("RESULT scheduler-check unknown", report)
+
+    def test_the_newest_run_is_used_when_history_is_out_of_order(self) -> None:
+        instance = FakeInstance()
+        instance.cleanup_runs = [
+            {"created_at": "2026-08-01T03:00:00+00:00", "status": "success"},
+            {"created_at": "2026-09-07T03:00:00+00:00", "status": "success"},
+        ]
+        code, report = self.check(instance)
+        self.assertIn("RESULT scheduler-check alive", report)
+        self.assertIn("recorded=2", report)
+
+    def test_no_server_reported_is_a_failure_not_a_verdict(self) -> None:
+        instance = FakeInstance()
+        instance.servers = []
+        code, report = self.check(instance)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("RESULT scheduler-check failed", report)
+
+    def test_the_check_writes_nothing(self) -> None:
+        """A diagnostic that changes state is not a diagnostic."""
+
+        instance = FakeInstance()
+        self.check(instance)
+        self.assertEqual(
+            [call for call in instance.calls if call[0] != "GET"],
+            [],
+        )
 
 
 if __name__ == "__main__":

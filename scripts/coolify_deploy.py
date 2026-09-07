@@ -72,6 +72,7 @@ OPERATIONS = (
     "networks",
     "backup-now",
     "backup-check",
+    "scheduler-check",
 )
 FORBIDDEN_METHODS = frozenset({"DELETE"})
 
@@ -86,6 +87,12 @@ BACKUP_RUN_INTERVAL_SECONDS = 15
 # newest successful run against today.
 BACKUP_MAX_AGE_HOURS = 48
 BACKUP_AGE_VARIABLE = "BACKUP_MAX_AGE_HOURS"
+
+# Coolify cleans up Docker on its own timer, and nobody triggers that by hand,
+# so the age of the newest cleanup run is a pulse for the scheduler itself. The
+# default cleanup frequency is daily; three days allows for a slower setting
+# without letting a genuinely stopped scheduler read as healthy.
+SCHEDULER_PULSE_HOURS = 72
 
 # Coolify reports a deployment through these states. Anything outside the two
 # sets below is unknown, and an unknown state is polled rather than guessed.
@@ -4336,6 +4343,83 @@ def operate_backup_check(client: Client, spec: dict, max_age_hours=None, now=Non
     return EXIT_OK
 
 
+def operate_scheduler_check(client: Client, spec: dict, now=None) -> int:
+    """Report whether Coolify's own timer is still firing anything at all.
+
+    A stopped backup schedule and a stopped scheduler look identical from the
+    backup history alone: both appear as an absence of new runs. Docker cleanup
+    is the other thing Coolify runs on a timer and nobody triggers it by hand,
+    so its newest run is a usable pulse. If cleanup is current then the backup
+    schedule alone is at fault; if cleanup stopped around the same date then the
+    scheduler is down and no schedule will recover by itself.
+
+    This reads and reports. The timed check on backup age is the gate, and one
+    gate for one question is enough.
+    """
+
+    emit("--- scheduler-check")
+    reference = now or datetime.now(timezone.utc)
+
+    servers = call(client, "GET", "/servers", allow_absent=True)
+    if not isinstance(servers, list) or not servers:
+        emit("RESULT scheduler-check failed reason=no-server-reported")
+        return EXIT_FAILED
+
+    pulse: float | None = None
+    for server in servers:
+        if not isinstance(server, dict):
+            continue
+        server_uuid = str(server.get("uuid") or "")
+        if not server_uuid:
+            continue
+        parsed = call(
+            client,
+            "GET",
+            f"/servers/{server_uuid}/docker-cleanup/executions",
+            allow_absent=True,
+        )
+        rows = parsed.get("executions") if isinstance(parsed, dict) else parsed
+        if not isinstance(rows, list):
+            emit(f"    server {server.get('name')}: cleanup history unavailable")
+            continue
+        ordered = sorted(
+            (row for row in rows if isinstance(row, dict)),
+            key=lambda row: str(row.get("created_at") or ""),
+            reverse=True,
+        )
+        if not ordered:
+            emit(f"    server {server.get('name')}: no cleanup run recorded")
+            continue
+        latest = ordered[0]
+        stamp = str(latest.get("created_at") or "")
+        age = backup_age_hours(stamp, now=reference)
+        shown = f"{age:.1f}h" if age is not None else "unreadable"
+        emit(
+            f"    server {server.get('name')}: newest cleanup {stamp} "
+            f"status={latest.get('status')} age={shown} recorded={len(ordered)}"
+        )
+        if age is not None and (pulse is None or age < pulse):
+            pulse = age
+
+    emit("")
+    if pulse is None:
+        emit("RESULT scheduler-check unknown reason=no-readable-cleanup-run")
+        return EXIT_OK
+    if pulse > SCHEDULER_PULSE_HOURS:
+        emit(
+            f"RESULT scheduler-check stalled pulse={pulse:.1f}h "
+            f"allowed={SCHEDULER_PULSE_HOURS:g}h -- Coolify's timer has fired "
+            "nothing recently, so a schedule left alone will not resume"
+        )
+        return EXIT_OK
+    emit(
+        f"RESULT scheduler-check alive pulse={pulse:.1f}h "
+        f"allowed={SCHEDULER_PULSE_HOURS:g}h -- the timer runs, so a schedule "
+        "that is not firing is at fault by itself"
+    )
+    return EXIT_OK
+
+
 def positive_integer(environ: dict, name: str, default: int) -> int:
     raw = (environ.get(name) or "").strip()
     if not raw:
@@ -4418,6 +4502,8 @@ def run(environ: dict) -> int:
             spec,
             max_age_hours=positive_integer(environ, BACKUP_AGE_VARIABLE, BACKUP_MAX_AGE_HOURS),
         )
+    if operation == "scheduler-check":
+        return operate_scheduler_check(client, spec)
     return operate_deploy(
         client,
         spec,
