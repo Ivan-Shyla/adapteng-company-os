@@ -23,6 +23,16 @@ name: Coolify deploy
 # output is masked by shape before it is printed, because it is the one thing
 # this workflow prints that it did not construct.
 #
+# model-smoke is the one operation here that does call the model, and it is the
+# only way to learn whether the provider works at all: every other probe passes
+# on a gateway whose Vertex credential has never been exercised. It sends one
+# fixed synthetic token declared in the driver, through the same scheduled task
+# verify uses, and hands the request to the gateway's own code path behind
+# authentication, so no bearer token is read, presented or printed and the
+# mounted credential never leaves the container. The call is idempotent for the
+# length of the run, so the every-minute schedule that triggers it cannot bill
+# twice, and the task is returned to rest whatever the outcome.
+#
 # backup-now runs the database's already-declared backup schedule once and waits
 # for a run newer than the one that was there before. It adds a backup and
 # nothing else: it creates no schedule, edits no configuration and reads no
@@ -58,6 +68,7 @@ on:
           - backup-now
           - backup-check
           - scheduler-check
+          - model-smoke
       service:
         description: "Spec file under deploy/, named without its extension"
         required: true
