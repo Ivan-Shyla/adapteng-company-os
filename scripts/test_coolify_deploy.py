@@ -3791,14 +3791,14 @@ class OpenRunTests(unittest.TestCase):
     def test_every_staged_statement_fits_the_channel_it_is_written_with(self) -> None:
         """The budget is the endpoint bound minus the writer around the chunk."""
 
-        budget = driver.PEER_COMMAND_LIMIT - driver.LEDGER_WRITE_MARGIN - len(
-            driver.LEDGER_WRITE_COMMAND.format(mode="w", chunk="")
-        )
+        budget = driver.stage_write_budget(driver.LEDGER_STAGE_PATH)
         self.assertGreater(budget, 0)
         for label, sql in driver.RUN_OPEN_STATEMENTS:
             with self.subTest(label):
                 for chunk in driver.stage_chunks(sql, budget):
-                    command = driver.LEDGER_WRITE_COMMAND.format(mode="w", chunk=chunk)
+                    command = driver.stage_write_command(
+                        driver.LEDGER_STAGE_PATH, "w", chunk
+                    )
                     self.assertLessEqual(
                         len(command), driver.PEER_COMMAND_LIMIT - driver.LEDGER_WRITE_MARGIN
                     )
@@ -3906,11 +3906,23 @@ class VertexWhyTests(unittest.TestCase):
 
     def test_every_write_fits_the_channel(self) -> None:
         for chunk in driver.stage_program(driver.VERTEX_WHY_PROGRAM):
-            command = driver.LEDGER_WRITE_COMMAND.format(mode="a", chunk=chunk)
+            command = driver.stage_write_command(
+                driver.PROBE_STAGE_PATH, "a", chunk
+            )
             with self.subTest(len(command)):
                 self.assertLessEqual(
                     len(command), driver.PEER_COMMAND_LIMIT - driver.LEDGER_WRITE_MARGIN
                 )
+
+    def test_the_writer_and_runner_name_the_same_file(self) -> None:
+        """A staged program is useless if the runner opens another path."""
+
+        command = driver.stage_write_command(
+            driver.PROBE_STAGE_PATH, "w", "YWJj"
+        )
+        self.assertIn(driver.PROBE_STAGE_PATH, command)
+        self.assertIn(driver.PROBE_STAGE_PATH, driver.PROBE_EXEC_COMMAND)
+        self.assertNotIn(driver.LEDGER_STAGE_PATH, command)
 
     def test_the_staged_pieces_reassemble_into_the_program(self) -> None:
         """Spaces land between the chunks; b64decode has to survive them."""

@@ -3487,7 +3487,7 @@ LEDGER_WRITE_COMMAND = (
     'python -c "'
     "import sys;v=sys.argv;"
     "print(v[1],open(v[2],v[3]).write(chr(32).join(v[4:])+chr(32)))"
-    '" ' + LEDGER_READ_MARKER + " " + LEDGER_STAGE_PATH + " {mode} {chunk}"
+    '" ' + LEDGER_READ_MARKER + " {path} {mode} {chunk}"
 )
 LEDGER_EXEC_COMMAND = (
     'python -c "'
@@ -3554,6 +3554,20 @@ def stage_chunks(sql: str, budget: int) -> list[str]:
     return chunks
 
 
+def stage_write_command(path: str, mode: str, chunk: str) -> str:
+    """Build one bounded write to the caller's exact scratch file."""
+
+    return LEDGER_WRITE_COMMAND.format(path=path, mode=mode, chunk=chunk)
+
+
+def stage_write_budget(path: str) -> int:
+    """Return the payload available after the writer and its safety margin."""
+
+    return PEER_COMMAND_LIMIT - LEDGER_WRITE_MARGIN - len(
+        stage_write_command(path, "w", "")
+    )
+
+
 def operate_open_run(client: Client, spec: dict, sleep=None) -> int:
     """Open the one run a model call has to bind to.
 
@@ -3616,9 +3630,7 @@ def operate_open_run(client: Client, spec: dict, sleep=None) -> int:
             return EXIT_FAILED
         emit(f"    using {dsn}")
 
-        budget = PEER_COMMAND_LIMIT - LEDGER_WRITE_MARGIN - len(
-            LEDGER_WRITE_COMMAND.format(mode="w", chunk="")
-        )
+        budget = stage_write_budget(LEDGER_STAGE_PATH)
         for label, sql in RUN_OPEN_STATEMENTS:
             chunks = stage_chunks(sql, budget)
             emit("")
@@ -3626,7 +3638,7 @@ def operate_open_run(client: Client, spec: dict, sleep=None) -> int:
             for index, chunk in enumerate(chunks):
                 mode = "w" if index == 0 else "a"
                 ask(
-                    LEDGER_WRITE_COMMAND.format(mode=mode, chunk=chunk),
+                    stage_write_command(LEDGER_STAGE_PATH, mode, chunk),
                     f"{label} write {index + 1}/{len(chunks)}",
                 )
             ask(LEDGER_EXEC_COMMAND.format(dsn=dsn), f"executing {label}")
@@ -3707,9 +3719,7 @@ def stage_program(source: str) -> list[str]:
     """Encode a program into pieces the command channel can carry."""
 
     encoded = base64.b64encode(source.encode("utf-8")).decode("ascii")
-    budget = PEER_COMMAND_LIMIT - LEDGER_WRITE_MARGIN - len(
-        LEDGER_WRITE_COMMAND.format(mode="w", chunk="")
-    )
+    budget = stage_write_budget(PROBE_STAGE_PATH)
     return [encoded[at : at + budget] for at in range(0, len(encoded), budget)]
 
 
@@ -3766,7 +3776,7 @@ def operate_vertex_why(client: Client, spec: dict, sleep=None) -> int:
         for index, chunk in enumerate(chunks):
             mode = "w" if index == 0 else "a"
             ask(
-                LEDGER_WRITE_COMMAND.format(mode=mode, chunk=chunk),
+                stage_write_command(PROBE_STAGE_PATH, mode, chunk),
                 f"write {index + 1}/{len(chunks)}",
                 LEDGER_READ_MARKER,
             )
