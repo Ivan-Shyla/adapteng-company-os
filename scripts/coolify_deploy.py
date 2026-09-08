@@ -3698,7 +3698,9 @@ from google.auth.transport.requests import AuthorizedSession as S
 
 M = "AEPROBE"
 try:
-    creds, proj = G.default()
+    creds, proj = G.default(
+        scopes=("https://www.googleapis.com/auth/cloud-platform",)
+    )
 except Exception as e:
     print(M, "adc_failed", type(e).__name__, str(e)[:200])
     raise SystemExit(0)

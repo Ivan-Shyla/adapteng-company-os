@@ -3893,6 +3893,21 @@ class VertexWhyTests(unittest.TestCase):
         self.assertIn("adc_failed", driver.VERTEX_WHY_PROGRAM)
         self.assertIn("transport", driver.VERTEX_WHY_PROGRAM)
 
+    def test_it_uses_the_same_scope_as_the_gateway(self) -> None:
+        """An unscoped diagnostic only diagnoses itself.
+
+        The first successful staging run omitted this argument and therefore
+        returned invalid_scope before it reached the model resource. Production
+        provider.py passes the cloud-platform scope explicitly; this probe must
+        mirror it before its response can explain production's 403.
+        """
+
+        self.assertIn(
+            "https://www.googleapis.com/auth/cloud-platform",
+            driver.VERTEX_WHY_PROGRAM,
+        )
+        self.assertIn("scopes=(", driver.VERTEX_WHY_PROGRAM)
+
     def test_the_encoded_program_carries_nothing_the_shell_reads(self) -> None:
         """This is the whole reason for base64: the alphabet is inert.
 
