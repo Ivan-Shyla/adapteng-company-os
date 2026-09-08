@@ -4,12 +4,13 @@
 Two pieces of secret material stand between a reconciled application and a
 running one, and they fail in opposite directions.
 
-The Vertex service-account key is issued by Google and cannot be generated
-here. It already exists as a repository secret, so this binds it by reference:
-the value travels from the workflow environment into a Coolify file storage and
-nowhere else. GOOGLE_APPLICATION_CREDENTIALS is set only after that file is
-recorded, because app/config.py fails closed at boot when the variable names a
-path that is not readable. Setting it first would turn a missing mount into a
+The dedicated Vertex service-account key is issued by Google and cannot be
+generated here. It must be owner-provided as a repository secret, and this binds
+it by reference: the value travels from the workflow environment into a Coolify
+file storage and nowhere else. A general Google or Workspace credential must not
+be reused for Vertex. GOOGLE_APPLICATION_CREDENTIALS is set only after that file
+is recorded, because app/config.py fails closed at boot when the variable names
+a path that is not readable. Setting it first would turn a missing mount into a
 crash loop rather than a no-op.
 
 The caller credential is ours, so it is generated here rather than requested
@@ -356,9 +357,9 @@ def main(argv: list[str]) -> int:
             material = os.environ.get("VERTEX_SERVICE_ACCOUNT_MATERIAL", "")
             if not material:
                 raise driver.Abort(
-                    "no service-account material was supplied. It is held as a "
-                    "repository secret and passed through the environment; nothing "
-                    "was mounted and nothing was changed."
+                    "no dedicated Vertex service-account material was supplied. It "
+                    "must be owner-provided as a repository secret and passed through "
+                    "the environment; nothing was mounted and nothing was changed."
                 )
             driver.register_redaction(material)
             return operate_bind_adc(client, material)
