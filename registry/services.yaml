@@ -399,6 +399,26 @@ services:
     source_of_truth_for: none (Drive is the document/evidence authority)
     status: repo-merged-not-live
     owner: Ivan
+    live_read_verification_2026_09_08:
+      verdict: LIVE-READ-VERIFIED
+      repository_main: 9957271a267ececd41abd09c22243d35fe87416f
+      workflow: Provision Drive Base Structure (.github/workflows/provision-drive.yml)
+      run: https://github.com/Ivan-Shyla/adapteng-automation-platform/actions/runs/34210295657
+      mode: dry_run
+      completed: 2026-09-08
+      duration_seconds: 17
+      writes_performed: 0
+      sanitized_result:
+        shared_drives_visible_to_delegated_admin: 1
+        target: AdaptEng Company
+        target_state: EXISTS
+        canonical_top_level_folders_present: 8
+        canonical_top_level_folders_expected: 8
+        canonical_top_level_folders_missing: 0
+        apply_needed: false
+        parallel_tree_created: false
+      proves: company Drive visibility and the repository CLI credential path
+      does_not_prove: a deployed long-running service
     notes: >-
       Automation PR #89 was independently reviewed and squash-merged as
       dbcf806ea7714b8e2a7415ae6cd788491924178d; its merge tree exactly matches
