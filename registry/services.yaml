@@ -369,6 +369,86 @@ services:
       from Coolify, Hetzner or any other provider; the whole correction comes
       from GitHub workflow-run metadata.
 
+  - id: adapteng-agent-runtime
+    repo: adapteng-automation-platform
+    path: services/adapteng-agent-runtime
+    role: >-
+      Governed internal agent runtime (A00 route / A10 normalize / A20 draft).
+      Concrete RunLedgerPort (Postgres) and GatewayPort (HTTP, to ai-gateway)
+      implementations over the mock-only contracts PR #132 shipped, plus a
+      deployable HTTP surface (GET /health, GET /ready, POST /v1/run) gated
+      inactive by GOVERNED_AGENT_RUNTIME_ACTIVE (defaults false, fails closed).
+    runtime: not yet deployed; no Coolify application exists for this service yet (see the deployed field below).
+    source_of_truth_for: none (writes only to the existing adapteng_ops run ledger and ai-gateway's own call ledger)
+    depends_on: [postgres-adapteng-ops (migration 002 run_ledger, no schema change needed), ai-gateway]
+    status: repo-merged-not-live
+    implemented: true
+    tested: true                          # LOCAL ONLY -- see test_evidence.verdict below. Do not read this as CI-verified.
+    deployed: false                        # a Coolify inspect attempt on 2026-09-08 failed before creating anything; see deployment_evidence
+    schema_applied_in_production: not_applicable   # no new migration; reuses migration 002's existing agent_task/agent_run tables unchanged
+    test_evidence:
+      verdict: LOCAL-ONLY-NOT-CI-VERIFIED
+      means: >-
+        `python -m pytest -q` in services/adapteng-agent-runtime, run on the
+        developer's machine, not inside adapteng-automation-platform's GitHub
+        Actions. 46 passed, 3 skipped (the skipped tests are marked
+        `@pytest.mark.postgres` and need a live database — they are written
+        and correct but have never executed against a real Postgres).
+      why_not_ci_verified: >-
+        A first attempt wired an `adapteng-agent-runtime` matrix leg and a
+        `governed-agent-runtime-postgres-semantics` job into
+        adapteng-automation-platform's `.github/workflows/adapter-tests.yml`.
+        That repository treats the entire `.github/workflows/` tree as a
+        protected path (`scripts/validation/verify_rollout_trust_anchor.py`'s
+        `PROTECTED_PREFIXES`), requiring a cryptographically signed approval
+        receipt from `.github/trust/rollout-policy/allowed_signers` — which is
+        currently in a deliberate bootstrap-unarmed state (zero principal
+        lines; see `docs/runbooks/authorize-rollout-policy-change.md` in that
+        repository). No one can currently produce a valid receipt, so the
+        workflow-file change was reverted rather than merged unsigned. See
+        `owner/action-items.md` for the exact rollout-authorization action
+        that unblocks this.
+      pr: 133
+      merge: 634635ea79e225a473595adec63a46f303c72e3b
+    n8n_workflow:
+      verdict: REPO-ONLY-NOT-LIVE-IMPORTED
+      file: n8n/workflows/experimental/MM-32-governed-agent-pilot-canary.json (adapteng-automation-platform, PR #134, merge 6b02c0964e98fd2276a1f97a67656800e1251bb5)
+      means: >-
+        A version-controlled workflow JSON exists, is registered in
+        workflow-classification.json/workflow-index.json, and passes the n8n
+        isolation validator. It has NOT been imported into the live
+        self-hosted n8n instance through the n8n UI/API — no import action was
+        taken. Manual-trigger only by design (n8n-nodes-base.manualTrigger);
+        will not run on its own even once imported.
+    deployment_evidence:
+      verdict: NOT-ATTEMPTED-BLOCKED-ON-CONFIG
+      means: >-
+        A read-only `coolify-deploy.yml -f operation=inspect -f
+        service=agent-runtime` dispatch on 2026-09-08 (run 34245025552)
+        aborted before any Coolify API call: the workflow's env block only
+        passes the five ai-gateway-specific COOLIFY_SECRET_* variables it was
+        originally written for, and the script fails closed when a passed
+        secret (AI_GATEWAY_FX_AS_OF) is not declared in the target spec's
+        `externally_provided_configuration` — deploy/agent-runtime.json
+        correctly does not declare it, since agent-runtime does not use FX
+        data. Deploying this service for real needs `coolify-deploy.yml`
+        extended with agent-runtime's own three externally-provided secrets
+        (GOVERNED_AGENT_RUNTIME_DATABASE_URL,
+        GOVERNED_AGENT_RUNTIME_GATEWAY_TOKEN,
+        GOVERNED_AGENT_RUNTIME_HTTP_BEARER_TOKENS) before the first real
+        deploy attempt — a small, non-protected workflow change (company-os
+        has no rollout-trust-anchor system), prepared as part of the deploy
+        sequence in owner/action-items.md.
+    not_blocked_by: [migration/schema, Postgres upsert correctness (proven against a real ephemeral Postgres locally), gateway HTTP contract, idempotency semantics]
+    blocked_by: ["VERTEX_SERVICE_ACCOUNT_JSON not yet installed on adapteng-company-os (owner action; see owner/action-items.md)", "coolify-deploy.yml needs agent-runtime's own secret passthroughs added before a deploy can succeed", "adapter-tests.yml CI wiring needs a signed rollout-policy-change approval"]
+    owner: Ivan
+    notes: >-
+      PR #133 and #134 merged 2026-09-08. Rollback/disable procedure:
+      runbooks/governed-agent-pilot-rollback.md (PR #248). This entry will be
+      corrected to deployed: true / a real test_evidence.verdict of
+      CI-VERIFIED only once genuine GitHub Actions and Coolify evidence
+      exists — not before.
+
   - id: integrity-reconciler
     repo: adapteng-automation-platform
     path: services/integrity-reconciler
