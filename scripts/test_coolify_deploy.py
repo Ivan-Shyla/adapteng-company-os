@@ -13,6 +13,7 @@ makes no writes on a second run, and no operation can reach a removal endpoint.
 
 from __future__ import annotations
 
+import base64
 import copy
 import datetime
 import hashlib
@@ -20,9 +21,11 @@ import io
 import json
 import re
 import unittest
+import zlib
 from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 try:
     from scripts import coolify_deploy as driver
@@ -2250,6 +2253,9 @@ class EntryPointTests(unittest.TestCase):
                 "backup-now",
                 "backup-check",
                 "scheduler-check",
+                "ledger-read",
+                "open-run",
+                "vertex-why",
                 "model-smoke",
             },
         )
@@ -3148,6 +3154,26 @@ class ModelSmokeTests(unittest.TestCase):
         self.assertNotIn("\n", command)
         self.assertEqual(command.count('"'), 2)
 
+    def test_the_call_names_the_run_that_open_run_creates(self) -> None:
+        """These two must not drift apart.
+
+        The gateway checks run_id against agent_run before it contacts the
+        provider. If this command names a run that open-run does not create,
+        every call fails on 'unknown run_id' -- which is exactly how the first
+        live attempt failed, when the call sent its own call_id as the run.
+        """
+
+        command = driver.model_smoke_command(driver.model_smoke_call_id())
+        self.assertIn(driver.RUN_OPEN_RUN_ID, command)
+        self.assertIn(driver.RUN_OPEN_RUN_ID, driver.RUN_OPEN_STATEMENTS[1][1])
+
+    def test_the_call_id_and_the_run_id_are_not_the_same_argument(self) -> None:
+        """They are different keys: one is idempotency, the other is lineage."""
+
+        command = driver.model_smoke_command("smk-fixed")
+        self.assertIn("v[2],v[3]", command)
+        self.assertNotIn("v[2],v[2]", command)
+
     def test_the_command_stays_under_the_measured_length_bound(self) -> None:
         """245 accepted and 300 refused, measured rather than assumed."""
 
@@ -3516,6 +3542,438 @@ class PeerVerifyTests(unittest.TestCase):
         self.assertEqual(
             [m for m, _p in instance.writes() if m == "DELETE"], []
         )
+
+
+class LedgerReadTests(unittest.TestCase):
+    """Two read-only questions asked through a channel that cannot write.
+
+    The gateway refuses a call whose run_id is not in agent_run. Before
+    building a way to open a run, two facts decide whether anything needs
+    building at all -- and both of them fit the measured command bound while
+    the inserts do not. These tests hold that boundary: this operation reads.
+    """
+
+    def test_every_query_fits_the_measured_bound(self) -> None:
+        """Over the bound the endpoint answers HTTP 500 with no reason to read.
+
+        245 was accepted and 300 refused on this application on 2026-09-07. A
+        query that grew past it would fail in a way that looks like an outage.
+        """
+
+        for label, sql, params in driver.LEDGER_QUERIES:
+            with self.subTest(label):
+                command = driver.ledger_command(sql, params)
+                self.assertLessEqual(len(command), driver.PEER_COMMAND_LIMIT)
+
+    def test_no_query_can_change_anything(self) -> None:
+        """The one guarantee that makes this safe to run against production."""
+
+        for label, sql, _params in driver.LEDGER_QUERIES:
+            with self.subTest(label):
+                lowered = sql.lower()
+                for verb in ("insert into", "update ", "delete", "drop", "alter",
+                             "truncate", "grant "):
+                    self.assertNotIn(verb, lowered)
+
+    def test_no_query_selects_every_column(self) -> None:
+        """agent_run holds no free text today, and a wildcard would not know it.
+
+        Naming columns keeps whatever a later migration adds to the table from
+        being exported by a query written before it existed.
+        """
+
+        for label, sql, _params in driver.LEDGER_QUERIES:
+            with self.subTest(label):
+                self.assertNotIn("*", sql)
+
+    def test_commands_carry_nothing_the_shell_would_touch(self) -> None:
+        """sh parses this line before python sees it, and a bare ( ends the run.
+
+        The parenthesis rule was learned the hard way: current_database() and
+        has_table_privilege(...) both produced `sh: 1: Syntax error: "("
+        unexpected` against a live container. Quotes, dollars and backticks
+        were already known; parentheses now sit with them.
+        """
+
+        for label, sql, params in driver.LEDGER_QUERIES:
+            with self.subTest(label):
+                command = driver.ledger_command(sql, params)
+                for character in ("'", "$", "`", "\n"):
+                    self.assertNotIn(character, command)
+                for character in ("(", ")", "&", ";", "|", "<", ">"):
+                    self.assertNotIn(character, sql)
+
+    def test_parameters_keep_values_out_of_the_statement(self) -> None:
+        """Naming a table inline would need quotes this channel cannot send.
+
+        Binding it as a parameter is both the only way to pass it and the
+        reason a value can never be read back as SQL.
+        """
+
+        command = driver.ledger_command("select x from y where n=%s", ("agent_run",))
+        self.assertIn(" 1 agent_run ", command)
+        self.assertIn("%s", command)
+
+    def test_it_reads_the_connection_string_from_the_environment(self) -> None:
+        """A DSN in the command would be written into the Coolify task record."""
+
+        command = driver.ledger_command(*driver.LEDGER_QUERIES[0][1:])
+        self.assertIn("os.environ", command)
+        self.assertIn(driver.LEDGER_DSN_VARIABLE, command)
+        self.assertNotIn("postgres://", command)
+        self.assertNotIn("postgresql://", command)
+
+    def test_it_asks_both_deciding_questions(self) -> None:
+        """Either answer alone leaves the next step undecided.
+
+        A run needs a task, so a role that can insert one and not the other
+        still cannot open a run. The two privileges are asked separately
+        because a single statement asking both is 291 characters and the
+        endpoint refuses it -- the bound test above caught that.
+        """
+
+        labels = [label for label, _sql, _params in driver.LEDGER_QUERIES]
+        self.assertIn("identity", labels)
+        self.assertIn("agent-acl", labels)
+        self.assertIn("agent-owner", labels)
+
+    def test_the_environment_probe_reports_names_and_never_values(self) -> None:
+        """Discovering which variable holds a DSN must not read the DSN.
+
+        The program iterates os.environ, which yields keys, and the suffix test
+        is applied to the key. A value never enters what is printed.
+        """
+
+        command = driver.LEDGER_ENV_COMMAND
+        self.assertIn("for k in os.environ", command)
+        self.assertNotIn("os.environ[", command)
+        self.assertLessEqual(len(command), driver.PEER_COMMAND_LIMIT)
+
+    def test_a_dsn_suffix_outranks_every_url(self) -> None:
+        """The adapter's real environment, which defeated the first ranking.
+
+        _URL names every HTTP base in these containers; _DSN means a connection
+        string and nothing else. Ranking _URL first picked the Baserow API.
+        """
+
+        answer = "AELEDG ['BASEROW_BASE_URL', 'ID_ALLOCATOR_DSN', 'COOLIFY_URL']"
+        self.assertEqual(driver.ledger_dsn_variable(answer), "ID_ALLOCATOR_DSN")
+
+    def test_a_named_database_url_is_accepted_when_no_dsn_exists(self) -> None:
+        """The gateway spells it AI_GATEWAY_DATABASE_URL, with no _DSN present."""
+
+        answer = "AELEDG ['AI_GATEWAY_DATABASE_URL', 'COOLIFY_URL']"
+        self.assertEqual(driver.ledger_dsn_variable(answer), "AI_GATEWAY_DATABASE_URL")
+
+    def test_it_reports_no_variable_rather_than_guessing_one(self) -> None:
+        """Connecting to a guessed endpoint is worse than reporting unknown.
+
+        A bare COOLIFY_URL is an HTTP base, and treating it as a database
+        produces an error that reads like the database is broken.
+        """
+
+        self.assertIsNone(driver.ledger_dsn_variable("AELEDG ['COOLIFY_URL']"))
+        self.assertIsNone(driver.ledger_dsn_variable("AELEDG []"))
+        self.assertIsNone(driver.ledger_dsn_variable(""))
+
+
+class ProbeOnceTests(unittest.TestCase):
+    """The arm, wait and disarm sequence, written once instead of per probe.
+
+    An armed task runs against production every minute. The property worth a
+    test is that it is disarmed even when the wait fails, which is the thing a
+    copied version eventually gets wrong.
+    """
+
+    def test_it_refuses_a_command_over_the_measured_bound(self) -> None:
+        """Sending one produces HTTP 500 and no field-level reason to read."""
+
+        instance = ReadinessInstance()
+        with self.assertRaises(driver.Abort):
+            with redirect_stdout(io.StringIO()):
+                driver.probe_once(
+                    instance,
+                    "app-1",
+                    driver.LEDGER_READ_TASK_NAME,
+                    "x" * (driver.PEER_COMMAND_LIMIT + 1),
+                    driver.LEDGER_READ_MARKER,
+                    lambda _s: None,
+                )
+        self.assertEqual(instance.tasks, [])
+
+    def test_it_disarms_even_when_the_wait_raises(self) -> None:
+        """Otherwise a failure leaves a command running every minute."""
+
+        instance = ReadinessInstance()
+
+        def explode(*_args, **_kwargs):
+            raise RuntimeError("boom")
+
+        with mock.patch.object(driver, "await_probe_answer", explode):
+            with self.assertRaises(RuntimeError):
+                with redirect_stdout(io.StringIO()):
+                    driver.probe_once(
+                        instance,
+                        "app-1",
+                        driver.LEDGER_READ_TASK_NAME,
+                        "echo " + driver.LEDGER_READ_MARKER,
+                        driver.LEDGER_READ_MARKER,
+                        lambda _s: None,
+                    )
+        self.assertTrue(instance.tasks)
+        self.assertIs(instance.tasks[-1]["enabled"], False)
+
+
+class OpenRunTests(unittest.TestCase):
+    """Writing the one row that a model call has to bind to.
+
+    This is the only operation in this file that writes to a business table,
+    and it writes to a governed one. The tests are about that: it must be
+    retryable without duplicating, it must touch nothing else, and the
+    statement must survive a channel that cannot carry a quote.
+    """
+
+    def test_every_statement_is_retryable(self) -> None:
+        """Staging happens over several minutes and can fail partway through.
+
+        Without on-conflict the second attempt would fail on the primary key
+        and leave the operation permanently stuck after any hiccup.
+        """
+
+        for label, sql in driver.RUN_OPEN_STATEMENTS:
+            with self.subTest(label):
+                self.assertIn("on conflict do nothing", sql)
+
+    def test_it_writes_only_to_the_run_ledger(self) -> None:
+        """A typo here would insert into whatever table the typo named."""
+
+        for label, sql in driver.RUN_OPEN_STATEMENTS:
+            with self.subTest(label):
+                self.assertTrue(sql.startswith(f"insert into {label} "))
+                for verb in ("update", "delete", "drop", "alter", "truncate"):
+                    self.assertNotIn(verb, sql)
+
+    def test_the_run_names_the_task_it_belongs_to(self) -> None:
+        """agent_run.task_id is a foreign key; a mismatch fails at commit."""
+
+        _label, run_sql = driver.RUN_OPEN_STATEMENTS[1]
+        self.assertIn(driver.RUN_OPEN_TASK_ID, run_sql)
+        self.assertIn(driver.RUN_OPEN_RUN_ID, run_sql)
+
+    def test_statements_carry_no_character_the_shell_would_touch(self) -> None:
+        """Including the parenthesis, which is why there is no column list."""
+
+        for label, sql in driver.RUN_OPEN_STATEMENTS:
+            with self.subTest(label):
+                for character in ("'", '"', "$", "`", "(", ")", ";", "&", "|"):
+                    self.assertNotIn(character, sql)
+
+    def test_chunks_never_split_a_word(self) -> None:
+        """A cut identifier is a syntax error, or worse, a different identifier.
+
+        The budget here is deliberately far below the real one: the statement
+        has to survive being cut in many places, not just the one the current
+        lengths happen to produce.
+        """
+
+        sql = driver.RUN_OPEN_STATEMENTS[1][1]
+        chunks = driver.stage_chunks(sql, 40)
+        self.assertGreater(len(chunks), 2)
+        self.assertEqual(" ".join(chunks).split(), sql.split())
+        for chunk in chunks:
+            self.assertLessEqual(len(chunk), 40)
+
+    def test_a_word_longer_than_a_write_is_refused(self) -> None:
+        """Staging it would silently truncate the statement."""
+
+        with self.assertRaises(driver.Abort):
+            driver.stage_chunks("insert into t select averylongliteralvalue", 10)
+
+    def test_every_staged_statement_fits_the_channel_it_is_written_with(self) -> None:
+        """The budget is the endpoint bound minus the writer around the chunk."""
+
+        budget = driver.stage_write_budget(driver.LEDGER_STAGE_PATH)
+        self.assertGreater(budget, 0)
+        for label, sql in driver.RUN_OPEN_STATEMENTS:
+            with self.subTest(label):
+                for chunk in driver.stage_chunks(sql, budget):
+                    command = driver.stage_write_command(
+                        driver.LEDGER_STAGE_PATH, "w", chunk
+                    )
+                    self.assertLessEqual(
+                        len(command), driver.PEER_COMMAND_LIMIT - driver.LEDGER_WRITE_MARGIN
+                    )
+
+    def test_the_executing_command_fits_and_names_no_secret(self) -> None:
+        """It only has to name the file and the variable, so it stays short."""
+
+        command = driver.LEDGER_EXEC_COMMAND.format(dsn="AI_GATEWAY_DATABASE_URL")
+        self.assertLessEqual(len(command), driver.PEER_COMMAND_LIMIT)
+        self.assertIn(driver.LEDGER_STAGE_PATH, command)
+        self.assertNotIn("postgres://", command)
+
+    def test_the_stage_file_stays_in_a_scratch_directory(self) -> None:
+        """Nothing this operation writes should outlive the container."""
+
+        self.assertTrue(driver.LEDGER_STAGE_PATH.startswith("/tmp/"))
+
+    def test_every_command_says_something_after_the_marker(self) -> None:
+        """A bare marker reads as no answer at all.
+
+        read_marker returns the text following the marker and treats an empty
+        remainder as absence, which is the right rule -- it is what stops a
+        shell error from being read as a verdict. The first live staging
+        attempt printed only the marker, so a write that had in fact succeeded
+        was reported as unanswered. Every command therefore has to report a
+        value: the writer returns the characters written, the executor the
+        rows affected.
+        """
+
+        templates = (driver.LEDGER_WRITE_COMMAND, driver.LEDGER_EXEC_COMMAND)
+        for template in templates:
+            with self.subTest(template[:40]):
+                self.assertIn(f"print(v[1],", template)
+                self.assertNotIn("print(v[1])", template)
+
+    def test_the_quote_standin_never_collides_with_the_statement(self) -> None:
+        """Every ~ is turned into a quote, so a real ~ would be corrupted."""
+
+        for label, sql in driver.RUN_OPEN_STATEMENTS:
+            with self.subTest(label):
+                restored = sql.replace(driver.LEDGER_QUOTE_STANDIN, "'")
+                self.assertEqual(restored.count("'") % 2, 0)
+
+    def test_every_command_keeps_room_below_the_bound(self) -> None:
+        """Landing exactly on 245 is not a margin.
+
+        The endpoint was measured accepting 245 and refusing 300; where in
+        between it turns over is unknown, so nothing here is built to sit on
+        the only value that was ever proven.
+        """
+
+        commands = [
+            driver.LEDGER_EXEC_COMMAND.format(dsn="ID_ALLOCATOR_DSN"),
+            driver.ledger_command(
+                driver.RUN_OPEN_VERIFY[0], driver.RUN_OPEN_VERIFY[1], "ID_ALLOCATOR_DSN"
+            ),
+        ]
+        for command in commands:
+            with self.subTest(command[:40]):
+                self.assertLess(len(command), driver.PEER_COMMAND_LIMIT - 20)
+
+
+class VertexWhyTests(unittest.TestCase):
+    """Reading the answer the gateway threw away.
+
+    This is a bounded second provider call whose purpose is to retain the error
+    body that the gateway correctly discards from its public result.
+    """
+
+    def test_the_staged_program_is_valid_python(self) -> None:
+        """A syntax error would only surface a minute later, in production."""
+
+        compile(driver.VERTEX_WHY_PROGRAM, "<vertex-why>", "exec")
+
+    def test_it_repeats_the_canonical_call_with_a_tiny_output_bound(self) -> None:
+        """It must diagnose production's POST rather than another endpoint."""
+
+        self.assertIn("P.build_vertex_request_body(", driver.VERTEX_WHY_PROGRAM)
+        self.assertIn(":generateContent", driver.VERTEX_WHY_PROGRAM)
+        self.assertIn(".post(", driver.VERTEX_WHY_PROGRAM)
+        self.assertIn("max_output_tokens=32", driver.VERTEX_WHY_PROGRAM)
+        self.assertIn('input_text="overdue"', driver.VERTEX_WHY_PROGRAM)
+
+    def test_it_uses_the_gateway_project_instead_of_adc_inference(self) -> None:
+        """The endpoint project comes from runtime config, not credential ADC."""
+
+        self.assertIn(
+            'os.environ["AI_GATEWAY_PROVIDER_PROJECT"]',
+            driver.VERTEX_WHY_PROGRAM,
+        )
+
+    def test_it_reports_the_status_rather_than_deciding_what_it_means(self) -> None:
+        """The body names the fix; classifying it here would only lose it."""
+
+        self.assertIn("resp.status_code", driver.VERTEX_WHY_PROGRAM)
+        self.assertIn("resp.text", driver.VERTEX_WHY_PROGRAM)
+
+    def test_a_success_never_prints_generated_output(self) -> None:
+        """Only an error body is evidence; synthetic output stays in-container."""
+
+        self.assertIn('if resp.status_code == 200', driver.VERTEX_WHY_PROGRAM)
+        self.assertIn('"response_bytes "', driver.VERTEX_WHY_PROGRAM)
+        self.assertNotIn("print(M, resp.text", driver.VERTEX_WHY_PROGRAM)
+
+    def test_it_answers_even_when_the_credential_cannot_be_built(self) -> None:
+        """A traceback carries no marker and would read as no answer at all."""
+
+        self.assertIn('"failure"', driver.VERTEX_WHY_PROGRAM)
+        self.assertIn("except Exception as e:", driver.VERTEX_WHY_PROGRAM)
+
+    def test_it_uses_the_same_scope_as_the_gateway(self) -> None:
+        """An unscoped diagnostic only diagnoses itself.
+
+        The first successful staging run omitted this argument and therefore
+        returned invalid_scope before it reached the model resource. Production
+        provider.py passes the cloud-platform scope explicitly; this probe must
+        mirror it before its response can explain production's 403.
+        """
+
+        self.assertIn(
+            "https://www.googleapis.com/auth/cloud-platform",
+            driver.VERTEX_WHY_PROGRAM,
+        )
+        self.assertIn("scopes=(", driver.VERTEX_WHY_PROGRAM)
+
+    def test_the_encoded_program_carries_nothing_the_shell_reads(self) -> None:
+        """This is the whole reason for base64: the alphabet is inert.
+
+        The program contains quotes, parentheses and newlines, every one of
+        which broke a bare command earlier in this file's history.
+        """
+
+        for chunk in driver.stage_program(driver.VERTEX_WHY_PROGRAM):
+            with self.subTest(chunk[:24]):
+                self.assertRegex(chunk, r"^[A-Za-z0-9+/=]+$")
+
+    def test_every_write_fits_the_channel(self) -> None:
+        for chunk in driver.stage_program(driver.VERTEX_WHY_PROGRAM):
+            command = driver.stage_write_command(
+                driver.PROBE_STAGE_PATH, "a", chunk
+            )
+            with self.subTest(len(command)):
+                self.assertLessEqual(
+                    len(command), driver.PEER_COMMAND_LIMIT - driver.LEDGER_WRITE_MARGIN
+                )
+
+    def test_the_writer_and_runner_name_the_same_file(self) -> None:
+        """A staged program is useless if the runner opens another path."""
+
+        command = driver.stage_write_command(
+            driver.PROBE_STAGE_PATH, "w", "YWJj"
+        )
+        self.assertIn(driver.PROBE_STAGE_PATH, command)
+        self.assertIn(driver.PROBE_STAGE_PATH, driver.PROBE_EXEC_COMMAND)
+        self.assertNotIn(driver.LEDGER_STAGE_PATH, command)
+
+    def test_the_staged_pieces_reassemble_into_the_program(self) -> None:
+        """Spaces land between the chunks; b64decode has to survive them."""
+
+        staged = " ".join(driver.stage_program(driver.VERTEX_WHY_PROGRAM))
+        restored = zlib.decompress(base64.b64decode(staged)).decode("utf-8")
+        self.assertEqual(restored, driver.VERTEX_WHY_PROGRAM)
+
+    def test_the_runner_fits_and_names_the_staged_file(self) -> None:
+        self.assertLessEqual(
+            len(driver.PROBE_EXEC_COMMAND), driver.PEER_COMMAND_LIMIT
+        )
+        self.assertIn(driver.PROBE_STAGE_PATH, driver.PROBE_EXEC_COMMAND)
+        self.assertTrue(driver.PROBE_STAGE_PATH.startswith("/tmp/"))
+
+    def test_the_program_prints_the_marker_the_runner_waits_for(self) -> None:
+        """The runner prints nothing itself, so the program has to."""
+
+        self.assertIn(f'"{driver.PROBE_MARKER}"', driver.VERTEX_WHY_PROGRAM)
 
 
 class ServiceDiagnoseTests(unittest.TestCase):

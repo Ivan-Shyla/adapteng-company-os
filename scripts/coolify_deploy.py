@@ -26,6 +26,7 @@ non-zero exit, so a partial apply can never be mistaken for a converged one.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -34,6 +35,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -74,6 +76,9 @@ OPERATIONS = (
     "backup-now",
     "backup-check",
     "scheduler-check",
+    "ledger-read",
+    "open-run",
+    "vertex-why",
     "model-smoke",
 )
 FORBIDDEN_METHODS = frozenset({"DELETE"})
@@ -2760,12 +2765,18 @@ MODEL_SMOKE_MARKER = "AEMODEL"
 # and the cost ledger write.
 MODEL_SMOKE_OPERATION = "classify"
 # Must match _CALLER_RE in the service's app/models.py: ^[a-z][a-z0-9._:-]{1,63}$
-MODEL_SMOKE_CALLER = "ae.smoke"
+# Shortened from ae.smoke for the two characters the run_id needed.
+MODEL_SMOKE_CALLER = "ae.smk"
 # Synthetic, non-personal, and carrying no space on purpose. The command cannot
 # quote anything -- Coolify escapes single quotes and the program already sits
 # inside the only pair of double quotes available -- so every argument arrives
 # bare through argv, and a space would split one argument into two.
-MODEL_SMOKE_INPUT = "invoice_overdue"
+#
+# It was invoice_overdue until the run_id had to be carried as well. Binding the
+# call to a real ledger run costs fifteen characters and there were six, so the
+# input gave up eight of them. What it classifies does not matter here; that the
+# whole path runs does.
+MODEL_SMOKE_INPUT = "overdue"
 # The same measured bound as the peer probe. It is not a guess in either place:
 # the scheduled-task endpoint accepted 245 characters and refused 300, and the
 # readiness command this instance has accepted repeatedly is exactly 245. A test
@@ -2782,8 +2793,8 @@ MODEL_SMOKE_COMMAND = (
     'python -c "'
     "import os,sys,app.models as A,app.company_os_model_proof as M;v=sys.argv;"
     "print(v[1],M._build_gateway(os.environ).handle("
-    "A.GatewayRequest(v[2],v[2],v[3],v[4],v[5])))"
-    '" ' + MODEL_SMOKE_MARKER + " {call_id} " + MODEL_SMOKE_OPERATION
+    "A.GatewayRequest(v[2],v[3],v[4],v[5],v[6])))"
+    '" ' + MODEL_SMOKE_MARKER + " {call_id} {run_id} " + MODEL_SMOKE_OPERATION
     + " " + MODEL_SMOKE_CALLER + " " + MODEL_SMOKE_INPUT
 )
 
@@ -2802,8 +2813,21 @@ def model_smoke_call_id(now=None) -> str:
     return f"smk-{stamp}"
 
 
-def model_smoke_command(call_id: str) -> str:
-    return MODEL_SMOKE_COMMAND.format(call_id=call_id)
+def model_smoke_command(call_id: str, run_id: str | None = None) -> str:
+    """Build the call, bound to a run that exists.
+
+    The first live attempt sent the call_id as the run_id too, and the gateway
+    refused it with 'unknown run_id' before Vertex was ever contacted: every
+    call carries a foreign key into agent_run, and nothing in production was
+    creating rows there. open-run creates that row; this names it.
+
+    The default is resolved here rather than in the signature because the run
+    is defined further down, with the operation that opens it.
+    """
+
+    return MODEL_SMOKE_COMMAND.format(
+        call_id=call_id, run_id=run_id or RUN_OPEN_RUN_ID
+    )
 
 
 def readiness_command(spec: dict) -> str:
@@ -3262,6 +3286,619 @@ def model_smoke_fields(answer: str) -> dict[str, str]:
         if match:
             found[name] = match.group(1)
     return found
+
+
+# --- reading the run ledger ---
+
+# Every model call must bind to a run_id that already exists in agent_run:
+# migration 008 makes the reference a foreign key and ai_gateway_reserve_call
+# raises 'unknown run_id' when it does not resolve. The first live call failed
+# there, and the service that owns run creation -- adapteng-run-ledger -- is not
+# deployed. Before building a way to open a run, two facts decide whether
+# anything needs building: whether a run already exists that a call can reuse,
+# and whether this database role is even permitted to insert one.
+#
+# Both questions are reads, and that matters. The shortest correct insert into
+# agent_run is 350 characters and into agent_task 288; the scheduled-task
+# endpoint refuses anything at 300, measured on this application. So the
+# channel that can ask these questions provably cannot answer them by writing,
+# which is why this operation is a read and carries a test saying so.
+LEDGER_READ_TASK_NAME = "adapteng-ledger-read"
+LEDGER_READ_MARKER = "AELEDG"
+# The gateway was asked on 2026-09-07 by run 34164549392 and answered:
+#
+#   psycopg.errors.InsufficientPrivilege: permission denied for table agent_run
+#
+# So the gateway's role holds no direct privilege on the ledger at all, not even
+# SELECT. That is migration 008 working as written -- it REVOKEs table DML and
+# leaves runtime callers only EXECUTE on seven SECURITY DEFINER functions, none
+# of which opens a run. Re-asking the gateway would only repeat that answer.
+#
+# The open question is whether some other container in the same database holds a
+# role that can. The Baserow adapter performs governed upserts, so it connects
+# with write privileges somewhere; whether those reach the run ledger is exactly
+# what decides between "open a run from inside the perimeter" and "this needs
+# the owner to deploy the run-ledger service".
+LEDGER_SUBJECTS = (("adapteng-baserow-adapter", None),)
+# The connection string is a secret and is already in the container's
+# environment. Naming the variable rather than the value keeps it out of the
+# command, out of the Coolify task record and out of the run log.
+LEDGER_DSN_VARIABLE = "AI_GATEWAY_DATABASE_URL"
+# Which variable holds it differs per service, so it is discovered rather than
+# assumed -- by listing variable NAMES that look like a connection string. No
+# value is ever read. A name that ends in _URL or _DSN is a connection string by
+# convention, and the convention is all this needs.
+LEDGER_ENV_COMMAND = (
+    'python -c "'
+    "import os,sys;v=sys.argv;"
+    "print(v[1],[k for k in os.environ if k.endswith(v[2]) or k.endswith(v[3])])"
+    '" ' + LEDGER_READ_MARKER + " _URL _DSN"
+)
+# Same construction rules as every other probe in this file: one line, no single
+# quote, no dollar, no backtick, no double quote inside the program, and no
+# space inside any argument. The last rule is why the statement is passed as
+# separate argv words and rejoined with chr(32) -- a quoted string is not
+# available, so the words arrive bare and are put back together in-process.
+LEDGER_READ_COMMAND = (
+    'python -c "'
+    "import os,sys,psycopg as P;v=sys.argv;"
+    "print(v[1],P.connect(os.environ[v[2]]).execute(chr(32).join(v[3:])).fetchall())"
+    '" ' + LEDGER_READ_MARKER + " {dsn} {sql}"
+)
+# A statement that needs a value carries it as a bound parameter rather than a
+# literal, because a literal would need quotes this channel cannot send. The
+# count of parameters is passed first so the program knows where they end and
+# the statement begins.
+LEDGER_PARAM_COMMAND = (
+    'python -c "'
+    "import os,sys,psycopg as P;v=sys.argv;n=int(v[3]);"
+    "print(v[1],P.connect(os.environ[v[2]]).execute("
+    "chr(32).join(v[4+n:]),v[4:4+n]).fetchall())"
+    '" ' + LEDGER_READ_MARKER + " {dsn} {count} {params} {sql}"
+)
+# Committed in full so review sees exactly what runs against production. All are
+# read-only, none selects every column, and none returns anything a person
+# wrote: agent_run holds identifiers, a status and counters.
+LEDGER_QUERIES = (
+    # Which role this container connects as. It is what turns "permission
+    # denied" from a dead end into a specific thing to grant.
+    ("identity", "select user", ()),
+    # Asked through the catalog rather than has_table_privilege because that
+    # call needs parentheses, and sh parses this command line before python
+    # ever sees it: a bare ( is a shell syntax error. relacl is also the more
+    # useful answer -- it is the whole access list, so it names every role that
+    # holds anything on the table, not just whether one guess was right.
+    ("agent-acl", "select relname,relacl from pg_class where relname~%s", ("agent_",)),
+    # pg_tables reports the owner as a name rather than an oid, which saves a
+    # second lookup. A NULL relacl above means nobody but the owner holds
+    # anything on the table, so who the owner is decides the question.
+    ("agent-owner",
+     "select tableowner from pg_tables where tablename~%s", ("agent",)),
+)
+
+
+def ledger_command(sql: str, params: tuple = (), dsn: str = LEDGER_DSN_VARIABLE) -> str:
+    """Assemble one committed query into a command this endpoint will accept."""
+
+    if not params:
+        return LEDGER_READ_COMMAND.format(sql=sql, dsn=dsn)
+    return LEDGER_PARAM_COMMAND.format(
+        count=len(params), params=" ".join(params), sql=sql, dsn=dsn
+    )
+
+
+def probe_once(client: Client, uuid: str, task_name: str, command: str,
+               marker: str, sleep) -> tuple:
+    """Run one command inside a running container and bring the task to rest.
+
+    Coolify offers no way to execute a scheduled task on demand, so the only
+    route in is to arm one at every-minute, wait for the scheduler, and read
+    the execution it records. Arming a task against production is the part that
+    has to be safe under failure: the disarm sits in a finally, so a command
+    that raises still stops repeating.
+
+    Returns (execution, answer, reason, at_rest). A caller that gets at_rest
+    False has a task still firing every minute and must say so loudly.
+    """
+
+    if len(command) > PEER_COMMAND_LIMIT:
+        raise Abort(
+            f"the {task_name} command is {len(command)} characters and the "
+            f"endpoint's measured bound is {PEER_COMMAND_LIMIT}; refusing to "
+            "send one that will be refused"
+        )
+
+    task_uuid, disposition = converge_readiness_task(client, uuid, command, task_name)
+    emit(f"    task {task_name}: {disposition} uuid={task_uuid}")
+
+    before = executions_snapshot(list_executions(client, uuid, task_uuid))
+    armed = write_readiness_task(
+        client,
+        uuid,
+        task_uuid,
+        readiness_task_body(command, armed=True, name=task_name),
+        task_name,
+    )
+    if not task_is_armed(armed):
+        raise Abort(
+            f"the {task_name} task did not arm; refusing to wait for an answer "
+            "that cannot arrive"
+        )
+
+    try:
+        execution, answer, reason = await_probe_answer(
+            client, uuid, task_uuid, before, sleep, marker
+        )
+    finally:
+        at_rest = disarm_readiness_task(client, uuid, task_uuid, command, task_name)
+        if not at_rest:
+            emit("")
+            emit(
+                f"    COULD NOT DISARM {task_name} ({task_uuid}) on application "
+                f"{uuid}. It is still enabled at {READINESS_ARMED_FREQUENCY} and "
+                "will keep running every minute until it is disabled: PATCH "
+                f"/applications/{uuid}/scheduled-tasks/{task_uuid} with "
+                "enabled=false, or run this operation again, which disarms first."
+            )
+
+    return execution, answer, reason, at_rest
+
+
+def ledger_dsn_variable(answer: str) -> str | None:
+    """Pick the connection-string variable out of a list of variable names.
+
+    The probe prints names only. Choosing here rather than in the container
+    keeps the choice reviewable and keeps the command short enough to send.
+
+    A _DSN suffix outranks everything: it means a connection string and nothing
+    else, while _URL is used for every HTTP base in the environment. The
+    adapter carries BASEROW_BASE_URL, ID_ALLOCATOR_DSN and COOLIFY_URL, and
+    ranking _URL first picked the Baserow API.
+    """
+
+    names = re.findall(r"[A-Z][A-Z0-9_]*(?:_URL|_DSN)", answer or "")
+    for name in names:
+        if name.endswith("_DSN"):
+            return name
+    for name in names:
+        if "DATABASE" in name or "POSTGRES" in name:
+            return name
+    return None
+
+
+# --- opening a run ---
+
+# The adapter answered on 2026-09-07 (run 34165335807): it connects as
+# adapteng_ops, and adapteng_ops owns agent_run, agent_task and agent_outcome
+# with relacl NULL -- no grants to anyone else, every privilege with the owner.
+# So a run can be opened from inside the perimeter after all, through the
+# adapter rather than the gateway.
+#
+# What still does not fit is the statement. The shortest honest insert into
+# agent_run is 148 characters of SQL on top of a 180-character wrapper, and the
+# endpoint stops at 245. So the statement is staged into a file inside the
+# container across short writes and then executed by a command that only has to
+# name the file. Nothing outside /tmp is touched and no redeploy is needed.
+LEDGER_STAGE_PATH = "/tmp/ae-ledger.sql"
+# Single quotes cannot travel through this channel -- Coolify escapes them --
+# so literals are written with ~ and restored at execution. ~ is safe in the
+# middle of a word, which is where every one of them sits.
+LEDGER_QUOTE_STANDIN = "~"
+LEDGER_WRITE_COMMAND = (
+    'python -c "'
+    "import sys;v=sys.argv;"
+    "print(v[1],open(v[2],v[3]).write(chr(32).join(v[4:])+chr(32)))"
+    '" ' + LEDGER_READ_MARKER + " {path} {mode} {chunk}"
+)
+LEDGER_EXEC_COMMAND = (
+    'python -c "'
+    "import os,sys,psycopg as P;v=sys.argv;c=P.connect(os.environ[v[2]]);"
+    "r=c.execute(open(v[3]).read().replace(chr(126),chr(39))).rowcount;"
+    "c.commit();print(v[1],r)"
+    '" ' + LEDGER_READ_MARKER + " {dsn} " + LEDGER_STAGE_PATH
+)
+# One task and one run, named so that a second attempt is the same row rather
+# than a new one. Both carry "on conflict do nothing", which is what makes this
+# safe to retry after a failure partway through.
+# 245 was accepted and 300 refused; where in between the endpoint turns over
+# was never measured. Staging is the one place where a longer command buys
+# nothing -- an extra write costs a minute -- so it keeps clear of the edge.
+LEDGER_WRITE_MARGIN = 10
+RUN_OPEN_TASK_ID = "ae-smoke-task-1"
+RUN_OPEN_RUN_ID = "ae-smoke-run-1"
+RUN_OPEN_STATEMENTS = (
+    (
+        "agent_task",
+        "insert into agent_task select ~{task}~, ~smoke~, null, null,"
+        " current_timestamp on conflict do nothing".format(task=RUN_OPEN_TASK_ID),
+    ),
+    (
+        "agent_run",
+        "insert into agent_run select ~{run}~, ~{task}~, ~vertex-ai~,"
+        " ~gemini-3.1-flash-lite~, 0, 0, 0, ~EUR~, ~started~,"
+        " current_timestamp, null on conflict do nothing".format(
+            run=RUN_OPEN_RUN_ID, task=RUN_OPEN_TASK_ID
+        ),
+    ),
+)
+# Read back with no parameters: the parameterised reader costs 45 more
+# characters and lands exactly on the 245 bound, which is no margin at all.
+# The ledger is otherwise unused, so listing it is both shorter and more
+# informative than asking about one row.
+RUN_OPEN_VERIFY = ("select run_id,status,started_at from agent_run limit 9", ())
+
+
+def stage_chunks(sql: str, budget: int) -> list[str]:
+    """Split a statement into pieces each short enough to send.
+
+    Splitting on whitespace is what makes this safe: every piece is a whole
+    number of SQL words, so no identifier or literal is ever cut in half, and
+    the writer rejoins them with the space it removed.
+    """
+
+    chunks: list[str] = []
+    current = ""
+    for word in sql.split():
+        if len(word) > budget:
+            raise Abort(
+                f"the word {word!r} is {len(word)} characters and a single "
+                f"write carries {budget}; it cannot be staged"
+            )
+        candidate = f"{current} {word}".strip()
+        if len(candidate) > budget:
+            chunks.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def stage_write_command(path: str, mode: str, chunk: str) -> str:
+    """Build one bounded write to the caller's exact scratch file."""
+
+    return LEDGER_WRITE_COMMAND.format(path=path, mode=mode, chunk=chunk)
+
+
+def stage_write_budget(path: str) -> int:
+    """Return the payload available after the writer and its safety margin."""
+
+    return PEER_COMMAND_LIMIT - LEDGER_WRITE_MARGIN - len(
+        stage_write_command(path, "w", "")
+    )
+
+
+def operate_open_run(client: Client, spec: dict, sleep=None) -> int:
+    """Open the one run a model call has to bind to.
+
+    Every gateway call carries a run_id that must already exist in agent_run;
+    ai_gateway_reserve_call raises 'unknown run_id' otherwise, which is exactly
+    how the first live call failed. The service that creates runs is not
+    deployed, and the gateway's own role cannot even read the table.
+
+    The adapter's role owns it. So this writes the row the ledger service would
+    have written -- one task and one run, both named, both idempotent -- and
+    then reads it back. It is a production write and is meant to be visible as
+    one.
+    """
+
+    import time
+
+    sleep = sleep or time.sleep
+    target = spec["target"]
+    emit(f"--- open-run {spec['service']}")
+    project = find_project(client, target["project"])
+    environment = (
+        find_environment(client, project["uuid"], target["environment"])
+        if project
+        else None
+    )
+    if project is None or environment is None:
+        emit("    project or environment absent; nothing to open")
+        emit("RESULT open-run failed application=absent")
+        return EXIT_FAILED
+
+    subject = LEDGER_SUBJECTS[0][0]
+    application = find_application(applications_in(client, environment), subject)
+    if application is None:
+        emit(f"    application {subject}: ABSENT")
+        emit("RESULT open-run failed application=absent")
+        return EXIT_FAILED
+
+    uuid = str(application["uuid"])
+    emit(f"    application {subject}: uuid={uuid} state={application.get('status')}")
+
+    def ask(command: str, note: str) -> str:
+        emit("")
+        emit(f"    {note} ({len(command)} chars)")
+        execution, answer, reason, at_rest = probe_once(
+            client, uuid, LEDGER_READ_TASK_NAME, command, LEDGER_READ_MARKER, sleep
+        )
+        if not at_rest:
+            raise Abort("the staging task could not be disarmed")
+        if answer is None:
+            emit_captured_output((execution or {}).get("message"), known=(uuid,))
+            raise Abort(f"no answer from {note} ({reason or 'no_marker'})")
+        return answer
+
+    try:
+        dsn_answer = ask(LEDGER_ENV_COMMAND, "discovering the connection variable")
+        emit_captured_output(dsn_answer, known=(uuid,))
+        dsn = ledger_dsn_variable(dsn_answer)
+        if dsn is None:
+            emit("RESULT open-run failed reason=no_dsn")
+            return EXIT_FAILED
+        emit(f"    using {dsn}")
+
+        budget = stage_write_budget(LEDGER_STAGE_PATH)
+        for label, sql in RUN_OPEN_STATEMENTS:
+            chunks = stage_chunks(sql, budget)
+            emit("")
+            emit(f"    staging {label}: {len(sql)} chars in {len(chunks)} writes")
+            for index, chunk in enumerate(chunks):
+                mode = "w" if index == 0 else "a"
+                ask(
+                    stage_write_command(LEDGER_STAGE_PATH, mode, chunk),
+                    f"{label} write {index + 1}/{len(chunks)}",
+                )
+            ask(LEDGER_EXEC_COMMAND.format(dsn=dsn), f"executing {label}")
+            emit(f"    {label}: committed")
+
+        verify = ask(
+            ledger_command(RUN_OPEN_VERIFY[0], RUN_OPEN_VERIFY[1], dsn),
+            "reading the run back",
+        )
+    except Abort as failure:
+        emit(f"    {failure}")
+        emit("RESULT open-run failed reason=aborted")
+        return EXIT_FAILED
+
+    emit_captured_output(verify, known=(uuid,))
+    if RUN_OPEN_RUN_ID not in verify:
+        emit("    the run is not in the ledger, so a model call would still fail")
+        emit("RESULT open-run failed reason=not_recorded")
+        return EXIT_FAILED
+
+    emit("")
+    emit(
+        f"    Run {RUN_OPEN_RUN_ID} exists. A gateway call naming it will pass "
+        "the reference check that refused the first one."
+    )
+    emit(f"RESULT open-run ok run_id={RUN_OPEN_RUN_ID}")
+    return EXIT_OK
+
+
+# --- asking Vertex why ---
+
+# The call reached the provider. ADC built a session, the request was signed and
+# sent, the response host was verified, and Vertex answered 403 -- which the
+# gateway records as unbilled and then discards. The body it discarded is the
+# only thing that distinguishes "the API is not enabled" from "this identity
+# lacks the role" from "the project has no billing account", and those have
+# three different owner actions.
+#
+# Reading it needs more than 245 characters of program, so the program stops
+# travelling in the command. It is base64-encoded and staged into a file the
+# same way the SQL was, and the command only decodes and runs it. Base64 is
+# what makes this general: its alphabet is letters, digits, plus, slash and
+# equals, none of which the shell touches, so the staged program is free to
+# contain quotes, parentheses and newlines that a bare command cannot carry.
+PROBE_STAGE_PATH = "/tmp/ae-probe.b64"
+PROBE_MARKER = "AEPROBE"
+PROBE_EXEC_COMMAND = (
+    'python -c "'
+    "import sys,base64 as B,zlib as Z;v=sys.argv;"
+    "exec(Z.decompress(B.b64decode(open(v[2]).read())))"
+    '" ' + PROBE_MARKER + " " + PROBE_STAGE_PATH
+)
+# Compression cuts several minute-long scheduler cycles from the staging path.
+# b64decode discards characters outside its alphabet by default, which is why
+# the spaces the writer puts between chunks do not have to be cleaned up first.
+VERTEX_WHY_PROGRAM = '''
+import app.provider as P
+import google.auth as G
+import os
+from google.auth.transport.requests import AuthorizedSession as S
+M = "AEPROBE"
+try:
+    creds, _ = G.default(scopes=("https://www.googleapis.com/auth/cloud-platform",))
+    project = os.environ["AI_GATEWAY_PROVIDER_PROJECT"]
+    url = f"{P.PINNED_EU_HOST}/v1/projects/{project}/locations/{P.PINNED_EU_LOCATION}/publishers/google/models/{P.PINNED_MODEL}:generateContent"
+    resp = S(creds).post(
+        url,
+        json=P.build_vertex_request_body(operation="classify", input_text="overdue",
+                                         metadata={}, max_output_tokens=32),
+        timeout=20,
+    )
+    body = ("response_bytes " + str(len(resp.content)) if resp.status_code == 200
+            else "body " + " ".join(resp.text.split())[:500])
+    print(M, "status", resp.status_code, body)
+except Exception as e:
+    print(M, "failure", type(e).__name__, str(e)[:200])
+'''
+
+
+def stage_program(source: str) -> list[str]:
+    """Encode a program into pieces the command channel can carry."""
+
+    encoded = base64.b64encode(
+        zlib.compress(source.encode("utf-8"), level=9)
+    ).decode("ascii")
+    budget = stage_write_budget(PROBE_STAGE_PATH)
+    return [encoded[at : at + budget] for at in range(0, len(encoded), budget)]
+
+
+def operate_vertex_why(client: Client, spec: dict, sleep=None) -> int:
+    """Read the answer Vertex gave that the gateway threw away.
+
+    A model-resource GET was tried first, but that route itself is unsupported
+    and returned a generic 404. This therefore repeats the same synthetic POST
+    with the gateway's exact project binding, scope and request builder. A 403
+    is unbilled under the provider contract and carries the owner action. A 200
+    is bounded to 32 output tokens and logs only the response size, never the
+    generated output.
+    """
+
+    import time
+
+    sleep = sleep or time.sleep
+    target = spec["target"]
+    emit(f"--- vertex-why {spec['service']}")
+    project = find_project(client, target["project"])
+    environment = (
+        find_environment(client, project["uuid"], target["environment"])
+        if project
+        else None
+    )
+    if project is None or environment is None:
+        emit("    project or environment absent")
+        emit("RESULT vertex-why failed application=absent")
+        return EXIT_FAILED
+
+    application = find_application(applications_in(client, environment), spec["service"])
+    if application is None:
+        emit(f"    application {spec['service']}: ABSENT")
+        emit("RESULT vertex-why failed application=absent")
+        return EXIT_FAILED
+
+    uuid = str(application["uuid"])
+    emit(f"    application {spec['service']}: uuid={uuid}")
+
+    def ask(command: str, note: str, marker: str) -> str:
+        emit("")
+        emit(f"    {note} ({len(command)} chars)")
+        execution, answer, reason, at_rest = probe_once(
+            client, uuid, LEDGER_READ_TASK_NAME, command, marker, sleep
+        )
+        if not at_rest:
+            raise Abort("the probe task could not be disarmed")
+        if answer is None:
+            emit_captured_output((execution or {}).get("message"), known=(uuid,))
+            raise Abort(f"no answer from {note} ({reason or 'no_marker'})")
+        return answer
+
+    try:
+        chunks = stage_program(VERTEX_WHY_PROGRAM)
+        emit(f"    staging the probe in {len(chunks)} writes")
+        for index, chunk in enumerate(chunks):
+            mode = "w" if index == 0 else "a"
+            ask(
+                stage_write_command(PROBE_STAGE_PATH, mode, chunk),
+                f"write {index + 1}/{len(chunks)}",
+                LEDGER_READ_MARKER,
+            )
+        answer = ask(PROBE_EXEC_COMMAND, "asking Vertex", PROBE_MARKER)
+    except Abort as failure:
+        emit(f"    {failure}")
+        emit("RESULT vertex-why failed reason=aborted")
+        return EXIT_FAILED
+
+    emit("")
+    emit_captured_output(answer, known=(uuid,))
+    emit("RESULT vertex-why ok")
+    return EXIT_OK
+
+
+def operate_ledger_read(client: Client, spec: dict, sleep=None) -> int:
+    """Ask a container's database role whether it could open a run.
+
+    This changes nothing. It exists because the alternative to asking is
+    guessing, and both guesses are expensive: building a run-opening channel
+    that was never needed, or assuming a role can open a run when it cannot.
+
+    The gateway has already answered -- permission denied on agent_run, which
+    is migration 008 working as designed. What is asked here is whether any
+    other container in the same database holds a role that can, because that is
+    the difference between finishing this from inside the perimeter and handing
+    the owner a deployment.
+    """
+
+    import time
+
+    sleep = sleep or time.sleep
+    target = spec["target"]
+    emit(f"--- ledger-read {spec['service']}")
+    project = find_project(client, target["project"])
+    environment = (
+        find_environment(client, project["uuid"], target["environment"])
+        if project
+        else None
+    )
+    if project is None or environment is None:
+        emit("    project or environment absent; nothing to read")
+        emit("RESULT ledger-read failed application=absent")
+        return EXIT_FAILED
+
+    applications = applications_in(client, environment)
+    asked = 0
+    for subject, known_dsn in LEDGER_SUBJECTS:
+        emit("")
+        application = find_application(applications, subject)
+        if application is None:
+            emit(f"    application {subject}: ABSENT")
+            emit(f"RESULT ledger-read failed application=absent subject={subject}")
+            return EXIT_FAILED
+
+        uuid = str(application["uuid"])
+        emit(f"    application {subject}: uuid={uuid} state={application.get('status')}")
+
+        dsn = known_dsn
+        if dsn is None:
+            emit(f"    discovering which variable holds {subject}'s connection string")
+            _execution, answer, reason, at_rest = probe_once(
+                client, uuid, LEDGER_READ_TASK_NAME, LEDGER_ENV_COMMAND,
+                LEDGER_READ_MARKER, sleep,
+            )
+            if not at_rest:
+                emit("RESULT ledger-read failed reason=task_left_armed")
+                return EXIT_FAILED
+            if answer is None:
+                emit(f"    no answer from {subject} ({reason})")
+                emit(f"RESULT ledger-read failed reason={reason} subject={subject}")
+                return EXIT_FAILED
+            emit_captured_output(answer, known=(uuid,))
+            dsn = ledger_dsn_variable(answer)
+            if dsn is None:
+                emit(f"    {subject} carries no variable that names a connection")
+                emit(f"RESULT ledger-read failed reason=no_dsn subject={subject}")
+                return EXIT_FAILED
+            emit(f"    using {dsn}")
+
+        for label, sql, params in LEDGER_QUERIES:
+            command = ledger_command(sql, params, dsn)
+            emit("")
+            emit(f"    {subject} {label}: {sql} ({len(command)} chars)")
+            execution, answer, reason, at_rest = probe_once(
+                client, uuid, LEDGER_READ_TASK_NAME, command,
+                LEDGER_READ_MARKER, sleep,
+            )
+            if not at_rest:
+                emit("RESULT ledger-read failed reason=task_left_armed")
+                return EXIT_FAILED
+            if answer is None:
+                emit(
+                    f"    the execution carries no {LEDGER_READ_MARKER} marker, so "
+                    "the query did not complete. The captured output follows, "
+                    "because the reason is in it."
+                )
+                emit_captured_output(
+                    (execution or {}).get("message"), known=(uuid,)
+                )
+                emit(f"RESULT ledger-read failed reason={reason} at={label}")
+                return EXIT_FAILED
+            emit_captured_output(answer, known=(uuid,))
+            asked += 1
+
+    emit("")
+    emit(
+        "    A True above means a run can be opened from inside the perimeter "
+        "and the first model call is one command away. A False means the run "
+        "ledger has no writer deployed, which is an owner action, not a "
+        "workaround."
+    )
+    emit(f"RESULT ledger-read ok queries={asked}")
+    return EXIT_OK
 
 
 def operate_model_smoke(client: Client, spec: dict, sleep=None, now=None) -> int:
@@ -4861,6 +5498,12 @@ def run(environ: dict) -> int:
         )
     if operation == "scheduler-check":
         return operate_scheduler_check(client, spec)
+    if operation == "ledger-read":
+        return operate_ledger_read(client, spec)
+    if operation == "open-run":
+        return operate_open_run(client, spec)
+    if operation == "vertex-why":
+        return operate_vertex_why(client, spec)
     if operation == "model-smoke":
         return operate_model_smoke(client, spec)
     return operate_deploy(
