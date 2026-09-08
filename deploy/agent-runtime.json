@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "service": "agent-runtime",
+  "summary": "Governed internal agent runtime (A00 route / A10 normalize / A20 draft) over the Postgres run ledger and the internal AI gateway. Private network only; feature-flagged inactive until the bounded canary.",
+  "source_of_declared_values": {
+    "repository": "Ivan-Shyla/adapteng-automation-platform",
+    "files": [
+      "services/adapteng-agent-runtime/Dockerfile",
+      "services/adapteng-agent-runtime/.env.example",
+      "services/adapteng-agent-runtime/app/config.py"
+    ],
+    "verified_on": "2026-09-08"
+  },
+  "target": {
+    "project": "adapteng-ops",
+    "environment": "production",
+    "resource_name": "agent-runtime",
+    "server": null,
+    "destination": null,
+    "note": "server and destination are null on purpose, matching deploy/ai-gateway.json: the reconciler resolves them from the instance and aborts when the match is not unique, rather than guessing. This spec has not yet been reconciled against a live Coolify application -- it is written ahead of the first `coolify-deploy.yml -f operation=deploy -f service=agent-runtime` run, which will create the application from this declaration."
+  },
+  "source": {
+    "kind": "private_github_app",
+    "git_repository": "Ivan-Shyla/adapteng-automation-platform",
+    "git_branch": "main",
+    "github_app": "adapteng-coolify",
+    "note": "Same private-repo App as deploy/ai-gateway.json; the built-in 'Public GitHub' source cannot read this private repository."
+  },
+  "build": {
+    "build_pack": "dockerfile",
+    "base_directory": "/services/adapteng-agent-runtime",
+    "dockerfile_location": "/Dockerfile"
+  },
+  "network": {
+    "internal_port": 8082,
+    "public_fqdn": null,
+    "connect_to_docker_network": true,
+    "network_aliases": ["agent-runtime"],
+    "peer_probe_application": "ai-gateway",
+    "note": "public_fqdn is null and must stay null: this service is reachable only from the private Docker network, exactly like ai-gateway. peer_probe_application names ai-gateway (not ops-runner) because the one live outbound call this service makes in the canary is to ai-gateway, so that is the reachability check that actually matters for this service."
+  },
+  "health_check": {
+    "enabled": false,
+    "container_gate": "image",
+    "path": "/ready",
+    "method": "GET",
+    "scheme": "http",
+    "return_code": 200,
+    "interval_seconds": 15,
+    "timeout_seconds": 10,
+    "retries": 5,
+    "start_period_seconds": 30,
+    "note": "Same rationale and same failure mode already documented and fixed in deploy/ai-gateway.json's note: this image (python:3.11-slim, minimal system deps) carries neither curl nor wget, so Coolify's generated coolify_http probe would fail every attempt. container_gate is 'image' -- the image's own HEALTHCHECK instruction (services/adapteng-agent-runtime/Dockerfile) is the real gate, requires health_check.enabled=false, and its four numbers must stay equal to the ones declared here since Coolify reads them back out of the image and overwrites its own stored values. Unlike ai-gateway's history, this service has never been deployed, so there is no incident to cite -- the Dockerfile's HEALTHCHECK was written with these exact four numbers from the start, precisely to avoid repeating that incident.",
+    "container_gate_note": "Probes /ready, not /health, for the same reason as ai-gateway: /health answers without touching the database, so gating promotion on it would prove only that a process is listening. /ready opens a database connection to the run ledger (see app/config.py::verify_database_reachable), so a container that cannot reach Postgres is never promoted."
+  },
+  "delivery": {
+    "auto_deploy_on_push": false,
+    "preview_deployments": false,
+    "force_https": false,
+    "note": "Deployment is driven only by the deploy operation of .github/workflows/coolify-deploy.yml (workflow_dispatch only), so a push to the platform repository never releases by itself. force_https is off because there is no public route to redirect."
+  },
+  "settings_not_reported_by_api": {
+    "note": "Same Coolify-version limitation already documented in deploy/ai-gateway.json's settings_not_reported_by_api: the four delivery flags are not reported back by this Coolify instance's API, so the driver reports them here for the owner to confirm in the UI rather than writing a value it cannot verify by read-back.",
+    "keys": {
+      "is_auto_deploy_enabled": {
+        "reason": "Not reported and not accepted by the creation endpoint on this version (same as ai-gateway).",
+        "compensating_control": "Releases are driven only by the deploy operation of .github/workflows/coolify-deploy.yml, which is workflow_dispatch only."
+      },
+      "is_preview_deployments_enabled": {
+        "reason": "Not accepted by the creation endpoint on this version (same as ai-gateway).",
+        "compensating_control": "public_fqdn is null and reconcile fails if an FQDN appears, so a preview has no route to publish on."
+      },
+      "is_force_https_enabled": {
+        "reason": "Not reported on this version (same as ai-gateway).",
+        "compensating_control": "There is no public route to redirect."
+      },
+      "connect_to_docker_network": {
+        "reason": "Not reported on this version (same as ai-gateway).",
+        "compensating_control": "network.network_aliases declares the alias this service needs; the same coolify-deploy.yml service-resolve operation used to verify ai-gateway's attachment can be run against this application before it is trusted for the canary."
+      }
+    }
+  },
+  "configuration": [
+    {
+      "key": "GOVERNED_AGENT_RUNTIME_HTTP_HOST",
+      "value": "0.0.0.0",
+      "note": "The service image ends with ENV GOVERNED_AGENT_RUNTIME_HTTP_HOST=127.0.0.1, and app/config.py falls back to the same loopback address. A process bound to loopback answers only callers inside its own container, so the container-network health probe and the internal n8n caller would be refused. Binding all interfaces is what makes the container reachable on the private network; nothing is published to the internet."
+    },
+    {
+      "key": "GOVERNED_AGENT_RUNTIME_HTTP_PORT",
+      "value": "8082",
+      "note": "Declared so the listening port, the internal_port above and the health-check port have exactly one source of truth in this file. 8082, not ai-gateway's 8081, so both services can run on hosts that share a network namespace."
+    },
+    {
+      "key": "GOVERNED_AGENT_RUNTIME_GATEWAY_BASE_URL",
+      "value": "http://ai-gateway:8081",
+      "note": "Resolves via the private Docker network using ai-gateway's own declared network_aliases entry (deploy/ai-gateway.json), not a public URL. Depends on ai-gateway's alias actually resolving on this network -- verified once, for ai-gateway itself, by run 31590576870 (cited in deploy/ai-gateway.json); worth re-confirming with a service-resolve run once this application exists, since that history describes ai-gateway's own onboarding, not this one."
+    },
+    {
+      "key": "GOVERNED_AGENT_RUNTIME_GATEWAY_CALLER",
+      "value": "adapteng.agent-runtime",
+      "note": "Passed as the gateway request's caller field (services/ai-gateway/app/models.py::GatewayRequest.caller), which the gateway's _CALLER_RE requires to be a bounded lowercase identifier."
+    },
+    {
+      "key": "GOVERNED_AGENT_RUNTIME_GATEWAY_PROVIDER",
+      "value": "vertex-ai",
+      "note": "Recorded into agent_run.model_provider on every ledger row. Descriptive only -- the actual provider routing is fixed inside ai-gateway itself (ADR-0010's canonical EU Vertex binding); this value never selects a provider."
+    },
+    {
+      "key": "GOVERNED_AGENT_RUNTIME_GATEWAY_MODEL",
+      "value": "gemini-3.1-flash-lite",
+      "note": "Recorded into agent_run.model_version on every ledger row. Must track deploy/ai-gateway.json's AI_GATEWAY_MODEL value; the two are declared independently rather than templated from one source because they answer different questions (this repo's spec format has no cross-file reference mechanism), so a drift between them is a real thing to check for, not a formality."
+    },
+    {
+      "key": "GOVERNED_AGENT_RUNTIME_ACTIVE",
+      "value": "false",
+      "note": "Fails closed: app/config.py treats anything other than the exact lowercase string 'true' as inactive. POST /v1/run returns 503 {\"error\":\"inactive\"} while this is false. Flipped to 'true' only for the bounded Phase 7 canary window, then reconciled back to 'false'."
+    }
+  ],
+  "externally_provided_configuration": [
+    {
+      "key": "GOVERNED_AGENT_RUNTIME_DATABASE_URL",
+      "reason": "Connection string for the same adapteng_ops run ledger ai-gateway and adapteng-run-ledger already write to, carrying a database password. Generated on the production host and posted to Coolify from there, so the password never reaches a runner, a log or this repository -- same handling as AI_GATEWAY_DATABASE_URL in deploy/ai-gateway.json."
+    },
+    {
+      "key": "GOVERNED_AGENT_RUNTIME_GATEWAY_TOKEN",
+      "reason": "One of ai-gateway's AI_GATEWAY_BEARER_TOKENS, dedicated to this caller. Caller authentication material; never written to this repository."
+    },
+    {
+      "key": "GOVERNED_AGENT_RUNTIME_HTTP_BEARER_TOKENS",
+      "reason": "Inbound caller authentication material for POST /v1/run (the internal n8n orchestration is the only intended caller). Never written to this repository; supplied to a reconcile run by reference and held in the Coolify environment store, same pattern as AI_GATEWAY_BEARER_TOKENS."
+    }
+  ]
+}
