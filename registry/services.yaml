@@ -12,7 +12,7 @@
 #   repo-merged-not-live     - code merged to main, no live deploy/wiring yet
 #   planned                  - designed, not built
 version: 1
-updated: 2026-09-07
+updated: 2026-09-08
 
 backup_configuration_2026_09_07:
   evidence_class: LIVE-VERIFIED
@@ -256,8 +256,36 @@ services:
       conclusion: success
       jobs_green: [ai-gateway unit tests (ubuntu-latest), ai-gateway unit tests (windows-latest), ai-gateway postgres semantics, ai-gateway supply-chain gates, repo validation]
       verified: 2026-08-10
-    not_blocked_by: [cost, model pricing, FX configuration, live reachability, database readiness]
-    blocked_by: ["first real model call: the service answers and its readiness gate passes, but the EU Vertex client, Drive adapters, orchestration and canonical approval composition have not yet been exercised against the running service by an actual draft request"]
+    not_blocked_by: [cost, model pricing, FX configuration, live reachability, database readiness, ADC discovery, OAuth scope]
+    blocked_by: ["Vertex IAM: the deployed workspace-automation service account lacks aiplatform.endpoints.predict on project adapteng-workspace-automation for publishers/google/models/gemini-3.1-flash-lite in location eu"]
+    provider_attempt_2026_09_08:
+      verdict: LIVE-PROVIDER-BLOCKED
+      run_open_evidence:
+        workflow_run: 34166157058
+        run_id: ae-smoke-run-1
+        state: started
+        recorded_at: "2026-09-07T22:23:03Z"
+      gateway_attempt:
+        workflow_run: 34166718885
+        call_id: smk-20260907T222720Z
+        operation: classify
+        input_class: synthetic-non-sensitive
+        provider_result: "HTTP 403 before a model response; unbilled"
+      exact_diagnostic:
+        workflow_run: 34208958112
+        observed_at: "2026-09-08T09:23:01Z"
+        runtime_identity: workspace-automation@adapteng-workspace-automation.iam.gserviceaccount.com
+        result: "HTTP 403: Permission 'aiplatform.endpoints.predict' denied"
+        resource: "//aiplatform.googleapis.com/projects/adapteng-workspace-automation/locations/eu/publishers/google/models/gemini-3.1-flash-lite"
+      significance: >-
+        The request passed the gateway's database-backed reservation and run
+        reference checks, ADC discovered the mounted service account, the
+        cloud-platform OAuth token was issued, and the signed request reached
+        the pinned EU Vertex endpoint. No model output was returned and neither
+        provider attempt was billable. The remaining model-call action is an
+        owner-controlled Google IAM grant containing
+        aiplatform.endpoints.predict, normally Vertex AI User, on the named
+        project; no new credential or network change is required.
     live_verification_2026_09_06:
       verdict: LIVE-VERIFIED
       method: read-only probe issued from inside the shared Coolify network by a temporary self-hosted n8n workflow; no public route was created or used
