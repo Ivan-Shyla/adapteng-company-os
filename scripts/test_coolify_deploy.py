@@ -21,6 +21,7 @@ import io
 import json
 import re
 import unittest
+import zlib
 from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -3864,9 +3865,8 @@ class OpenRunTests(unittest.TestCase):
 class VertexWhyTests(unittest.TestCase):
     """Reading the answer the gateway threw away.
 
-    The value of this operation is entirely in it being a question. If it can
-    generate, it can be billed; if it can be billed, it is no longer a free
-    diagnostic and would not be safe to run while the reason is unknown.
+    This is a bounded second provider call whose purpose is to retain the error
+    body that the gateway correctly discards from its public result.
     """
 
     def test_the_staged_program_is_valid_python(self) -> None:
@@ -3874,12 +3874,22 @@ class VertexWhyTests(unittest.TestCase):
 
         compile(driver.VERTEX_WHY_PROGRAM, "<vertex-why>", "exec")
 
-    def test_it_only_asks_and_never_generates(self) -> None:
-        """A GET on the model resource tests authorization without billing."""
+    def test_it_repeats_the_canonical_call_with_a_tiny_output_bound(self) -> None:
+        """It must diagnose production's POST rather than another endpoint."""
 
-        self.assertIn(".get(", driver.VERTEX_WHY_PROGRAM)
-        for billable in ("generateContent", ":predict", ".post("):
-            self.assertNotIn(billable, driver.VERTEX_WHY_PROGRAM)
+        self.assertIn("P.build_vertex_request_body(", driver.VERTEX_WHY_PROGRAM)
+        self.assertIn(":generateContent", driver.VERTEX_WHY_PROGRAM)
+        self.assertIn(".post(", driver.VERTEX_WHY_PROGRAM)
+        self.assertIn("max_output_tokens=32", driver.VERTEX_WHY_PROGRAM)
+        self.assertIn('input_text="overdue"', driver.VERTEX_WHY_PROGRAM)
+
+    def test_it_uses_the_gateway_project_instead_of_adc_inference(self) -> None:
+        """The endpoint project comes from runtime config, not credential ADC."""
+
+        self.assertIn(
+            'os.environ["AI_GATEWAY_PROVIDER_PROJECT"]',
+            driver.VERTEX_WHY_PROGRAM,
+        )
 
     def test_it_reports_the_status_rather_than_deciding_what_it_means(self) -> None:
         """The body names the fix; classifying it here would only lose it."""
@@ -3887,11 +3897,18 @@ class VertexWhyTests(unittest.TestCase):
         self.assertIn("resp.status_code", driver.VERTEX_WHY_PROGRAM)
         self.assertIn("resp.text", driver.VERTEX_WHY_PROGRAM)
 
+    def test_a_success_never_prints_generated_output(self) -> None:
+        """Only an error body is evidence; synthetic output stays in-container."""
+
+        self.assertIn('if resp.status_code == 200', driver.VERTEX_WHY_PROGRAM)
+        self.assertIn('"response_bytes "', driver.VERTEX_WHY_PROGRAM)
+        self.assertNotIn("print(M, resp.text", driver.VERTEX_WHY_PROGRAM)
+
     def test_it_answers_even_when_the_credential_cannot_be_built(self) -> None:
         """A traceback carries no marker and would read as no answer at all."""
 
-        self.assertIn("adc_failed", driver.VERTEX_WHY_PROGRAM)
-        self.assertIn("transport", driver.VERTEX_WHY_PROGRAM)
+        self.assertIn('"failure"', driver.VERTEX_WHY_PROGRAM)
+        self.assertIn("except Exception as e:", driver.VERTEX_WHY_PROGRAM)
 
     def test_it_uses_the_same_scope_as_the_gateway(self) -> None:
         """An unscoped diagnostic only diagnoses itself.
@@ -3943,7 +3960,7 @@ class VertexWhyTests(unittest.TestCase):
         """Spaces land between the chunks; b64decode has to survive them."""
 
         staged = " ".join(driver.stage_program(driver.VERTEX_WHY_PROGRAM))
-        restored = base64.b64decode(staged).decode("utf-8")
+        restored = zlib.decompress(base64.b64decode(staged)).decode("utf-8")
         self.assertEqual(restored, driver.VERTEX_WHY_PROGRAM)
 
     def test_the_runner_fits_and_names_the_staged_file(self) -> None:

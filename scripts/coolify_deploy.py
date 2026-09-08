@@ -35,6 +35,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -3687,40 +3688,43 @@ PROBE_STAGE_PATH = "/tmp/ae-probe.b64"
 PROBE_MARKER = "AEPROBE"
 PROBE_EXEC_COMMAND = (
     'python -c "'
-    "import sys,base64 as B;v=sys.argv;exec(B.b64decode(open(v[2]).read()))"
+    "import sys,base64 as B,zlib as Z;v=sys.argv;"
+    "exec(Z.decompress(B.b64decode(open(v[2]).read())))"
     '" ' + PROBE_MARKER + " " + PROBE_STAGE_PATH
 )
+# Compression cuts several minute-long scheduler cycles from the staging path.
 # b64decode discards characters outside its alphabet by default, which is why
 # the spaces the writer puts between chunks do not have to be cleaned up first.
 VERTEX_WHY_PROGRAM = '''
+import app.provider as P
 import google.auth as G
+import os
 from google.auth.transport.requests import AuthorizedSession as S
-
 M = "AEPROBE"
 try:
-    creds, proj = G.default(
-        scopes=("https://www.googleapis.com/auth/cloud-platform",)
+    creds, _ = G.default(scopes=("https://www.googleapis.com/auth/cloud-platform",))
+    project = os.environ["AI_GATEWAY_PROVIDER_PROJECT"]
+    url = f"{P.PINNED_EU_HOST}/v1/projects/{project}/locations/{P.PINNED_EU_LOCATION}/publishers/google/models/{P.PINNED_MODEL}:generateContent"
+    resp = S(creds).post(
+        url,
+        json=P.build_vertex_request_body(operation="classify", input_text="overdue",
+                                         metadata={}, max_output_tokens=32),
+        timeout=20,
     )
+    body = ("response_bytes " + str(len(resp.content)) if resp.status_code == 200
+            else "body " + " ".join(resp.text.split())[:500])
+    print(M, "status", resp.status_code, body)
 except Exception as e:
-    print(M, "adc_failed", type(e).__name__, str(e)[:200])
-    raise SystemExit(0)
-url = ("https://aiplatform.eu.rep.googleapis.com/v1/projects/" + str(proj)
-       + "/locations/eu/publishers/google/models/gemini-3.1-flash-lite")
-try:
-    resp = S(creds).get(url, timeout=20)
-except Exception as e:
-    print(M, "transport", type(e).__name__, str(e)[:200])
-    raise SystemExit(0)
-print(M, "status", resp.status_code,
-      "identity", getattr(creds, "service_account_email", None),
-      "body", " ".join(resp.text.split())[:500])
+    print(M, "failure", type(e).__name__, str(e)[:200])
 '''
 
 
 def stage_program(source: str) -> list[str]:
     """Encode a program into pieces the command channel can carry."""
 
-    encoded = base64.b64encode(source.encode("utf-8")).decode("ascii")
+    encoded = base64.b64encode(
+        zlib.compress(source.encode("utf-8"), level=9)
+    ).decode("ascii")
     budget = stage_write_budget(PROBE_STAGE_PATH)
     return [encoded[at : at + budget] for at in range(0, len(encoded), budget)]
 
@@ -3728,10 +3732,12 @@ def stage_program(source: str) -> list[str]:
 def operate_vertex_why(client: Client, spec: dict, sleep=None) -> int:
     """Read the answer Vertex gave that the gateway threw away.
 
-    This sends no generation request and cannot be billed: it asks for the
-    model's own description, which is the same authorization surface the call
-    failed on. A 403 here with a body naming a disabled API, a missing role or
-    an unlinked billing account is the owner action, stated exactly.
+    A model-resource GET was tried first, but that route itself is unsupported
+    and returned a generic 404. This therefore repeats the same synthetic POST
+    with the gateway's exact project binding, scope and request builder. A 403
+    is unbilled under the provider contract and carries the owner action. A 200
+    is bounded to 32 output tokens and logs only the response size, never the
+    generated output.
     """
 
     import time
