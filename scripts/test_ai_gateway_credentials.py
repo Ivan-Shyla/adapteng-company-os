@@ -356,8 +356,12 @@ class WorkflowTests(unittest.TestCase):
         text = Path(__file__).resolve().parent.parent.joinpath(
             ".github/workflows/ai-gateway-credentials.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn("VERTEX_SERVICE_ACCOUNT_MATERIAL", text)
-        self.assertIn("GOOGLE_SERVICE_ACCOUNT_JSON", text)
+        self.assertIn(
+            "VERTEX_SERVICE_ACCOUNT_MATERIAL: "
+            "${{ secrets.VERTEX_SERVICE_ACCOUNT_JSON }}",
+            text,
+        )
+        self.assertNotIn("secrets.GOOGLE_SERVICE_ACCOUNT_JSON", text)
 
 
 if __name__ == "__main__":
