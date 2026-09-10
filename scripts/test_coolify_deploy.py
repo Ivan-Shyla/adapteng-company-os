@@ -4118,6 +4118,41 @@ class ReservationInspectTests(unittest.TestCase):
         self.assertIn('"failure"', driver.RESERVATION_INSPECT_PROGRAM)
         self.assertIn("except Exception as e:", driver.RESERVATION_INSPECT_PROGRAM)
 
+    def test_the_program_prints_exactly_one_marker_line(self) -> None:
+        """Regression (run 34479762885, 2026-09-10): read_marker() keeps only
+        the first line starting with the marker, so a program printing one
+        marker-prefixed line per row loses every row after the first. Every
+        row's fields must be folded onto the single line the program prints,
+        not emitted as separate per-row print() calls."""
+
+        source = driver.RESERVATION_INSPECT_PROGRAM
+        marker_line_count = sum(
+            1 for line in source.splitlines() if 'print(M,' in line
+        )
+        self.assertEqual(marker_line_count, 2)  # the try body and the except body
+
+    def test_the_program_orders_newest_first(self) -> None:
+        """The row that just conflicted should survive the display clip even
+        if older rows do not."""
+
+        self.assertIn("order by reserved_at desc", driver.RESERVATION_INSPECT_PROGRAM)
+
+    def test_a_simulated_three_row_answer_fits_the_captured_output_budget(self) -> None:
+        """The 2026-09-10 production run returned 3 rows. Each field is sized
+        generously (a full publisher-model name, a full provider host, an
+        ISO timestamp with timezone) to show the realistic worst case still
+        clips cleanly rather than silently losing the newest row."""
+
+        row = (
+            "smk-20260910T111644Z", "ae-smoke-run-1", "classify", "failed",
+            "idempotency key has a different binding", "ae.smk", "vertex-ai",
+            "gemini-3.1-flash-lite", "eu", "aiplatform.eu.rep.googleapis.com",
+            "2026-09-10 11:16:44.000000+00:00",
+        )
+        body = "|".join("~".join(row) for _ in range(3))
+        answer = f"rows 3 {body}"
+        self.assertLess(len(answer), driver.CAPTURED_OUTPUT_BUDGET)
+
     def test_the_encoded_program_carries_nothing_the_shell_reads(self) -> None:
         for chunk in driver.stage_program(driver.RESERVATION_INSPECT_PROGRAM):
             with self.subTest(chunk[:24]):

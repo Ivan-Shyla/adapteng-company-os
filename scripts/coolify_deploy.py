@@ -3946,6 +3946,24 @@ def operate_iam_check(client: Client, spec: dict, sleep=None) -> int:
 # variable name the same way operate_open_run does -- by listing
 # environment variable NAMES ending _URL/_DSN -- rather than assuming
 # AI_GATEWAY_DATABASE_URL, which is not the adapter's variable name.
+#
+# The first run against production (34479762885, 2026-09-10) reached this
+# database correctly (ID_ALLOCATOR_DSN, resolved the same way
+# operate_open_run resolves it) and the query succeeded -- "rows 3" came
+# back -- but the per-row detail never did. read_marker() keeps only the
+# first line that starts with the marker; a program that prints one marker
+# line per row loses every row after the first to that same-shape
+# assumption every other probe in this file relies on. The fix is not a
+# driver change -- every other probe already answers in one line -- it is
+# this program answering in one line too: every row's fields joined onto
+# the single line the marker names, ordered newest first so the row that
+# just conflicted survives ahead of the 800-character display clip even if
+# older rows do not. input_hash is left out on purpose: it cannot be
+# compared against anything without the new request's own hash, which this
+# read-only probe never computes, and at 64 hex characters it would have
+# been the single largest thing crowding out the fields that answer
+# instruction #1 directly -- run_id, operation, caller, provider, model,
+# region, provider_host, status, error_class.
 RESERVATION_INSPECT_PROGRAM = '''
 import os
 import psycopg
@@ -3955,16 +3973,16 @@ try:
     conn = psycopg.connect(dsn)
     cur = conn.execute(
         "select call_id, run_id, operation, status, error_class, "
-        "schema_status, caller, provider, model, region, provider_host, "
-        "input_hash, actual_eur_amount, reserved_at, finalized_at "
-        "from ai_gateway_call where run_id = %s order by reserved_at",
+        "caller, provider, model, region, provider_host, reserved_at "
+        "from ai_gateway_call where run_id = %s order by reserved_at desc",
         ("{run_id}",),
     )
     rows = cur.fetchall()
     conn.close()
-    print(M, "rows", len(rows))
-    for row in rows:
-        print(M, "row", row)
+    body = "|".join(
+        "~".join("" if v is None else str(v) for v in row) for row in rows
+    )
+    print(M, "rows", len(rows), body)
 except Exception as e:
     print(M, "failure", type(e).__name__, str(e)[:200])
 '''
