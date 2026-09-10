@@ -3072,11 +3072,23 @@ class ModelSmokeTests(unittest.TestCase):
         return instance
 
     def run_smoke(self, instance, spec=None):
+        """Run operate_model_smoke with open-run stubbed to succeed.
+
+        open-run's own correctness (idempotent statements, staging, the
+        run/task binding) is covered exhaustively by OpenRunTests; stubbing
+        it here keeps these tests about the smoke call itself, and matches
+        this fixture's application roster, which was never extended to
+        include adapteng-baserow-adapter (see
+        test_a_failed_open_run_stops_before_any_model_task_is_armed for the
+        one test that exercises the real, unstubbed call).
+        """
+
         buffer = io.StringIO()
-        with redirect_stdout(buffer):
-            code = driver.operate_model_smoke(
-                instance, spec or self.real_spec(), sleep=lambda _seconds: None
-            )
+        with mock.patch.object(driver, "operate_open_run", return_value=driver.EXIT_OK):
+            with redirect_stdout(buffer):
+                code = driver.operate_model_smoke(
+                    instance, spec or self.real_spec(), sleep=lambda _seconds: None
+                )
         return code, buffer.getvalue()
 
     def test_a_succeeded_response_is_the_provider_proof(self) -> None:
@@ -3168,7 +3180,7 @@ class ModelSmokeTests(unittest.TestCase):
 
         command = driver.model_smoke_command(driver.model_smoke_call_id())
         self.assertIn(driver.RUN_OPEN_RUN_ID, command)
-        self.assertIn(driver.RUN_OPEN_RUN_ID, driver.RUN_OPEN_STATEMENTS[1][1])
+        self.assertIn(driver.RUN_OPEN_RUN_ID, driver.run_open_statements(driver.RUN_OPEN_RUN_ID)[1][1])
 
     def test_the_call_id_and_the_run_id_are_not_the_same_argument(self) -> None:
         """They are different keys: one is idempotency, the other is lineage."""
@@ -3229,6 +3241,37 @@ class ModelSmokeTests(unittest.TestCase):
         instance = self.instance()
         self.run_smoke(instance)
         self.assertEqual([m for m, _ in instance.calls if m == "DELETE"], [])
+
+    def test_a_failed_open_run_stops_before_any_model_task_is_armed(self) -> None:
+        """The real (unstubbed) path: this fixture never registers
+        adapteng-baserow-adapter, so open-run fails with application=absent
+        before model-smoke can arm anything against ai-gateway at all."""
+
+        instance = self.instance()
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver.operate_model_smoke(
+                instance, self.real_spec(), sleep=lambda _seconds: None
+            )
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("RESULT open-run failed", buffer.getvalue())
+        self.assertIn("RESULT model-smoke failed reason=open_run_failed", buffer.getvalue())
+        self.assertEqual(instance.tasks, [])
+
+    def test_the_run_id_used_is_derived_not_the_bare_literal(self) -> None:
+        """Regression: every attempt before this fix shared RUN_OPEN_RUN_ID
+        forever, which is what forced MODEL_SMOKE_INPUT to be rotated three
+        times and ultimately produced the fifth attempt's reservation
+        conflict (call_id smk-20260910T111644Z, 2026-09-10)."""
+
+        instance = self.instance()
+        with mock.patch.dict(
+            "os.environ", {"GITHUB_RUN_ID": "999", "GITHUB_RUN_ATTEMPT": "2"}
+        ):
+            code, output = self.run_smoke(instance)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("run_id=r999.2", output)
+        self.assertNotIn(driver.RUN_OPEN_RUN_ID, output)
 
 
 class PeerInstance(ReadinessInstance):
@@ -3743,14 +3786,14 @@ class OpenRunTests(unittest.TestCase):
         and leave the operation permanently stuck after any hiccup.
         """
 
-        for label, sql in driver.RUN_OPEN_STATEMENTS:
+        for label, sql in driver.run_open_statements(driver.RUN_OPEN_RUN_ID):
             with self.subTest(label):
                 self.assertIn("on conflict do nothing", sql)
 
     def test_it_writes_only_to_the_run_ledger(self) -> None:
         """A typo here would insert into whatever table the typo named."""
 
-        for label, sql in driver.RUN_OPEN_STATEMENTS:
+        for label, sql in driver.run_open_statements(driver.RUN_OPEN_RUN_ID):
             with self.subTest(label):
                 self.assertTrue(sql.startswith(f"insert into {label} "))
                 for verb in ("update", "delete", "drop", "alter", "truncate"):
@@ -3759,14 +3802,14 @@ class OpenRunTests(unittest.TestCase):
     def test_the_run_names_the_task_it_belongs_to(self) -> None:
         """agent_run.task_id is a foreign key; a mismatch fails at commit."""
 
-        _label, run_sql = driver.RUN_OPEN_STATEMENTS[1]
+        _label, run_sql = driver.run_open_statements(driver.RUN_OPEN_RUN_ID)[1]
         self.assertIn(driver.RUN_OPEN_TASK_ID, run_sql)
         self.assertIn(driver.RUN_OPEN_RUN_ID, run_sql)
 
     def test_statements_carry_no_character_the_shell_would_touch(self) -> None:
         """Including the parenthesis, which is why there is no column list."""
 
-        for label, sql in driver.RUN_OPEN_STATEMENTS:
+        for label, sql in driver.run_open_statements(driver.RUN_OPEN_RUN_ID):
             with self.subTest(label):
                 for character in ("'", '"', "$", "`", "(", ")", ";", "&", "|"):
                     self.assertNotIn(character, sql)
@@ -3779,7 +3822,7 @@ class OpenRunTests(unittest.TestCase):
         lengths happen to produce.
         """
 
-        sql = driver.RUN_OPEN_STATEMENTS[1][1]
+        sql = driver.run_open_statements(driver.RUN_OPEN_RUN_ID)[1][1]
         chunks = driver.stage_chunks(sql, 40)
         self.assertGreater(len(chunks), 2)
         self.assertEqual(" ".join(chunks).split(), sql.split())
@@ -3797,7 +3840,7 @@ class OpenRunTests(unittest.TestCase):
 
         budget = driver.stage_write_budget(driver.LEDGER_STAGE_PATH)
         self.assertGreater(budget, 0)
-        for label, sql in driver.RUN_OPEN_STATEMENTS:
+        for label, sql in driver.run_open_statements(driver.RUN_OPEN_RUN_ID):
             with self.subTest(label):
                 for chunk in driver.stage_chunks(sql, budget):
                     command = driver.stage_write_command(
@@ -3841,7 +3884,7 @@ class OpenRunTests(unittest.TestCase):
     def test_the_quote_standin_never_collides_with_the_statement(self) -> None:
         """Every ~ is turned into a quote, so a real ~ would be corrupted."""
 
-        for label, sql in driver.RUN_OPEN_STATEMENTS:
+        for label, sql in driver.run_open_statements(driver.RUN_OPEN_RUN_ID):
             with self.subTest(label):
                 restored = sql.replace(driver.LEDGER_QUOTE_STANDIN, "'")
                 self.assertEqual(restored.count("'") % 2, 0)
@@ -3863,6 +3906,96 @@ class OpenRunTests(unittest.TestCase):
         for command in commands:
             with self.subTest(command[:40]):
                 self.assertLess(len(command), driver.PEER_COMMAND_LIMIT - 20)
+
+
+class ExecutionRunIdTests(unittest.TestCase):
+    """The identifier that replaced the single shared RUN_OPEN_RUN_ID literal.
+
+    Regression coverage for the fifth model-smoke attempt's reservation
+    conflict (call_id smk-20260910T111644Z, 2026-09-10): reservation-inspect
+    (run 34481230551) showed the existing rows for run_id=ae-smoke-run-1
+    all sharing identical caller/provider/model/region/provider_host, so the
+    conflict was ai_gateway_reserve_call correctly rejecting reservation
+    metadata (estimated tokens/cost/schema_version) that had legitimately
+    changed between two attempts sharing one run_id across a redeploy. The
+    fix is a fresh run_id per workflow invocation, not a change to
+    ai_gateway_reserve_call itself.
+    """
+
+    def test_it_falls_back_to_the_literal_outside_a_workflow(self) -> None:
+        self.assertEqual(driver.execution_run_id({}), driver.RUN_OPEN_RUN_ID)
+        self.assertEqual(
+            driver.execution_run_id({"GITHUB_RUN_ID": "123"}), driver.RUN_OPEN_RUN_ID
+        )
+        self.assertEqual(
+            driver.execution_run_id({"GITHUB_RUN_ATTEMPT": "1"}),
+            driver.RUN_OPEN_RUN_ID,
+        )
+
+    def test_it_derives_from_the_run_and_attempt_pair(self) -> None:
+        run_id = driver.execution_run_id(
+            {"GITHUB_RUN_ID": "34481230551", "GITHUB_RUN_ATTEMPT": "1"}
+        )
+        self.assertEqual(run_id, "r34481230551.1")
+
+    def test_different_run_ids_never_collide(self) -> None:
+        first = driver.execution_run_id(
+            {"GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1"}
+        )
+        second = driver.execution_run_id(
+            {"GITHUB_RUN_ID": "2", "GITHUB_RUN_ATTEMPT": "1"}
+        )
+        self.assertNotEqual(first, second)
+
+    def test_a_rerun_of_the_same_invocation_gets_a_different_identifier(self) -> None:
+        """A GitHub 're-run' keeps GITHUB_RUN_ID but bumps GITHUB_RUN_ATTEMPT.
+
+        Correctness property: different authorized workflow attempts must
+        not collide -- a rerun is a different attempt and must get a fresh
+        reservation, not silently replay the failed attempt's outcome."""
+
+        first_attempt = driver.execution_run_id(
+            {"GITHUB_RUN_ID": "500", "GITHUB_RUN_ATTEMPT": "1"}
+        )
+        rerun_attempt = driver.execution_run_id(
+            {"GITHUB_RUN_ID": "500", "GITHUB_RUN_ATTEMPT": "2"}
+        )
+        self.assertNotEqual(first_attempt, rerun_attempt)
+
+    def test_retries_within_one_attempt_stay_identical(self) -> None:
+        """Correctness property: an identical request within one attempt
+        must replay without another provider call -- which requires the
+        identifier to be a pure function of (run, attempt), not time-based."""
+
+        env = {"GITHUB_RUN_ID": "500", "GITHUB_RUN_ATTEMPT": "1"}
+        self.assertEqual(driver.execution_run_id(env), driver.execution_run_id(env))
+
+    def test_the_derived_identifier_is_a_valid_gateway_run_id(self) -> None:
+        """Must match the gateway's own _CALL_ID_RE:
+        ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$ (services/ai-gateway/app/models.py,
+        adapteng-automation-platform)."""
+
+        run_id = driver.execution_run_id(
+            {"GITHUB_RUN_ID": "34481230551", "GITHUB_RUN_ATTEMPT": "1"}
+        )
+        self.assertRegex(run_id, r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")
+
+    def test_the_derived_identifier_fits_the_model_smoke_command_budget(self) -> None:
+        """The tightest consumer: model_smoke_command's single-line channel
+        is bounded at MODEL_SMOKE_COMMAND_LIMIT (245, measured), and the
+        run_id is only one of several arguments sharing that budget."""
+
+        run_id = driver.execution_run_id(
+            {"GITHUB_RUN_ID": "34481230551", "GITHUB_RUN_ATTEMPT": "1"}
+        )
+        command = driver.model_smoke_command(driver.model_smoke_call_id(), run_id)
+        self.assertLessEqual(len(command), driver.MODEL_SMOKE_COMMAND_LIMIT)
+
+    def test_it_reads_the_real_process_environment_by_default(self) -> None:
+        with mock.patch.dict(
+            "os.environ", {"GITHUB_RUN_ID": "42", "GITHUB_RUN_ATTEMPT": "3"}
+        ):
+            self.assertEqual(driver.execution_run_id(), "r42.3")
 
 
 class VertexWhyTests(unittest.TestCase):
@@ -4077,12 +4210,19 @@ class ReservationInspectTests(unittest.TestCase):
         self.assertNotIn("aiplatform.googleapis.com", driver.RESERVATION_INSPECT_PROGRAM)
         self.assertNotIn("cloudresourcemanager", driver.RESERVATION_INSPECT_PROGRAM)
 
-    def test_the_program_scopes_to_the_smoke_run_id(self) -> None:
+    def test_the_program_scopes_to_the_smoke_caller(self) -> None:
+        """Scoped by caller, not a fixed run_id (2026-09-10, second
+        revision): every real attempt now opens its own run via
+        execution_run_id(), so a fixed run_id would only ever show one
+        invocation's rows again. MODEL_SMOKE_CALLER is the one thing every
+        smoke call still shares."""
+
         formatted = driver.RESERVATION_INSPECT_PROGRAM.format(
-            dsn="X", run_id=driver.RUN_OPEN_RUN_ID
+            dsn="X", caller=driver.MODEL_SMOKE_CALLER
         )
-        self.assertIn(f'"{driver.RUN_OPEN_RUN_ID}"', formatted)
-        self.assertIn("where run_id = %s", formatted)
+        self.assertIn(f'"{driver.MODEL_SMOKE_CALLER}"', formatted)
+        self.assertIn("where caller = %s", formatted)
+        self.assertIn("limit 3", formatted)
 
     def test_the_program_takes_the_dsn_variable_as_a_placeholder(self) -> None:
         """The variable name is discovered, not assumed.
@@ -4096,7 +4236,7 @@ class ReservationInspectTests(unittest.TestCase):
         self.assertIn('os.environ["{dsn}"]', driver.RESERVATION_INSPECT_PROGRAM)
         self.assertNotIn("AI_GATEWAY_DATABASE_URL", driver.RESERVATION_INSPECT_PROGRAM)
         formatted = driver.RESERVATION_INSPECT_PROGRAM.format(
-            dsn="ADAPTER_DATABASE_DSN", run_id=driver.RUN_OPEN_RUN_ID
+            dsn="ADAPTER_DATABASE_DSN", caller=driver.MODEL_SMOKE_CALLER
         )
         self.assertIn('os.environ["ADAPTER_DATABASE_DSN"]', formatted)
 
@@ -4138,15 +4278,17 @@ class ReservationInspectTests(unittest.TestCase):
         self.assertIn("order by reserved_at desc", driver.RESERVATION_INSPECT_PROGRAM)
 
     def test_a_simulated_three_row_answer_fits_the_captured_output_budget(self) -> None:
-        """The 2026-09-10 production run returned 3 rows. Each field is sized
-        generously (a full publisher-model name, a full provider host, an
-        ISO timestamp with timezone) to show the realistic worst case still
-        clips cleanly rather than silently losing the newest row."""
+        """LIMIT 3 is the query's own cap. Each field is sized generously (a
+        full publisher-model name, a full provider host, the longer
+        r<run>.<attempt> run_id, the longest error_class string seen so far,
+        an ISO timestamp with timezone) to show the realistic worst case
+        still clips cleanly rather than silently losing the newest row."""
 
         row = (
-            "smk-20260910T111644Z", "ae-smoke-run-1", "classify", "failed",
-            "idempotency key has a different binding", "ae.smk", "vertex-ai",
-            "gemini-3.1-flash-lite", "eu", "aiplatform.eu.rep.googleapis.com",
+            "smk-20260910T111644Z", "r34481230551.1", "classify", "failed",
+            "idempotency key has different reservation metadata", "ae.smk",
+            "vertex-ai", "gemini-3.1-flash-lite", "eu",
+            "aiplatform.eu.rep.googleapis.com",
             "2026-09-10 11:16:44.000000+00:00",
         )
         body = "|".join("~".join(row) for _ in range(3))

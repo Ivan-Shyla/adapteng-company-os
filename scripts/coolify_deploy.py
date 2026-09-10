@@ -3523,27 +3523,106 @@ LEDGER_EXEC_COMMAND = (
 # nothing -- an extra write costs a minute -- so it keeps clear of the edge.
 LEDGER_WRITE_MARGIN = 10
 RUN_OPEN_TASK_ID = "ae-smoke-task-1"
+# The literal fallback for contexts that carry no workflow identity (local
+# runs, direct unit tests). Every real dispatch instead gets its own run_id
+# from execution_run_id() below -- see that function for why a single fixed
+# run_id, reused since 2026-09-07, is what forced three rounds of rotating
+# MODEL_SMOKE_INPUT and ultimately produced the fifth attempt's reservation
+# conflict (call_id smk-20260910T111644Z, 2026-09-10).
 RUN_OPEN_RUN_ID = "ae-smoke-run-1"
-RUN_OPEN_STATEMENTS = (
-    (
-        "agent_task",
-        "insert into agent_task select ~{task}~, ~smoke~, null, null,"
-        " current_timestamp on conflict do nothing".format(task=RUN_OPEN_TASK_ID),
-    ),
-    (
-        "agent_run",
-        "insert into agent_run select ~{run}~, ~{task}~, ~vertex-ai~,"
-        " ~gemini-3.1-flash-lite~, 0, 0, 0, ~EUR~, ~started~,"
-        " current_timestamp, null on conflict do nothing".format(
-            run=RUN_OPEN_RUN_ID, task=RUN_OPEN_TASK_ID
+
+
+def run_open_statements(run_id: str) -> tuple:
+    """Build the two staged inserts for one run, parameterised by run_id.
+
+    task_id stays RUN_OPEN_TASK_ID across every run: agent_task is the
+    logical smoke task, agent_run is one execution of it, and many runs
+    legitimately reference the same task row. Only the run needs a fresh
+    identity per invocation.
+    """
+
+    return (
+        (
+            "agent_task",
+            "insert into agent_task select ~{task}~, ~smoke~, null, null,"
+            " current_timestamp on conflict do nothing".format(
+                task=RUN_OPEN_TASK_ID
+            ),
         ),
-    ),
-)
+        (
+            "agent_run",
+            "insert into agent_run select ~{run}~, ~{task}~, ~vertex-ai~,"
+            " ~gemini-3.1-flash-lite~, 0, 0, 0, ~EUR~, ~started~,"
+            " current_timestamp, null on conflict do nothing".format(
+                run=run_id, task=RUN_OPEN_TASK_ID
+            ),
+        ),
+    )
+
+
 # Read back with no parameters: the parameterised reader costs 45 more
 # characters and lands exactly on the 245 bound, which is no margin at all.
 # The ledger is otherwise unused, so listing it is both shorter and more
 # informative than asking about one row.
 RUN_OPEN_VERIFY = ("select run_id,status,started_at from agent_run limit 9", ())
+
+
+# --- deriving a stable per-workflow-attempt run identifier -------------------
+#
+# ae-smoke-run-1 was a single literal, reused by open-run and model-smoke
+# alike for every dispatch since the mission began (2026-09-07). Migration
+# 008's idempotency is keyed on (run_id, operation, input_hash) as well as
+# call_id (ai_gateway_reserve_call's v_by_semantic lookup); with run_id
+# permanently fixed, the only way to get a fresh reservation was to change
+# the input word, which is why MODEL_SMOKE_INPUT was rotated three times
+# ("overdue" -> "unpaid" -> "closed") and why the practice was explicitly
+# forbidden going forward.
+#
+# The fifth real attempt (call_id smk-20260910T111644Z, 2026-09-10) shows
+# why rotating the word was never going to be a durable fix. Read back via
+# reservation-inspect (run 34481230551): "closed" was already consumed at
+# 10:45 UTC by a schema-validation failure (smk-20260910T104413Z, caller,
+# provider, model, region and provider_host all identical to every other
+# row for this run_id). Automation-platform PR #135 (the responseSchema
+# fix) merged at 10:59 UTC and was redeployed before the fifth attempt at
+# 11:16 UTC reused "closed" again. The binding fields still matched -- no
+# "different binding" error -- so ai_gateway_reserve_call fell through to
+# comparing the newly ESTIMATED reservation metadata (estimated tokens,
+# estimated cost, schema_version, fx_rate and the rest) against what the
+# 10:45 row had stored, found them changed by the redeploy in between, and
+# correctly raised "idempotency key has different reservation metadata"
+# rather than silently accepting the drift or double-billing. That is
+# ai_gateway_reserve_call doing exactly its job -- the four correctness
+# properties this file must preserve are already implemented there, not
+# broken. The defect is entirely on this side: reusing one run_id forever
+# means any change to the deployed gateway's own cost/schema estimation
+# between two attempts that reuse the same (run_id, operation, input) triple
+# will always eventually collide, no matter how the input word is chosen.
+#
+# GITHUB_RUN_ID identifies one workflow_dispatch invocation; GITHUB_RUN_ATTEMPT
+# distinguishes a GitHub "re-run" of that same invocation from the original --
+# this is precisely "a GitHub Actions rerun retaining the same GITHUB_RUN_ID
+# while GITHUB_RUN_ATTEMPT changed". Both are set by GitHub Actions on every
+# job already; no workflow-file change is needed to read them. Deriving
+# run_id from the pair, rather than a literal, gives every fresh invocation
+# its own reservation, so a redeploy between two invocations can never
+# collide with a stale estimate again, while retries within the SAME
+# invocation -- the scheduler firing an armed task more than once before
+# probe_once disarms it -- keep the identifier stable and replay through the
+# call_id/semantic match instead of reserving twice. Falling back to
+# RUN_OPEN_RUN_ID when the two variables are absent (a local run, a direct
+# unit test) keeps every existing non-CI invocation working unchanged.
+def execution_run_id(environ: dict | None = None) -> str:
+    """Return the run_id this process's own workflow invocation should use."""
+
+    env = os.environ if environ is None else environ
+    run, attempt = env.get("GITHUB_RUN_ID"), env.get("GITHUB_RUN_ATTEMPT")
+    if not run or not attempt:
+        return RUN_OPEN_RUN_ID
+    run_id = f"r{run}.{attempt}"
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}", run_id):
+        raise Abort(f"derived run_id {run_id!r} is not a valid identifier")
+    return run_id
 
 
 def stage_chunks(sql: str, budget: int) -> list[str]:
@@ -3587,7 +3666,7 @@ def stage_write_budget(path: str) -> int:
     )
 
 
-def operate_open_run(client: Client, spec: dict, sleep=None) -> int:
+def operate_open_run(client: Client, spec: dict, sleep=None, run_id: str | None = None) -> int:
     """Open the one run a model call has to bind to.
 
     Every gateway call carries a run_id that must already exist in agent_run;
@@ -3599,11 +3678,17 @@ def operate_open_run(client: Client, spec: dict, sleep=None) -> int:
     have written -- one task and one run, both named, both idempotent -- and
     then reads it back. It is a production write and is meant to be visible as
     one.
+
+    run_id defaults to execution_run_id(): a fresh identity per workflow
+    invocation rather than a literal reused forever, so a caller (notably
+    operate_model_smoke, which opens its own run before it calls) gets a run
+    that cannot collide with a stale reservation from a previous invocation.
     """
 
     import time
 
     sleep = sleep or time.sleep
+    run_id = run_id or execution_run_id()
     target = spec["target"]
     emit(f"--- open-run {spec['service']}")
     project = find_project(client, target["project"])
@@ -3650,7 +3735,7 @@ def operate_open_run(client: Client, spec: dict, sleep=None) -> int:
         emit(f"    using {dsn}")
 
         budget = stage_write_budget(LEDGER_STAGE_PATH)
-        for label, sql in RUN_OPEN_STATEMENTS:
+        for label, sql in run_open_statements(run_id):
             chunks = stage_chunks(sql, budget)
             emit("")
             emit(f"    staging {label}: {len(sql)} chars in {len(chunks)} writes")
@@ -3673,17 +3758,17 @@ def operate_open_run(client: Client, spec: dict, sleep=None) -> int:
         return EXIT_FAILED
 
     emit_captured_output(verify, known=(uuid,))
-    if RUN_OPEN_RUN_ID not in verify:
+    if run_id not in verify:
         emit("    the run is not in the ledger, so a model call would still fail")
         emit("RESULT open-run failed reason=not_recorded")
         return EXIT_FAILED
 
     emit("")
     emit(
-        f"    Run {RUN_OPEN_RUN_ID} exists. A gateway call naming it will pass "
+        f"    Run {run_id} exists. A gateway call naming it will pass "
         "the reference check that refused the first one."
     )
-    emit(f"RESULT open-run ok run_id={RUN_OPEN_RUN_ID}")
+    emit(f"RESULT open-run ok run_id={run_id}")
     return EXIT_OK
 
 
@@ -3964,6 +4049,18 @@ def operate_iam_check(client: Client, spec: dict, sleep=None) -> int:
 # been the single largest thing crowding out the fields that answer
 # instruction #1 directly -- run_id, operation, caller, provider, model,
 # region, provider_host, status, error_class.
+#
+# Scoped by caller rather than run_id (2026-09-10, second revision): every
+# real attempt now opens its own run via execution_run_id() (see that
+# function's comment), so a fixed run_id would only ever show one
+# invocation's rows again, exactly the problem this diagnostic exists to
+# avoid repeating. MODEL_SMOKE_CALLER is the one thing every smoke call
+# still shares, so this remains useful across every future invocation
+# without a new input each time. Capped at 3 rows, newest first, to stay
+# under CAPTURED_OUTPUT_BUDGET even at the longest realistic row (a full
+# publisher-model name, a full provider host, the longer r<run>.<attempt>
+# run_id, and the longest error_class string seen so far) -- the ones that
+# matter are always the most recent.
 RESERVATION_INSPECT_PROGRAM = '''
 import os
 import psycopg
@@ -3974,8 +4071,9 @@ try:
     cur = conn.execute(
         "select call_id, run_id, operation, status, error_class, "
         "caller, provider, model, region, provider_host, reserved_at "
-        "from ai_gateway_call where run_id = %s order by reserved_at desc",
-        ("{run_id}",),
+        "from ai_gateway_call where caller = %s "
+        "order by reserved_at desc limit 3",
+        ("{caller}",),
     )
     rows = cur.fetchall()
     conn.close()
@@ -3989,7 +4087,8 @@ except Exception as e:
 
 
 def operate_reservation_inspect(client: Client, spec: dict, sleep=None) -> int:
-    """Read every ai_gateway_call row for the smoke run, read-only.
+    """Read the five most recent ai_gateway_call rows for MODEL_SMOKE_CALLER,
+    read-only.
 
     Targets LEDGER_SUBJECTS[0][0] (adapteng-baserow-adapter), not
     spec['service']: the gateway's own role holds no direct SELECT on
@@ -4054,7 +4153,7 @@ def operate_reservation_inspect(client: Client, spec: dict, sleep=None) -> int:
             return EXIT_FAILED
         emit(f"    using {dsn}")
 
-        program = RESERVATION_INSPECT_PROGRAM.format(dsn=dsn, run_id=RUN_OPEN_RUN_ID)
+        program = RESERVATION_INSPECT_PROGRAM.format(dsn=dsn, caller=MODEL_SMOKE_CALLER)
         chunks = stage_program(program)
         emit(f"    staging the probe in {len(chunks)} writes")
         for index, chunk in enumerate(chunks):
@@ -4200,11 +4299,25 @@ def operate_model_smoke(client: Client, spec: dict, sleep=None, now=None) -> int
     for the run, so if Coolify's every-minute schedule fires the task more than
     once before it is disarmed, every run after the first is served from the
     stored response instead of the provider.
+
+    The run it binds to is opened here, first, using execution_run_id() --
+    this workflow invocation's own identity, not the single literal every
+    attempt before 2026-09-10 shared forever (see execution_run_id's own
+    comment for why that collided). open-run's insert is idempotent, so a
+    caller that already opened this same run_id (same GITHUB_RUN_ID and
+    GITHUB_RUN_ATTEMPT, i.e. a retry within this one invocation) does not
+    write a second row; a genuinely new invocation always gets a fresh one.
     """
 
     import time
 
     sleep = sleep or time.sleep
+    run_id = execution_run_id()
+    opened = operate_open_run(client, spec, sleep, run_id=run_id)
+    if opened != EXIT_OK:
+        emit("RESULT model-smoke failed reason=open_run_failed")
+        return EXIT_FAILED
+
     target = spec["target"]
     emit(f"--- model-smoke {spec['service']}")
     project = find_project(client, target["project"])
@@ -4233,7 +4346,7 @@ def operate_model_smoke(client: Client, spec: dict, sleep=None, now=None) -> int
     )
 
     call_id = model_smoke_call_id(now)
-    command = model_smoke_command(call_id)
+    command = model_smoke_command(call_id, run_id=run_id)
     if len(command) > MODEL_SMOKE_COMMAND_LIMIT:
         raise Abort(
             f"the model-smoke command is {len(command)} characters and the "
@@ -4241,7 +4354,7 @@ def operate_model_smoke(client: Client, spec: dict, sleep=None, now=None) -> int
             "refusing to send one that will be refused"
         )
     emit(
-        f"    call_id={call_id} operation={MODEL_SMOKE_OPERATION} "
+        f"    call_id={call_id} run_id={run_id} operation={MODEL_SMOKE_OPERATION} "
         f"caller={MODEL_SMOKE_CALLER} input={MODEL_SMOKE_INPUT!r} "
         f"command={len(command)} chars"
     )
@@ -4348,7 +4461,8 @@ def operate_model_smoke(client: Client, spec: dict, sleep=None, now=None) -> int
     emit(
         "RESULT model-smoke ok model=yes "
         f"status=succeeded provider={fields.get('provider', 'unreported')} "
-        f"model_id={fields.get('model', 'unreported')} call_id={call_id}"
+        f"model_id={fields.get('model', 'unreported')} call_id={call_id} "
+        f"run_id={run_id}"
     )
     return EXIT_OK
 
