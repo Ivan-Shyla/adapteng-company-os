@@ -2257,6 +2257,7 @@ class EntryPointTests(unittest.TestCase):
                 "open-run",
                 "vertex-why",
                 "iam-check",
+                "reservation-inspect",
                 "model-smoke",
             },
         )
@@ -4052,6 +4053,58 @@ class IamCheckTests(unittest.TestCase):
 
     def test_iam_check_is_a_registered_operation(self) -> None:
         self.assertIn("iam-check", driver.OPERATIONS)
+
+
+class ReservationInspectTests(unittest.TestCase):
+    """Read-only ledger diagnostic (COS-005, added 2026-09-10).
+
+    The staged program must be a pure SELECT: no INSERT, UPDATE, or DELETE
+    keyword may appear anywhere in it, and it must never call Vertex.
+    """
+
+    def test_the_staged_program_is_valid_python(self) -> None:
+        compile(driver.RESERVATION_INSPECT_PROGRAM, "<reservation-inspect>", "exec")
+
+    def test_the_program_is_read_only(self) -> None:
+        upper = driver.RESERVATION_INSPECT_PROGRAM.upper()
+        for forbidden in ("INSERT ", "UPDATE ", "DELETE ", "DROP ", "TRUNCATE ", "ALTER "):
+            self.assertNotIn(forbidden, upper)
+        self.assertIn("select", driver.RESERVATION_INSPECT_PROGRAM)
+
+    def test_the_program_never_touches_vertex_or_generative_endpoints(self) -> None:
+        self.assertNotIn("generateContent", driver.RESERVATION_INSPECT_PROGRAM)
+        self.assertNotIn("aiplatform.googleapis.com", driver.RESERVATION_INSPECT_PROGRAM)
+        self.assertNotIn("cloudresourcemanager", driver.RESERVATION_INSPECT_PROGRAM)
+
+    def test_the_program_scopes_to_the_smoke_run_id(self) -> None:
+        self.assertIn('"ae-smoke-run-1"', driver.RESERVATION_INSPECT_PROGRAM)
+        self.assertIn("where run_id = %s", driver.RESERVATION_INSPECT_PROGRAM)
+
+    def test_the_program_uses_the_ai_gateway_dsn_variable(self) -> None:
+        self.assertIn(
+            'os.environ["AI_GATEWAY_DATABASE_URL"]',
+            driver.RESERVATION_INSPECT_PROGRAM,
+        )
+
+    def test_the_program_answers_even_when_the_query_fails(self) -> None:
+        self.assertIn('"failure"', driver.RESERVATION_INSPECT_PROGRAM)
+        self.assertIn("except Exception as e:", driver.RESERVATION_INSPECT_PROGRAM)
+
+    def test_the_encoded_program_carries_nothing_the_shell_reads(self) -> None:
+        for chunk in driver.stage_program(driver.RESERVATION_INSPECT_PROGRAM):
+            with self.subTest(chunk[:24]):
+                self.assertRegex(chunk, r"^[A-Za-z0-9+/=]+$")
+
+    def test_the_staged_pieces_reassemble_into_the_program(self) -> None:
+        staged = " ".join(driver.stage_program(driver.RESERVATION_INSPECT_PROGRAM))
+        restored = zlib.decompress(base64.b64decode(staged)).decode("utf-8")
+        self.assertEqual(restored, driver.RESERVATION_INSPECT_PROGRAM)
+
+    def test_the_program_prints_the_marker_the_runner_waits_for(self) -> None:
+        self.assertIn(f'"{driver.PROBE_MARKER}"', driver.RESERVATION_INSPECT_PROGRAM)
+
+    def test_reservation_inspect_is_a_registered_operation(self) -> None:
+        self.assertIn("reservation-inspect", driver.OPERATIONS)
 
 
 class ServiceDiagnoseTests(unittest.TestCase):
