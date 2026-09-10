@@ -3932,24 +3932,33 @@ def operate_iam_check(client: Client, spec: dict, sleep=None) -> int:
 # metadata" (psycopg.errors.UniqueViolation) before the provider was ever
 # invoked, and there was no way to see WHICH stored row's fields actually
 # disagreed with the new request without reading ai_gateway_call directly.
-# Targets whichever application `spec['service']` names -- dispatched
-# against ai-gateway, this runs inside ai-gateway's own container, which
-# already carries AI_GATEWAY_DATABASE_URL in its environment (confirmed in
-# app/config.py's own config loading), so the DSN variable name is known
-# rather than discovered.
+#
+# The first version of this operation targeted spec['service'] (ai-gateway)
+# and read os.environ["AI_GATEWAY_DATABASE_URL"] from inside that container.
+# It failed with psycopg.errors.InsufficientPrivilege: permission denied for
+# table ai_gateway_call (run 102863886011, 2026-09-10) -- not a bug, but
+# migration 008 working exactly as designed: the gateway's own role holds no
+# table DML at all, only EXECUTE on the SECURITY DEFINER functions. Per
+# operate_open_run's own finding, adapteng_ops -- the role the Baserow
+# adapter connects as -- owns agent_run/agent_task/ai_gateway_call and can
+# read them directly. This operation now targets that same application
+# (LEDGER_SUBJECTS[0][0], not spec['service']) and discovers its DSN
+# variable name the same way operate_open_run does -- by listing
+# environment variable NAMES ending _URL/_DSN -- rather than assuming
+# AI_GATEWAY_DATABASE_URL, which is not the adapter's variable name.
 RESERVATION_INSPECT_PROGRAM = '''
 import os
 import psycopg
 M = "AEPROBE"
 try:
-    dsn = os.environ["AI_GATEWAY_DATABASE_URL"]
+    dsn = os.environ["{dsn}"]
     conn = psycopg.connect(dsn)
     cur = conn.execute(
-        "select call_id, operation, status, error_class, schema_status, "
-        "caller, provider, model, region, provider_host, input_hash, "
-        "actual_eur_amount, reserved_at, finalized_at "
+        "select call_id, run_id, operation, status, error_class, "
+        "schema_status, caller, provider, model, region, provider_host, "
+        "input_hash, actual_eur_amount, reserved_at, finalized_at "
         "from ai_gateway_call where run_id = %s order by reserved_at",
-        ("ae-smoke-run-1",),
+        ("{run_id}",),
     )
     rows = cur.fetchall()
     conn.close()
@@ -3963,6 +3972,13 @@ except Exception as e:
 
 def operate_reservation_inspect(client: Client, spec: dict, sleep=None) -> int:
     """Read every ai_gateway_call row for the smoke run, read-only.
+
+    Targets LEDGER_SUBJECTS[0][0] (adapteng-baserow-adapter), not
+    spec['service']: the gateway's own role holds no direct SELECT on
+    ai_gateway_call (confirmed 2026-09-10, run 102863886011 --
+    InsufficientPrivilege), while adapteng_ops -- the role the adapter
+    connects as -- owns the table. The DSN variable name is discovered the
+    same way operate_open_run discovers it, not assumed.
 
     Same staging mechanism as vertex-why/iam-check, same scheduled task.
     This program issues exactly one SELECT and nothing else -- no ledger row
@@ -3986,14 +4002,15 @@ def operate_reservation_inspect(client: Client, spec: dict, sleep=None) -> int:
         emit("RESULT reservation-inspect failed application=absent")
         return EXIT_FAILED
 
-    application = find_application(applications_in(client, environment), spec["service"])
+    subject = LEDGER_SUBJECTS[0][0]
+    application = find_application(applications_in(client, environment), subject)
     if application is None:
-        emit(f"    application {spec['service']}: ABSENT")
+        emit(f"    application {subject}: ABSENT")
         emit("RESULT reservation-inspect failed application=absent")
         return EXIT_FAILED
 
     uuid = str(application["uuid"])
-    emit(f"    application {spec['service']}: uuid={uuid}")
+    emit(f"    application {subject}: uuid={uuid} state={application.get('status')}")
 
     def ask(command: str, note: str, marker: str) -> str:
         emit("")
@@ -4009,7 +4026,18 @@ def operate_reservation_inspect(client: Client, spec: dict, sleep=None) -> int:
         return answer
 
     try:
-        chunks = stage_program(RESERVATION_INSPECT_PROGRAM)
+        dsn_answer = ask(
+            LEDGER_ENV_COMMAND, "discovering the connection variable", LEDGER_READ_MARKER
+        )
+        emit_captured_output(dsn_answer, known=(uuid,))
+        dsn = ledger_dsn_variable(dsn_answer)
+        if dsn is None:
+            emit("RESULT reservation-inspect failed reason=no_dsn")
+            return EXIT_FAILED
+        emit(f"    using {dsn}")
+
+        program = RESERVATION_INSPECT_PROGRAM.format(dsn=dsn, run_id=RUN_OPEN_RUN_ID)
+        chunks = stage_program(program)
         emit(f"    staging the probe in {len(chunks)} writes")
         for index, chunk in enumerate(chunks):
             mode = "w" if index == 0 else "a"

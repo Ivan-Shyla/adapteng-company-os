@@ -17,6 +17,7 @@ import base64
 import copy
 import datetime
 import hashlib
+import inspect
 import io
 import json
 import re
@@ -4077,14 +4078,41 @@ class ReservationInspectTests(unittest.TestCase):
         self.assertNotIn("cloudresourcemanager", driver.RESERVATION_INSPECT_PROGRAM)
 
     def test_the_program_scopes_to_the_smoke_run_id(self) -> None:
-        self.assertIn('"ae-smoke-run-1"', driver.RESERVATION_INSPECT_PROGRAM)
-        self.assertIn("where run_id = %s", driver.RESERVATION_INSPECT_PROGRAM)
-
-    def test_the_program_uses_the_ai_gateway_dsn_variable(self) -> None:
-        self.assertIn(
-            'os.environ["AI_GATEWAY_DATABASE_URL"]',
-            driver.RESERVATION_INSPECT_PROGRAM,
+        formatted = driver.RESERVATION_INSPECT_PROGRAM.format(
+            dsn="X", run_id=driver.RUN_OPEN_RUN_ID
         )
+        self.assertIn(f'"{driver.RUN_OPEN_RUN_ID}"', formatted)
+        self.assertIn("where run_id = %s", formatted)
+
+    def test_the_program_takes_the_dsn_variable_as_a_placeholder(self) -> None:
+        """The variable name is discovered, not assumed.
+
+        The gateway's own AI_GATEWAY_DATABASE_URL is not the name this
+        operation reads: it targets adapteng-baserow-adapter's application,
+        whose connection-string variable is discovered at run time the same
+        way operate_open_run discovers it, and substituted in before staging.
+        """
+
+        self.assertIn('os.environ["{dsn}"]', driver.RESERVATION_INSPECT_PROGRAM)
+        self.assertNotIn("AI_GATEWAY_DATABASE_URL", driver.RESERVATION_INSPECT_PROGRAM)
+        formatted = driver.RESERVATION_INSPECT_PROGRAM.format(
+            dsn="ADAPTER_DATABASE_DSN", run_id=driver.RUN_OPEN_RUN_ID
+        )
+        self.assertIn('os.environ["ADAPTER_DATABASE_DSN"]', formatted)
+
+    def test_reservation_inspect_targets_the_ledger_subject_not_the_service(self) -> None:
+        """Mirrors operate_open_run: the gateway's own role cannot read the
+        table (InsufficientPrivilege, run 102863886011, 2026-09-10), so this
+        must run inside adapteng-baserow-adapter's container, not ai-gateway's."""
+
+        source = inspect.getsource(driver.operate_reservation_inspect)
+        self.assertIn("LEDGER_SUBJECTS[0][0]", source)
+        self.assertNotIn('applications_in(client, environment), spec["service"]', source)
+
+    def test_reservation_inspect_discovers_the_dsn_variable(self) -> None:
+        source = inspect.getsource(driver.operate_reservation_inspect)
+        self.assertIn("LEDGER_ENV_COMMAND", source)
+        self.assertIn("ledger_dsn_variable(", source)
 
     def test_the_program_answers_even_when_the_query_fails(self) -> None:
         self.assertIn('"failure"', driver.RESERVATION_INSPECT_PROGRAM)
