@@ -2256,6 +2256,7 @@ class EntryPointTests(unittest.TestCase):
                 "ledger-read",
                 "open-run",
                 "vertex-why",
+                "iam-check",
                 "model-smoke",
             },
         )
@@ -3974,6 +3975,83 @@ class VertexWhyTests(unittest.TestCase):
         """The runner prints nothing itself, so the program has to."""
 
         self.assertIn(f'"{driver.PROBE_MARKER}"', driver.VERTEX_WHY_PROGRAM)
+
+
+class IamCheckTests(unittest.TestCase):
+    """No-inference IAM check on whatever credential is actually mounted.
+
+    Mirrors VertexWhyTests' program-content checks, but for
+    VERTEX_IAM_CHECK_PROGRAM: this program must never call generateContent,
+    predict, or any inference endpoint -- only testIamPermissions.
+    """
+
+    def test_the_staged_program_is_valid_python(self) -> None:
+        compile(driver.VERTEX_IAM_CHECK_PROGRAM, "<iam-check>", "exec")
+
+    def test_it_calls_only_test_iam_permissions_never_inference(self) -> None:
+        self.assertIn("testIamPermissions", driver.VERTEX_IAM_CHECK_PROGRAM)
+        self.assertIn(
+            "cloudresourcemanager.googleapis.com",
+            driver.VERTEX_IAM_CHECK_PROGRAM,
+        )
+        self.assertNotIn(":generateContent", driver.VERTEX_IAM_CHECK_PROGRAM)
+        self.assertNotIn(":predict", driver.VERTEX_IAM_CHECK_PROGRAM)
+        self.assertNotIn(":streamGenerateContent", driver.VERTEX_IAM_CHECK_PROGRAM)
+
+    def test_it_checks_exactly_the_predict_permission(self) -> None:
+        self.assertIn(
+            '"permissions": ["aiplatform.endpoints.predict"]',
+            driver.VERTEX_IAM_CHECK_PROGRAM,
+        )
+
+    def test_it_uses_the_gateway_project_instead_of_adc_inference(self) -> None:
+        self.assertIn(
+            'os.environ["AI_GATEWAY_PROVIDER_PROJECT"]',
+            driver.VERTEX_IAM_CHECK_PROGRAM,
+        )
+
+    def test_it_reports_the_service_account_email(self) -> None:
+        """The whole point: knowing which principal answered."""
+
+        self.assertIn("service_account_email", driver.VERTEX_IAM_CHECK_PROGRAM)
+        self.assertIn('"account"', driver.VERTEX_IAM_CHECK_PROGRAM)
+
+    def test_it_answers_even_when_the_credential_cannot_be_built(self) -> None:
+        self.assertIn('"failure"', driver.VERTEX_IAM_CHECK_PROGRAM)
+        self.assertIn("except Exception as e:", driver.VERTEX_IAM_CHECK_PROGRAM)
+
+    def test_it_uses_the_same_scope_as_the_gateway(self) -> None:
+        self.assertIn(
+            "https://www.googleapis.com/auth/cloud-platform",
+            driver.VERTEX_IAM_CHECK_PROGRAM,
+        )
+        self.assertIn("scopes=(", driver.VERTEX_IAM_CHECK_PROGRAM)
+
+    def test_the_encoded_program_carries_nothing_the_shell_reads(self) -> None:
+        for chunk in driver.stage_program(driver.VERTEX_IAM_CHECK_PROGRAM):
+            with self.subTest(chunk[:24]):
+                self.assertRegex(chunk, r"^[A-Za-z0-9+/=]+$")
+
+    def test_every_write_fits_the_channel(self) -> None:
+        for chunk in driver.stage_program(driver.VERTEX_IAM_CHECK_PROGRAM):
+            command = driver.stage_write_command(
+                driver.PROBE_STAGE_PATH, "a", chunk
+            )
+            with self.subTest(len(command)):
+                self.assertLessEqual(
+                    len(command), driver.PEER_COMMAND_LIMIT - driver.LEDGER_WRITE_MARGIN
+                )
+
+    def test_the_staged_pieces_reassemble_into_the_program(self) -> None:
+        staged = " ".join(driver.stage_program(driver.VERTEX_IAM_CHECK_PROGRAM))
+        restored = zlib.decompress(base64.b64decode(staged)).decode("utf-8")
+        self.assertEqual(restored, driver.VERTEX_IAM_CHECK_PROGRAM)
+
+    def test_the_program_prints_the_marker_the_runner_waits_for(self) -> None:
+        self.assertIn(f'"{driver.PROBE_MARKER}"', driver.VERTEX_IAM_CHECK_PROGRAM)
+
+    def test_iam_check_is_a_registered_operation(self) -> None:
+        self.assertIn("iam-check", driver.OPERATIONS)
 
 
 class ServiceDiagnoseTests(unittest.TestCase):
