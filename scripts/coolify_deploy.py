@@ -2778,20 +2778,22 @@ MODEL_SMOKE_CALLER = "ae.smk"
 # input gave up eight of them. What it classifies does not matter here; that the
 # whole path runs does.
 #
-# Changed from "overdue" to "unpaid" on 2026-09-10: the gateway's idempotency
-# is keyed on (run_id, operation, input_hash) as well as call_id
-# (database/migrations/008_ai_gateway_runtime_hardening.sql,
+# Changed from "overdue" to "unpaid" on 2026-09-10, then to "closed" the same
+# day: the gateway's idempotency is keyed on (run_id, operation, input_hash)
+# as well as call_id (database/migrations/008_ai_gateway_runtime_hardening.sql,
 # ai_gateway_reserve_call's v_by_semantic lookup). run_id and operation are
 # both fixed constants here, so with a fixed input the (run_id, operation,
-# input_hash) triple can only ever be consumed once -- the first live attempt
-# (call_id smk-20260907T222720Z) hit the then-wrong credential and recorded a
-# terminal "failed" row for that triple, so every later smoke run replayed
-# that stale failure forever instead of reaching the provider again, even
-# after the credential was fixed (measured: run 34457170582, unbilled replay,
-# actual_eur=0.000000). Changing the input text produces a genuinely new
-# input_hash -- a fresh semantic key -- without touching any stored ledger
-# row, which is what lets a corrected-credential retry actually happen.
-MODEL_SMOKE_INPUT = "unpaid"
+# input_hash) triple can only ever be consumed once, success or failure --
+# every attempt with this exact input, ever again, replays that one stored
+# outcome instead of reaching the provider. This has now happened twice:
+# "overdue" was consumed by the original wrong-credential 403
+# (smk-20260907T222720Z), then "unpaid" was consumed by a SECOND real 403
+# (smk-20260910T090934Z, run 34459077005) that turned out to be a stale
+# Coolify credential-mount PATCH, not a permission problem -- fixed by
+# deleting and recreating the file storage (POST instead of PATCH). Each
+# input word is therefore single-use across this run_id/operation forever;
+# retrying ANY failed attempt, for any reason, needs a new one here.
+MODEL_SMOKE_INPUT = "closed"
 # The same measured bound as the peer probe. It is not a guess in either place:
 # the scheduled-task endpoint accepted 245 characters and refused 300, and the
 # readiness command this instance has accepted repeatedly is exactly 245. A test
