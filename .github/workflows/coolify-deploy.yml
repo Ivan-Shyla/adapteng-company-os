@@ -23,6 +23,16 @@ name: Coolify deploy
 # output is masked by shape before it is printed, because it is the one thing
 # this workflow prints that it did not construct.
 #
+# iam-check is a no-inference diagnostic (added 2026-09-10): it asks Cloud
+# Resource Manager's testIamPermissions, through the same scheduled task
+# verify uses, whether the credential actually mounted right now holds
+# aiplatform.endpoints.predict. It never calls generateContent, predict, or
+# any inference endpoint, and never touches the gateway's ledger -- unlike
+# adapteng-automation-platform's verify-vertex-runtime.yml, which checks a
+# credential stored in ITS OWN protected environment, this checks whichever
+# credential an owner has actually installed into this repository's
+# VERTEX_SERVICE_ACCOUNT_JSON, which the two workflows never cross-verify.
+#
 # model-smoke is the one operation here that does call the model, and it is the
 # only way to learn whether the provider works at all: every other probe passes
 # on a gateway whose Vertex credential has never been exercised. It sends one
@@ -72,6 +82,7 @@ on:
           - ledger-read
           - open-run
           - vertex-why
+          - iam-check
           - model-smoke
       service:
         description: "Spec file under deploy/, named without its extension"

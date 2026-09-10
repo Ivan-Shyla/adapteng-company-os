@@ -79,6 +79,7 @@ OPERATIONS = (
     "ledger-read",
     "open-run",
     "vertex-why",
+    "iam-check",
     "model-smoke",
 )
 FORBIDDEN_METHODS = frozenset({"DELETE"})
@@ -3732,6 +3733,39 @@ except Exception as e:
     print(M, "failure", type(e).__name__, str(e)[:200])
 '''
 
+# No-inference IAM diagnostic (COS-005 mission, added 2026-09-10). Mirrors
+# adapteng-automation-platform's scripts/validation/verify_vertex_runtime.py
+# testIamPermissions probe exactly -- same Cloud Resource Manager endpoint,
+# same single permission, same cloud-platform scope -- but against whichever
+# credential is actually mounted in THIS container right now. That readiness
+# workflow verifies a credential stored in automation-platform's own
+# protected environment; it has no way to know whether the credential an
+# owner later installs directly into this repository's
+# VERTEX_SERVICE_ACCOUNT_JSON is the same principal. This is the missing
+# no-inference check for that credential specifically. It never calls
+# generateContent, predict, or any inference endpoint, and it never touches
+# the gateway's ledger -- it is a pure identity/permission read.
+VERTEX_IAM_CHECK_PROGRAM = '''
+import google.auth as G
+import os
+from google.auth.transport.requests import AuthorizedSession as S
+M = "AEPROBE"
+try:
+    creds, _ = G.default(scopes=("https://www.googleapis.com/auth/cloud-platform",))
+    project = os.environ["AI_GATEWAY_PROVIDER_PROJECT"]
+    email = getattr(creds, "service_account_email", "unknown")
+    url = f"https://cloudresourcemanager.googleapis.com/v1/projects/{project}:testIamPermissions"
+    resp = S(creds).post(
+        url,
+        json={"permissions": ["aiplatform.endpoints.predict"]},
+        timeout=20,
+    )
+    body = str(resp.json()) if resp.status_code == 200 else " ".join(resp.text.split())[:500]
+    print(M, "account", email, "status", resp.status_code, body)
+except Exception as e:
+    print(M, "failure", type(e).__name__, str(e)[:200])
+'''
+
 
 def stage_program(source: str) -> list[str]:
     """Encode a program into pieces the command channel can carry."""
@@ -3811,6 +3845,79 @@ def operate_vertex_why(client: Client, spec: dict, sleep=None) -> int:
     emit("")
     emit_captured_output(answer, known=(uuid,))
     emit("RESULT vertex-why ok")
+    return EXIT_OK
+
+
+def operate_iam_check(client: Client, spec: dict, sleep=None) -> int:
+    """No-inference IAM check on whatever credential is actually mounted.
+
+    Same staging mechanism as vertex-why, same scheduled task, but the staged
+    program calls only Cloud Resource Manager's testIamPermissions for
+    aiplatform.endpoints.predict -- never generateContent, predict, or any
+    inference endpoint -- and never touches the gateway's ledger. Exists
+    because a credential installed directly into this repository's
+    VERTEX_SERVICE_ACCOUNT_JSON has never been checked against the identity
+    adapteng-automation-platform's verify-vertex-runtime.yml verified: that
+    workflow reads its own protected environment's copy, not this one.
+    """
+
+    import time
+
+    sleep = sleep or time.sleep
+    target = spec["target"]
+    emit(f"--- iam-check {spec['service']}")
+    project = find_project(client, target["project"])
+    environment = (
+        find_environment(client, project["uuid"], target["environment"])
+        if project
+        else None
+    )
+    if project is None or environment is None:
+        emit("    project or environment absent")
+        emit("RESULT iam-check failed application=absent")
+        return EXIT_FAILED
+
+    application = find_application(applications_in(client, environment), spec["service"])
+    if application is None:
+        emit(f"    application {spec['service']}: ABSENT")
+        emit("RESULT iam-check failed application=absent")
+        return EXIT_FAILED
+
+    uuid = str(application["uuid"])
+    emit(f"    application {spec['service']}: uuid={uuid}")
+
+    def ask(command: str, note: str, marker: str) -> str:
+        emit("")
+        emit(f"    {note} ({len(command)} chars)")
+        execution, answer, reason, at_rest = probe_once(
+            client, uuid, LEDGER_READ_TASK_NAME, command, marker, sleep
+        )
+        if not at_rest:
+            raise Abort("the probe task could not be disarmed")
+        if answer is None:
+            emit_captured_output((execution or {}).get("message"), known=(uuid,))
+            raise Abort(f"no answer from {note} ({reason or 'no_marker'})")
+        return answer
+
+    try:
+        chunks = stage_program(VERTEX_IAM_CHECK_PROGRAM)
+        emit(f"    staging the probe in {len(chunks)} writes")
+        for index, chunk in enumerate(chunks):
+            mode = "w" if index == 0 else "a"
+            ask(
+                stage_write_command(PROBE_STAGE_PATH, mode, chunk),
+                f"write {index + 1}/{len(chunks)}",
+                LEDGER_READ_MARKER,
+            )
+        answer = ask(PROBE_EXEC_COMMAND, "checking IAM", PROBE_MARKER)
+    except Abort as failure:
+        emit(f"    {failure}")
+        emit("RESULT iam-check failed reason=aborted")
+        return EXIT_FAILED
+
+    emit("")
+    emit_captured_output(answer, known=(uuid,))
+    emit("RESULT iam-check ok")
     return EXIT_OK
 
 
@@ -5518,6 +5625,8 @@ def run(environ: dict) -> int:
         return operate_open_run(client, spec)
     if operation == "vertex-why":
         return operate_vertex_why(client, spec)
+    if operation == "iam-check":
+        return operate_iam_check(client, spec)
     if operation == "model-smoke":
         return operate_model_smoke(client, spec)
     return operate_deploy(
