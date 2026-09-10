@@ -185,8 +185,10 @@ def operate_bind_adc(client: driver.Client, material: str) -> int:
             f"/applications/{uuid}/storages",
             body={
                 "uuid": storage_uuid,
+                "type": "file",
                 "mount_path": ADC_MOUNT_PATH,
                 "content": material,
+                "is_directory": False,
             },
             expect=(200, 201),
         )
