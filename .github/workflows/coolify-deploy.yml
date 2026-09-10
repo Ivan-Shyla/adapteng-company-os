@@ -33,6 +33,13 @@ name: Coolify deploy
 # credential an owner has actually installed into this repository's
 # VERTEX_SERVICE_ACCOUNT_JSON, which the two workflows never cross-verify.
 #
+# reservation-inspect is a read-only ledger diagnostic (added 2026-09-10):
+# it SELECTs the ai_gateway_call rows for the smoke run's run_id and prints
+# them (never touching Vertex, never touching model-smoke's own idempotency
+# state). It exists because a reservation-layer idempotency conflict cannot
+# be diagnosed from the outside -- the only way to see which stored row's
+# fields disagreed with a new request is to read the row.
+#
 # model-smoke is the one operation here that does call the model, and it is the
 # only way to learn whether the provider works at all: every other probe passes
 # on a gateway whose Vertex credential has never been exercised. It sends one
@@ -83,6 +90,7 @@ on:
           - open-run
           - vertex-why
           - iam-check
+          - reservation-inspect
           - model-smoke
       service:
         description: "Spec file under deploy/, named without its extension"

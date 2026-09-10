@@ -80,6 +80,7 @@ OPERATIONS = (
     "open-run",
     "vertex-why",
     "iam-check",
+    "reservation-inspect",
     "model-smoke",
 )
 FORBIDDEN_METHODS = frozenset({"DELETE"})
@@ -3923,6 +3924,112 @@ def operate_iam_check(client: Client, spec: dict, sleep=None) -> int:
     return EXIT_OK
 
 
+# Read-only ledger diagnostic (COS-005 mission, added 2026-09-10). SELECT
+# only -- no INSERT/UPDATE/DELETE anywhere in this program, and no ledger
+# row is ever touched. Exists because the fifth model-smoke attempt
+# (call_id smk-20260910T111644Z, run 34470437687, 2026-09-10) failed inside
+# ai_gateway_reserve_call with "idempotency key has different reservation
+# metadata" (psycopg.errors.UniqueViolation) before the provider was ever
+# invoked, and there was no way to see WHICH stored row's fields actually
+# disagreed with the new request without reading ai_gateway_call directly.
+# Targets whichever application `spec['service']` names -- dispatched
+# against ai-gateway, this runs inside ai-gateway's own container, which
+# already carries AI_GATEWAY_DATABASE_URL in its environment (confirmed in
+# app/config.py's own config loading), so the DSN variable name is known
+# rather than discovered.
+RESERVATION_INSPECT_PROGRAM = '''
+import os
+import psycopg
+M = "AEPROBE"
+try:
+    dsn = os.environ["AI_GATEWAY_DATABASE_URL"]
+    conn = psycopg.connect(dsn)
+    cur = conn.execute(
+        "select call_id, operation, status, error_class, schema_status, "
+        "caller, provider, model, region, provider_host, input_hash, "
+        "actual_eur_amount, reserved_at, finalized_at "
+        "from ai_gateway_call where run_id = %s order by reserved_at",
+        ("ae-smoke-run-1",),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    print(M, "rows", len(rows))
+    for row in rows:
+        print(M, "row", row)
+except Exception as e:
+    print(M, "failure", type(e).__name__, str(e)[:200])
+'''
+
+
+def operate_reservation_inspect(client: Client, spec: dict, sleep=None) -> int:
+    """Read every ai_gateway_call row for the smoke run, read-only.
+
+    Same staging mechanism as vertex-why/iam-check, same scheduled task.
+    This program issues exactly one SELECT and nothing else -- no ledger row
+    is created, updated, or deleted by this operation, and it never touches
+    Vertex or any inference endpoint.
+    """
+
+    import time
+
+    sleep = sleep or time.sleep
+    target = spec["target"]
+    emit(f"--- reservation-inspect {spec['service']}")
+    project = find_project(client, target["project"])
+    environment = (
+        find_environment(client, project["uuid"], target["environment"])
+        if project
+        else None
+    )
+    if project is None or environment is None:
+        emit("    project or environment absent")
+        emit("RESULT reservation-inspect failed application=absent")
+        return EXIT_FAILED
+
+    application = find_application(applications_in(client, environment), spec["service"])
+    if application is None:
+        emit(f"    application {spec['service']}: ABSENT")
+        emit("RESULT reservation-inspect failed application=absent")
+        return EXIT_FAILED
+
+    uuid = str(application["uuid"])
+    emit(f"    application {spec['service']}: uuid={uuid}")
+
+    def ask(command: str, note: str, marker: str) -> str:
+        emit("")
+        emit(f"    {note} ({len(command)} chars)")
+        execution, answer, reason, at_rest = probe_once(
+            client, uuid, LEDGER_READ_TASK_NAME, command, marker, sleep
+        )
+        if not at_rest:
+            raise Abort("the probe task could not be disarmed")
+        if answer is None:
+            emit_captured_output((execution or {}).get("message"), known=(uuid,))
+            raise Abort(f"no answer from {note} ({reason or 'no_marker'})")
+        return answer
+
+    try:
+        chunks = stage_program(RESERVATION_INSPECT_PROGRAM)
+        emit(f"    staging the probe in {len(chunks)} writes")
+        for index, chunk in enumerate(chunks):
+            mode = "w" if index == 0 else "a"
+            ask(
+                stage_write_command(PROBE_STAGE_PATH, mode, chunk),
+                f"write {index + 1}/{len(chunks)}",
+                LEDGER_READ_MARKER,
+            )
+        answer = ask(PROBE_EXEC_COMMAND, "reading the ledger", PROBE_MARKER)
+    except Abort as failure:
+        emit(f"    {failure}")
+        emit("RESULT reservation-inspect failed reason=aborted")
+        return EXIT_FAILED
+
+    emit("")
+    emit_captured_output(answer, known=(uuid,))
+    emit("RESULT reservation-inspect ok")
+    return EXIT_OK
+
+
 def operate_ledger_read(client: Client, spec: dict, sleep=None) -> int:
     """Ask a container's database role whether it could open a run.
 
@@ -5629,6 +5736,8 @@ def run(environ: dict) -> int:
         return operate_vertex_why(client, spec)
     if operation == "iam-check":
         return operate_iam_check(client, spec)
+    if operation == "reservation-inspect":
+        return operate_reservation_inspect(client, spec)
     if operation == "model-smoke":
         return operate_model_smoke(client, spec)
     return operate_deploy(
