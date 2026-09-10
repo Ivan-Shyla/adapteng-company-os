@@ -179,6 +179,11 @@ def operate_bind_adc(client: driver.Client, material: str) -> int:
         # rotated key is actually delivered rather than silently skipped.
         storage_uuid = existing.get("uuid") or existing.get("id")
         driver.emit(f"    change storage {ADC_MOUNT_PATH}: updated")
+        # Measured live against Coolify on 2026-09-10: the PATCH validator's
+        # accepted field set is narrower than POST's, not equal to it --
+        # PATCH requires "type" (POST also requires it) but rejects
+        # "is_directory" outright ("This field is not allowed."). Do not
+        # "complete" this body to mirror the POST body again.
         driver.call(
             client,
             "PATCH",
@@ -188,7 +193,6 @@ def operate_bind_adc(client: driver.Client, material: str) -> int:
                 "type": "file",
                 "mount_path": ADC_MOUNT_PATH,
                 "content": material,
-                "is_directory": False,
             },
             expect=(200, 201),
         )

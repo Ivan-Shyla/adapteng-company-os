@@ -265,11 +265,13 @@ class BindAdcTests(unittest.TestCase):
         methods = [verb for verb, path, _ in coolify.writes if path.endswith("/storages")]
         self.assertEqual(methods, ["PATCH"])
 
-    def test_the_patch_body_declares_type_like_the_create_body_does(self) -> None:
-        """Coolify's storages PATCH rejects a body missing "type" with HTTP 422
-        ("Validation failed", "type": ["This field is required."]) -- measured
-        against the live instance on 2026-09-10. The PATCH body must carry the
-        same shape as the POST (create) body, not a partial patch."""
+    def test_the_patch_body_declares_type_but_not_is_directory(self) -> None:
+        """Measured live against Coolify on 2026-09-10: the storages PATCH
+        validator rejects a body missing "type" with HTTP 422 ("Validation
+        failed", "type": ["This field is required."]) -- but also rejects a
+        body that includes "is_directory" ("This field is not allowed."),
+        even though the POST (create) body both requires and accepts it.
+        PATCH's accepted field set is narrower than POST's, not equal to it."""
 
         coolify = FakeCoolify(storages=[{"uuid": "old", "mount_path": binder.ADC_MOUNT_PATH}])
         run_operation(binder.operate_bind_adc, coolify, material=SERVICE_ACCOUNT)
@@ -278,7 +280,7 @@ class BindAdcTests(unittest.TestCase):
             if path.endswith("/storages") and verb == "PATCH"
         ][0]
         self.assertEqual(patch_body["type"], "file")
-        self.assertEqual(patch_body["is_directory"], False)
+        self.assertNotIn("is_directory", patch_body)
         self.assertEqual(patch_body["mount_path"], binder.ADC_MOUNT_PATH)
 
     def test_the_variable_names_exactly_the_mount_point(self) -> None:
