@@ -2260,6 +2260,7 @@ class EntryPointTests(unittest.TestCase):
                 "iam-check",
                 "reservation-inspect",
                 "model-smoke",
+                "baserow-schema",
             },
         )
         workflow = (
@@ -4310,6 +4311,75 @@ class ReservationInspectTests(unittest.TestCase):
 
     def test_reservation_inspect_is_a_registered_operation(self) -> None:
         self.assertIn("reservation-inspect", driver.OPERATIONS)
+
+
+class BaserowSchemaTests(unittest.TestCase):
+    """Read-only Baserow field-schema diagnostic (canary phase, 2026-09-14).
+
+    Exists because the committed canary workflow writes Baserow with
+    kind="approval_draft", which is not a real kind, and the replacement has
+    to come from what the adapter's live L1 read endpoint actually reports
+    for candidate kinds, not a guess.
+    """
+
+    def test_the_staged_program_is_valid_python(self) -> None:
+        formatted = driver.BASEROW_SCHEMA_PROGRAM.format(kinds=driver.BASEROW_SCHEMA_KINDS)
+        compile(formatted, "<baserow-schema>", "exec")
+
+    def test_the_program_is_read_only(self) -> None:
+        upper = driver.BASEROW_SCHEMA_PROGRAM.upper()
+        for forbidden in ("POST", "PUT", "PATCH", "DELETE", "UPSERT"):
+            self.assertNotIn(forbidden, upper)
+        self.assertIn("urllib.request.urlopen", driver.BASEROW_SCHEMA_PROGRAM)
+
+    def test_the_program_never_touches_vertex_or_generative_endpoints(self) -> None:
+        self.assertNotIn("generateContent", driver.BASEROW_SCHEMA_PROGRAM)
+        self.assertNotIn("aiplatform", driver.BASEROW_SCHEMA_PROGRAM)
+        self.assertNotIn("cloudresourcemanager", driver.BASEROW_SCHEMA_PROGRAM)
+
+    def test_the_program_queries_schema_not_upsert(self) -> None:
+        self.assertIn("/v1/schema/", driver.BASEROW_SCHEMA_PROGRAM)
+        self.assertNotIn("/v1/upsert", driver.BASEROW_SCHEMA_PROGRAM)
+
+    def test_the_program_checks_system_and_the_two_candidate_kinds(self) -> None:
+        self.assertEqual(
+            driver.BASEROW_SCHEMA_KINDS, ("system", "document", "action")
+        )
+
+    def test_the_program_uses_the_adapter_service_token_env_var(self) -> None:
+        self.assertIn('os.environ["ADAPTER_SERVICE_TOKEN"]', driver.BASEROW_SCHEMA_PROGRAM)
+
+    def test_the_program_answers_even_when_a_kind_is_rejected(self) -> None:
+        """A 403 kind_not_readable is an expected, useful answer for
+        document/action -- the program must report it, not crash."""
+
+        self.assertIn("except urllib.error.HTTPError", driver.BASEROW_SCHEMA_PROGRAM)
+        self.assertIn("except Exception", driver.BASEROW_SCHEMA_PROGRAM)
+
+    def test_the_encoded_program_carries_nothing_the_shell_reads(self) -> None:
+        formatted = driver.BASEROW_SCHEMA_PROGRAM.format(kinds=driver.BASEROW_SCHEMA_KINDS)
+        for chunk in driver.stage_program(formatted):
+            with self.subTest(chunk[:24]):
+                self.assertRegex(chunk, r"^[A-Za-z0-9+/=]+$")
+
+    def test_the_staged_pieces_reassemble_into_the_program(self) -> None:
+        formatted = driver.BASEROW_SCHEMA_PROGRAM.format(kinds=driver.BASEROW_SCHEMA_KINDS)
+        staged = " ".join(driver.stage_program(formatted))
+        restored = zlib.decompress(base64.b64decode(staged)).decode("utf-8")
+        self.assertEqual(restored, formatted)
+
+    def test_the_program_prints_the_marker_the_runner_waits_for(self) -> None:
+        self.assertIn(f'"{driver.PROBE_MARKER}"', driver.BASEROW_SCHEMA_PROGRAM)
+
+    def test_baserow_schema_targets_the_ledger_subject_not_the_service(self) -> None:
+        source = inspect.getsource(driver.operate_baserow_schema)
+        self.assertIn("LEDGER_SUBJECTS[0][0]", source)
+        self.assertNotIn(
+            'applications_in(client, environment), spec["service"]', source
+        )
+
+    def test_baserow_schema_is_a_registered_operation(self) -> None:
+        self.assertIn("baserow-schema", driver.OPERATIONS)
 
 
 class ServiceDiagnoseTests(unittest.TestCase):
