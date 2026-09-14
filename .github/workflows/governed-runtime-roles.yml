@@ -1,0 +1,90 @@
+name: Governed runtime roles
+
+# Provisions the two least-privilege Postgres roles the governed pilot's new
+# services connect as: the agent runtime's ledger role (agent_task, agent_run)
+# and the drive adapter's replay-reservation role
+# (drive_bridge_replay_reservations). Same shape as postgres-runtime-role.yml,
+# which this reuses rather than duplicates -- see scripts/governed_runtime_roles.py.
+#
+# Runs on the dedicated operations runner for the same reason: canonical
+# production Postgres is reachable only from the private Docker network that
+# runner sits on, and it holds no database credential of its own -- the
+# Coolify credential it already has is used to discover the admin login, so no
+# new secret is created for that step.
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Which service's role to operate on
+        required: true
+        type: choice
+        options:
+          - agent-runtime
+          - drive-bridge-replay
+      operation:
+        description: "recon is read only; provision creates the role and publishes the DSN"
+        required: true
+        default: recon
+        type: choice
+        options:
+          - recon
+          - provision
+
+permissions:
+  contents: read
+
+# One at a time, and shared with postgres-runtime-role.yml: both write to the
+# same database and an overlapping provision would each rotate a credential
+# the other is about to publish.
+concurrency:
+  group: postgres-runtime-role
+  cancel-in-progress: false
+
+jobs:
+  drive:
+    name: Governed role ${{ inputs.profile }} ${{ inputs.operation }}
+    runs-on: [self-hosted, adapteng-ops]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Refuse to start without the access this needs
+        env:
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_URL: ${{ vars.COOLIFY_URL }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for name in COOLIFY_API_TOKEN COOLIFY_URL; do
+            if [ -z "${!name:-}" ]; then
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing required configuration:$missing"
+            exit 1
+          fi
+          echo "all required configuration is present"
+
+      - name: Prove this runner can reach the database at all
+        run: |
+          set -euo pipefail
+          if ! command -v psql > /dev/null; then
+            echo "::error::psql is not installed on this runner."
+            exit 1
+          fi
+          psql --version
+
+      - name: Run the operation
+        env:
+          PROFILE: ${{ inputs.profile }}
+          OPERATION: ${{ inputs.operation }}
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_URL: ${{ vars.COOLIFY_URL }}
+          AGENT_RUNTIME_COOLIFY_APP_UUID: ${{ vars.AGENT_RUNTIME_COOLIFY_APP_UUID }}
+          DRIVE_ADAPTER_COOLIFY_APP_UUID: ${{ vars.DRIVE_ADAPTER_COOLIFY_APP_UUID }}
+          PG_DSN_HOST: ${{ vars.AI_GATEWAY_PG_DSN_HOST }}
+        run: |
+          set -euo pipefail
+          python3 scripts/governed_runtime_roles.py "$PROFILE" "$OPERATION"
