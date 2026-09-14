@@ -1710,6 +1710,13 @@ def operate_inspect(client: Client, spec: dict) -> int:
     # reconcile verifies a write against. Comparing the list entry here would let
     # inspect report agreement for a resource reconcile would still change.
     detail = report_object_shape(client, application)
+    # Neither value is secret -- a commit hash and a branch name -- and this is
+    # the only way to prove what the running container was actually built
+    # from, rather than inferring it from a deploy's own reported success.
+    emit(
+        f"    built from: branch={detail.get('git_branch')} "
+        f"commit={detail.get('git_commit_sha')}"
+    )
     entries = expect_list(
         call(client, "GET", f"/applications/{application['uuid']}/envs"), "environment entries"
     )

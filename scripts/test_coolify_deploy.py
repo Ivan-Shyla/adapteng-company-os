@@ -1544,6 +1544,17 @@ class SettingsShapeTests(unittest.TestCase):
         self.assertIn("private_key_here", report)
         self.assertNotIn("supersecretvalue", report)
 
+    def test_inspect_reports_the_built_commit_and_branch(self) -> None:
+        """Neither value is secret, and it is the only way to confirm what a
+        running container was actually built from rather than inferring it
+        from a deploy's own reported success."""
+
+        instance = FakeInstance(with_application=True)
+        instance.applications[0]["git_commit_sha"] = "1b8440079286236d751415fa3245922be9d76fa1"
+        instance.applications[0]["git_branch"] = "main"
+        _, report = run_operation(driver.operate_inspect, instance)
+        self.assertIn("built from: branch=main commit=1b8440079286236d751415fa3245922be9d76fa1", report)
+
 
 class StoredSettingsTests(unittest.TestCase):
     """The delivery flags must be readable in whichever shape the API sends them.
