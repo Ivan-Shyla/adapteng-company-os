@@ -456,6 +456,76 @@ class BindCanaryCredentialsTests(unittest.TestCase):
         self.assertEqual(client.calls, [])
 
 
+def execution_detail(node_name: str, output_json: dict | None) -> dict:
+    run_data = {}
+    if output_json is not None:
+        run_data[node_name] = [{"data": {"main": [[{"json": output_json}]]}}]
+    return {"data": {"resultData": {"runData": run_data}}}
+
+
+class ExtractRedactedResultTests(unittest.TestCase):
+    def test_the_real_node_shape_is_extracted(self) -> None:
+        payload = {"baserow_business_id": "AE-SYS-governed-agent-pilot-canary", "drive_file_id": "abc123"}
+        detail = execution_detail(driver_module.REDACTED_RESULT_NODE, payload)
+        self.assertEqual(driver_module.extract_redacted_result(detail), payload)
+
+    def test_a_missing_node_returns_none_rather_than_raising(self) -> None:
+        detail = execution_detail("Some Other Node", {"x": 1})
+        self.assertIsNone(driver_module.extract_redacted_result(detail))
+
+    def test_an_empty_items_list_returns_none(self) -> None:
+        detail = {
+            "data": {"resultData": {"runData": {
+                driver_module.REDACTED_RESULT_NODE: [{"data": {"main": [[]]}}]
+            }}}
+        }
+        self.assertIsNone(driver_module.extract_redacted_result(detail))
+
+    def test_a_completely_unexpected_shape_returns_none(self) -> None:
+        self.assertIsNone(driver_module.extract_redacted_result({}))
+        self.assertIsNone(driver_module.extract_redacted_result({"data": {}}))
+        self.assertIsNone(driver_module.extract_redacted_result({"data": None}))
+
+
+class CanaryExecutionsTests(unittest.TestCase):
+    def test_lists_executions_and_reports_the_redacted_result(self) -> None:
+        canary = {"id": "canary-1", "name": driver_module.CANARY_NAME, "active": False}
+        payload = {"baserow_business_id": "AE-SYS-governed-agent-pilot-canary", "drive_folder_id": "f1"}
+        client = FakeN8nClient({
+            ("GET", "/workflows"): workflows_page([canary]),
+            ("GET", "/executions"): (200, {"data": [{"id": "exec-1", "status": "success"}]}),
+            ("GET", "/executions/exec-1"): (200, execution_detail(driver_module.REDACTED_RESULT_NODE, payload)),
+        })
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver_module.operate_canary_executions(client, limit=5)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("execution id=exec-1", buffer.getvalue())
+        self.assertIn("baserow_business_id: AE-SYS-governed-agent-pilot-canary", buffer.getvalue())
+        self.assertIn("drive_folder_id: f1", buffer.getvalue())
+        self.assertIn("RESULT canary-executions ok count=1", buffer.getvalue())
+
+    def test_canary_not_found_is_a_failure(self) -> None:
+        client = FakeN8nClient({("GET", "/workflows"): workflows_page(SELF_HOSTED_SET)})
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = driver_module.operate_canary_executions(client, limit=5)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("canary_not_found", buffer.getvalue())
+
+    def test_a_missing_redacted_result_is_reported_not_hidden(self) -> None:
+        canary = {"id": "canary-1", "name": driver_module.CANARY_NAME, "active": False}
+        client = FakeN8nClient({
+            ("GET", "/workflows"): workflows_page([canary]),
+            ("GET", "/executions"): (200, {"data": [{"id": "exec-1", "status": "error"}]}),
+            ("GET", "/executions/exec-1"): (200, execution_detail("Some Other Node", {"x": 1})),
+        })
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            driver_module.operate_canary_executions(client, limit=5)
+        self.assertIn("output: not available", buffer.getvalue())
+
+
 class N8nClientTests(unittest.TestCase):
     def test_delete_is_refused_before_any_network_call(self) -> None:
         client = driver_module.N8nClient("https://n8n.adapteng.com", "fake-credential")

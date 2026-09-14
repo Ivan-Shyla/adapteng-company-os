@@ -34,6 +34,14 @@ Operations:
   run-canary     execute the canary's manual trigger once and report the
                  execution id, or report clearly if this n8n version's
                  public API does not expose that endpoint
+  canary-executions
+                 read-only. Lists the canary's most recent executions and,
+                 for each, prints the "Build Redacted Result" node's output --
+                 the one node in this workflow deliberately designed to carry
+                 only non-sensitive identifiers (task/run ids, the Baserow
+                 business_id, the Drive folder/file ids), never raw model
+                 output or credentials. Evidence for the mission report,
+                 read back rather than retyped from the n8n UI.
 
 Every write here is scoped to one workflow, matched by name against the
 three self-hosted workflows already known (AUT-001, WEB-002, the L1 proof)
@@ -60,7 +68,15 @@ import coolify_deploy as driver  # noqa: E402  (reuse emit/Abort/EXIT_*/Client/e
 API_PREFIX = "/api/v1"
 BASE_URL_VARIABLE = "N8N_BASE_URL"
 CREDENTIAL_VARIABLE = "N8N_API_CREDENTIAL"
-OPERATIONS = ("status", "export", "import-canary", "bind-canary-credentials", "run-canary")
+OPERATIONS = (
+    "status",
+    "export",
+    "import-canary",
+    "bind-canary-credentials",
+    "run-canary",
+    "canary-executions",
+)
+REDACTED_RESULT_NODE = "Build Redacted Result"
 
 # The committed canary file's three placeholder credential ids, and the
 # deployed service each corresponds to. Kept next to CREDENTIAL_NAMES so the
@@ -503,6 +519,75 @@ def operate_run_canary(client: N8nClient) -> int:
     return driver.EXIT_OK
 
 
+def extract_redacted_result(execution_detail: dict) -> dict | None:
+    """Pull the one node's output this operation is allowed to show.
+
+    n8n's execution-detail shape nests a node's output at
+    resultData.runData[nodeName][0].data.main[0][0].json -- read defensively,
+    since every level is a place the shape could differ across versions, and
+    "could not find it" must degrade to None, never to guessing at another
+    node's data.
+    """
+
+    try:
+        run_data = execution_detail["data"]["resultData"]["runData"]
+        node_runs = run_data.get(REDACTED_RESULT_NODE)
+        if not node_runs:
+            return None
+        main = node_runs[0]["data"]["main"]
+        items = main[0]
+        if not items:
+            return None
+        value = items[0].get("json")
+        return value if isinstance(value, dict) else None
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def operate_canary_executions(client: N8nClient, limit: int) -> int:
+    """List the canary's most recent executions and their redacted result."""
+
+    driver.emit(f"--- canary-executions {client.base_url}")
+    matches = [
+        item for item in list_all_workflows(client) if item.get("name") == CANARY_NAME
+    ]
+    if len(matches) != 1:
+        driver.emit(f"    found {len(matches)} workflows named {CANARY_NAME!r}, want exactly 1")
+        driver.emit("RESULT canary-executions failed reason=canary_not_found")
+        return driver.EXIT_FAILED
+    workflow_id = matches[0]["id"]
+    driver.emit(f"    canary id={workflow_id}")
+
+    listing = call(client, "GET", "/executions", query={"workflowId": workflow_id, "limit": limit})
+    if not isinstance(listing, dict):
+        raise driver.Abort("GET /executions did not return an object")
+    executions = [item for item in (listing.get("data") or []) if isinstance(item, dict)]
+    driver.emit(f"    executions found: {len(executions)}")
+
+    for summary in executions:
+        execution_id = summary.get("id")
+        detail = call(
+            client,
+            "GET",
+            f"/executions/{urllib.parse.quote(str(execution_id))}",
+            query={"includeData": "true"},
+        )
+        redacted = extract_redacted_result(detail) if isinstance(detail, dict) else None
+        driver.emit(
+            f"    execution id={execution_id} status={summary.get('status')} "
+            f"startedAt={summary.get('startedAt')} stoppedAt={summary.get('stoppedAt')}"
+        )
+        if redacted is None:
+            driver.emit(f"      {REDACTED_RESULT_NODE!r} output: not available")
+        else:
+            for key in sorted(redacted):
+                driver.emit(f"      {key}: {redacted[key]}")
+
+    driver.emit("")
+    driver.emit(f"RESULT canary-executions ok count={len(executions)}")
+    return driver.EXIT_OK
+
+
 def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=OPERATIONS)
@@ -516,6 +601,12 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
         default=None,
         help="local path to the corrected canary workflow JSON "
         "(import-canary and bind-canary-credentials only)",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=5,
+        help="max executions to list (canary-executions only)",
     )
     return parser.parse_args(argv)
 
@@ -561,6 +652,8 @@ def main(argv: list[str]) -> int:
                 os.environ.get("GOVERNED_AGENT_RUNTIME_HTTP_BEARER_TOKENS", ""),
                 os.environ.get("DRIVE_SERVICE_BEARER_TOKENS", ""),
             )
+        if arguments.operation == "canary-executions":
+            return operate_canary_executions(client, arguments.limit)
         return operate_run_canary(client)
     except driver.Abort as abort:
         driver.emit(f"ABORT {abort}")
