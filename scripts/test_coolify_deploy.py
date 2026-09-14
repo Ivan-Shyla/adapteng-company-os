@@ -2280,6 +2280,78 @@ class EntryPointTests(unittest.TestCase):
         self.assertEqual(driver.positive_integer({}, driver.POLL_VARIABLE, 10), 10)
 
 
+class SecretPassthroughScopingTests(unittest.TestCase):
+    """Regression (2026-09-14): drive-adapter's first inspect dispatch
+    aborted with "COOLIFY_SECRET_AI_GATEWAY_FX_AS_OF supplies
+    AI_GATEWAY_FX_AS_OF, which spec drive-adapter.json does not declare".
+    The workflow passed ai-gateway's own COOLIFY_SECRET_* values
+    unconditionally to every service; supplied_values() correctly aborts
+    on any non-empty value the TARGET spec does not declare. Every
+    COOLIFY_SECRET_* line must therefore resolve empty for every service
+    except the one it names.
+    """
+
+    def workflow_text(self) -> str:
+        return (
+            Path(driver.ROOT) / ".github" / "workflows" / "coolify-deploy.yml"
+        ).read_text(encoding="utf-8")
+
+    def env_block(self) -> str:
+        text = self.workflow_text()
+        match = re.search(r"\n\s+env:\n(.*?)\n\s+run: python", text, re.S)
+        self.assertIsNotNone(match, "no env: block found before the run step")
+        return match.group(1)
+
+    def secret_key_lines(self) -> list[str]:
+        """Actual `COOLIFY_SECRET_X: value` env entries, not comment lines
+        that merely mention the prefix (this file explains the scoping in
+        prose right above the entries it describes)."""
+
+        return [
+            line
+            for line in self.env_block().splitlines()
+            if line.strip().startswith("COOLIFY_SECRET_")
+        ]
+
+    def test_every_coolify_secret_line_is_scoped_to_one_service(self) -> None:
+        secret_lines = self.secret_key_lines()
+        self.assertGreater(len(secret_lines), 0)
+        for line in secret_lines:
+            with self.subTest(line=line.strip()):
+                self.assertRegex(
+                    line,
+                    r"\$\{\{ inputs\.service == '[a-z-]+' && .+ \|\| '' \}\}",
+                    "must be an inputs.service == '<name>' && <value> || '' ternary",
+                )
+
+    def test_every_declared_service_name_matches_a_real_deploy_spec(self) -> None:
+        """A typo'd service name in the ternary would silently never fire."""
+
+        block = self.env_block()
+        named_services = set(re.findall(r"inputs\.service == '([a-z-]+)'", block))
+        self.assertEqual(named_services, {"ai-gateway", "agent-runtime", "drive-adapter"})
+        for service in named_services:
+            with self.subTest(service=service):
+                self.assertTrue(driver.spec_path(service).exists())
+
+    def test_drive_adapter_never_receives_an_ai_gateway_secret(self) -> None:
+        """The exact failure mode this fix exists to prevent."""
+
+        for line in self.secret_key_lines():
+            if "inputs.service == 'ai-gateway'" in line:
+                self.assertNotIn("drive-adapter", line)
+                self.assertNotIn("agent-runtime", line)
+
+    def test_google_service_account_json_b64_is_never_passed_through_here(self) -> None:
+        """drive-adapter-credentials.yml's bind-google-credential writes this
+        directly to Coolify; it must never appear as an actual
+        COOLIFY_SECRET_* key in the generic deploy workflow (prose above the
+        entries is free to name it, as this file's own comment does)."""
+
+        for line in self.secret_key_lines():
+            self.assertNotIn("GOOGLE_SERVICE_ACCOUNT_JSON_B64", line)
+
+
 class ReadinessInstance(FakeInstance):
     """A Coolify instance that also answers the scheduled-task endpoints.
 

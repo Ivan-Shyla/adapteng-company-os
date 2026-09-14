@@ -141,9 +141,37 @@ jobs:
           # An empty value is treated as not supplied and leaves the stored value
           # untouched, which is what makes a partially configured resource safe
           # to reconcile.
-          COOLIFY_SECRET_AI_GATEWAY_FX_USD_EUR: ${{ vars.AI_GATEWAY_FX_USD_EUR }}
-          COOLIFY_SECRET_AI_GATEWAY_FX_AS_OF: ${{ vars.AI_GATEWAY_FX_AS_OF }}
-          COOLIFY_SECRET_AI_GATEWAY_FX_SOURCE: ${{ vars.AI_GATEWAY_FX_SOURCE }}
-          COOLIFY_SECRET_GOOGLE_APPLICATION_CREDENTIALS: ${{ vars.AI_GATEWAY_ADC_PATH }}
-          COOLIFY_SECRET_AI_GATEWAY_BEARER_TOKENS: ${{ secrets.AI_GATEWAY_BEARER_TOKENS }}
+          #
+          # Every COOLIFY_SECRET_* below is scoped to inputs.service: this job
+          # dispatches against exactly one service per run, and
+          # supplied_values() (scripts/coolify_deploy.py) aborts on any
+          # non-empty value the TARGET spec does not declare -- unconditionally
+          # passing ai-gateway's own FX/bearer values on a drive-adapter or
+          # agent-runtime dispatch used to abort inspect/reconcile/deploy for
+          # both of those services before they had ever been deployed once
+          # (2026-09-14, drive-adapter's first inspect: "COOLIFY_SECRET_AI_
+          # GATEWAY_FX_AS_OF supplies AI_GATEWAY_FX_AS_OF, which spec drive-
+          # adapter.json does not declare"). The ternary resolves to an empty
+          # string for every service but the one it names, which the script
+          # already treats as not supplied.
+          COOLIFY_SECRET_AI_GATEWAY_FX_USD_EUR: ${{ inputs.service == 'ai-gateway' && vars.AI_GATEWAY_FX_USD_EUR || '' }}
+          COOLIFY_SECRET_AI_GATEWAY_FX_AS_OF: ${{ inputs.service == 'ai-gateway' && vars.AI_GATEWAY_FX_AS_OF || '' }}
+          COOLIFY_SECRET_AI_GATEWAY_FX_SOURCE: ${{ inputs.service == 'ai-gateway' && vars.AI_GATEWAY_FX_SOURCE || '' }}
+          COOLIFY_SECRET_GOOGLE_APPLICATION_CREDENTIALS: ${{ inputs.service == 'ai-gateway' && vars.AI_GATEWAY_ADC_PATH || '' }}
+          # AI_GATEWAY_BEARER_TOKENS is not a repository secret and never has
+          # been: ai-gateway-credentials.yml's mint-caller/mint-additional-
+          # caller write it directly to Coolify, never through this
+          # passthrough. This line is kept only so a value would flow if one
+          # were ever set this way instead; it has always resolved empty.
+          COOLIFY_SECRET_AI_GATEWAY_BEARER_TOKENS: ${{ inputs.service == 'ai-gateway' && secrets.AI_GATEWAY_BEARER_TOKENS || '' }}
+          COOLIFY_SECRET_GOVERNED_AGENT_RUNTIME_DATABASE_URL: ${{ inputs.service == 'agent-runtime' && secrets.GOVERNED_AGENT_RUNTIME_DATABASE_URL || '' }}
+          COOLIFY_SECRET_GOVERNED_AGENT_RUNTIME_GATEWAY_TOKEN: ${{ inputs.service == 'agent-runtime' && secrets.GOVERNED_AGENT_RUNTIME_GATEWAY_TOKEN || '' }}
+          COOLIFY_SECRET_GOVERNED_AGENT_RUNTIME_HTTP_BEARER_TOKENS: ${{ inputs.service == 'agent-runtime' && secrets.GOVERNED_AGENT_RUNTIME_HTTP_BEARER_TOKENS || '' }}
+          COOLIFY_SECRET_DRIVE_SERVICE_BEARER_TOKENS: ${{ inputs.service == 'drive-adapter' && secrets.DRIVE_SERVICE_BEARER_TOKENS || '' }}
+          COOLIFY_SECRET_DRIVE_BRIDGE_REPLAY_DATABASE_URL: ${{ inputs.service == 'drive-adapter' && secrets.DRIVE_BRIDGE_REPLAY_DATABASE_URL || '' }}
+          # GOOGLE_SERVICE_ACCOUNT_JSON_B64 (drive-adapter) is deliberately
+          # absent from this list: it is never a repository secret, the same
+          # shape as AI_GATEWAY_BEARER_TOKENS above -- drive-adapter-
+          # credentials.yml's bind-google-credential writes it directly to
+          # Coolify from the existing GOOGLE_SERVICE_ACCOUNT_JSON.
         run: python scripts/coolify_deploy.py
