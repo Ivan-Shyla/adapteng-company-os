@@ -82,6 +82,7 @@ OPERATIONS = (
     "iam-check",
     "reservation-inspect",
     "model-smoke",
+    "baserow-schema",
 )
 FORBIDDEN_METHODS = frozenset({"DELETE"})
 
@@ -4175,6 +4176,128 @@ def operate_reservation_inspect(client: Client, spec: dict, sleep=None) -> int:
     return EXIT_OK
 
 
+# Read-only Baserow schema diagnostic (COS-005 canary phase, added 2026-09-14).
+# Exists because the committed canary workflow (MM-32-governed-agent-pilot-
+# canary.json, automation-platform PR #134) writes Baserow with
+# kind="approval_draft", which is not in KINDS at all -- the caller must pick
+# a real kind before that workflow can run, and per instruction "select the
+# correct real entity kind and fields from the returned schema; do not
+# guess", the pick has to come from the live L1 read endpoint
+# (GET /v1/schema/{kind}), not from reading the adapter's source and assuming
+# it still matches what Baserow itself reports.
+#
+# READ_FIELD_ALLOWLIST (automation-platform services/adapteng-baserow-adapter
+# /app/models.py) currently enables exactly one kind for this endpoint --
+# "system" (Systems_Automations, AE-SYS) -- deliberately, because its fields
+# are internal engineering metadata with no client/business content, unlike
+# every other kind. Every other kind answers 403 kind_not_readable by design,
+# which is itself useful to see directly rather than infer from source: it is
+# the live proof that "system" is not just the only kind this probe *can*
+# check, but the one kind whose read path is actually exposed at all. Queries
+# "system", "document" and "action" in one program so the 403s are visible
+# evidence alongside the one schema that answers.
+#
+# Same staging mechanism as reservation-inspect, same scheduled task. GET
+# only -- no upsert, no write, no ledger touched, no Vertex call.
+BASEROW_SCHEMA_KINDS = ("system", "document", "action")
+BASEROW_SCHEMA_PROGRAM = '''
+import os
+import urllib.request
+import urllib.error
+M = "AEPROBE"
+bearer = os.environ["ADAPTER_SERVICE_TOKEN"]
+kinds = {kinds!r}
+parts = []
+for kind in kinds:
+    req = urllib.request.Request(
+        "http://127.0.0.1:8080/v1/schema/" + kind,
+        headers={{"Authorization": "Bearer " + bearer}},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = resp.read().decode("utf-8")
+            parts.append(kind + "~200~" + " ".join(body.split()))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")
+        parts.append(kind + "~" + str(e.code) + "~" + " ".join(body.split()))
+    except Exception as e:
+        parts.append(kind + "~error~" + type(e).__name__ + " " + str(e)[:150])
+print(M, "|".join(parts))
+'''
+
+
+def operate_baserow_schema(client: Client, spec: dict, sleep=None) -> int:
+    """Read the live Baserow field schema for candidate entity kinds.
+
+    Targets LEDGER_SUBJECTS[0][0] (adapteng-baserow-adapter), mirroring
+    reservation-inspect and open-run -- this endpoint lives on the adapter,
+    not on spec['service']. Uses the adapter's own ADAPTER_SERVICE_TOKEN from
+    its container environment, so no credential value is ever read or
+    printed by this driver.
+    """
+
+    import time
+
+    sleep = sleep or time.sleep
+    target = spec["target"]
+    emit(f"--- baserow-schema {spec['service']}")
+    project = find_project(client, target["project"])
+    environment = (
+        find_environment(client, project["uuid"], target["environment"])
+        if project
+        else None
+    )
+    if project is None or environment is None:
+        emit("    project or environment absent")
+        emit("RESULT baserow-schema failed application=absent")
+        return EXIT_FAILED
+
+    subject = LEDGER_SUBJECTS[0][0]
+    application = find_application(applications_in(client, environment), subject)
+    if application is None:
+        emit(f"    application {subject}: ABSENT")
+        emit("RESULT baserow-schema failed application=absent")
+        return EXIT_FAILED
+
+    uuid = str(application["uuid"])
+    emit(f"    application {subject}: uuid={uuid} state={application.get('status')}")
+
+    def ask(command: str, note: str, marker: str) -> str:
+        emit("")
+        emit(f"    {note} ({len(command)} chars)")
+        execution, answer, reason, at_rest = probe_once(
+            client, uuid, LEDGER_READ_TASK_NAME, command, marker, sleep
+        )
+        if not at_rest:
+            raise Abort("the probe task could not be disarmed")
+        if answer is None:
+            emit_captured_output((execution or {}).get("message"), known=(uuid,))
+            raise Abort(f"no answer from {note} ({reason or 'no_marker'})")
+        return answer
+
+    try:
+        program = BASEROW_SCHEMA_PROGRAM.format(kinds=BASEROW_SCHEMA_KINDS)
+        chunks = stage_program(program)
+        emit(f"    staging the probe in {len(chunks)} writes")
+        for index, chunk in enumerate(chunks):
+            mode = "w" if index == 0 else "a"
+            ask(
+                stage_write_command(PROBE_STAGE_PATH, mode, chunk),
+                f"write {index + 1}/{len(chunks)}",
+                LEDGER_READ_MARKER,
+            )
+        answer = ask(PROBE_EXEC_COMMAND, "reading the Baserow schema", PROBE_MARKER)
+    except Abort as failure:
+        emit(f"    {failure}")
+        emit("RESULT baserow-schema failed reason=aborted")
+        return EXIT_FAILED
+
+    emit("")
+    emit_captured_output(answer, known=(uuid,))
+    emit("RESULT baserow-schema ok")
+    return EXIT_OK
+
+
 def operate_ledger_read(client: Client, spec: dict, sleep=None) -> int:
     """Ask a container's database role whether it could open a run.
 
@@ -5900,6 +6023,8 @@ def run(environ: dict) -> int:
         return operate_reservation_inspect(client, spec)
     if operation == "model-smoke":
         return operate_model_smoke(client, spec)
+    if operation == "baserow-schema":
+        return operate_baserow_schema(client, spec)
     return operate_deploy(
         client,
         spec,

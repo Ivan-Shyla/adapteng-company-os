@@ -50,6 +50,14 @@ name: Coolify deploy
 # length of the run, so the every-minute schedule that triggers it cannot bill
 # twice, and the task is returned to rest whatever the outcome.
 #
+# baserow-schema is a read-only Baserow field-schema diagnostic (added
+# 2026-09-14, canary phase): it GETs /v1/schema/{kind} for system, document
+# and action through the adapter's own L1 read endpoint and prints what comes
+# back -- no upsert, no write, no ledger touched. It exists because the
+# committed canary workflow's Baserow kind ("approval_draft") is not a real
+# kind, and picking a replacement has to come from what the adapter actually
+# exposes, not a guess.
+#
 # backup-now runs the database's already-declared backup schedule once and waits
 # for a run newer than the one that was there before. It adds a backup and
 # nothing else: it creates no schedule, edits no configuration and reads no
@@ -92,6 +100,7 @@ on:
           - iam-check
           - reservation-inspect
           - model-smoke
+          - baserow-schema
       service:
         description: "Spec file under deploy/, named without its extension"
         required: true
