@@ -65,6 +65,7 @@ jobs:
           scripts.test_n8n_deploy
           scripts.test_postgres_runtime_role
           scripts.test_governed_runtime_roles
+          scripts.test_canary_evidence
           scripts.test_ops_runner
           scripts.test_ai_gateway_credentials
           scripts.test_drive_adapter_credentials
