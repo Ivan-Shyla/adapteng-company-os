@@ -1,0 +1,55 @@
+name: Canary evidence
+
+# Read-only ledger evidence for the governed-agent-pilot canary (Phase 7):
+# what agent_task/agent_run and ai_gateway_call actually hold for the
+# canary's fixed task_id/run_id, so the mission's evidence report and its
+# idempotency check are backed by real rows rather than a green checkmark in
+# the n8n UI.
+#
+# Runs on the dedicated operations runner for the same reason every other
+# database check here does: canonical production Postgres is reachable only
+# from the private Docker network that runner sits on.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: postgres-runtime-role
+  cancel-in-progress: false
+
+jobs:
+  drive:
+    name: Canary evidence
+    runs-on: [self-hosted, adapteng-ops]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Refuse to start without the access this needs
+        env:
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_URL: ${{ vars.COOLIFY_URL }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for name in COOLIFY_API_TOKEN COOLIFY_URL; do
+            if [ -z "${!name:-}" ]; then
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing required configuration:$missing"
+            exit 1
+          fi
+          echo "all required configuration is present"
+
+      - name: Run the operation
+        env:
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_URL: ${{ vars.COOLIFY_URL }}
+        run: |
+          set -euo pipefail
+          python3 scripts/canary_evidence.py
