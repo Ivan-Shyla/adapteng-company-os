@@ -1889,6 +1889,100 @@ class DestinationResolutionTests(unittest.TestCase):
         self.assertIn("500", str(raised.exception))
 
 
+class FindBuiltCommitTests(unittest.TestCase):
+    def test_finds_a_real_coolify_style_checkout_line(self) -> None:
+        lines = [
+            "Preparing container...",
+            "Checking out commit 1b8440079286236d751415fa3245922be9d76fa1 on branch main",
+            "Building image...",
+        ]
+        self.assertEqual(
+            driver.find_built_commit(lines), "1b8440079286236d751415fa3245922be9d76fa1"
+        )
+
+    def test_is_case_insensitive_on_the_word_commit(self) -> None:
+        lines = ["Commit: 1b8440079286236d751415fa3245922be9d76fa1"]
+        self.assertEqual(
+            driver.find_built_commit(lines), "1b8440079286236d751415fa3245922be9d76fa1"
+        )
+
+    def test_no_matching_line_returns_none(self) -> None:
+        self.assertIsNone(driver.find_built_commit(["Building image...", "Done."]))
+
+    def test_empty_or_none_input_returns_none(self) -> None:
+        self.assertIsNone(driver.find_built_commit([]))
+        self.assertIsNone(driver.find_built_commit(None))
+
+    def test_a_short_hash_does_not_match(self) -> None:
+        """A 7-character short SHA is not the full 40-character hash this
+        needs to unambiguously identify one commit."""
+
+        self.assertIsNone(driver.find_built_commit(["Checking out commit 1b84400 on branch main"]))
+
+
+class DeployLogTests(unittest.TestCase):
+    def setUp(self) -> None:
+        driver.reset_redactions()
+        self.addCleanup(driver.reset_redactions)
+
+    def test_reports_the_built_commit_and_tail(self) -> None:
+        instance = FakeInstance(with_application=True)
+        instance.deployments["dep-1"] = {
+            "deployment_uuid": "dep-1",
+            "status": "finished",
+            "logs": json.dumps(
+                [
+                    {"output": "Checking out commit 1b8440079286236d751415fa3245922be9d76fa1 on branch main"},
+                    {"output": "Build succeeded"},
+                ]
+            ),
+        }
+        code, report = run_operation(driver.operate_deploy_log, instance, deployment_uuid="dep-1")
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("built commit (from the build log itself): 1b8440079286236d751415fa3245922be9d76fa1", report)
+        self.assertIn("Build succeeded", report)
+        self.assertIn("RESULT deploy-log ok commit=1b8440079286236d751415fa3245922be9d76fa1", report)
+
+    def test_no_matching_commit_line_is_reported_as_not_found_not_hidden(self) -> None:
+        instance = FakeInstance(with_application=True)
+        instance.deployments["dep-1"] = {
+            "deployment_uuid": "dep-1",
+            "status": "finished",
+            "logs": json.dumps([{"output": "Build succeeded"}]),
+        }
+        _, report = run_operation(driver.operate_deploy_log, instance, deployment_uuid="dep-1")
+        self.assertIn("built commit (from the build log itself): not found in the log", report)
+        self.assertIn("RESULT deploy-log ok commit=unknown", report)
+
+    def test_an_owner_held_value_quoted_in_the_log_is_not_disclosed(self) -> None:
+        instance = FakeInstance(with_application=True)
+        stored = "value-that-must-not-appear-in-any-run-log"
+        for entry in instance.environment_entries["app-1"]:
+            if entry["key"] == "AI_GATEWAY_DATABASE_URL":
+                entry["value"] = stored
+        instance.deployments["dep-1"] = {
+            "deployment_uuid": "dep-1",
+            "status": "finished",
+            "logs": json.dumps([{"output": f"connecting with {stored} failed"}]),
+        }
+        _, report = run_operation(driver.operate_deploy_log, instance, deployment_uuid="dep-1")
+        self.assertNotIn(stored, report)
+        self.assertIn("connecting with [redacted] failed", report)
+
+    def test_no_deployment_uuid_supplied_aborts_before_any_call(self) -> None:
+        instance = FakeInstance(with_application=True)
+        with self.assertRaises(driver.Abort):
+            run_operation(driver.operate_deploy_log, instance, deployment_uuid="")
+        self.assertEqual(instance.calls, [])
+
+    def test_an_unknown_deployment_uuid_is_reported_not_crashed_on(self) -> None:
+        instance = FakeInstance(with_application=True)
+        code, report = run_operation(driver.operate_deploy_log, instance, deployment_uuid="dep-nonexistent")
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertIn("could not read the deployment log", report)
+        self.assertIn("RESULT deploy-log ok commit=unknown", report)
+
+
 class DeployTests(unittest.TestCase):
     def setUp(self) -> None:
         driver.reset_redactions()
@@ -2272,6 +2366,7 @@ class EntryPointTests(unittest.TestCase):
                 "reservation-inspect",
                 "model-smoke",
                 "baserow-schema",
+                "deploy-log",
             },
         )
         workflow = (

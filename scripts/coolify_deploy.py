@@ -51,6 +51,7 @@ OPERATION_VARIABLE = "OPERATION"
 SERVICE_VARIABLE = "SERVICE"
 POLL_VARIABLE = "DEPLOY_POLL_SECONDS"
 TIMEOUT_VARIABLE = "DEPLOY_TIMEOUT_SECONDS"
+DEPLOYMENT_UUID_VARIABLE = "DEPLOYMENT_UUID"
 
 # An owner-held value may be handed to this run through the environment under
 # this prefix, so a credential can be moved from one store to another without
@@ -83,6 +84,7 @@ OPERATIONS = (
     "reservation-inspect",
     "model-smoke",
     "baserow-schema",
+    "deploy-log",
 )
 FORBIDDEN_METHODS = frozenset({"DELETE"})
 
@@ -2071,6 +2073,84 @@ def deployment_log_lines(record: dict) -> list[str]:
     return lines
 
 
+def register_owner_held_redactions(client: Client, spec: dict, application_uuid: str) -> None:
+    """Register every owner-held env value currently stored for this application.
+
+    A build log is untrusted text that may quote a connection string, so the
+    values stored on the application are registered for redaction before a line
+    of it is ever printed - otherwise the redaction table would hold only what
+    this process happened to write itself, and a deploy writes almost nothing.
+
+    Only the owner-held keys are masked, not every key. The values under
+    ``configuration`` are committed in this repository in clear text, so hiding
+    them protects nothing and costs the reader the one thing a build log is for.
+    Masking a model name or a hostname would turn the log into the opaque
+    verdict this exists to avoid.
+    """
+
+    sensitive_keys = {
+        entry["key"]
+        for entry in spec["externally_provided_configuration"]
+        if is_sensitive(entry)
+    }
+    for entry in read_environment_entries(client, application_uuid):
+        if isinstance(entry, dict) and entry.get("key") in sensitive_keys:
+            register_redaction(entry.get("value"))
+
+
+def fetch_deployment_log_lines(client: Client, deployment_uuid: str) -> list[str] | None:
+    """Return this deployment's non-empty log lines, or None if it could not be read."""
+
+    try:
+        record = expect_object(
+            call(client, "GET", f"/deployments/{deployment_uuid}"), "deployment"
+        )
+    except Abort:
+        return None
+    return [line for line in deployment_log_lines(record) if line.strip()]
+
+
+def print_deployment_log_tail(lines: list[str] | None, tail: int) -> None:
+    if lines is None:
+        emit("    could not read the deployment log")
+        return
+    if not lines:
+        emit("    the deployment reported no log lines")
+        return
+    shown = lines[-tail:]
+    if len(shown) != len(lines):
+        emit(f"    deployment log, last {len(shown)} of {len(lines)} lines:")
+    else:
+        emit(f"    deployment log, {len(lines)} lines:")
+    for line in shown:
+        emit(f"    | {line}")
+
+
+# Coolify's build log announces the checkout with a line of this shape before
+# the docker build steps begin: "Checking out commit <sha> on branch <name>".
+# Matched loosely (a bare 40-character hex run after the word "commit") so a
+# small wording change in a future Coolify version degrades to "not found"
+# rather than silently matching the wrong thing.
+_BUILD_COMMIT_RE = re.compile(r"\bcommit\b[^0-9a-f]*([0-9a-f]{40})\b", re.IGNORECASE)
+
+
+def find_built_commit(lines: list[str] | None) -> str | None:
+    """Return the commit hash Coolify's own build log says it checked out.
+
+    This is independent of (and more trustworthy than) the application
+    object's own ``git_commit_sha`` field, which this instance stores as the
+    literal string "HEAD" rather than a resolved hash.
+    """
+
+    if not lines:
+        return None
+    for line in lines:
+        match = _BUILD_COMMIT_RE.search(line)
+        if match:
+            return match.group(1)
+    return None
+
+
 def report_deployment_failure(
     client: Client,
     spec: dict,
@@ -2085,47 +2165,39 @@ def report_deployment_failure(
     collapsed into a generic verdict, leaving the reader to guess. The build log
     is the only place the cause exists, so it is fetched here rather than left in
     a console someone has to open by hand.
-
-    A build log is untrusted text that may quote a connection string, so the
-    values stored on the application are registered for redaction before a line
-    is printed - otherwise the redaction table would hold only what this process
-    happened to write itself, and a deploy writes almost nothing.
-
-    Only the owner-held keys are masked, not every key. The values under
-    ``configuration`` are committed in this repository in clear text, so hiding
-    them protects nothing and costs the reader the one thing this function
-    exists to give them. Masking a model name or a hostname would turn the log
-    into the opaque verdict it is meant to replace.
     """
 
-    sensitive_keys = {
-        entry["key"]
-        for entry in spec["externally_provided_configuration"]
-        if is_sensitive(entry)
-    }
-    for entry in read_environment_entries(client, application_uuid):
-        if isinstance(entry, dict) and entry.get("key") in sensitive_keys:
-            register_redaction(entry.get("value"))
+    register_owner_held_redactions(client, spec, application_uuid)
+    print_deployment_log_tail(fetch_deployment_log_lines(client, deployment_uuid), tail)
 
-    try:
-        record = expect_object(
-            call(client, "GET", f"/deployments/{deployment_uuid}"), "deployment"
-        )
-    except Abort as exc:
-        emit(f"    could not read the deployment log: {exc}")
-        return
 
-    lines = [line for line in deployment_log_lines(record) if line.strip()]
-    if not lines:
-        emit("    the deployment reported no log lines")
-        return
-    shown = lines[-tail:]
-    if len(shown) != len(lines):
-        emit(f"    deployment log, last {len(shown)} of {len(lines)} lines:")
-    else:
-        emit(f"    deployment log, {len(lines)} lines:")
-    for line in shown:
-        emit(f"    | {line}")
+def operate_deploy_log(client: Client, spec: dict, deployment_uuid: str) -> int:
+    """Read-only: report one already-completed deployment's built commit and log tail.
+
+    Exists so "what did this deployment actually build" can be answered from a
+    past, already-successful deployment_uuid without triggering a new one.
+    """
+
+    emit(f"--- deploy-log {spec['service']} deployment={deployment_uuid}")
+    if not deployment_uuid:
+        raise Abort(f"{DEPLOYMENT_UUID_VARIABLE} is not set; no deployment to look up")
+    target = spec["target"]
+    project = find_project(client, target["project"])
+    environment = find_environment(client, project["uuid"], target["environment"]) if project else None
+    application = (
+        find_application(applications_in(client, environment), target["resource_name"])
+        if environment
+        else None
+    )
+    if application is not None:
+        register_owner_held_redactions(client, spec, str(application["uuid"]))
+    lines = fetch_deployment_log_lines(client, deployment_uuid)
+    commit = find_built_commit(lines)
+    emit(f"    built commit (from the build log itself): {commit or 'not found in the log'}")
+    print_deployment_log_tail(lines, tail=40)
+    emit("")
+    emit(f"RESULT deploy-log ok commit={commit or 'unknown'}")
+    return EXIT_OK
 
 
 def poll_deployment(
@@ -6032,6 +6104,8 @@ def run(environ: dict) -> int:
         return operate_model_smoke(client, spec)
     if operation == "baserow-schema":
         return operate_baserow_schema(client, spec)
+    if operation == "deploy-log":
+        return operate_deploy_log(client, spec, environ.get(DEPLOYMENT_UUID_VARIABLE, "").strip())
     return operate_deploy(
         client,
         spec,

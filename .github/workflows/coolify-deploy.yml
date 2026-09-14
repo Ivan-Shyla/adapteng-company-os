@@ -101,10 +101,16 @@ on:
           - reservation-inspect
           - model-smoke
           - baserow-schema
+          - deploy-log
       service:
         description: "Spec file under deploy/, named without its extension"
         required: true
         default: ai-gateway
+        type: string
+      deployment_uuid:
+        description: "deploy-log only: an already-completed deployment's uuid to read back"
+        required: false
+        default: ""
         type: string
 
 permissions:
@@ -134,6 +140,7 @@ jobs:
           COOLIFY_BASE_URL: ${{ vars.COOLIFY_URL }}
           OPERATION: ${{ inputs.operation }}
           SERVICE: ${{ inputs.service }}
+          DEPLOYMENT_UUID: ${{ inputs.deployment_uuid }}
           # Owner-held values are bound by reference: the name is declared in the
           # committed spec and the value arrives here from a store outside this
           # repository. A variable naming a key the spec does not declare is
