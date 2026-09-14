@@ -1,0 +1,93 @@
+name: n8n deploy
+
+# Drives the self-hosted n8n REST API (n8n.adapteng.com) for the
+# governed-agent-pilot canary. This lives here, not in
+# adapteng-automation-platform, because that repository's .github/workflows/
+# tree is protected by its rollout-trust-anchor and a new workflow file there
+# needs the owner's locally-held signing key -- see
+# docs/runbooks/authorize-rollout-policy-change.md in that repository. This
+# repository has no such system, so the credential-driving automation for
+# this phase lives here instead, matching coolify-deploy.yml and
+# ai-gateway-credentials.yml.
+#
+# Prerequisite (owner action, one time): N8N_BASE_URL as a repository
+# variable and X_N8N_API_KEY as a repository secret, both on THIS repository
+# -- duplicated from adapteng-automation-platform, where they already exist
+# for the same purpose. scripts/n8n_deploy.py fails closed with a named,
+# readable error if either is missing; nothing is attempted without both.
+#
+# status confirms this is the self-hosted instance (n8n.adapteng.com), never
+# n8n Cloud -- the wrong-instance case that made building this necessary in
+# the first place. export fetches every live workflow's full definition and
+# uploads it as a build artifact, evidence of state before any write.
+# import-canary fetches the reviewed canary workflow JSON from
+# adapteng-automation-platform's main branch (read-only, via the existing
+# cross-repo read token) and creates-or-updates exactly the one workflow
+# named "MM-32 Governed Agent Pilot Canary", never touching any other
+# workflow, and never leaving it active. run-canary executes its manual
+# trigger once, or reports plainly if this n8n version's public API does not
+# expose that endpoint at all.
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "status and export read only; import-canary and run-canary touch exactly the MM-32 canary workflow"
+        required: true
+        default: status
+        type: choice
+        options:
+          - status
+          - export
+          - import-canary
+          - run-canary
+
+permissions:
+  contents: read
+
+# One at a time. Two overlapping imports could each read a workflow state
+# the other is about to change.
+concurrency:
+  group: n8n-deploy
+  cancel-in-progress: false
+
+jobs:
+  drive:
+    name: n8n ${{ inputs.operation }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v6.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Fetch the reviewed canary workflow from automation-platform
+        if: inputs.operation == 'import-canary'
+        env:
+          GH_TOKEN: ${{ secrets.ADAPTENG_GITHUB_READ_TOKEN }}
+        run: >-
+          gh api
+          -H "Accept: application/vnd.github.raw+json"
+          repos/Ivan-Shyla/adapteng-automation-platform/contents/n8n/workflows/experimental/MM-32-governed-agent-pilot-canary.json?ref=main
+          > "$RUNNER_TEMP/mm-32-canary.json"
+
+      - name: Drive the n8n API
+        env:
+          OPERATION: ${{ inputs.operation }}
+          N8N_BASE_URL: ${{ vars.N8N_BASE_URL }}
+          N8N_API_CREDENTIAL: ${{ secrets.X_N8N_API_KEY }}
+        run: >-
+          python scripts/n8n_deploy.py "$OPERATION"
+          --export-dir "$RUNNER_TEMP/n8n-export"
+          --canary-file "$RUNNER_TEMP/mm-32-canary.json"
+
+      - name: Upload export evidence
+        if: inputs.operation == 'export'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: n8n-export-${{ github.run_id }}
+          path: ${{ runner.temp }}/n8n-export
+          if-no-files-found: error
+          retention-days: 30
