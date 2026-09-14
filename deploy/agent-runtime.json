@@ -113,7 +113,7 @@
     },
     {
       "key": "GOVERNED_AGENT_RUNTIME_ACTIVE",
-      "value": "true",
+      "value": "false",
       "note": "Fails closed: app/config.py treats anything other than the exact lowercase string 'true' as inactive. POST /v1/run returns 503 {\"error\":\"inactive\"} while this is false. Flipped to 'true' only for the bounded Phase 7 canary window, then reconciled back to 'false'."
     }
   ],
