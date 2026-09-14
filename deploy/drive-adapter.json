@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "service": "drive-adapter",
+  "summary": "Internal governed Google Drive HTTP boundary (ensure_folder/copy/copy_tree/upload_draft). Private network only; never deployed before this spec.",
+  "source_of_declared_values": {
+    "repository": "Ivan-Shyla/adapteng-automation-platform",
+    "files": [
+      "services/adapteng-drive-adapter/Dockerfile",
+      "services/adapteng-drive-adapter/.env.example",
+      "services/adapteng-drive-adapter/app/service.py",
+      "services/adapteng-drive-adapter/app/config.py"
+    ],
+    "verified_on": "2026-09-14"
+  },
+  "target": {
+    "project": "adapteng-ops",
+    "environment": "production",
+    "resource_name": "drive-adapter",
+    "server": null,
+    "destination": null,
+    "note": "server and destination are null on purpose, matching deploy/ai-gateway.json and deploy/agent-runtime.json: the reconciler resolves them from the instance and aborts when the match is not unique, rather than guessing. This spec has not yet been reconciled against a live Coolify application -- it is written ahead of the first `coolify-deploy.yml -f operation=deploy -f service=drive-adapter` run, which will create the application from this declaration."
+  },
+  "source": {
+    "kind": "private_github_app",
+    "git_repository": "Ivan-Shyla/adapteng-automation-platform",
+    "git_branch": "main",
+    "github_app": "adapteng-coolify",
+    "note": "Same private-repo App as deploy/ai-gateway.json and deploy/agent-runtime.json; the built-in 'Public GitHub' source cannot read this private repository."
+  },
+  "build": {
+    "build_pack": "dockerfile",
+    "base_directory": "/services/adapteng-drive-adapter",
+    "dockerfile_location": "/Dockerfile"
+  },
+  "network": {
+    "internal_port": 8082,
+    "public_fqdn": null,
+    "connect_to_docker_network": true,
+    "network_aliases": ["drive-adapter"],
+    "peer_probe_application": "ops-runner",
+    "note": "public_fqdn is null and must stay null: this service is reachable only from the private Docker network, exactly like ai-gateway and agent-runtime. peer_probe_application names ops-runner, matching deploy/ai-gateway.json's choice: this service's own outbound dependencies are Postgres (DRIVE_BRIDGE_REPLAY_DATABASE_URL) and Google's external API, neither of which is another Coolify-hosted peer on this network, so there is no single internal caller whose reachability check would be more specific than the generic ops-runner probe."
+  },
+  "health_check": {
+    "enabled": false,
+    "container_gate": "image",
+    "path": "/healthz",
+    "method": "GET",
+    "scheme": "http",
+    "return_code": 200,
+    "interval_seconds": 30,
+    "timeout_seconds": 5,
+    "retries": 3,
+    "start_period_seconds": 10,
+    "note": "Same rationale as deploy/ai-gateway.json's and deploy/agent-runtime.json's notes: this image (python:3.11-slim, minimal system deps) carries neither curl nor wget, so Coolify's generated coolify_http probe would fail every attempt. container_gate is 'image' -- the image's own HEALTHCHECK instruction (services/adapteng-drive-adapter/Dockerfile) is the real gate, requires health_check.enabled=false, and its four numbers must stay equal to the ones declared here since Coolify reads them back out of the image and overwrites its own stored values: HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3, matching the Dockerfile exactly. This service has never been deployed, so there is no incident to cite -- the Dockerfile's HEALTHCHECK was written with these exact four numbers from the start.",
+    "container_gate_note": "Probes /healthz, not /ready: this service has no /ready endpoint at all. /healthz is liveness only and deliberately never touches Drive or PostgreSQL (app/service.py's own docstring), so a 200 here proves the process is listening, not that Google or the replay ledger are reachable -- there is no cheaper way to gate promotion available from this image, and the governed operations themselves (ensure_folder/upload_draft/etc.) are the real end-to-end proof, exercised only by the bounded canary, not by this probe."
+  },
+  "delivery": {
+    "auto_deploy_on_push": false,
+    "preview_deployments": false,
+    "force_https": false,
+    "note": "Deployment is driven only by the deploy operation of .github/workflows/coolify-deploy.yml (workflow_dispatch only), so a push to the platform repository never releases by itself. force_https is off because there is no public route to redirect."
+  },
+  "settings_not_reported_by_api": {
+    "note": "Same Coolify-version limitation already documented in deploy/ai-gateway.json's and deploy/agent-runtime.json's settings_not_reported_by_api: the four delivery flags are not reported back by this Coolify instance's API, so the driver reports them here for the owner to confirm in the UI rather than writing a value it cannot verify by read-back.",
+    "keys": {
+      "is_auto_deploy_enabled": {
+        "reason": "Not reported and not accepted by the creation endpoint on this version (same as ai-gateway and agent-runtime).",
+        "compensating_control": "Releases are driven only by the deploy operation of .github/workflows/coolify-deploy.yml, which is workflow_dispatch only."
+      },
+      "is_preview_deployments_enabled": {
+        "reason": "Not accepted by the creation endpoint on this version (same as ai-gateway and agent-runtime).",
+        "compensating_control": "public_fqdn is null and reconcile fails if an FQDN appears, so a preview has no route to publish on."
+      },
+      "is_force_https_enabled": {
+        "reason": "Not reported on this version (same as ai-gateway and agent-runtime).",
+        "compensating_control": "There is no public route to redirect."
+      },
+      "connect_to_docker_network": {
+        "reason": "Not reported on this version (same as ai-gateway and agent-runtime).",
+        "compensating_control": "network.network_aliases declares the alias this service needs; the same coolify-deploy.yml service-resolve operation used to verify ai-gateway's and agent-runtime's attachment can be run against this application before it is trusted for the canary."
+      }
+    }
+  },
+  "configuration": [
+    {
+      "key": "DRIVE_SERVICE_BIND_HOST",
+      "value": "0.0.0.0",
+      "note": "The service image defaults to DRIVE_SERVICE_BIND_HOST=127.0.0.1 (app/service.py's own DEFAULT_BIND_HOST). A process bound to loopback answers only callers inside its own container, so the container-network health probe and the internal n8n caller would be refused. Binding all interfaces is what makes the container reachable on the private network; nothing is published to the internet -- public_fqdn stays null."
+    },
+    {
+      "key": "DRIVE_SERVICE_BIND_PORT",
+      "value": "8082",
+      "note": "Declared so the listening port, the internal_port above and the health-check port have exactly one source of truth in this file. Matches app/service.py's DEFAULT_BIND_PORT."
+    },
+    {
+      "key": "DRIVE_SERVICE_ALLOW_NON_LOOPBACK",
+      "value": "true",
+      "note": "runtime_settings() (app/service.py) refuses a non-loopback DRIVE_SERVICE_BIND_HOST unless this is explicitly truthy -- the same fail-closed contract .env.example documents: 'Set true only after the owner has verified a private Coolify network and no public proxy/domain/host-port route.' That is exactly this deployment's shape, already verified for ai-gateway and agent-runtime on the same Coolify instance."
+    },
+    {
+      "key": "GOOGLE_WORKSPACE_DELEGATED_USER",
+      "value": "ivan.shyla@adapteng.com",
+      "note": "Not a secret -- an email address. Must equal the repository variable GOOGLE_WORKSPACE_ADMIN's existing value (adapteng-company-os and adapteng-automation-platform both already carry it), the same identity the drive base-structure CLI already impersonates via domain-wide delegation. app/config.py::_governed_client_config requires this to be a valid email; it does not have to be a NEW delegated user distinct from the existing admin identity."
+    },
+    {
+      "key": "GOOGLE_DRIVE_SCOPE",
+      "value": "https://www.googleapis.com/auth/drive",
+      "note": "Not a secret -- a fixed OAuth scope string. app/config.py::_governed_client_config requires this to equal app/drive_client.py's own DRIVE_SCOPE constant exactly, or it refuses to build the client."
+    },
+    {
+      "key": "GOOGLE_CLOUD_PROJECT",
+      "value": "adapteng-workspace-automation",
+      "note": "Not a secret -- a GCP project id, already the value of repository variable GOOGLE_CLOUD_PROJECT_ID on both adapteng-automation-platform and (duplicated 2026-09-14) adapteng-company-os. app/config.py::_governed_client_config cross-checks this against the decoded service-account credential's own project_id field and refuses to build the client on a mismatch -- so this is a consistency check on the existing Vertex/Workspace automation project, not a new project."
+    }
+  ],
+  "externally_provided_configuration": [
+    {
+      "key": "GOOGLE_SERVICE_ACCOUNT_JSON_B64",
+      "reason": "The existing GOOGLE_SERVICE_ACCOUNT_JSON secret (already present on both adapteng-automation-platform and adapteng-company-os since 2026-07-24), base64-re-encoded -- app/config.py's governed-operations code path reads only the _B64 env var (a different credential CONTRACT, not a different credential: 'Governed operations have a separate, locked credential contract. They do NOT read GOOGLE_SERVICE_ACCOUNT_JSON', per services/adapteng-drive-adapter/.env.example). No new Google service-account key is minted; the transformation happens once, server-side, and the plaintext is never printed."
+    },
+    {
+      "key": "DRIVE_SERVICE_BEARER_TOKENS",
+      "reason": "Inbound caller authentication material for POST /v1/drive/operations (the internal n8n orchestration is the only intended caller). Generated 2026-09-14 and set directly as a company-os repository secret; never written to this repository."
+    },
+    {
+      "key": "DRIVE_BRIDGE_REPLAY_DATABASE_URL",
+      "reason": "Connection string for a least-privilege role on the same adapteng_ops database ai-gateway and agent-runtime already use, scoped to the drive_bridge_replay_reservations table (migration 008_drive_bridge_replay_reservations.sql, already live in production per registry/data-stores.yaml). Generated on the production host and posted to Coolify from there, so the password never reaches a runner, a log or this repository -- same handling as AI_GATEWAY_DATABASE_URL and GOVERNED_AGENT_RUNTIME_DATABASE_URL."
+    }
+  ]
+}
