@@ -12,6 +12,7 @@ the caller, not here.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 
@@ -30,6 +31,19 @@ scalar = base.scalar
 # idempotency check instead of a second, distinct run.
 TASK_ID = "pilot-canary-2026-09-task-001"
 RUN_ID = "pilot-canary-2026-09-run-001"
+
+# Fixed idempotency_key values from the same workflow's two Drive nodes
+# (Ensure Canary Drive Folder / Upload Canary Draft Artifact). The table's
+# primary key is the sha256 digest of that string
+# (governed_bridge.py::_idempotency_digest), not the string itself.
+DRIVE_IDEMPOTENCY_KEYS = {
+    "ensure_folder": "mm32-ensure-folder-pilot-canary-2026-09-run-001",
+    "upload_draft": "mm32-upload-draft-pilot-canary-2026-09-run-001",
+}
+
+
+def _digest(idempotency_key: str) -> str:
+    return hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
 
 
 def operate_evidence(target) -> int:
@@ -91,10 +105,30 @@ def operate_evidence(target) -> int:
         emit(f"    total actual_eur_amount: {total_actual_eur}")
         emit(f"    call_id(s): {call_ids}")
 
+    reservation_counts = {}
+    for label, key in DRIVE_IDEMPOTENCY_KEYS.items():
+        digest = _digest(key)
+        count = scalar(
+            target,
+            "SELECT count(*) FROM drive_bridge_replay_reservations "
+            f"WHERE key_digest = {sql_literal(digest)};",
+        )
+        completed = "n/a"
+        if count == "1":
+            completed = scalar(
+                target,
+                "SELECT completed::text FROM drive_bridge_replay_reservations "
+                f"WHERE key_digest = {sql_literal(digest)};",
+            )
+        reservation_counts[label] = count
+        emit(f"    drive_bridge_replay_reservations[{label}]: rows={count} completed={completed}")
+
     emit("")
     emit(
         f"RESULT canary-evidence ok agent_task={task_present} agent_run={run_present} "
-        f"ai_gateway_call={call_count}"
+        f"ai_gateway_call={call_count} "
+        f"drive_ensure_folder={reservation_counts['ensure_folder']} "
+        f"drive_upload_draft={reservation_counts['upload_draft']}"
     )
     return EXIT_OK
 
