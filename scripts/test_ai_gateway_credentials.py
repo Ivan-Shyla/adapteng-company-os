@@ -324,6 +324,110 @@ class MintCallerTests(unittest.TestCase):
             run_operation(binder.operate_mint_caller, Forgetful(), repository="o/r")
 
 
+class MintAdditionalCallerTests(unittest.TestCase):
+    """Appending one caller token without ever losing an existing one.
+
+    The property that matters most here is the opposite of MintCallerTests':
+    mint-caller may freely overwrite because there was nothing to lose the
+    first time; this operation exists specifically because model-smoke's
+    working ae.smk credential must never be dropped by adding a second
+    caller for agent-runtime.
+    """
+
+    def written_value(self, coolify: "FakeCoolify") -> str:
+        return [
+            body["value"]
+            for method, path, body in coolify.writes
+            if path.endswith("/envs") and isinstance(body, dict)
+        ][-1]
+
+    def test_it_refuses_to_run_when_no_caller_is_configured_yet(self) -> None:
+        """This is additive by design; first-time setup is mint-caller's job."""
+
+        coolify = FakeCoolify()
+        with self.assertRaises(driver.Abort):
+            run_operation(binder.operate_mint_additional_caller, coolify, caller_token="new-token-value")
+        self.assertEqual(coolify.writes, [])
+
+    def test_the_existing_token_survives_in_the_written_value(self) -> None:
+        coolify = FakeCoolify(
+            environment=[{"key": binder.CALLER_KEY, "value": "existing-ae-smk-token"}]
+        )
+        run_operation(binder.operate_mint_additional_caller, coolify, caller_token="new-token-value")
+        written = self.written_value(coolify)
+        self.assertIn("existing-ae-smk-token", written.split(","))
+        self.assertIn("new-token-value", written.split(","))
+
+    def test_multiple_existing_tokens_all_survive(self) -> None:
+        coolify = FakeCoolify(
+            environment=[{"key": binder.CALLER_KEY, "value": "token-a,token-b,token-c"}]
+        )
+        run_operation(binder.operate_mint_additional_caller, coolify, caller_token="token-d")
+        parts = self.written_value(coolify).split(",")
+        self.assertEqual(set(parts), {"token-a", "token-b", "token-c", "token-d"})
+
+    def test_the_new_token_never_reaches_the_report(self) -> None:
+        coolify = FakeCoolify(
+            environment=[{"key": binder.CALLER_KEY, "value": "existing-ae-smk-token"}]
+        )
+        _, report = run_operation(
+            binder.operate_mint_additional_caller, coolify, caller_token="secret-new-token-value"
+        )
+        self.assertNotIn("secret-new-token-value", report)
+        self.assertNotIn("existing-ae-smk-token", report)
+
+    def test_a_token_already_present_is_a_no_op_not_a_duplicate(self) -> None:
+        coolify = FakeCoolify(
+            environment=[{"key": binder.CALLER_KEY, "value": "existing-ae-smk-token,already-added"}]
+        )
+        code, report = run_operation(
+            binder.operate_mint_additional_caller, coolify, caller_token="already-added"
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(coolify.writes, [])
+        self.assertIn("already present", report)
+
+    def test_a_write_that_drops_a_prior_token_is_a_failure_not_a_success(self) -> None:
+        """The exact failure mode this operation exists to prevent."""
+
+        class Lossy(FakeCoolify):
+            def __call__(self, client, method, path, body=None, expect=(200,), allow_absent=False):
+                result = super().__call__(client, method, path, body, expect, allow_absent)
+                # Only corrupt reads that happen AFTER the write, so the
+                # initial read (which decides what to append to) still sees
+                # the real prior state -- otherwise this fixture never
+                # reaches the write path being tested at all.
+                if method.upper() == "GET" and path.endswith("/envs") and self.writes:
+                    return [
+                        {"key": e.get("key"), "value": "new-token-value"}
+                        if e.get("key") == binder.CALLER_KEY
+                        else e
+                        for e in result
+                    ]
+                return result
+
+        coolify = Lossy(environment=[{"key": binder.CALLER_KEY, "value": "existing-ae-smk-token"}])
+        with self.assertRaises(driver.Abort):
+            run_operation(binder.operate_mint_additional_caller, coolify, caller_token="new-token-value")
+
+    def test_a_write_that_omits_the_new_token_is_a_failure(self) -> None:
+        class DropsNew(FakeCoolify):
+            def __call__(self, client, method, path, body=None, expect=(200,), allow_absent=False):
+                result = super().__call__(client, method, path, body, expect, allow_absent)
+                if method.upper() == "GET" and path.endswith("/envs") and self.writes:
+                    return [
+                        {"key": e.get("key"), "value": "existing-ae-smk-token"}
+                        if e.get("key") == binder.CALLER_KEY
+                        else e
+                        for e in result
+                    ]
+                return result
+
+        coolify = DropsNew(environment=[{"key": binder.CALLER_KEY, "value": "existing-ae-smk-token"}])
+        with self.assertRaises(driver.Abort):
+            run_operation(binder.operate_mint_additional_caller, coolify, caller_token="new-token-value")
+
+
 class StatusTests(unittest.TestCase):
     def test_a_path_naming_a_mount_that_is_not_there_is_reported_as_a_problem(self) -> None:
         coolify = FakeCoolify(
@@ -367,7 +471,7 @@ class WorkflowTests(unittest.TestCase):
         text = Path(__file__).resolve().parent.parent.joinpath(
             ".github/workflows/ai-gateway-credentials.yml"
         ).read_text(encoding="utf-8")
-        for operation in ("status", "bind-adc", "mint-caller"):
+        for operation in ("status", "bind-adc", "mint-caller", "mint-additional-caller"):
             self.assertIn(f"- {operation}", text)
 
     def test_the_workflow_passes_the_material_by_reference(self) -> None:
@@ -380,6 +484,16 @@ class WorkflowTests(unittest.TestCase):
             text,
         )
         self.assertNotIn("secrets.GOOGLE_SERVICE_ACCOUNT_JSON", text)
+
+    def test_the_additional_caller_token_is_passed_by_reference_not_generated(self) -> None:
+        text = Path(__file__).resolve().parent.parent.joinpath(
+            ".github/workflows/ai-gateway-credentials.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "GOVERNED_AGENT_RUNTIME_GATEWAY_TOKEN: "
+            "${{ secrets.GOVERNED_AGENT_RUNTIME_GATEWAY_TOKEN }}",
+            text,
+        )
 
 
 if __name__ == "__main__":
