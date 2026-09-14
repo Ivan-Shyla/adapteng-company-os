@@ -1,0 +1,103 @@
+name: Governed service auth check
+
+# Proves the two governed-pilot services actually enforce bearer-token
+# authentication before the canary depends on it: a request with no
+# Authorization header and one with a syntactically valid but wrong token must
+# both be refused, and a request carrying the real inbound token must get past
+# the authentication layer (a non-401 response -- agent-runtime is expected to
+# still answer 503 "inactive" until the canary flips it on; this only proves
+# auth was not what stopped it).
+#
+# Runs on the operations runner for the same reason every other check here
+# does: both services are private-network-only, reachable by alias only from a
+# container already on that Docker network.
+#
+# The real inbound tokens are read into curl's Authorization header directly
+# from the job environment and never echoed; only HTTP status codes are
+# printed.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: governed-service-auth-check
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Bearer-auth probe
+    runs-on: [self-hosted, adapteng-ops]
+    timeout-minutes: 10
+    steps:
+      - name: agent-runtime -- no Authorization header must be refused
+        run: |
+          set -euo pipefail
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://agent-runtime:8082/v1/run \
+            -H 'Content-Type: application/json' --data '{}')
+          echo "status=$code"
+          test "$code" = "401"
+
+      - name: agent-runtime -- a syntactically valid but wrong token must be refused
+        run: |
+          set -euo pipefail
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://agent-runtime:8082/v1/run \
+            -H 'Content-Type: application/json' \
+            -H 'Authorization: Bearer 0000000000000000000000000000000000wrong' \
+            --data '{}')
+          echo "status=$code"
+          test "$code" = "401"
+
+      - name: agent-runtime -- the real inbound token must get past authentication
+        env:
+          GOVERNED_AGENT_RUNTIME_HTTP_BEARER_TOKENS: ${{ secrets.GOVERNED_AGENT_RUNTIME_HTTP_BEARER_TOKENS }}
+        run: |
+          set -euo pipefail
+          token="${GOVERNED_AGENT_RUNTIME_HTTP_BEARER_TOKENS%%,*}"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://agent-runtime:8082/v1/run \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer $token" \
+            --data '{}')
+          echo "status=$code"
+          if [ "$code" = "401" ]; then
+            echo "::error::the real token was rejected -- authentication is broken, not just inactive"
+            exit 1
+          fi
+          echo "authentication passed (non-401); this deployment is feature-flagged inactive, so a non-401 status such as 503 is the expected shape here"
+
+      - name: drive-adapter -- no Authorization header must be refused
+        run: |
+          set -euo pipefail
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://drive-adapter:8082/v1/drive/operations \
+            -H 'Content-Type: application/json' --data '{}')
+          echo "status=$code"
+          test "$code" = "401"
+
+      - name: drive-adapter -- a syntactically valid but wrong token must be refused
+        run: |
+          set -euo pipefail
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://drive-adapter:8082/v1/drive/operations \
+            -H 'Content-Type: application/json' \
+            -H 'Authorization: Bearer 0000000000000000000000000000000000wrong' \
+            --data '{}')
+          echo "status=$code"
+          test "$code" = "401"
+
+      - name: drive-adapter -- the real inbound token must get past authentication
+        env:
+          DRIVE_SERVICE_BEARER_TOKENS: ${{ secrets.DRIVE_SERVICE_BEARER_TOKENS }}
+        run: |
+          set -euo pipefail
+          token="${DRIVE_SERVICE_BEARER_TOKENS%%,*}"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://drive-adapter:8082/v1/drive/operations \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer $token" \
+            --data '{}')
+          echo "status=$code"
+          if [ "$code" = "401" ]; then
+            echo "::error::the real token was rejected -- authentication is broken"
+            exit 1
+          fi
+          echo "authentication passed (non-401)"
