@@ -1890,7 +1890,22 @@ class DestinationResolutionTests(unittest.TestCase):
 
 
 class FindBuiltCommitTests(unittest.TestCase):
-    def test_finds_a_real_coolify_style_checkout_line(self) -> None:
+    def test_finds_the_real_coolify_image_tagging_line(self) -> None:
+        """Pinned to the actual log line observed live (agent-runtime,
+        deployment xf1qw9dg9pwl5xr3mwa2dktw, 2026-09-14) -- this Coolify
+        version logs no "checking out" line at all; the commit only appears
+        as the tag on the exported image."""
+
+        lines = [
+            "#13 exporting to image",
+            "#13 naming to docker.io/library/f3a9cnfsp87rioakqxnofzfb:1b8440079286236d751415fa3245922be9d76fa1 done",
+            "#13 DONE 0.0s",
+        ]
+        self.assertEqual(
+            driver.find_built_commit(lines), "1b8440079286236d751415fa3245922be9d76fa1"
+        )
+
+    def test_finds_a_hypothetical_checkout_line_style_too(self) -> None:
         lines = [
             "Preparing container...",
             "Checking out commit 1b8440079286236d751415fa3245922be9d76fa1 on branch main",
@@ -1932,7 +1947,7 @@ class DeployLogTests(unittest.TestCase):
             "status": "finished",
             "logs": json.dumps(
                 [
-                    {"output": "Checking out commit 1b8440079286236d751415fa3245922be9d76fa1 on branch main"},
+                    {"output": "#13 naming to docker.io/library/f3a9cnfsp87rioakqxnofzfb:1b8440079286236d751415fa3245922be9d76fa1 done"},
                     {"output": "Build succeeded"},
                 ]
             ),
