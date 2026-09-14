@@ -8,33 +8,24 @@ Legend: 🔴 security / do first · 🟠 data hygiene · 🟡 unblock next steps
 
 ---
 
-## Governed agent pilot — 2026-09-08
+## Governed agent pilot — DONE 2026-09-14
 
-Supersedes item #5 ("Vertex prediction role + caller-token reference") in the
-2026-09-07 table below **for the pilot specifically**: Phase 2's
-`verify-vertex-runtime.yml` readiness run (run `34229146754`, 2026-09-08)
-already proved the dedicated `company-os-vertex-runtime` identity has
-`aiplatform.endpoints.predict` — **no IAM grant is needed**. The only real
-blocker is installing that identity's existing credential as a repository
-secret so `ai-gateway`'s deployment can actually use it. Everything else in
-this pilot (adapters, deployable service, n8n canary, rollback runbook —
-`adapteng-automation-platform` PR #133/#134, `adapteng-company-os` PR #247/#248)
-is merged and does not need owner action.
+Everything in this section through the 2026-09-08 "exact sequence" (items
+1-10 below) is now complete and live-verified. Summary, full detail in
+`registry/services.yaml`'s `adapteng-agent-runtime` and
+`adapteng-drive-adapter` entries (`canary_evidence` blocks):
 
-Two owner actions remain, independent of each other, in priority order:
+- `VERTEX_SERVICE_ACCOUNT_JSON` installed; the Vertex/Gemini identity is bound and working.
+- `agent-runtime` and `drive-adapter` both deployed (Coolify, private network only) and `running:healthy`, each on its own least-privilege Postgres role (`scripts/governed_runtime_roles.py`).
+- MM-32 imported into the live self-hosted n8n instance (`BgjPl1Cv9LqIPeMQ`), inactive, manual-trigger only.
+- One bounded canary run (n8n execution 120) and one idempotency replay (execution 121) both completed successfully by hand from the n8n UI (this n8n version's public API returns 405 on `POST /workflows/{id}/run` for a manual-trigger workflow, so this step cannot be automated). The replay produced zero additional `ai_gateway_call` rows, zero duplicate Baserow rows, zero duplicate Drive artifacts, and is marked `replayed: true` by the workflow's own output.
+- `GOVERNED_AGENT_RUNTIME_ACTIVE` is `false` again (flipped `true` only for the canary window, per `deploy/agent-runtime.json`'s own documented intent).
+- **Known follow-up, not a pilot blocker**: a real bug in `services/adapteng-agent-runtime`'s ledger writes causes `agent_run.status` to regress from `succeeded` back to `started` on a replay (billing/duplication safety is unaffected — `ai_gateway_call` stayed at exactly 1 row). See `registry/services.yaml`'s `canary_evidence.known_issue` for the root cause; the production ledger row itself was deliberately left uncorrected.
 
-### 1. VERTEX SECRET INSTALLATION 🔴 — do first, unblocks Phase 3/4/7
+The one item from this section that is **still genuinely open** — unrelated
+to the pilot's live status — is the protected-CI rollout authorization below.
 
-| Field | Value |
-|---|---|
-| Repository | `Ivan-Shyla/adapteng-company-os` |
-| Secret name | `VERTEX_SERVICE_ACCOUNT_JSON` |
-| Exact command | `gh secret set VERTEX_SERVICE_ACCOUNT_JSON --repo Ivan-Shyla/adapteng-company-os < /secure/path/to/company-os-vertex-runtime.json` (stdin only — never paste the JSON anywhere, including into this file, an issue, a PR, or chat) |
-| Where to get the file | This key **already exists**. GitHub never allows reading a stored secret's value back. The dedicated service account is `company-os-vertex-runtime` in GCP project `adapteng-workspace-automation` (Phase 2 just reconfirmed it is correctly anchored and permissioned, via `adapteng-automation-platform`'s protected `company-os-vertex-runtime-readiness` environment). Retrieve that account's original key file from wherever it was originally saved — password manager, vault, local backup — or re-download it from the GCP Console's key list for that exact account. Do **not** mint a new key. |
-| Verification | `gh secret list --repo Ivan-Shyla/adapteng-company-os \| grep VERTEX_SERVICE_ACCOUNT_JSON` shows the secret exists (value never shown) |
-| What runs immediately after | `gh workflow run ai-gateway-credentials.yml --repo Ivan-Shyla/adapteng-company-os -f operation=status`, then `-f operation=bind-adc`, then `-f operation=status` again (Phase 3) |
-
-### 2. PROTECTED CI ROLLOUT AUTHORIZATION 🟡 — unblocks CI-verified status for the new service's tests only
+### 1. PROTECTED CI ROLLOUT AUTHORIZATION 🟡 — unblocks CI-verified status for the new service's tests only
 
 This is a real, separate governance decision, not a quick command — flagging
 it honestly rather than a one-liner. `adapteng-automation-platform` treats
@@ -54,23 +45,10 @@ bootstrap project (`adapteng-automation-platform/docs/runbooks/authorize-rollout
 | Verification | `python -I scripts/validation/run_rollout_module.py scripts.validation.validate_rollout_ci_policy` passes with the new paths present; the `Base-Trusted Rollout Authorization` check on the follow-up PR shows `success` |
 | What runs immediately after | Push the follow-up PR, watch `governed-agent-runtime-postgres-semantics` and the `adapteng-agent-runtime` matrix leg go green in real GitHub Actions CI, then this file's `registry/services.yaml` entry for `adapteng-agent-runtime` gets corrected from `LOCAL-ONLY-NOT-CI-VERIFIED` to a real CI verdict |
 
-This second item is **not required** for Phase 3/4/7 (credential bind,
-bounded smoke, canary) — only for getting the new service's test suite
-running inside this repository's own protected CI, which is a quality/trust
-improvement, not a pilot blocker.
-
-### Exact sequence once secret #1 above is installed (nothing further to build)
-
-1. `gh workflow run ai-gateway-credentials.yml --repo Ivan-Shyla/adapteng-company-os -f operation=status` → `-f operation=bind-adc` → `-f operation=status` (Phase 3, confirms the dedicated identity is mounted).
-2. **New prerequisite, discovered 2026-09-08**: `coolify-deploy.yml`'s env block only passes `ai-gateway`'s five `COOLIFY_SECRET_*` variables. Deploying `agent-runtime` for the first time needs three more added the same way: `COOLIFY_SECRET_GOVERNED_AGENT_RUNTIME_DATABASE_URL`, `COOLIFY_SECRET_GOVERNED_AGENT_RUNTIME_GATEWAY_TOKEN`, `COOLIFY_SECRET_GOVERNED_AGENT_RUNTIME_HTTP_BEARER_TOKENS` — a small, non-protected workflow change (`adapteng-company-os` has no rollout-trust-anchor system) in a focused PR, needing the actual DB DSN and a caller token for `agent-runtime` to authenticate to `ai-gateway` (an `ai-gateway` bearer token you already hold) plus a freshly generated inbound bearer token for `agent-runtime` itself.
-3. `gh workflow run coolify-deploy.yml --repo Ivan-Shyla/adapteng-company-os -f operation=deploy -f service=agent-runtime` (deploys inactive by default — `GOVERNED_AGENT_RUNTIME_ACTIVE=false` per `deploy/agent-runtime.json`), then `-f operation=status` and `-f operation=verify`.
-4. Build and merge the bounded `model-smoke`-equivalent PR for the agent-runtime path if a real end-to-end model draft (not just `ai-gateway`'s own existing `model-smoke` operation) is wanted for evidence — otherwise Phase 4's existing `operate_model_smoke` in `scripts/coolify_deploy.py` (already implemented, added by the already-merged PR #244) covers the "prove real inference" requirement on its own: `gh workflow run coolify-deploy.yml --repo Ivan-Shyla/adapteng-company-os -f operation=model-smoke -f service=ai-gateway`.
-5. Flip `GOVERNED_AGENT_RUNTIME_ACTIVE=true` on the `agent-runtime` Coolify application (via `coolify-deploy.yml -f operation=deploy` after updating the value) only for the canary window.
-6. Import `n8n/workflows/experimental/MM-32-governed-agent-pilot-canary.json` into the live self-hosted n8n instance through the n8n UI (still manual-trigger, still inactive by default — importing is not the same as running it).
-7. Run the canary once by hand from the n8n UI; capture the redacted result (task/run IDs, status, cost, draft record ID).
-8. Run it a second time, unchanged, to prove idempotency: zero additional `ai-gateway` calls, zero duplicate ledger rows, zero duplicate Baserow draft rows.
-9. Set `GOVERNED_AGENT_RUNTIME_ACTIVE=false` again (see `runbooks/governed-agent-pilot-rollback.md`'s "fastest disable").
-10. Final evidence-reconciliation PR to `adapteng-company-os` updating `registry/services.yaml`'s `adapteng-agent-runtime` entry from `repo-merged-not-live` to a real live-verified status, with the canary's redacted trace.
+This item is **not required** for the pilot, which is fully live (see the
+DONE summary above) — only for getting the new service's test suite running
+inside this repository's own protected CI, which is a quality/trust
+improvement, not a blocker.
 
 ---
 
