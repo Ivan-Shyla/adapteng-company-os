@@ -20,35 +20,48 @@ Everything in this section through the 2026-09-08 "exact sequence" (items
 - MM-32 imported into the live self-hosted n8n instance (`BgjPl1Cv9LqIPeMQ`), inactive, manual-trigger only.
 - One bounded canary run (n8n execution 120) and one idempotency replay (execution 121) both completed successfully by hand from the n8n UI (this n8n version's public API returns 405 on `POST /workflows/{id}/run` for a manual-trigger workflow, so this step cannot be automated). The replay produced zero additional `ai_gateway_call` rows, zero duplicate Baserow rows, zero duplicate Drive artifacts, and is marked `replayed: true` by the workflow's own output.
 - `GOVERNED_AGENT_RUNTIME_ACTIVE` is `false` again (flipped `true` only for the canary window, per `deploy/agent-runtime.json`'s own documented intent).
-- **Known follow-up, not a pilot blocker**: a real bug in `services/adapteng-agent-runtime`'s ledger writes causes `agent_run.status` to regress from `succeeded` back to `started` on a replay (billing/duplication safety is unaffected — `ai_gateway_call` stayed at exactly 1 row). See `registry/services.yaml`'s `canary_evidence.known_issue` for the root cause; the production ledger row itself was deliberately left uncorrected.
+- **Fixed 2026-09-14**: the ledger-status regression found during the replay (`agent_run.status` reverting from `succeeded` to `started`) is fixed and deployed — adapteng-automation-platform PR #139, independently verified against a disposable Postgres 16 container before merge, deployed and confirmed via the built image's own commit tag (not inferred from health alone). See `registry/services.yaml`'s `canary_evidence.known_issue` for the full trail. The historical `pilot-canary-2026-09-run-001` ledger row was deliberately left exactly as the replay left it — evidence of the regression, not corrected out of band.
 
-The one item from this section that is **still genuinely open** — unrelated
-to the pilot's live status — is the protected-CI rollout authorization below.
+Two items from this section are **still genuinely open**:
 
-### 1. PROTECTED CI ROLLOUT AUTHORIZATION 🟡 — unblocks CI-verified status for the new service's tests only
+### 1. SIGN PR #140 🟡 — the CI wiring is written, tested, and open; only your signature is missing
 
-This is a real, separate governance decision, not a quick command — flagging
-it honestly rather than a one-liner. `adapteng-automation-platform` treats
-every `.github/workflows/**` path as protected
-(`scripts/validation/verify_rollout_trust_anchor.py`); any change there needs
-a cryptographically signed approval receipt. The trust root
-(`.github/trust/rollout-policy/allowed_signers`) is currently
-**bootstrap-unarmed** — zero principal lines, so no one, including you
-directly, can currently produce a valid receipt. Arming it is its own
-bootstrap project (`adapteng-automation-platform/docs/runbooks/authorize-rollout-policy-change.md`):
+Correction to this section's earlier text: the trust anchor is **not**
+bootstrap-unarmed. `.github/trust/rollout-policy/allowed_signers` has carried
+one real principal line since 2026-08-05 (commit `c3e2e89`); the file's own
+header comment just said otherwise until 2026-09-14, when it was corrected.
+The anchor being armed means exactly one thing is needed now: a signed
+receipt for one specific PR, not a bootstrap project.
 
 | Field | Value |
 |---|---|
 | Repository | `Ivan-Shyla/adapteng-automation-platform` |
-| Setting | `.github/trust/rollout-policy/allowed_signers` (currently comment-only) |
-| Steps | (1) Generate an `ssh-keygen -t ed25519` keypair outside any Git checkout, at the path the runbook expects (`$HOME/.adapteng/rollout-trust/owner_ed25519` by convention). (2) Independently review and guarded-merge a data-only commit that appends exactly one principal line to `allowed_signers`: `rollout-approval@adapteng.com namespaces="adapteng-rollout-approval-v1" ssh-ed25519 <BASE64_PUBLIC_KEY> rollout-approval@adapteng.com`. This bootstrap commit cannot self-sign (an unarmed anchor cannot authorize its own first key) — it needs the same independent-review-and-guarded-merge discipline the runbook describes for every other protected change, just without a receipt this one time. (3) Once armed, a small follow-up PR can re-add `services/adapteng-agent-runtime/**` to `adapter-tests.yml`'s trigger paths, `ADAPTER_RUNTIME_PATHS` in `scripts/validation/validate_rollout_ci_policy.py`, the `adapteng-agent-runtime` matrix leg, and the `governed-agent-runtime-postgres-semantics` job (the exact diff was drafted and reverted in `adapteng-automation-platform` PR #133 — commits `8759125`/`b20d06c`/`da558f3` show the full before/after), signed via `scripts/approval/create_rollout_trust_receipt.ps1`/`.sh` per the runbook. |
-| Verification | `python -I scripts/validation/run_rollout_module.py scripts.validation.validate_rollout_ci_policy` passes with the new paths present; the `Base-Trusted Rollout Authorization` check on the follow-up PR shows `success` |
-| What runs immediately after | Push the follow-up PR, watch `governed-agent-runtime-postgres-semantics` and the `adapteng-agent-runtime` matrix leg go green in real GitHub Actions CI, then this file's `registry/services.yaml` entry for `adapteng-agent-runtime` gets corrected from `LOCAL-ONLY-NOT-CI-VERIFIED` to a real CI verdict |
+| PR | [#140](https://github.com/Ivan-Shyla/adapteng-automation-platform/pull/140) — adds `services/adapteng-agent-runtime/**` to `adapter-tests.yml`'s matrix and a new `governed-agent-runtime-postgres-semantics` job, registers the path in `validate_rollout_ci_policy.py`, and corrects the stale header comment above |
+| Current state | Every real check is green (both `adapteng-agent-runtime` and `governed-agent-runtime-postgres-semantics` legs pass, on both push and pull_request). Only `Base-Trusted Rollout Authorization` fails, because the diff carries no signed receipt yet |
+| Steps | Run `scripts/approval/create_rollout_trust_receipt.ps1` (or `.sh`) locally per `docs/runbooks/authorize-rollout-policy-change.md` against PR #140's branch (`feat/agent-runtime-ci-wiring`), then push the resulting receipt to that branch |
+| Verification | The `Base-Trusted Rollout Authorization` check on PR #140 turns green; then squash-merge it |
+| What runs immediately after | Nothing further to build — `registry/services.yaml`'s `adapteng-agent-runtime.test_evidence.verdict` can then be corrected from `LOCAL-ONLY-NOT-CI-VERIFIED` to a real CI-verified state |
 
 This item is **not required** for the pilot, which is fully live (see the
 DONE summary above) — only for getting the new service's test suite running
 inside this repository's own protected CI, which is a quality/trust
 improvement, not a blocker.
+
+### 2. DECIDE THE BACKUP-RESTORE-REHEARSAL PATH 🟡 — genuinely blocked, not just undone
+
+Attempted 2026-09-14 as part of governed-pilot closure: prove `adapteng_ops`'s
+backup can actually be restored, not just that it exists. The backup itself
+is real and current (Coolify's own scheduled backup, confirmed via
+`coolify-deploy.yml -f operation=backup-check`: newest successful run
+2026-09-14T07:30:35Z, 176323 bytes) — the restore step is what's blocked.
+Full detail in `registry/services.yaml`'s `postgres-adapteng-ops` entry,
+`coolify_backup_verification_2026_09_14` field.
+
+| Field | Value |
+|---|---|
+| Blocker | Every backup-related Coolify API endpoint this codebase has ever probed returns only execution metadata (timestamp/status/size), never a downloadable artifact or a restore-trigger endpoint. The actual bytes live in Backblaze B2, reachable only with `B2_MASTER_APPLICATION_KEY`/`B2_MASTER_KEY_ID` — a credential whose name suggests broad, account-level scope rather than a bucket-scoped key, so it was deliberately not wired into a new, unreviewed automation to fetch it |
+| Two ways to unblock, either is enough | (a) Confirm from Coolify's own admin UI (or its changelog for this version) whether a server-side "restore to new database" API endpoint exists that read-only probing has not found — if so, a restore rehearsal never needs the B2 credential at all. (b) If not, provision a bucket/prefix-scoped **read-only** B2 credential dedicated to backup verification, separate from the broad `B2_MASTER_*` key, and a restore-rehearsal operation can be built against it safely |
+| Not urgent | The backup itself is confirmed healthy and current; this is about proving recoverability, not about the recovery point being missing |
 
 ---
 
