@@ -42,6 +42,7 @@ on:
           - import-canary
           - bind-canary-credentials
           - run-canary
+          - canary-executions
 
 permissions:
   contents: read
