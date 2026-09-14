@@ -2126,12 +2126,18 @@ def print_deployment_log_tail(lines: list[str] | None, tail: int) -> None:
         emit(f"    | {line}")
 
 
-# Coolify's build log announces the checkout with a line of this shape before
-# the docker build steps begin: "Checking out commit <sha> on branch <name>".
-# Matched loosely (a bare 40-character hex run after the word "commit") so a
-# small wording change in a future Coolify version degrades to "not found"
-# rather than silently matching the wrong thing.
-_BUILD_COMMIT_RE = re.compile(r"\bcommit\b[^0-9a-f]*([0-9a-f]{40})\b", re.IGNORECASE)
+# Confirmed against a real build log (agent-runtime, deployment
+# xf1qw9dg9pwl5xr3mwa2dktw, 2026-09-14): this Coolify version's log carries no
+# "checking out" line at all. What it does log, from the image-export step of
+# the docker build, is the built image being tagged with the exact commit it
+# was built from:
+#   #13 naming to docker.io/library/<app-uuid>:<40-hex-commit> done
+# A bare "commit" keyword is also matched, in case a future Coolify version
+# logs the checkout explicitly -- either way requires a full 40-character hex
+# run, so a short/abbreviated SHA can never be mistaken for the real one.
+_BUILD_COMMIT_RE = re.compile(
+    r"(?:naming to \S+:|\bcommit\b[^0-9a-f]*)([0-9a-f]{40})\b", re.IGNORECASE
+)
 
 
 def find_built_commit(lines: list[str] | None) -> str | None:
