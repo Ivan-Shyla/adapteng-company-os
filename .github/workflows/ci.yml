@@ -62,6 +62,7 @@ jobs:
           scripts.test_rehearsal_contour
           scripts.test_rehearsal_effective_repository
           scripts.test_coolify_deploy
+          scripts.test_n8n_deploy
           scripts.test_postgres_runtime_role
           scripts.test_ops_runner
           scripts.test_ai_gateway_credentials
