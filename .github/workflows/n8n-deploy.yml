@@ -32,7 +32,7 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: "status and export read only; import-canary and run-canary touch exactly the MM-32 canary workflow"
+        description: "status and export read only; the rest touch exactly the MM-32 canary workflow"
         required: true
         default: status
         type: choice
@@ -40,6 +40,7 @@ on:
           - status
           - export
           - import-canary
+          - bind-canary-credentials
           - run-canary
 
 permissions:
@@ -64,7 +65,7 @@ jobs:
           python-version: "3.11"
 
       - name: Fetch the reviewed canary workflow from automation-platform
-        if: inputs.operation == 'import-canary'
+        if: inputs.operation == 'import-canary' || inputs.operation == 'bind-canary-credentials'
         env:
           GH_TOKEN: ${{ secrets.ADAPTENG_GITHUB_READ_TOKEN }}
         run: >-
@@ -78,6 +79,11 @@ jobs:
           OPERATION: ${{ inputs.operation }}
           N8N_BASE_URL: ${{ vars.N8N_BASE_URL }}
           N8N_API_CREDENTIAL: ${{ secrets.X_N8N_API_KEY }}
+          COOLIFY_URL: ${{ inputs.operation == 'bind-canary-credentials' && vars.COOLIFY_URL || '' }}
+          COOLIFY_API_TOKEN: ${{ inputs.operation == 'bind-canary-credentials' && secrets.COOLIFY_API_TOKEN || '' }}
+          BASEROW_ADAPTER_COOLIFY_APP_UUID: ${{ inputs.operation == 'bind-canary-credentials' && vars.BASEROW_ADAPTER_COOLIFY_APP_UUID || '' }}
+          GOVERNED_AGENT_RUNTIME_HTTP_BEARER_TOKENS: ${{ inputs.operation == 'bind-canary-credentials' && secrets.GOVERNED_AGENT_RUNTIME_HTTP_BEARER_TOKENS || '' }}
+          DRIVE_SERVICE_BEARER_TOKENS: ${{ inputs.operation == 'bind-canary-credentials' && secrets.DRIVE_SERVICE_BEARER_TOKENS || '' }}
         run: >-
           python scripts/n8n_deploy.py "$OPERATION"
           --export-dir "$RUNNER_TEMP/n8n-export"

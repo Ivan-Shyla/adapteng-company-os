@@ -17,6 +17,20 @@ Operations:
                  canary workflow, by name, from automation-platform's
                  reviewed n8n/workflows/experimental/ file, and never touch
                  any other workflow. Always leaves it inactive.
+  bind-canary-credentials
+                 the committed workflow file carries three placeholder
+                 httpHeaderAuth credential ids (REPLACE_WITH_*) rather than
+                 real ones, matching this project's rule that a credential
+                 value never lands in a repository. This operation creates
+                 the three real n8n credentials from the tokens the deployed
+                 services already trust (read from this repository's own
+                 secrets, and for the Baserow adapter's, from its Coolify
+                 environment -- never printed), then re-imports the canary
+                 with the placeholders replaced by the real ids. n8n's public
+                 API offers no way to look a credential up by name, so this
+                 is a one-time bootstrap: re-running it creates three more,
+                 unused but harmless, credentials rather than reusing the
+                 first three.
   run-canary     execute the canary's manual trigger once and report the
                  execution id, or report clearly if this n8n version's
                  public API does not expose that endpoint
@@ -30,6 +44,7 @@ an unrelated workflow stops the run rather than overwriting it.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import sys
@@ -40,12 +55,27 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import coolify_deploy as driver  # noqa: E402  (reuse emit/Abort/EXIT_* only)
+import coolify_deploy as driver  # noqa: E402  (reuse emit/Abort/EXIT_*/Client/etc.)
 
 API_PREFIX = "/api/v1"
 BASE_URL_VARIABLE = "N8N_BASE_URL"
 CREDENTIAL_VARIABLE = "N8N_API_CREDENTIAL"
-OPERATIONS = ("status", "export", "import-canary", "run-canary")
+OPERATIONS = ("status", "export", "import-canary", "bind-canary-credentials", "run-canary")
+
+# The committed canary file's three placeholder credential ids, and the
+# deployed service each corresponds to. Kept next to CREDENTIAL_NAMES so the
+# two can never drift apart silently.
+PLACEHOLDER_CREDENTIAL_IDS = {
+    "agent-runtime": "REPLACE_WITH_AGENT_RUNTIME_BEARER_CREDENTIAL_ID",
+    "baserow-adapter": "REPLACE_WITH_BASEROW_ADAPTER_TOKEN_CREDENTIAL_ID",
+    "drive-adapter": "REPLACE_WITH_DRIVE_ADAPTER_TOKEN_CREDENTIAL_ID",
+}
+CREDENTIAL_NAMES = {
+    "agent-runtime": "Governed Agent Runtime Bearer (canary)",
+    "baserow-adapter": "Baserow Adapter Bearer (canary)",
+    "drive-adapter": "Drive Adapter Bearer (canary)",
+}
+BASEROW_ADAPTER_ENV_KEY = "ADAPTER_SERVICE_TOKEN"
 
 # Known self-hosted workflow ids (runbooks/n8n-operations.md). Their presence
 # is the positive signal this is n8n.adapteng.com; their absence, combined
@@ -302,6 +332,137 @@ def operate_import_canary(client: N8nClient, workflow_definition: dict) -> int:
     return driver.EXIT_OK
 
 
+def create_header_credential(client: N8nClient, name: str, header_value: str) -> str:
+    """Create one httpHeaderAuth credential and return its id.
+
+    The value is never logged: it travels from wherever it was read straight
+    into this request body. n8n's public API does not return `data` back on
+    create, so there is nothing to redact in the response either.
+    """
+
+    created = call(
+        client,
+        "POST",
+        "/credentials",
+        body={
+            "name": name,
+            "type": "httpHeaderAuth",
+            "data": {"name": "Authorization", "value": header_value},
+        },
+        expect=(200, 201),
+    )
+    if not isinstance(created, dict) or not created.get("id"):
+        raise driver.Abort(f"creating credential {name!r} did not return an id")
+    return str(created["id"])
+
+
+def substitute_credential_ids(
+    workflow_definition: dict, real_ids: dict[str, str]
+) -> dict:
+    """Return a copy of the workflow with each placeholder id swapped for real.
+
+    Structural, not textual: only `node.credentials.httpHeaderAuth.id` fields
+    are touched, so nothing else in the definition can be affected by a
+    coincidental string match.
+    """
+
+    updated = copy.deepcopy(workflow_definition)
+    services_seen: set[str] = set()
+    for node in updated.get("nodes", []):
+        if not isinstance(node, dict):
+            continue
+        header_auth = node.get("credentials", {}).get("httpHeaderAuth")
+        if not isinstance(header_auth, dict):
+            continue
+        placeholder = header_auth.get("id")
+        for service, expected_placeholder in PLACEHOLDER_CREDENTIAL_IDS.items():
+            if placeholder == expected_placeholder:
+                header_auth["id"] = real_ids[service]
+                services_seen.add(service)
+    missing = set(PLACEHOLDER_CREDENTIAL_IDS) - services_seen
+    if missing:
+        raise driver.Abort(
+            f"found no node carrying the placeholder credential id for {sorted(missing)}; "
+            "the source file's node shape may have changed"
+        )
+    return updated
+
+
+def read_baserow_adapter_token(
+    coolify_client: "driver.Client", baserow_adapter_uuid: str
+) -> str:
+    """Read the Baserow adapter's own inbound bearer token out of Coolify.
+
+    This is the one of the three tokens this repository does not hold a copy
+    of -- the Baserow adapter predates this repository's deploy-spec
+    convention and was provisioned directly in Coolify. Reading it back
+    through the Coolify API -- the same API every other credential-binding
+    operation in this repository already uses -- avoids inventing a fourth
+    place a copy of it could drift out of sync.
+    """
+
+    entries = driver.read_environment_entries(coolify_client, baserow_adapter_uuid)
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("key") == BASEROW_ADAPTER_ENV_KEY:
+            value = entry.get("value")
+            if isinstance(value, str) and value:
+                driver.register_redaction(value)
+                return value
+    raise driver.Abort(
+        f"{BASEROW_ADAPTER_ENV_KEY} is not set on the Baserow adapter application"
+    )
+
+
+def operate_bind_canary_credentials(
+    client: N8nClient,
+    workflow_definition: dict,
+    coolify_client: "driver.Client",
+    baserow_adapter_uuid: str,
+    agent_runtime_token: str,
+    drive_adapter_token: str,
+) -> int:
+    """Create the three real credentials the canary needs, then re-import it.
+
+    Bootstrap only -- see the module docstring. Every token is registered for
+    redaction the instant it is read and is never assembled into anything
+    that gets printed; only credential ids (not secrets) appear in output.
+    """
+
+    driver.emit(f"--- bind-canary-credentials {client.base_url}")
+    if not agent_runtime_token:
+        raise driver.Abort("the agent-runtime bearer token was not supplied")
+    if not drive_adapter_token:
+        raise driver.Abort("the drive-adapter bearer token was not supplied")
+    if not baserow_adapter_uuid:
+        raise driver.Abort("no Baserow adapter Coolify application uuid was supplied")
+
+    baserow_token = read_baserow_adapter_token(coolify_client, baserow_adapter_uuid)
+
+    # A comma-separated allowlist is accepted by every one of these services;
+    # any single member authenticates, so the first is sufficient here.
+    real_ids = {
+        "agent-runtime": create_header_credential(
+            client,
+            CREDENTIAL_NAMES["agent-runtime"],
+            f"Bearer {agent_runtime_token.split(',')[0].strip()}",
+        ),
+        "baserow-adapter": create_header_credential(
+            client, CREDENTIAL_NAMES["baserow-adapter"], f"Bearer {baserow_token}"
+        ),
+        "drive-adapter": create_header_credential(
+            client,
+            CREDENTIAL_NAMES["drive-adapter"],
+            f"Bearer {drive_adapter_token.split(',')[0].strip()}",
+        ),
+    }
+    for service, credential_id in real_ids.items():
+        driver.emit(f"    created credential {service}: id={credential_id}")
+
+    updated_definition = substitute_credential_ids(workflow_definition, real_ids)
+    driver.emit("    re-importing the canary with the real credential ids bound")
+    return operate_import_canary(client, updated_definition)
+
+
 def operate_run_canary(client: N8nClient) -> int:
     """Execute the canary's manual trigger once, if the API supports it."""
 
@@ -317,13 +478,16 @@ def operate_run_canary(client: N8nClient) -> int:
     driver.emit(f"    canary id={workflow_id}")
 
     status, parsed = client.request("POST", f"/workflows/{urllib.parse.quote(workflow_id)}/run")
-    if status == 404:
+    if status in (404, 405):
+        # Confirmed against the live instance: it answers 405 ("POST method
+        # not allowed"), not 404, for this path -- the route exists but does
+        # not accept execution this way. Both mean the same thing here.
         driver.emit("")
         driver.emit(
-            "    this n8n instance's public API has no /workflows/{id}/run endpoint. "
-            "A manual-trigger workflow cannot be executed through the public REST "
-            "API on this version; it has to be run from the n8n UI's own "
-            "'Test workflow' button, by the owner."
+            f"    this n8n instance's public API returned {status} for "
+            "/workflows/{id}/run. A manual-trigger workflow cannot be executed "
+            "through the public REST API on this version; it has to be run "
+            "from the n8n UI's own 'Test workflow' button, by the owner."
         )
         driver.emit("RESULT run-canary failed reason=api_execute_unsupported")
         return driver.EXIT_FAILED
@@ -350,7 +514,8 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--canary-file",
         default=None,
-        help="local path to the corrected canary workflow JSON (import-canary only)",
+        help="local path to the corrected canary workflow JSON "
+        "(import-canary and bind-canary-credentials only)",
     )
     return parser.parse_args(argv)
 
@@ -372,13 +537,30 @@ def main(argv: list[str]) -> int:
         if arguments.operation == "export":
             export_dir = Path(arguments.export_dir or "n8n-export")
             return operate_export(client, export_dir)
-        if arguments.operation == "import-canary":
+        if arguments.operation in ("import-canary", "bind-canary-credentials"):
             if not arguments.canary_file:
-                raise driver.Abort("--canary-file is required for import-canary")
+                raise driver.Abort(f"--canary-file is required for {arguments.operation}")
             workflow_definition = json.loads(
                 Path(arguments.canary_file).read_text(encoding="utf-8")
             )
-            return operate_import_canary(client, workflow_definition)
+            if arguments.operation == "import-canary":
+                return operate_import_canary(client, workflow_definition)
+
+            coolify_credential = os.environ.get("COOLIFY_API_TOKEN", "")
+            if not coolify_credential:
+                raise driver.Abort("COOLIFY_API_TOKEN is not set")
+            driver.register_redaction(coolify_credential)
+            coolify_client = driver.Client(
+                os.environ.get("COOLIFY_URL", ""), coolify_credential
+            )
+            return operate_bind_canary_credentials(
+                client,
+                workflow_definition,
+                coolify_client,
+                os.environ.get("BASEROW_ADAPTER_COOLIFY_APP_UUID", ""),
+                os.environ.get("GOVERNED_AGENT_RUNTIME_HTTP_BEARER_TOKENS", ""),
+                os.environ.get("DRIVE_SERVICE_BEARER_TOKENS", ""),
+            )
         return operate_run_canary(client)
     except driver.Abort as abort:
         driver.emit(f"ABORT {abort}")

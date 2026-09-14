@@ -244,6 +244,18 @@ class RunCanaryTests(unittest.TestCase):
         self.assertIn("api_execute_unsupported", output)
         self.assertIn("n8n UI", output)
 
+    def test_a_405_on_run_also_reports_the_api_does_not_support_execution(self) -> None:
+        """Confirmed against the live instance: it answers 405, not 404."""
+
+        canary = {"id": "canary-1", "name": driver_module.CANARY_NAME, "active": False}
+        client = FakeN8nClient({
+            ("GET", "/workflows"): workflows_page([canary]),
+            ("POST", f"/workflows/{canary['id']}/run"): (405, {"message": "POST method not allowed"}),
+        })
+        code, output = self.run_run(client)
+        self.assertEqual(code, driver.EXIT_FAILED)
+        self.assertIn("api_execute_unsupported", output)
+
     def test_a_successful_run_reports_the_execution_id(self) -> None:
         canary = {"id": "canary-1", "name": driver_module.CANARY_NAME, "active": False}
         client = FakeN8nClient({
@@ -253,6 +265,195 @@ class RunCanaryTests(unittest.TestCase):
         code, output = self.run_run(client)
         self.assertEqual(code, driver.EXIT_OK)
         self.assertIn("execution_id=exec-42", output)
+
+
+class SubstituteCredentialIdsTests(unittest.TestCase):
+    def definition_with_placeholders(self) -> dict:
+        return {
+            "name": driver_module.CANARY_NAME,
+            "nodes": [
+                {"name": "Manual Trigger"},
+                {
+                    "name": "Call Governed Agent Runtime",
+                    "credentials": {
+                        "httpHeaderAuth": {
+                            "id": driver_module.PLACEHOLDER_CREDENTIAL_IDS["agent-runtime"],
+                            "name": "placeholder",
+                        }
+                    },
+                },
+                {
+                    "name": "Create Baserow Draft",
+                    "credentials": {
+                        "httpHeaderAuth": {
+                            "id": driver_module.PLACEHOLDER_CREDENTIAL_IDS["baserow-adapter"],
+                            "name": "placeholder",
+                        }
+                    },
+                },
+                {
+                    "name": "Ensure Canary Drive Folder",
+                    "credentials": {
+                        "httpHeaderAuth": {
+                            "id": driver_module.PLACEHOLDER_CREDENTIAL_IDS["drive-adapter"],
+                            "name": "placeholder",
+                        }
+                    },
+                },
+                {
+                    "name": "Upload Canary Draft Artifact",
+                    "credentials": {
+                        "httpHeaderAuth": {
+                            "id": driver_module.PLACEHOLDER_CREDENTIAL_IDS["drive-adapter"],
+                            "name": "placeholder",
+                        }
+                    },
+                },
+                {"name": "Build Redacted Result"},
+            ],
+        }
+
+    def test_every_placeholder_is_replaced_with_its_real_id(self) -> None:
+        real_ids = {"agent-runtime": "id-a", "baserow-adapter": "id-b", "drive-adapter": "id-d"}
+        updated = driver_module.substitute_credential_ids(
+            self.definition_with_placeholders(), real_ids
+        )
+        found = {
+            node["name"]: node["credentials"]["httpHeaderAuth"]["id"]
+            for node in updated["nodes"]
+            if "credentials" in node
+        }
+        self.assertEqual(found["Call Governed Agent Runtime"], "id-a")
+        self.assertEqual(found["Create Baserow Draft"], "id-b")
+        self.assertEqual(found["Ensure Canary Drive Folder"], "id-d")
+        self.assertEqual(found["Upload Canary Draft Artifact"], "id-d")
+
+    def test_the_input_definition_is_not_mutated(self) -> None:
+        original = self.definition_with_placeholders()
+        original_agent_runtime_id = original["nodes"][1]["credentials"]["httpHeaderAuth"]["id"]
+        driver_module.substitute_credential_ids(
+            original, {"agent-runtime": "id-a", "baserow-adapter": "id-b", "drive-adapter": "id-d"}
+        )
+        self.assertEqual(
+            original["nodes"][1]["credentials"]["httpHeaderAuth"]["id"],
+            original_agent_runtime_id,
+        )
+
+    def test_a_missing_placeholder_is_refused_rather_than_silently_partial(self) -> None:
+        definition = self.definition_with_placeholders()
+        # Simulate the source file's shape having changed under us.
+        definition["nodes"][1]["credentials"]["httpHeaderAuth"]["id"] = "already-something-else"
+        with self.assertRaises(driver.Abort):
+            driver_module.substitute_credential_ids(
+                definition,
+                {"agent-runtime": "id-a", "baserow-adapter": "id-b", "drive-adapter": "id-d"},
+            )
+
+
+class ReadBaserowAdapterTokenTests(unittest.TestCase):
+    def test_returns_the_value_and_registers_it_for_redaction(self) -> None:
+        coolify_client = object()
+        with mock.patch.object(
+            driver,
+            "read_environment_entries",
+            return_value=[{"key": "OTHER", "value": "x"}, {"key": "ADAPTER_SERVICE_TOKEN", "value": "the-token"}],
+        ):
+            with mock.patch.object(driver, "register_redaction") as redact:
+                value = driver_module.read_baserow_adapter_token(coolify_client, "uuid-1")
+        self.assertEqual(value, "the-token")
+        redact.assert_called_once_with("the-token")
+
+    def test_a_missing_key_aborts(self) -> None:
+        coolify_client = object()
+        with mock.patch.object(driver, "read_environment_entries", return_value=[{"key": "OTHER", "value": "x"}]):
+            with self.assertRaises(driver.Abort):
+                driver_module.read_baserow_adapter_token(coolify_client, "uuid-1")
+
+
+class BindCanaryCredentialsTests(unittest.TestCase):
+    def definition(self) -> dict:
+        return {
+            "name": driver_module.CANARY_NAME,
+            "nodes": [
+                {
+                    "name": n,
+                    "credentials": {
+                        "httpHeaderAuth": {"id": placeholder, "name": "placeholder"}
+                    },
+                }
+                for n, placeholder in (
+                    ("agent-runtime node", driver_module.PLACEHOLDER_CREDENTIAL_IDS["agent-runtime"]),
+                    ("baserow node", driver_module.PLACEHOLDER_CREDENTIAL_IDS["baserow-adapter"]),
+                    ("drive node a", driver_module.PLACEHOLDER_CREDENTIAL_IDS["drive-adapter"]),
+                    ("drive node b", driver_module.PLACEHOLDER_CREDENTIAL_IDS["drive-adapter"]),
+                )
+            ],
+            "connections": {},
+            "settings": {},
+        }
+
+    def test_creates_three_credentials_and_reimports_with_real_ids(self) -> None:
+        created_bodies: list[dict] = []
+
+        def credentials_post(body, _query):
+            created_bodies.append(body)
+            return 201, {"id": f"cred-{len(created_bodies)}"}
+
+        client = FakeN8nClient({
+            ("POST", "/credentials"): credentials_post,
+            ("GET", "/workflows"): workflows_page([]),
+            ("POST", "/workflows"): (201, {"id": "canary-id", "active": False}),
+        })
+        with mock.patch.object(
+            driver, "read_environment_entries",
+            return_value=[{"key": "ADAPTER_SERVICE_TOKEN", "value": "baserow-secret-value"}],
+        ):
+            with mock.patch.object(driver, "register_redaction"):
+                buffer = io.StringIO()
+                with redirect_stdout(buffer):
+                    code = driver_module.operate_bind_canary_credentials(
+                        client,
+                        self.definition(),
+                        coolify_client=object(),
+                        baserow_adapter_uuid="uuid-1",
+                        agent_runtime_token="agent-token-value",
+                        drive_adapter_token="drive-token-value,second-token",
+                    )
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertEqual(len(created_bodies), 3)
+        for body in created_bodies:
+            self.assertEqual(body["type"], "httpHeaderAuth")
+            self.assertEqual(body["data"]["name"], "Authorization")
+        values = {body["data"]["value"] for body in created_bodies}
+        self.assertEqual(
+            values,
+            {"Bearer agent-token-value", "Bearer baserow-secret-value", "Bearer drive-token-value"},
+        )
+        # None of the raw secret values leaked into the printed log.
+        self.assertNotIn("agent-token-value", buffer.getvalue())
+        self.assertNotIn("baserow-secret-value", buffer.getvalue())
+        self.assertNotIn("drive-token-value", buffer.getvalue())
+
+        post_workflow_body = next(
+            body for method, path, body, _q in client.calls
+            if method == "POST" and path == "/workflows"
+        )
+        for node in post_workflow_body["nodes"]:
+            credential_id = node["credentials"]["httpHeaderAuth"]["id"]
+            self.assertTrue(credential_id.startswith("cred-"))
+
+    def test_a_missing_agent_runtime_token_aborts_before_any_call(self) -> None:
+        client = FakeN8nClient({})
+        with self.assertRaises(driver.Abort):
+            driver_module.operate_bind_canary_credentials(
+                client,
+                self.definition(),
+                coolify_client=object(),
+                baserow_adapter_uuid="uuid-1",
+                agent_runtime_token="",
+                drive_adapter_token="drive-token-value",
+            )
+        self.assertEqual(client.calls, [])
 
 
 class N8nClientTests(unittest.TestCase):
