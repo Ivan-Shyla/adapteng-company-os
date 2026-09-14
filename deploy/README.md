@@ -13,6 +13,8 @@ appearing in a diff here.
 | Service | Spec |
 |---|---|
 | AI Gateway | [`ai-gateway.json`](ai-gateway.json) |
+| Agent Runtime | [`agent-runtime.json`](agent-runtime.json) |
+| Drive Adapter | [`drive-adapter.json`](drive-adapter.json) |
 
 ## Operations
 
