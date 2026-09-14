@@ -4205,13 +4205,13 @@ import os
 import urllib.request
 import urllib.error
 M = "AEPROBE"
-token = os.environ["ADAPTER_SERVICE_TOKEN"]
+bearer = os.environ["ADAPTER_SERVICE_TOKEN"]
 kinds = {kinds!r}
 parts = []
 for kind in kinds:
     req = urllib.request.Request(
         "http://127.0.0.1:8080/v1/schema/" + kind,
-        headers={{"Authorization": "Bearer " + token}},
+        headers={{"Authorization": "Bearer " + bearer}},
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
