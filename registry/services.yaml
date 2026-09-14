@@ -192,6 +192,44 @@ services:
       Rollout authorization is BLOCKED_ON_UNCONFIGURED_PRODUCTION_BACKUP; the
       superseded literal NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR no
       longer describes reality.
+    coolify_backup_verification_2026_09_14:
+      verdict: BACKUP-LIVE-VERIFIED, RESTORE-REHEARSAL-BLOCKED
+      means: >-
+        A separate, simpler mechanism from the pgBackRest narrative above --
+        Coolify's own built-in scheduled database backup -- IS configured and
+        working for this database (Coolify database uuid pgdgbwzsuuxhw55g8v5opjgn,
+        "adapteng-ops-db"): schedule enabled, daily 02:00 UTC, save_s3=true.
+        Confirmed live (coolify-deploy.yml -f operation=backup-check, run
+        34897461109): newest successful run 2026-09-14T07:30:35Z, size=176323
+        bytes, 13.7h old at check time against a 48h allowed threshold. This
+        is a real, current recovery point for the live database -- separate
+        from, and not blocked by, the pgBackRest/approved-assets gate above.
+
+        Restoring that backup into an isolated disposable target to prove
+        recoverability (attempted 2026-09-14 as part of governed-pilot
+        closure) is genuinely blocked, not merely undone: every backup-related
+        endpoint this codebase has ever probed on this Coolify instance
+        (scripts/coolify_deploy.py's report_database_backups /
+        probe_backup_execution_sources, exercised across this whole mission)
+        returns only execution metadata (created_at/status/size/message),
+        never a downloadable artifact reference or a restore-trigger endpoint.
+        The backup's actual bytes live in S3-compatible storage (Backblaze B2,
+        per PGBACKREST_REPO1_S3_ENDPOINT and save_s3=true), reachable only
+        with a credential (B2_MASTER_APPLICATION_KEY / B2_MASTER_KEY_ID) whose
+        exact scope has never been verified as safely narrow enough to wire
+        into a new, unreviewed automation -- its name suggests broad,
+        account-level access rather than a bucket-scoped key. Building a real
+        fetch-and-restore operation is legitimate future work, not something
+        to improvise under this credential without first either (a)
+        confirming Coolify has a server-side restore-to-new-database API this
+        codebase has not yet found, or (b) provisioning a narrowly-scoped,
+        read-only credential for just the backup bucket/prefix.
+      owner_action_if_pursued: >-
+        Either confirm (from Coolify's own admin UI or changelog for this
+        version) whether a database restore API endpoint exists that this
+        codebase's read-only probing has not discovered, or provision a
+        bucket/prefix-scoped read-only B2 credential dedicated to backup
+        verification, distinct from the broad B2_MASTER_* key.
 
   - id: adapteng-baserow-adapter
     repo: adapteng-automation-platform
@@ -464,26 +502,50 @@ services:
       drive_file_id: 1yQjM8EQpL201AnL3c1gKTkBMG6MTqhB4
       drive_folder_id: 1QQXcwqVD5keQJWpPpzjbnmN69orVnsZS
       drive_bridge_replay_reservations: "1 row each for ensure_folder and upload_draft, both completed=true"
-      known_issue: >-
-        agent_run.status reads 'started' with ended_at cleared, not
-        'succeeded', after the replay -- a real bug in
-        services/adapteng-agent-runtime, NOT a billing or duplication risk
-        (ai_gateway_call stayed at exactly 1 row either way). record_run_started
-        unconditionally reuses the same upsert as the terminal write
-        (app/adapters/ledger_postgres.py), so its second call on a replay
-        overwrites an already-'succeeded' row's status/ended_at back to
-        'started'/NULL before _complete_replay's own (correct) decision not
-        to re-finalize a replayed run. Flagged as a follow-up; the live
-        production ledger row was deliberately left as-is rather than
-        corrected out of band.
-    not_blocked_by: [migration/schema, Postgres upsert correctness (proven against a real ephemeral Postgres locally), gateway HTTP contract, idempotency semantics, deployment, the bounded canary]
-    blocked_by: ["adapter-tests.yml CI wiring needs a signed rollout-policy-change approval (adapteng-automation-platform's rollout-trust-anchor; unrelated to this service's live status)", "record_run_started ledger-status regression on replay (see canary_evidence.known_issue above)"]
+      known_issue:
+        verdict: FIXED-AND-DEPLOYED
+        was: >-
+          agent_run.status read 'started' with ended_at cleared, not
+          'succeeded', after a replay -- record_run_started unconditionally
+          reused the same upsert as the terminal write
+          (app/adapters/ledger_postgres.py), so its second call on a replay
+          overwrote an already-'succeeded' row's status/ended_at back to
+          'started'/NULL. Never a billing or duplication risk on its own
+          (ai_gateway_call stayed at exactly 1 row either way).
+        fix: >-
+          adapteng-automation-platform PR #139 (merge
+          1b8440079286236d751415fa3245922be9d76fa1): record_run_started now
+          issues its own upsert whose SET clause only ever touches
+          task_id/model_provider/model_version. Independently verified before
+          merge (not just the PR's own claim): a disposable local Postgres 16
+          container proved the added regression test fails against the
+          pre-fix adapter and passes against the fix; the full local suite
+          (51 tests, including 4 real-Postgres tests) also passed.
+        deployed: >-
+          coolify-deploy.yml deploy run 34893878237 (agent-runtime,
+          running:healthy). Confirmed via the built Docker image's own tag,
+          not inferred from health status alone (deploy-log run 34896434441,
+          scripts/coolify_deploy.py's new deploy-log operation, PR #274/#275):
+          the image is tagged 1b8440079286236d751415fa3245922be9d76fa1 --
+          exactly PR #139's merge SHA.
+        the_historical_pilot_row: >-
+          agent_run row pilot-canary-2026-09-run-001 was deliberately left
+          exactly as the replay left it (status='started', ended_at unset).
+          It documents a real regression that occurred and was fixed in code
+          afterward; correcting it out of band would erase that evidence and
+          was never authorized.
+    not_blocked_by: [migration/schema, Postgres upsert correctness (proven against a real ephemeral Postgres locally), gateway HTTP contract, idempotency semantics, deployment, the bounded canary, the ledger status-regression bug (fixed, see canary_evidence.known_issue above)]
+    blocked_by: ["adapter-tests.yml CI wiring (adapteng-automation-platform PR #140) is open and green on every real check except the signed rollout-approval receipt, which needs the owner's own signing key -- see owner/action-items.md"]
     owner: Ivan
     notes: >-
       PR #133/#134 merged 2026-09-08 (repo). Deployed, activated, and the
       bounded Phase 7 canary + idempotency replay completed 2026-09-14 (see
       canary_evidence above); GOVERNED_AGENT_RUNTIME_ACTIVE is false again.
-      Rollback/disable procedure: runbooks/governed-agent-pilot-rollback.md
+      The ledger status-regression bug found during the replay is fixed and
+      deployed (PR #139; see canary_evidence.known_issue above). CI wiring
+      for this service's own test suite is prepared and open as
+      adapteng-automation-platform PR #140, blocked only on the owner's
+      signature. Rollback/disable procedure: runbooks/governed-agent-pilot-rollback.md
       (PR #248).
 
   - id: integrity-reconciler
