@@ -52,6 +52,7 @@ from scripts.postgres_restore_guard import (
     validate_container,
     validate_generation_names,
     validate_network,
+    validate_repository,
     validate_volume,
 )
 from scripts.postgres_restore_host_inventory import (
@@ -3053,6 +3054,136 @@ class ReadinessAndManifestTests(unittest.TestCase):
             self.assertTrue(
                 payload.endswith(b"\n"), f"{relative_path} lacks a final newline"
             )
+
+
+class RestoreGuardRepositoryPathTests(unittest.TestCase):
+    """Pin the pgBackRest repository prefix the restore guard fails closed on.
+
+    Issue #32 recorded a one-character mismatch between the
+    ``PGBACKREST_REPO1_PATH`` repository variable and the literal
+    ``validate_repository`` compares against.  A repository variable can only be
+    changed by the repository owner, so this repository cannot correct the
+    variable and does not try to.  What it can do is stop the two sides of that
+    comparison from drifting apart again in silence, which is what actually made
+    the mismatch survive unnoticed.
+
+    These tests bind three surfaces to one value: the literal compiled into
+    ``scripts/postgres_restore_guard.py``, the value documented in
+    ``runbooks/backup-and-restore.md`` and the observable behaviour of the
+    guard.  Editing any one of them alone fails here.  The guard itself is left
+    exactly as it is - it is a deliberate fail-closed control, and widening it
+    to accept an arbitrary prefix would remove the very check that caught this.
+    """
+
+    #: The single authoritative pgBackRest repository prefix for this
+    #: repository.  Changing it here is not enough: the guard source and the
+    #: runbook must be changed in the same commit or the tests below fail.
+    AUTHORITATIVE_REPO_PATH = "/adapteng-ops"
+
+    GUARD_SOURCE = SCRIPTS / "postgres_restore_guard.py"
+    RUNBOOK = ROOT / "runbooks" / "backup-and-restore.md"
+
+    def _repository_config(self, repo_path: str) -> dict[str, object]:
+        """A repository config that is valid up to the stanza/repo/path pin.
+
+        Every field before the pin is deliberately well formed, so a failure can
+        only come from the prefix comparison itself.  Nothing after the pin is
+        reachable unless the prefix is accepted, which is what makes "how far
+        this got" a usable signal.
+        """
+
+        return {
+            "endpoint": "endpoint.invalid",
+            "bucket": "bucket-placeholder",
+            "region": "region-placeholder",
+            "repo_path": repo_path,
+            "restore_key_attestation_path": str(
+                Path(tempfile.gettempdir()) / "restore-key-attestation-absent.json"
+            ),
+            "restore_key_attestation_sha256": "0" * 64,
+            "stanza": "adapteng-ops",
+            "repo": 1,
+        }
+
+    def test_configured_repository_path_clears_the_guard_pin(self) -> None:
+        """The authoritative prefix reaches the attestation step, not the pin.
+
+        ``validate_repository`` compares the stanza, repo number and prefix
+        before it reads the restore key attestation, so reaching that read is
+        exactly the evidence that the prefix was accepted.  The read is replaced
+        with a sentinel because the real one walks a POSIX-only ownership check
+        that cannot run on every runner - the point being asserted here is which
+        branch was taken, not what the file contains.
+        """
+
+        sentinel = GuardError("sentinel: reached the restore key attestation")
+        with patch(
+            "scripts.postgres_restore_guard.checked_bytes", side_effect=sentinel
+        ) as attestation_read:
+            with self.assertRaises(GuardError) as caught:
+                validate_repository(
+                    self._repository_config(self.AUTHORITATIVE_REPO_PATH)
+                )
+        self.assertIs(caught.exception, sentinel)
+        self.assertEqual(attestation_read.call_count, 1)
+
+    def test_any_other_repository_path_fails_closed(self) -> None:
+        divergent = (
+            "/adapteng_ops",  # the value recorded in issue #32
+            "/adapteng-ops/",
+            "/Adapteng-Ops",
+            "/adapteng-ops-backups",
+            "/",
+        )
+        for repo_path in divergent:
+            with self.subTest(repo_path=repo_path):
+                with self.assertRaises(GuardError) as caught:
+                    validate_repository(self._repository_config(repo_path))
+                self.assertEqual(
+                    str(caught.exception), "repository stanza/repo is not exact"
+                )
+
+    def test_guard_literal_and_runbook_cannot_drift_apart(self) -> None:
+        guard_source = self.GUARD_SOURCE.read_text(encoding="utf-8")
+        guard_literal = re.search(
+            r'config\["repo_path"\]\s*!=\s*"([^"]+)"', guard_source
+        )
+        self.assertIsNotNone(
+            guard_literal,
+            "validate_repository no longer pins repo_path against a literal",
+        )
+        assert guard_literal is not None
+        self.assertEqual(
+            guard_literal.group(1),
+            self.AUTHORITATIVE_REPO_PATH,
+            "the guard literal drifted from the authoritative repository path",
+        )
+
+        documented = re.search(
+            r"\*\*Pinned repository prefix \(authoritative\): `([^`]+)`\.\*\*",
+            self.RUNBOOK.read_text(encoding="utf-8"),
+        )
+        self.assertIsNotNone(
+            documented,
+            "runbooks/backup-and-restore.md no longer records the pinned prefix",
+        )
+        assert documented is not None
+        self.assertEqual(
+            documented.group(1),
+            self.AUTHORITATIVE_REPO_PATH,
+            "the runbook drifted from the authoritative repository path",
+        )
+
+    def test_stanza_and_repository_path_stay_consistent(self) -> None:
+        guard_source = self.GUARD_SOURCE.read_text(encoding="utf-8")
+        stanza = re.search(r'config\["stanza"\]\s*!=\s*"([^"]+)"', guard_source)
+        self.assertIsNotNone(stanza, "validate_repository no longer pins the stanza")
+        assert stanza is not None
+        self.assertEqual(
+            "/" + stanza.group(1),
+            self.AUTHORITATIVE_REPO_PATH,
+            "the stanza name and the repository prefix must stay in step",
+        )
 
 
 if __name__ == "__main__":

@@ -515,6 +515,23 @@ the next reader does not re-open the question:
   repository** until the mismatch recorded in
   [`owner/action-items.md`](../owner/action-items.md) is resolved.
 
+  **Pinned repository prefix (authoritative): `/adapteng-ops`.** This is the
+  value `validate_repository` in `scripts/postgres_restore_guard.py` requires,
+  and it is the value the stanza name, the generated config and the unit tests
+  already agree on. The guard is a deliberate fail-closed control and is not
+  relaxed to accept another value. `scripts/test_postgres_restore_rehearsal.py`
+  re-derives the literal from the guard source and compares it with the value
+  recorded on this line, so the guard and this runbook cannot drift apart
+  silently — editing either one alone fails the test suite at commit time.
+
+  The remaining mismatch is **owner-only** and is not resolved by this
+  repository: the `PGBACKREST_REPO1_PATH` repository variable must be set to
+  the pinned value above. Only the repository owner can change a repository
+  variable, and no agent run does it. Whenever that value is settled, the B2
+  lifecycle rules and any application-key prefix restriction must be re-scoped
+  to it, because a lifecycle rule left on a stale prefix silently stops
+  expiring hidden versions and no pgBackRest command reports that.
+
   What is **not** free is consistency: the same prefix must be used for backup
   and for every restore, and it must match the B2 lifecycle-rule scope and the
   application key prefix restriction from Phase 2.
