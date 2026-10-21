@@ -23,6 +23,7 @@ AE_CGR_ID = re.compile(r"^AE-CGR-\d{4}$")
 DRIVE_ID_LIKE = re.compile(r"[A-Za-z0-9_-]{28,}")
 DRIVE_URL = re.compile(r"drive\.google\.com|docs\.google\.com", re.IGNORECASE)
 FORBIDDEN_DESTINATION_PARTS = ("01_Inbox",)
+PROTECTED_RADAR_FIELDS = ("status", "drive_file_id", "analysis_id")
 
 
 class ManifestError(ValueError):
@@ -100,6 +101,20 @@ def validate(manifest: dict) -> list[str]:
         if sum(source_class["repeats"].values()) != source_class.get("count"):
             problems.append(source_class["class"] + ": repeats do not add up to count")
 
+    writer = manifest.get("recurring_writer")
+    if not writer:
+        problems.append("recurring_writer is missing: the path that writes recurring source packages is unaccounted for")
+    else:
+        if set(writer.get("protected_fields", [])) != set(PROTECTED_RADAR_FIELDS):
+            problems.append("recurring_writer.protected_fields must be exactly " + ", ".join(PROTECTED_RADAR_FIELDS))
+        if writer.get("status") == "proven" and writer.get("confirm_with"):
+            problems.append("recurring_writer is marked proven while confirm_with is still listed")
+    gates = manifest.get("completion_gates", [])
+    if not gates:
+        problems.append("completion_gates is missing")
+    if manifest.get("status") in ("complete", "completed") and not all(g.get("satisfied") for g in gates):
+        problems.append("status claims completion while a completion gate is unsatisfied")
+
     return problems
 
 
@@ -128,6 +143,41 @@ def plan_copy(candidates: list[dict], already_copied: set[tuple[str, str]] | Non
             seen_pairs.add(pair)
         seen_file_ids.add(file_id)
     return {"copy": to_copy, "skip": skipped}
+
+
+def rediscovery_row(existing: dict | None, discovered: dict) -> dict | None:
+    """Return the row discovery may write, or None when it must write nothing.
+
+    A publication found again must not touch the row that already tracks it:
+    the upsert in MM-20 maps status, drive_file_id and analysis_id from the new
+    item, and the new item carries empty values for the last two.
+    """
+    if existing is not None:
+        return None
+    return dict(discovered)
+
+
+def protected_field_mappings(columns: dict) -> list[str]:
+    """Return protected radar fields that a discovery upsert maps from the item.
+
+    ``columns`` is the ``columns.value`` mapping of the data table upsert node.
+    A reviewed rewiring of MM-20 must return an empty list.
+    """
+    return [field for field in PROTECTED_RADAR_FIELDS if field in columns]
+
+
+def should_write_source_package(row: dict, existing_names: set[str]) -> bool:
+    """Decide whether MM-21 may create a source package for a radar row.
+
+    It writes only when the row has no Drive file recorded and the destination
+    holds no file whose name starts with the row's pub_id.
+    """
+    if str(row.get("drive_file_id") or "").strip():
+        return False
+    pub_id = str(row.get("pub_id") or "").strip()
+    if not pub_id:
+        return False
+    return not any(name.startswith(pub_id) for name in existing_names)
 
 
 if __name__ == "__main__":

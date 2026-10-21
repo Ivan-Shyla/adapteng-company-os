@@ -67,6 +67,31 @@ class ManifestTests(unittest.TestCase):
         broken["status"] = "executed"
         self.assertTrue(manifest_module.validate(broken))
 
+    def test_recurring_writer_must_stay_accounted_for(self) -> None:
+        broken = copy.deepcopy(self.manifest)
+        del broken["recurring_writer"]
+        self.assertTrue(any("recurring_writer" in p for p in manifest_module.validate(broken)))
+
+    def test_protected_fields_cannot_be_dropped(self) -> None:
+        broken = copy.deepcopy(self.manifest)
+        broken["recurring_writer"]["protected_fields"] = ["status"]
+        self.assertTrue(any("protected_fields" in p for p in manifest_module.validate(broken)))
+
+    def test_writer_cannot_be_called_proven_with_open_confirmations(self) -> None:
+        broken = copy.deepcopy(self.manifest)
+        broken["recurring_writer"]["status"] = "proven"
+        self.assertTrue(any("proven" in p for p in manifest_module.validate(broken)))
+
+    def test_plan_cannot_claim_completion_while_gates_are_open(self) -> None:
+        self.assertTrue(any(not g["satisfied"] for g in self.manifest["completion_gates"]))
+        broken = copy.deepcopy(self.manifest)
+        broken["status"] = "complete"
+        self.assertTrue(any("completion gate" in p for p in manifest_module.validate(broken)))
+
+    def test_mm20_is_in_the_workflow_map(self) -> None:
+        names = [w["workflow"] for w in self.manifest["workflow_map"]]
+        self.assertIn("MM-20 Publication Scout", names)
+
     def test_workflows_are_never_activated_by_the_manifest(self) -> None:
         self.assertTrue(self.manifest["workflow_map"])
         broken = copy.deepcopy(self.manifest)
@@ -110,6 +135,46 @@ class PlanCopyTests(unittest.TestCase):
             [self.candidate("f1", "a", "h2")], already_copied={("a", "h1")}
         )
         self.assertEqual(len(plan["copy"]), 1)
+
+
+class ProcessedStateTests(unittest.TestCase):
+    discovered = {
+        "dedupe_key": "k1",
+        "pub_id": "CROSSREF_10_1_x",
+        "status": "candidate_for_fetch",
+        "drive_file_id": "",
+        "analysis_id": "",
+        "relevance_score": 90,
+    }
+
+    def test_new_publication_is_inserted(self) -> None:
+        self.assertEqual(manifest_module.rediscovery_row(None, self.discovered), self.discovered)
+
+    def test_rediscovery_never_writes_an_existing_row(self) -> None:
+        processed = {**self.discovered, "status": "approved_for_analysis", "drive_file_id": "f1", "analysis_id": "a1"}
+        self.assertIsNone(manifest_module.rediscovery_row(processed, self.discovered))
+
+    def test_current_upsert_mapping_is_flagged(self) -> None:
+        columns = {name: "={{ $json." + name + " }}" for name in self.discovered}
+        self.assertEqual(
+            manifest_module.protected_field_mappings(columns),
+            ["status", "drive_file_id", "analysis_id"],
+        )
+
+    def test_reviewed_mapping_is_clean(self) -> None:
+        columns = {"dedupe_key": "x", "pub_id": "y", "relevance_score": "z"}
+        self.assertEqual(manifest_module.protected_field_mappings(columns), [])
+
+    def test_source_package_is_written_once(self) -> None:
+        row = {"pub_id": "CROSSREF_10_1_x", "drive_file_id": ""}
+        self.assertTrue(manifest_module.should_write_source_package(row, set()))
+        self.assertFalse(manifest_module.should_write_source_package({**row, "drive_file_id": "f1"}, set()))
+        self.assertFalse(
+            manifest_module.should_write_source_package(row, {"CROSSREF_10_1_x__title.txt"})
+        )
+
+    def test_row_without_pub_id_is_never_written(self) -> None:
+        self.assertFalse(manifest_module.should_write_source_package({"drive_file_id": ""}, set()))
 
 
 if __name__ == "__main__":

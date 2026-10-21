@@ -7,26 +7,57 @@
     "originals": "never moved, renamed, trashed or edited; copy only",
     "identifiers": "no Drive IDs or URLs are recorded here; the governed manifest builder reads them at copy time",
     "watched_folders": "no copy lands in a folder any active trigger watches; the only watched folder today is the personal 01_Inbox of MM-01",
-    "duplicate_guard": ["legacy_key", "source_sha256", "ae_cgr_id"],
-    "article_ids": "AE-CGR numbers are reserved through the governed identity reservation, never chosen by hand; ae_cgr_id stays null until then"
+    "duplicate_guard": [
+      "legacy_key",
+      "source_sha256",
+      "ae_cgr_id",
+      "pub_id",
+      "processed-state protection"
+    ],
+    "article_ids": "AE-CGR numbers are reserved through the governed identity reservation, never chosen by hand; ae_cgr_id stays null until then",
+    "plan_status": "incomplete while any completion_gates entry is unsatisfied"
   },
   "destination": {
     "shared_drive": "AdaptEng Company",
     "content_root_alias": "company-drive://40_Content",
     "case_media_root_alias": "company-drive://00_Case_Uploads",
     "article_folder_pattern": "AE-CGR-NNNN_short-title",
-    "article_subfolders": ["01_Source", "02_Drafts", "03_Review", "04_Approved", "05_Published"],
+    "article_subfolders": [
+      "01_Source",
+      "02_Drafts",
+      "03_Review",
+      "04_Approved",
+      "05_Published"
+    ],
     "folders_created_so_far": [],
     "folders_created_note": "None. The connected personal session cannot see Shared Drives and no governed folder operation was authorized for this step."
   },
   "workflow_map": [
+    {
+      "workflow": "MM-20 Publication Scout",
+      "live_id": "gJMEoOMUI0uS0D1Y",
+      "repo_export": "adapteng-automation-platform n8n/workflows/production/MM-20-publication-scout.json",
+      "repo_state": "production, active; manual trigger plus a weekly Tuesday 07:00 schedule in the export",
+      "live_state_reported": "Owner inspected the live graph: weekly Monday 07:00 trigger, auto-approves selected Publication_Radar candidates, then calls MM-21. Reported by the owner, not independently verified, and it differs from the repository export (Tuesday, no auto-approve, no MM-21 call). The instance timezone has not been checked.",
+      "reads": "Crossref and Semantic Scholar search",
+      "writes": [
+        "Publication_Radar"
+      ],
+      "writes_kind": "n8n Data Table, then MM-21 writes Drive files",
+      "dedupe_today": "Upsert matches on dedupe_key, but the same upsert writes status, drive_file_id and analysis_id from the newly discovered item, and the new item sets drive_file_id and analysis_id to empty strings. Confirmed in the repository export; the live graph is reported to map the same fields.",
+      "consequence_if_unchanged": "A publication discovered again can lose its processed state, return to a fetchable status, and be fetched again.",
+      "change_before_cutover": "Existing radar rows are never written by discovery (insert only if absent). Status, drive_file_id and analysis_id are protected fields. Pause or gate this schedule before any Drive cutover."
+    },
     {
       "workflow": "MM-01 Content Intake from Google Drive",
       "live_id": "fTJVvxC0hviQy0im",
       "repo_export": "adapteng-automation-platform n8n/workflows/production/MM-01-content-intake-from-google-drive.json",
       "repo_state": "production, active",
       "reads": "personal 01_Inbox (poll every minute, fileCreated)",
-      "writes": ["Raw_Media", "Content_Cases"],
+      "writes": [
+        "Raw_Media",
+        "Content_Cases"
+      ],
       "writes_kind": "n8n Data Tables",
       "also": "sends an intake email notice",
       "dedupe_today": "none: media_id is time and random based and both inserts are plain inserts",
@@ -38,7 +69,9 @@
       "repo_export": "adapteng-automation-platform n8n/workflows/paused/MM-15-photo-intake.json",
       "repo_state": "paused, inactive",
       "reads": "personal 01_Inbox (same folder as MM-01)",
-      "writes": ["Photo_Content_Queue"],
+      "writes": [
+        "Photo_Content_Queue"
+      ],
       "writes_kind": "n8n Data Table",
       "dedupe_today": "none",
       "change_before_cutover": "stay paused; two triggers on one folder would double-ingest"
@@ -52,8 +85,8 @@
       "writes": "source package .txt files to the personal My Drive root, then Publication_Radar drive_file_id and status",
       "writes_kind": "Drive files plus an n8n Data Table",
       "dedupe_today": "status gate only; the radar row moves to approved_for_analysis after a successful write",
-      "observed_conflict": "44 source package files exist in the personal My Drive root, created at about 02:00 UTC on Mondays from 2026-07-27 to 2026-10-19 (plus earlier runs on 2026-06-15, 2026-07-21 and 2026-07-27), with the same publication repeated up to 20 times and sometimes twice within one run. A manual-trigger export cannot do that, so a scheduled live variant or a different writer exists that is not in the repository.",
-      "change_before_cutover": "identify the scheduled writer on Cloud, add a pub_id and DOI existence check, and write into the article 01_Source folder instead of the My Drive root"
+      "observed_conflict": "44 source package files sit in the personal My Drive root, created at about 02:00 UTC on Mondays from 2026-07-27 to 2026-10-19 (plus earlier runs on 2026-06-15, 2026-07-21 and 2026-07-27), with one publication repeated 20 times and sometimes twice within one run. The repository export is manual-only, so something else calls it. The owner reports that live MM-20 calls MM-21 after auto-approving candidates; see recurring_writer.",
+      "change_before_cutover": "Do not run or schedule until the radar row and the Drive folder are both checked for an existing source package; write to the article 01_Source folder, not the My Drive root."
     },
     {
       "workflow": "MM-23 Publication to Website Draft",
@@ -61,7 +94,10 @@
       "repo_export": "adapteng-automation-platform n8n/workflows/experimental/MM-23-publication-to-website-draft.json",
       "repo_state": "experimental, inactive, manual trigger",
       "reads": "Publication_Analysis Data Table",
-      "writes": ["Website_Content", "LinkedIn_Drafts"],
+      "writes": [
+        "Website_Content",
+        "LinkedIn_Drafts"
+      ],
       "writes_kind": "n8n Data Tables",
       "drive_dependency": "none",
       "change_before_cutover": "none for Drive; Data Table export is the dependency"
@@ -83,7 +119,10 @@
       "repo_export": "adapteng-automation-platform n8n/workflows/paused/MM-23D-google-doc-to-website-content-sync.json",
       "repo_state": "paused, inactive, manual trigger",
       "reads": "an approved Google Doc by document ID, as text",
-      "writes": ["Website_Content", "Website_Content_Sync"],
+      "writes": [
+        "Website_Content",
+        "Website_Content_Sync"
+      ],
       "writes_kind": "n8n Data Tables",
       "change_before_cutover": "the document ID column must point at the corporate copy; no folder constant to change"
     },
@@ -164,7 +203,7 @@
     },
     {
       "class": "source-packages-recurring-duplicates",
-      "description": "Weekly repeated source packages with no downstream article",
+      "description": "Weekly repeated source packages with no downstream article. Suspected cause is recurring_writer; not proven.",
       "count": 39,
       "distinct_sources": 5,
       "repeats": {
@@ -211,11 +250,19 @@
     "source": "https://adapteng.com/sitemap-post-type-post.xml",
     "count": 21,
     "topics": [
-      "sensor selection", "DAS/DIS integration", "carbon metering",
-      "QAL2 and RATA practice", "QAL1 certificate", "QAL2 versus RATA",
+      "sensor selection",
+      "DAS/DIS integration",
+      "carbon metering",
+      "QAL2 and RATA practice",
+      "QAL1 certificate",
+      "QAL2 versus RATA",
       "CEMS QA/QC procedure"
     ],
-    "languages": ["en", "cz", "ru"],
+    "languages": [
+      "en",
+      "cz",
+      "ru"
+    ],
     "note": "None of the three personal review docs matches a published article. The cems-qa-qc-procedure-1 post matches the earlier ART-2026-001 pilot, whose source package is covered by the platform repository's approved-asset migration runbook."
   },
   "cutover_order": [
@@ -227,5 +274,57 @@
     "6. Rebuild one workflow at a time on self-hosted inactive, run a manual canary against a test folder, then switch the single trigger.",
     "7. Pause the Cloud twin only after the self-hosted canary passes and the rollback step below is written down."
   ],
-  "rollback": "Originals are never touched, so rollback is: reactivate the Cloud twin (kept paused, not deleted) and delete only the corporate copies created under the recorded idempotency keys."
+  "rollback": "Originals are never touched, so rollback is: reactivate the Cloud twin (kept paused, not deleted) and delete only the corporate copies created under the recorded idempotency keys.",
+  "recurring_writer": {
+    "suspect": "MM-20 Publication Scout rediscovers a publication, its upsert resets drive_file_id, analysis_id and status, auto-approval moves the row to approved_for_fetch, and MM-21 writes another source package to the personal My Drive root.",
+    "status": "plausible, not proven",
+    "evidence_for": [
+      "Repository export of MM-20 upserts on dedupe_key but also writes status, drive_file_id and analysis_id with the discovered values, and the discovered values for the last two are empty.",
+      "Owner inspection of the live graph reports a weekly Monday 07:00 trigger, auto-approval and a call to MM-21.",
+      "Source files appear weekly around Monday 02:00 UTC, with one DOI repeated 20 times."
+    ],
+    "evidence_against_or_open": [
+      "The repository export has a Tuesday 07:00 schedule and no call to MM-21, so the repository is not the live graph.",
+      "Monday 07:00 in the workflow equals Monday 02:00 UTC only if the Cloud instance timezone is five hours ahead of UTC; the timezone has not been read.",
+      "Rows and executions on Cloud have not been read, so which workflow actually created each file is unknown."
+    ],
+    "confirm_with": [
+      "Cloud executions of MM-20 and MM-21: start times against the Drive file creation times",
+      "Publication_Radar rows for the repeated DOIs: whether status, drive_file_id and analysis_id were empty or reset after an earlier success",
+      "The instance timezone and the live MM-20 schedule node"
+    ],
+    "protected_fields": [
+      "status",
+      "drive_file_id",
+      "analysis_id"
+    ],
+    "discovery_rule": "insert only if absent; never write protected fields on an existing row",
+    "fetch_rule": "MM-21 writes only when the radar row has no drive_file_id and the destination folder holds no file for that pub_id"
+  },
+  "completion_gates": [
+    {
+      "gate": "recurring writer identified from Cloud executions and rows",
+      "satisfied": false
+    },
+    {
+      "gate": "MM-20 upsert no longer writes protected fields on existing rows",
+      "satisfied": false
+    },
+    {
+      "gate": "MM-21 write guarded by radar row and destination folder check",
+      "satisfied": false
+    },
+    {
+      "gate": "Cloud schedule for MM-20 paused or gated by the owner before any Drive cutover",
+      "satisfied": false
+    },
+    {
+      "gate": "Cloud Data Tables exported and row counts matched on self-hosted",
+      "satisfied": false
+    },
+    {
+      "gate": "copy, replay and manifest comparison recorded for the three review docs",
+      "satisfied": false
+    }
+  ]
 }
