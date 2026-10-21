@@ -1,6 +1,11 @@
 # n8n Cloud export (read-only, bounded)
 
 Status: **built and tested, not dispatched.** Nothing here has read n8n Cloud.
+
+**This repository is public.** Its build logs and artifacts can be read by anyone,
+so the workflow uploads no artifact and prints only aggregate facts. The first
+design of this tool uploaded a full snapshot as an artifact and described the
+repository as private; that was wrong and was fixed before merge.
 The code is `scripts/n8n_cloud_export.py`, the workflow is
 `.github/workflows/n8n-cloud-export.yml`, and the tests are
 `scripts/test_n8n_cloud_export.py`.
@@ -54,24 +59,32 @@ same name stop the run. A missing table is reported, and the result is
   table is in the manifest. This is best effort and is not a promise that
   nothing sensitive remains: treat the output as confidential business data.
 
-## Where the files go
+## What is printed, and where the full snapshot may go
 
-A GitHub Actions build artifact named `n8n-cloud-export-<run id>`, kept for
-**7 days**, on this private repository. Anyone with read access to the repository
-can download it. It is never committed and never copied to a personal Drive. If
-it must be kept longer, the owner decides where, and a copy into the Shared Drive
-goes through the governed Drive path.
+The workflow offers two operations and uploads nothing.
 
-```
-workflows/<workflow id>.json        cleaned definition, one per workflow
-executions/<MM-20 id>.json          metadata list, newest first
-executions/<MM-21 id>.json
-data-tables/<table name>.json       {"name": ..., "rows": [...]}
-_manifest.json                      counts, redaction counts, SHA-256 of every file
-```
+- `preflight`: whether the key works, that the account is the legacy Cloud one,
+  the workflow count, the data table path that answered, and which of the eight
+  tables exist.
+- `evidence`: for MM-20 and MM-21 only, the graph shape (node names and types,
+  schedule numbers, the called workflow id, the data table and column names with
+  whether each is mapped from the incoming item, whether a Drive node writes to
+  the root folder, the connections), run counts, start slots and times, and the
+  statuses of `Publication_Radar` rows. For each radar row it prints the
+  publication id, status, discovery time and whether `drive_file_id` and
+  `analysis_id` are empty. It prints no title, abstract, note, parameter value,
+  payload or Drive id; values that do not match a strict safe pattern print as
+  `[not printed]`. A test feeds it sentinel text in every such field and checks
+  none appears.
 
-`_manifest.json` also records the allowlist version, the generation time, the
-Cloud host name (no key), the `--since` cutoff and any missing tables.
+The full snapshot (`export` in the script) writes one cleaned file per
+workflow, the two execution lists, one file per table and a `_manifest.json` with
+counts, redaction counts and SHA-256 hashes. It is **refused** unless
+`EXPORT_DESTINATION_PRIVATE=true` is set, and the workflow does not offer it.
+Run it only on a machine the owner controls, writing to a private location, and
+never as a build artifact of this public repository. If table contents have to move
+to self-hosted n8n, that needs a separate reviewed path that writes directly to
+the destination.
 
 ## How to review it before the first run
 
@@ -80,12 +93,13 @@ Cloud host name (no key), the `--since` cutoff and any missing tables.
 2. Run `python -m unittest scripts.test_n8n_cloud_export`. It covers wrong
    hosts, non-GET methods, forbidden paths, execution payload requests,
    non-allowlisted tables, redaction, the 401 message, the missing-table result
-   and the workflow file (manual dispatch only, own environment, 7 day
-   retention, no use of the self-hosted key).
+   the evidence output (no content), the export gate and the workflow file (manual
+   dispatch only, own environment, no artifact, two log-safe operations, no use of
+   the self-hosted key).
 3. Dispatch `preflight` first. It checks the key, confirms the account is the
    legacy Cloud one (the known MM-08 workflow is present and no self-hosted
    workflow is), reports which of the eight tables exist and writes nothing.
-4. Only then dispatch `export`. `--since` defaults to 2026-06-01, before the first
+4. Only then dispatch `evidence`. `since` defaults to 2026-06-01, before the first
    source package files.
 
 ## What the 401 turned out to be
@@ -117,7 +131,8 @@ Either of these ends the 401 problem. The first needs no new key.
 
 1. If the connection you used to read MM-20 can be added to this session, add it
    and say so. No credential is created. I can then read definitions and run
-   history directly, and the export is needed only for the Data Table rows.
+   history directly. Table rows still need the key, because the connector tool
+   only forwards GET requests and the key is what it lacks.
 2. Otherwise follow the private procedure below, which is the one setup the
    export needs.
 

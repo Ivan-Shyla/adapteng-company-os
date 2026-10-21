@@ -1,13 +1,21 @@
 name: n8n Cloud export
 
-# Bounded, GET-only snapshot of n8n Cloud for the content migration. It is NOT
-# the self-hosted driver (n8n-deploy.yml) and shares nothing with it: its own
+# Bounded, GET-only read of n8n Cloud for the content migration. It is NOT the
+# self-hosted driver (n8n-deploy.yml) and shares nothing with it: its own
 # environment, its own secret and its own base-URL variable. It never reads the
 # self-hosted key or the self-hosted base URL.
 #
-# What it reads, and where the result goes, is fixed in
-# scripts/n8n_cloud_export.py and described in runbooks/n8n-cloud-export.md.
-# The output is a short-lived build artifact. It is never committed.
+# This repository is PUBLIC, so its build logs and artifacts are readable by
+# anyone. Nothing here uploads an artifact. The two operations are therefore
+# limited to what is safe in a public log:
+#   preflight  access and instance check; counts and table names only
+#   evidence   aggregate facts about MM-20 and MM-21; never a title, abstract,
+#              note, parameter value or payload
+# The full snapshot (script operation "export") is refused unless a private
+# destination is declared, and is deliberately not offered here.
+#
+# What it reads is fixed in scripts/n8n_cloud_export.py and described in
+# runbooks/n8n-cloud-export.md.
 #
 # Prerequisite (owner action): an environment named n8n-cloud-export holding the
 # secret N8N_CLOUD_API_KEY and the variable N8N_CLOUD_BASE_URL. The script fails
@@ -19,15 +27,15 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: "preflight checks access and writes nothing; export writes the snapshot artifact"
+        description: "preflight checks access; evidence prints aggregate MM-20 and MM-21 facts. Neither writes anything."
         required: true
         default: preflight
         type: choice
         options:
           - preflight
-          - export
+          - evidence
       since:
-        description: "export only: earliest execution start time for MM-20 and MM-21 (UTC)"
+        description: "evidence only: earliest execution start time for MM-20 and MM-21 (UTC)"
         required: false
         default: "2026-06-01T00:00:00Z"
         type: string
@@ -40,7 +48,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  export:
+  read:
     name: n8n Cloud ${{ inputs.operation }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -60,14 +68,4 @@ jobs:
           N8N_CLOUD_API_CREDENTIAL: ${{ secrets.N8N_CLOUD_API_KEY }}
         run: >-
           python scripts/n8n_cloud_export.py "$OPERATION"
-          --output-dir "$RUNNER_TEMP/n8n-cloud-export"
           --since "$SINCE"
-
-      - name: Upload snapshot
-        if: inputs.operation == 'export'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: n8n-cloud-export-${{ github.run_id }}
-          path: ${{ runner.temp }}/n8n-cloud-export
-          if-no-files-found: error
-          retention-days: 7

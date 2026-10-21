@@ -262,6 +262,91 @@ class ExportTests(unittest.TestCase):
         self.assertIn("RESULT preflight ok", out.getvalue())
 
 
+class EvidenceTests(unittest.TestCase):
+    SENTINELS = ("SECRET-TITLE", "SECRET-ABSTRACT", "SECRET-NOTE", "SECRET-PARAM", "SECRET-FOLDER")
+
+    def routes(self):
+        routes = full_routes()
+        routes["/workflows/gJMEoOMUI0uS0D1Y"] = (
+            200,
+            {
+                "id": "gJMEoOMUI0uS0D1Y",
+                "name": "MM-20 Publication Scout",
+                "active": True,
+                "nodes": [
+                    {"name": "Weekly Monday 07:00", "type": "n8n-nodes-base.scheduleTrigger", "parameters": {"rule": {"interval": [{"field": "weeks", "weeksInterval": 1, "triggerAtDay": [1], "triggerAtHour": 7, "triggerAtMinute": 0, "note": "SECRET-PARAM"}]}}},
+                    {"name": "Upsert Publication_Radar", "type": "n8n-nodes-base.dataTable", "parameters": {"operation": "upsert", "dataTableId": {"mode": "name", "value": "Publication_Radar"}, "columns": {"value": {"status": "={{ $json.status }}", "drive_file_id": "={{ $json.drive_file_id }}", "title": "SECRET-PARAM"}}}},
+                    {"name": "Call MM-21", "type": "n8n-nodes-base.executeWorkflow", "parameters": {"workflowId": {"value": "kB21JwdMDZt7nT5a"}}},
+                    {"name": "Make file", "type": "n8n-nodes-base.googleDrive", "parameters": {"operation": "createFromText", "folderId": {"value": "root"}, "content": "SECRET-FOLDER"}},
+                    {"name": "Code step", "type": "n8n-nodes-base.code", "parameters": {"jsCode": "SECRET-PARAM"}},
+                ],
+                "connections": {"Weekly Monday 07:00": {"main": [[{"node": "Upsert Publication_Radar"}]]}},
+            },
+        )
+        radar = [
+            {"pub_id": "CROSSREF_10_1_x", "status": "approved_for_analysis", "drive_file_id": "", "analysis_id": "", "dedupe_key": "k1", "discovered_at": "2026-10-19T02:00:00Z", "title": "SECRET-TITLE", "abstract": "SECRET-ABSTRACT", "notes": "SECRET-NOTE"},
+            {"pub_id": "CROSSREF_10_2_y", "status": "keep_in_radar_only", "drive_file_id": "f1", "analysis_id": "a1", "dedupe_key": "k2", "discovered_at": "2026-10-12T02:00:00Z"},
+        ]
+        radar_id = next(t["id"] for t in routes["/data-tables"][1]["data"] if t["name"] == "Publication_Radar")
+        routes[f"/data-tables/{radar_id}/rows"] = page(radar)
+        return routes
+
+    def run_evidence(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = export.operate_evidence(FakeCloud(self.routes()), export.DEFAULT_SINCE)
+        return code, out.getvalue()
+
+    def test_output_never_contains_content(self) -> None:
+        code, output = self.run_evidence()
+        self.assertEqual(code, driver.EXIT_OK)
+        for sentinel in self.SENTINELS:
+            self.assertNotIn(sentinel, output)
+
+    def test_it_reports_the_facts_the_migration_needs(self) -> None:
+        _, output = self.run_evidence()
+        self.assertIn('"triggerAtDay": [1]', output)
+        self.assertIn("calls=kB21JwdMDZt7nT5a", output)
+        self.assertIn("drive_file_id(from item)", output)
+        self.assertIn("folder_is_root=True", output)
+        self.assertIn("edge: Weekly Monday 07:00 -> Upsert Publication_Radar", output)
+        self.assertIn("rows with empty drive_file_id and analysis_id in an approved status: 1", output)
+        self.assertIn("Mon 02:00Z", output)
+
+    def test_only_radar_rows_are_read(self) -> None:
+        client = FakeCloud(self.routes())
+        with redirect_stdout(io.StringIO()):
+            export.operate_evidence(client, export.DEFAULT_SINCE)
+        row_reads = [path for path, _ in client.calls if path.endswith("/rows")]
+        self.assertEqual(len(row_reads), 1)
+
+    def test_it_writes_no_files(self) -> None:
+        with TemporaryDirectory() as directory:
+            before = list(Path(directory).iterdir())
+            self.run_evidence()
+            self.assertEqual(before, list(Path(directory).iterdir()))
+
+    def test_unprintable_values_are_withheld(self) -> None:
+        self.assertEqual(export.safe_text("line one\nline two"), "[not printed]")
+        self.assertEqual(export.safe_text("a b c d"), "[not printed]")
+        self.assertEqual(export.safe_text("CROSSREF_10_1_x"), "CROSSREF_10_1_x")
+
+
+class ExportGateTests(unittest.TestCase):
+    def test_export_is_refused_without_a_private_destination(self) -> None:
+        env = {"N8N_CLOUD_BASE_URL": CLOUD_URL, "N8N_CLOUD_API_CREDENTIAL": "k" * 20}
+        out = io.StringIO()
+        with mock.patch.dict("os.environ", env, clear=True), redirect_stdout(out):
+            code = export.main(["export"])
+        self.assertEqual(code, driver.EXIT_MISCONFIGURED)
+        self.assertIn("EXPORT_DESTINATION_PRIVATE", out.getvalue())
+
+    def test_export_is_refused_when_the_flag_is_not_exactly_true(self) -> None:
+        env = {"N8N_CLOUD_BASE_URL": CLOUD_URL, "N8N_CLOUD_API_CREDENTIAL": "k" * 20, "EXPORT_DESTINATION_PRIVATE": "yes"}
+        with mock.patch.dict("os.environ", env, clear=True), redirect_stdout(io.StringIO()):
+            self.assertEqual(export.main(["export"]), driver.EXIT_MISCONFIGURED)
+
+
 class MainTests(unittest.TestCase):
     def test_missing_settings_stop_before_any_request(self) -> None:
         out = io.StringIO()
@@ -294,11 +379,18 @@ class WorkflowFileTests(unittest.TestCase):
         self.assertIn("secrets.N8N_CLOUD_API_KEY", self.text)
         self.assertIn("vars.N8N_CLOUD_BASE_URL", self.text)
 
-    def test_artifact_is_short_lived_and_read_only_permissions(self) -> None:
+    def test_public_repository_never_gets_an_artifact(self) -> None:
+        self.assertNotIn("upload-artifact", self.text)
+        self.assertNotIn("actions/upload", self.text)
+
+    def test_only_log_safe_operations_are_offered(self) -> None:
+        options = re.search(r"options:\n((?:\s+- \w+\n)+)", self.text)
+        self.assertIsNotNone(options)
+        self.assertEqual(re.findall(r"- (\w+)", options.group(1)), ["preflight", "evidence"])
+
+    def test_read_only_permissions(self) -> None:
         self.assertIn("contents: read", self.text)
-        match = re.search(r"retention-days:\s*(\d+)", self.text)
-        self.assertIsNotNone(match)
-        self.assertLessEqual(int(match.group(1)), 7)
+        self.assertNotIn("contents: write", self.text)
 
 
 if __name__ == "__main__":

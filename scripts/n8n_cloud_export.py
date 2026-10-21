@@ -22,7 +22,14 @@ a substitute for treating the output as confidential.
 Operations:
   preflight  confirm the key works and that this is n8n Cloud, report which of the
              eight tables exist, and write nothing
-  export     write the snapshot under --output-dir
+  evidence   write nothing; print aggregate, non-sensitive facts about MM-20 and
+             MM-21 (graph shape, run times, Publication_Radar status counts) and
+             never any title, abstract, note, parameter value or payload. Safe
+             for a public log.
+  export     write the full snapshot under --output-dir. Refused unless the
+             destination is declared private (EXPORT_DESTINATION_PRIVATE=true):
+             the snapshot holds business data and must never become a build
+             artifact of a public repository.
 """
 
 from __future__ import annotations
@@ -48,7 +55,8 @@ ALLOWLIST_VERSION = "1"
 API_PREFIX = "/api/v1"
 BASE_URL_VARIABLE = "N8N_CLOUD_BASE_URL"
 CREDENTIAL_VARIABLE = "N8N_CLOUD_API_CREDENTIAL"
-OPERATIONS = ("preflight", "export")
+OPERATIONS = ("preflight", "evidence", "export")
+PRIVATE_DESTINATION_VARIABLE = "EXPORT_DESTINATION_PRIVATE"
 
 # Execution metadata is requested for these two workflows only.
 CORRELATED_WORKFLOWS = {
@@ -365,6 +373,172 @@ def operate_preflight(client: Cloud) -> int:
     return driver.EXIT_OK if not missing else driver.EXIT_FAILED
 
 
+RADAR_TABLE = "Publication_Radar"
+SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]{3,120}$")
+SAFE_STATUS = re.compile(r"^[a-z_]{3,40}$")
+SAFE_LABEL = re.compile(r"^[^\n]{1,80}$")
+SAFE_TIME = re.compile(r"^[0-9T:.+Z-]{10,40}$")
+SAFE_WORD = re.compile(r"^[A-Za-z]{2,30}$")
+SCHEDULE_KEYS = (
+    "field", "daysInterval", "weeksInterval", "monthsInterval", "hoursInterval",
+    "minutesInterval", "triggerAtDay", "triggerAtHour", "triggerAtMinute",
+    "triggerAtDayOfMonth",
+)
+MAX_LISTED_EXECUTIONS = 60
+MAX_LISTED_RADAR_ROWS = 60
+
+
+def safe_text(value: object, pattern: re.Pattern = SAFE_NAME) -> str:
+    text = str(value) if value is not None else ""
+    return text if pattern.match(text) else "[not printed]"
+
+
+def column_names(node_parameters: dict) -> list[tuple[str, bool]]:
+    columns = node_parameters.get("columns")
+    mapping = columns.get("value") if isinstance(columns, dict) else None
+    if not isinstance(mapping, dict):
+        return []
+    return [
+        (safe_text(name), isinstance(value, str) and value.startswith("="))
+        for name, value in mapping.items()
+    ]
+
+
+def table_label(node_parameters: dict) -> str:
+    ref = node_parameters.get("dataTableId")
+    if isinstance(ref, dict):
+        return safe_text(ref.get("cachedResultName") or ref.get("value"))
+    return "[not printed]"
+
+
+def is_root_folder(node_parameters: dict) -> bool:
+    ref = node_parameters.get("folderId")
+    value = ref.get("value") if isinstance(ref, dict) else ref
+    return value == "root"
+
+
+def workflow_shape(definition: dict) -> list[str]:
+    """Describe a workflow's structure without printing any parameter value.
+
+    Only node names and types, schedule numbers, the named data table, column
+    names with whether each is mapped from the incoming item, whether a Drive
+    node writes to the root folder, and the ids of workflows it calls.
+    """
+
+    lines = [
+        f"  name: {safe_text(definition.get('name'), SAFE_LABEL)}  active: {definition.get('active')}"
+    ]
+    for node in definition.get("nodes", []) or []:
+        kind = str(node.get("type", "")).split(".")[-1]
+        params = node.get("parameters") if isinstance(node.get("parameters"), dict) else {}
+        flag = " (disabled)" if node.get("disabled") else ""
+        detail = ""
+        if kind == "scheduleTrigger":
+            rules = (params.get("rule") or {}).get("interval") or []
+            kept = [
+                {k: r.get(k) for k in SCHEDULE_KEYS if k in r}
+                for r in rules
+                if isinstance(r, dict)
+            ]
+            detail = " schedule=" + json.dumps(kept, sort_keys=True)
+        elif kind == "executeWorkflow":
+            target = params.get("workflowId")
+            target = target.get("value") if isinstance(target, dict) else target
+            detail = " calls=" + safe_text(target)
+        elif kind == "dataTable":
+            cols = ", ".join(
+                f"{name}{'(from item)' if mapped else ''}" for name, mapped in column_names(params)
+            )
+            detail = (
+                f" op={safe_text(params.get('operation'), SAFE_STATUS)}"
+                f" table={table_label(params)} columns=[{cols}]"
+            )
+        elif kind == "googleDrive":
+            detail = (
+                f" op={safe_text(params.get('operation'), SAFE_WORD)}"
+                f" folder_is_root={is_root_folder(params)}"
+            )
+        lines.append(f"  node: {safe_text(node.get('name'), SAFE_LABEL)} [{kind}]{flag}{detail}")
+    connections = definition.get("connections") or {}
+    for source, outputs in sorted(connections.items()):
+        for group in (outputs or {}).get("main", []) or []:
+            for edge in group or []:
+                lines.append(f"  edge: {safe_text(source, SAFE_LABEL)} -> {safe_text(edge.get('node'), SAFE_LABEL)}")
+    return lines
+
+
+def operate_evidence(client: Cloud, since: str) -> int:
+    driver.emit(f"--- evidence {client.base_url}")
+    workflows = list(paged(client, "/workflows"))
+    confirm_cloud(workflows)
+    driver.emit(f"workflows: {len(workflows)} active: {sum(1 for w in workflows if w.get('active'))}")
+
+    for workflow_id, label in CORRELATED_WORKFLOWS.items():
+        definition = call(client, f"/workflows/{urllib.parse.quote(workflow_id)}")
+        driver.emit(f"== {label} ({workflow_id})")
+        for line in workflow_shape(definition if isinstance(definition, dict) else {}):
+            driver.emit(line)
+        runs = executions_since(client, workflow_id, since)
+        driver.emit(f"  executions since {since}: {len(runs)}")
+        by_slot: dict[str, int] = {}
+        for run in runs:
+            started = run.get("startedAt")
+            if isinstance(started, str):
+                moment = parse_time(started)
+                slot = f"{moment.strftime('%a')} {moment.hour:02d}:00Z"
+                by_slot[slot] = by_slot.get(slot, 0) + 1
+        driver.emit("  start slots (UTC): " + json.dumps(by_slot, sort_keys=True))
+        for run in runs[:MAX_LISTED_EXECUTIONS]:
+            driver.emit(
+                f"  run {safe_text(run.get('id'))} mode={safe_text(run.get('mode'), SAFE_STATUS)} "
+                f"status={safe_text(run.get('status'), SAFE_STATUS)} "
+                f"start={safe_text(run.get('startedAt'), SAFE_TIME)} "
+                f"stop={safe_text(run.get('stoppedAt'), SAFE_TIME)}"
+            )
+
+    base, mapping, _missing = resolve_tables(client)
+    table_id = mapping.get(RADAR_TABLE)
+    if table_id is None:
+        driver.emit(f"{RADAR_TABLE}: table not found")
+        driver.emit("RESULT evidence partial radar=missing")
+        return driver.EXIT_FAILED
+    rows = list(paged(client, f"{base}/{table_id}/rows"))
+    statuses: dict[str, int] = {}
+    keys: dict[str, int] = {}
+    listing = []
+    for row in rows:
+        status = safe_text(row.get("status"), SAFE_STATUS)
+        statuses[status] = statuses.get(status, 0) + 1
+        key = row.get("dedupe_key")
+        if isinstance(key, str):
+            keys[key] = keys.get(key, 0) + 1
+        listing.append(
+            (
+                safe_text(row.get("pub_id")),
+                status,
+                not str(row.get("drive_file_id") or "").strip(),
+                not str(row.get("analysis_id") or "").strip(),
+                safe_text(row.get("discovered_at"), SAFE_TIME),
+            )
+        )
+    driver.emit(f"== {RADAR_TABLE}: rows={len(rows)}")
+    driver.emit("  by status: " + json.dumps(statuses, sort_keys=True))
+    driver.emit(f"  dedupe_key values repeated: {sum(1 for n in keys.values() if n > 1)}")
+    reset = [
+        item
+        for item in listing
+        if item[2] and item[3] and item[1] in ("approved_for_fetch", "approved_for_analysis")
+    ]
+    driver.emit(f"  rows with empty drive_file_id and analysis_id in an approved status: {len(reset)}")
+    for pub_id, status, no_drive, no_analysis, found in listing[:MAX_LISTED_RADAR_ROWS]:
+        driver.emit(
+            f"  row {pub_id} status={status} drive_file_id_empty={no_drive} "
+            f"analysis_id_empty={no_analysis} discovered={found}"
+        )
+    driver.emit(f"RESULT evidence ok rows={len(rows)}")
+    return driver.EXIT_OK
+
+
 def operate_export(client: Cloud, output_dir: Path, since: str) -> int:
     driver.emit(f"--- export {client.base_url}")
     workflows = list(paged(client, "/workflows"))
@@ -452,6 +626,14 @@ def main(argv: list[str]) -> int:
         client = Cloud(base_url, credential)
         if arguments.operation == "preflight":
             return operate_preflight(client)
+        if arguments.operation == "evidence":
+            return operate_evidence(client, arguments.since)
+        if os.environ.get(PRIVATE_DESTINATION_VARIABLE) != "true":
+            raise driver.Abort(
+                "export writes business data and is refused unless "
+                f"{PRIVATE_DESTINATION_VARIABLE}=true; it must not become a public build artifact",
+                driver.EXIT_MISCONFIGURED,
+            )
         return operate_export(client, Path(arguments.output_dir), arguments.since)
     except driver.Abort as abort:
         driver.emit(f"ABORT {abort}")
