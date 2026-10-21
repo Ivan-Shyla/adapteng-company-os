@@ -1,5 +1,8 @@
 # Runbook — company Drive and daily file placement
 
+For legal entity records, deadlines, approved company facts and proposal templates,
+see [company administration](company-administration.md).
+
 The company document authority is the organization-owned Shared Drive
 **AdaptEng Company**:
 
