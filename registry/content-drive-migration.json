@@ -1,0 +1,231 @@
+{
+  "schema": "adapteng.content-drive-migration/v1",
+  "status": "prepared-not-executed",
+  "evidence_date": "2026-10-21",
+  "evidence_basis": "Read-only listing of the connected personal Drive session, the public website sitemap, repository workflow exports and the self-hosted n8n status operation. n8n Cloud could not be read (connector returned 401), so Data Table contents and live Cloud workflow state are unverified.",
+  "rules": {
+    "originals": "never moved, renamed, trashed or edited; copy only",
+    "identifiers": "no Drive IDs or URLs are recorded here; the governed manifest builder reads them at copy time",
+    "watched_folders": "no copy lands in a folder any active trigger watches; the only watched folder today is the personal 01_Inbox of MM-01",
+    "duplicate_guard": ["legacy_key", "source_sha256", "ae_cgr_id"],
+    "article_ids": "AE-CGR numbers are reserved through the governed identity reservation, never chosen by hand; ae_cgr_id stays null until then"
+  },
+  "destination": {
+    "shared_drive": "AdaptEng Company",
+    "content_root_alias": "company-drive://40_Content",
+    "case_media_root_alias": "company-drive://00_Case_Uploads",
+    "article_folder_pattern": "AE-CGR-NNNN_short-title",
+    "article_subfolders": ["01_Source", "02_Drafts", "03_Review", "04_Approved", "05_Published"],
+    "folders_created_so_far": [],
+    "folders_created_note": "None. The connected personal session cannot see Shared Drives and no governed folder operation was authorized for this step."
+  },
+  "workflow_map": [
+    {
+      "workflow": "MM-01 Content Intake from Google Drive",
+      "live_id": "fTJVvxC0hviQy0im",
+      "repo_export": "adapteng-automation-platform n8n/workflows/production/MM-01-content-intake-from-google-drive.json",
+      "repo_state": "production, active",
+      "reads": "personal 01_Inbox (poll every minute, fileCreated)",
+      "writes": ["Raw_Media", "Content_Cases"],
+      "writes_kind": "n8n Data Tables",
+      "also": "sends an intake email notice",
+      "dedupe_today": "none: media_id is time and random based and both inserts are plain inserts",
+      "change_before_cutover": "add a drive_file_id existence check ahead of both inserts, then repoint the trigger to the corporate case intake folder"
+    },
+    {
+      "workflow": "MM-15 Photo Intake",
+      "live_id": "ih7XILrXI0JwB43U",
+      "repo_export": "adapteng-automation-platform n8n/workflows/paused/MM-15-photo-intake.json",
+      "repo_state": "paused, inactive",
+      "reads": "personal 01_Inbox (same folder as MM-01)",
+      "writes": ["Photo_Content_Queue"],
+      "writes_kind": "n8n Data Table",
+      "dedupe_today": "none",
+      "change_before_cutover": "stay paused; two triggers on one folder would double-ingest"
+    },
+    {
+      "workflow": "MM-21 Publication Fetcher",
+      "live_id": "kB21JwdMDZt7nT5a",
+      "repo_export": "adapteng-automation-platform n8n/workflows/paused/MM-21-publication-fetcher.json",
+      "repo_state": "paused, inactive, manual trigger",
+      "reads": "Publication_Radar rows with status approved_for_fetch",
+      "writes": "source package .txt files to the personal My Drive root, then Publication_Radar drive_file_id and status",
+      "writes_kind": "Drive files plus an n8n Data Table",
+      "dedupe_today": "status gate only; the radar row moves to approved_for_analysis after a successful write",
+      "observed_conflict": "44 source package files exist in the personal My Drive root, created at about 02:00 UTC on Mondays from 2026-07-27 to 2026-10-19 (plus earlier runs on 2026-06-15, 2026-07-21 and 2026-07-27), with the same publication repeated up to 20 times and sometimes twice within one run. A manual-trigger export cannot do that, so a scheduled live variant or a different writer exists that is not in the repository.",
+      "change_before_cutover": "identify the scheduled writer on Cloud, add a pub_id and DOI existence check, and write into the article 01_Source folder instead of the My Drive root"
+    },
+    {
+      "workflow": "MM-23 Publication to Website Draft",
+      "live_id": "a9kv1zsJAvLcAs1u",
+      "repo_export": "adapteng-automation-platform n8n/workflows/experimental/MM-23-publication-to-website-draft.json",
+      "repo_state": "experimental, inactive, manual trigger",
+      "reads": "Publication_Analysis Data Table",
+      "writes": ["Website_Content", "LinkedIn_Drafts"],
+      "writes_kind": "n8n Data Tables",
+      "drive_dependency": "none",
+      "change_before_cutover": "none for Drive; Data Table export is the dependency"
+    },
+    {
+      "workflow": "MM-23C Google Docs Draft Exporter",
+      "live_id": "uawTyLkBJ6pp4u5y",
+      "repo_export": "adapteng-automation-platform n8n/workflows/experimental/MM-23C-google-docs-draft-exporter.json",
+      "repo_state": "experimental, inactive, manual trigger",
+      "reads": "Website_Content polished drafts",
+      "writes": "Google Docs to the personal My Drive root, then Website_Content review status",
+      "writes_kind": "Drive files plus an n8n Data Table",
+      "dedupe_today": "none visible in the export",
+      "change_before_cutover": "write into the article 03_Review folder of the corporate Shared Drive and look up the website_id before creating a document"
+    },
+    {
+      "workflow": "MM-23D Google Doc to Website_Content Sync",
+      "live_id": "92875J5AqzsmrUhM",
+      "repo_export": "adapteng-automation-platform n8n/workflows/paused/MM-23D-google-doc-to-website-content-sync.json",
+      "repo_state": "paused, inactive, manual trigger",
+      "reads": "an approved Google Doc by document ID, as text",
+      "writes": ["Website_Content", "Website_Content_Sync"],
+      "writes_kind": "n8n Data Tables",
+      "change_before_cutover": "the document ID column must point at the corporate copy; no folder constant to change"
+    },
+    {
+      "workflow": "MM-24 Website Draft to WordPress Draft",
+      "live_id": "skSadXstKOwHPVHs",
+      "repo_export": "adapteng-automation-platform n8n/workflows/experimental/MM-24-website-draft-to-wordpress-draft.json",
+      "repo_state": "experimental, inactive, manual trigger",
+      "reads": "Website_Content approved rows",
+      "writes": "WordPress draft post",
+      "writes_kind": "external site",
+      "drive_dependency": "none",
+      "change_before_cutover": "none for Drive; final publishing stays manual"
+    },
+    {
+      "workflow": "MM-41 Case Pipeline Orchestrator",
+      "live_id": "z2dYx1mvy9rXOsLY",
+      "repo_export": "none (live-only, recorded in docs/n8n/inventory-reconciliation-2026-07-26.md of the platform repository)",
+      "repo_state": "inactive, safety-frozen 2026-07-27",
+      "reads": "unknown: no export",
+      "writes": "unknown: no export",
+      "change_before_cutover": "export and sanitize before any decision; do not reactivate"
+    },
+    {
+      "workflow": "MM-03 LinkedIn Draft Factory",
+      "live_id": "uNX7fPyRiokonTzZ",
+      "repo_state": "experimental, inactive",
+      "note": "No LinkedIn autopublishing is assumed or planned."
+    }
+  ],
+  "source_classes": [
+    {
+      "class": "article-review-docs",
+      "description": "Google Docs exported for review by the draft exporter, sitting in the personal My Drive root",
+      "items": [
+        {
+          "legacy_key": "draft-2026-06-16-cfd-flue-gas-flow-ghg-cems",
+          "title": "Using CFD to Improve Flue-Gas Flow Measurement for GHG-CEMS",
+          "created": "2026-06-16",
+          "linked_source": "CROSSREF 10.2139/ssrn.6086433",
+          "published_on_site": false,
+          "ae_cgr_id": null,
+          "destination": "40_Content/AE-CGR-NNNN_cfd-flue-gas-flow/03_Review",
+          "action": "copy",
+          "source_sha256": null
+        },
+        {
+          "legacy_key": "draft-2026-06-16-flue-gas-temperature-dust",
+          "title": "Flue gas temperature and dust measurement - why sampling conditions matter",
+          "created": "2026-06-16",
+          "linked_source": "CROSSREF 10.17798/bitlisfen.1719869",
+          "published_on_site": false,
+          "ae_cgr_id": null,
+          "destination": "40_Content/AE-CGR-NNNN_flue-gas-temperature-dust/03_Review",
+          "action": "copy",
+          "source_sha256": null
+        },
+        {
+          "legacy_key": "draft-2026-06-16-common-cems-problems",
+          "title": "Common CEMS problems and how operators can reduce data-quality risk",
+          "created": "2026-06-16",
+          "linked_source": "CROSSREF 10.37190/epe.214925",
+          "published_on_site": false,
+          "ae_cgr_id": null,
+          "destination": "40_Content/AE-CGR-NNNN_common-cems-problems/03_Review",
+          "action": "copy",
+          "source_sha256": null
+        }
+      ]
+    },
+    {
+      "class": "source-packages-linked",
+      "description": "One-off source package text files that map to a draft above",
+      "count": 3,
+      "destination": "the 01_Source folder of the matching article",
+      "action": "copy",
+      "dedupe": "legacy_key plus source_sha256; DOI recorded as the cross-check"
+    },
+    {
+      "class": "source-packages-recurring-duplicates",
+      "description": "Weekly repeated source packages with no downstream article",
+      "count": 39,
+      "distinct_sources": 5,
+      "repeats": {
+        "10.56127/juit.v5i1.2527": 20,
+        "10.1088/1742-6596/3298/1/012058": 6,
+        "10.48084/etasr.18689": 7,
+        "OPENALEX 10.1016/j.envint.2025.109594": 3,
+        "EUROPEPMC 10.1016/j.jenvman.2025.126219": 3
+      },
+      "destination": "none yet",
+      "action": "hold: copy at most one canonical file per DOI after the owner picks which sources become articles; leave the rest in place"
+    },
+    {
+      "class": "source-packages-test-fixtures",
+      "description": "Synthetic or test fetch outputs",
+      "count": 2,
+      "destination": "none",
+      "action": "exclude"
+    },
+    {
+      "class": "case-media",
+      "description": "CASE_GMS810_WOHLER_001: 3 photos, 1 video, 1 case note in the personal 01_Inbox",
+      "count": 5,
+      "destination": "company-drive://00_Case_Uploads/CASE-YYYY-NNN, per runbooks/company-drive.md; 40_Content/01_Source holds only a link manifest",
+      "action": "hold: copy after the owner confirms redaction review (EXIF/GPS and visual), because the file names say needs_manual_review",
+      "note": "The video is about 140 MB, so it needs the large-file path rather than text copy."
+    },
+    {
+      "class": "tracking-workbook",
+      "description": "AdaptEng Marketing System spreadsheet in the personal AdaptEng_Marketing folder",
+      "count": 1,
+      "destination": "none yet",
+      "action": "hold: legacy tracker superseded by Data Tables; owner decides keep, archive or copy as reference"
+    },
+    {
+      "class": "out-of-scope",
+      "description": "Two Russian-language technical documents in the personal My Drive root that are not marketing content",
+      "count": 2,
+      "destination": "none",
+      "action": "exclude"
+    }
+  ],
+  "published_articles": {
+    "source": "https://adapteng.com/sitemap-post-type-post.xml",
+    "count": 21,
+    "topics": [
+      "sensor selection", "DAS/DIS integration", "carbon metering",
+      "QAL2 and RATA practice", "QAL1 certificate", "QAL2 versus RATA",
+      "CEMS QA/QC procedure"
+    ],
+    "languages": ["en", "cz", "ru"],
+    "note": "None of the three personal review docs matches a published article. The cems-qa-qc-procedure-1 post matches the earlier ART-2026-001 pilot, whose source package is covered by the platform repository's approved-asset migration runbook."
+  },
+  "cutover_order": [
+    "1. Owner provides Shared Drive access to the company service account path (see the runbook owner action).",
+    "2. Create the 40_Content article folders for the three review docs through the governed folder operation, with fixed idempotency keys.",
+    "3. Copy the three review docs and their three source packages; compare names, MIME types and SHA-256 against this manifest.",
+    "4. Replay the copy; confirm zero new files.",
+    "5. Export the n8n Data Tables from Cloud (Raw_Media, Content_Cases, Photo_Content_Queue, Publication_Radar, Publication_Analysis, Website_Content, Website_Content_Sync, LinkedIn_Drafts) and import to self-hosted.",
+    "6. Rebuild one workflow at a time on self-hosted inactive, run a manual canary against a test folder, then switch the single trigger.",
+    "7. Pause the Cloud twin only after the self-hosted canary passes and the rollback step below is written down."
+  ],
+  "rollback": "Originals are never touched, so rollback is: reactivate the Cloud twin (kept paused, not deleted) and delete only the corporate copies created under the recorded idempotency keys."
+}
