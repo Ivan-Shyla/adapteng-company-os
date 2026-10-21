@@ -1,0 +1,71 @@
+name: n8n Cloud export
+
+# Bounded, GET-only read of n8n Cloud for the content migration. It is NOT the
+# self-hosted driver (n8n-deploy.yml) and shares nothing with it: its own
+# environment, its own secret and its own base-URL variable. It never reads the
+# self-hosted key or the self-hosted base URL.
+#
+# This repository is PUBLIC, so its build logs and artifacts are readable by
+# anyone. Nothing here uploads an artifact. The two operations are therefore
+# limited to what is safe in a public log:
+#   preflight  access and instance check; counts and table names only
+#   evidence   aggregate facts about MM-20 and MM-21; never a title, abstract,
+#              note, parameter value or payload
+# The full snapshot (script operation "export") is refused unless a private
+# destination is declared, and is deliberately not offered here.
+#
+# What it reads is fixed in scripts/n8n_cloud_export.py and described in
+# runbooks/n8n-cloud-export.md.
+#
+# Prerequisite (owner action): an environment named n8n-cloud-export holding the
+# secret N8N_CLOUD_API_KEY and the variable N8N_CLOUD_BASE_URL. The script fails
+# closed with a named error if either is missing.
+#
+# Manual dispatch only. Do not add a schedule or any other trigger.
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "preflight checks access; evidence prints aggregate MM-20 and MM-21 facts. Neither writes anything."
+        required: true
+        default: preflight
+        type: choice
+        options:
+          - preflight
+          - evidence
+      since:
+        description: "evidence only: earliest execution start time for MM-20 and MM-21 (UTC)"
+        required: false
+        default: "2026-06-01T00:00:00Z"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: n8n-cloud-export
+  cancel-in-progress: false
+
+jobs:
+  read:
+    name: n8n Cloud ${{ inputs.operation }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: n8n-cloud-export
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v6.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Read n8n Cloud
+        env:
+          OPERATION: ${{ inputs.operation }}
+          SINCE: ${{ inputs.since }}
+          N8N_CLOUD_BASE_URL: ${{ vars.N8N_CLOUD_BASE_URL }}
+          N8N_CLOUD_API_CREDENTIAL: ${{ secrets.N8N_CLOUD_API_KEY }}
+        run: >-
+          python scripts/n8n_cloud_export.py "$OPERATION"
+          --since "$SINCE"
