@@ -68,7 +68,12 @@ production_backup_state_2026_09_07:
     capability. The only pgBackRest evidence in the bucket is the 2026-08-03
     rehearsal under postgres-physical-backup/validation/ against the disposable
     adapteng_ops_test stanza, which is not production data.
-  restore: NEVER EXERCISED against production data — this is the remaining half of the durability gate
+  restore: >-
+    The September 2026 production-backup restore exercise was
+    not completed as of 2026-09-14. Owner decision 2026-10-21 closes this as a
+    blocker for the governed pilot and next bounded business workflow; do not
+    claim that the production backup was restored. Reassess on new failure,
+    missing offsite object or stale recovery point.
   scheduler_state:
     evidence_class: LIVE-VERIFIED
     observed_at: 2026-09-07T17:55Z

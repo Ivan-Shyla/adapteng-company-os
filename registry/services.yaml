@@ -193,7 +193,7 @@ services:
       superseded literal NOT_READY_PENDING_AUTOMATION_EVIDENCE_LIFECYCLE_PR no
       longer describes reality.
     coolify_backup_verification_2026_09_14:
-      verdict: BACKUP-LIVE-VERIFIED, RESTORE-REHEARSAL-BLOCKED
+      verdict: BACKUP-LIVE-VERIFIED, PILOT-BACKUP-GATE-CLOSED
       means: >-
         A separate, simpler mechanism from the pgBackRest narrative above --
         Coolify's own built-in scheduled database backup -- IS configured and
@@ -230,6 +230,15 @@ services:
         codebase's read-only probing has not discovered, or provision a
         bucket/prefix-scoped read-only B2 credential dedicated to backup
         verification, distinct from the broad B2_MASTER_* key.
+      pilot_owner_decision_2026_10_21: >-
+        Owner confirmed repeated production-backup checks in Coolify and
+        offsite B2. For the governed-agent pilot and design/bounded execution
+        of the next business workflow, the backup item is closed. Do not
+        promote the older pgBackRest rollout plan or the unperformed
+        production-backup restore rehearsal into a new pilot blocker.
+        Keep the latter as a separate optional operations exercise; no
+        production-backup restore is claimed. Reassess only on new failure,
+        missing offsite object, stale recovery point, or failed restore.
 
   - id: adapteng-baserow-adapter
     repo: adapteng-automation-platform

@@ -22,47 +22,33 @@ Everything in this section through the 2026-09-08 "exact sequence" (items
 - `GOVERNED_AGENT_RUNTIME_ACTIVE` is `false` again (flipped `true` only for the canary window, per `deploy/agent-runtime.json`'s own documented intent).
 - **Fixed 2026-09-14**: the ledger-status regression found during the replay (`agent_run.status` reverting from `succeeded` to `started`) is fixed and deployed — adapteng-automation-platform PR #139, independently verified against a disposable Postgres 16 container before merge, deployed and confirmed via the built image's own commit tag (not inferred from health alone). See `registry/services.yaml`'s `canary_evidence.known_issue` for the full trail. The historical `pilot-canary-2026-09-run-001` ledger row was deliberately left exactly as the replay left it — evidence of the regression, not corrected out of band.
 
-Two items from this section are **still genuinely open**:
+## Governed pilot closure update — 2026-10-21
 
-### 1. SIGN PR #140 🟡 — the CI wiring is written, tested, and open; only your signature is missing
+The rollout trust key recovery and agent-runtime CI wiring are complete: automation
+PRs #141 and #140 are merged, and the agent-runtime matrix and real-Postgres
+semantics job pass on `main`. This supersedes the older owner actions below
+that still describe PR #140 as unsigned.
 
-Correction to this section's earlier text: the trust anchor is **not**
-bootstrap-unarmed. `.github/trust/rollout-policy/allowed_signers` has carried
-one real principal line since 2026-08-05 (commit `c3e2e89`); the file's own
-header comment just said otherwise until 2026-09-14, when it was corrected.
-The anchor being armed means exactly one thing is needed now: a signed
-receipt for one specific PR, not a bootstrap project.
+**Backup item closed for the governed pilot and the next bounded business
+workflow.** The production `adapteng_ops` backup was verified through two
+independent views: Coolify's successful scheduled database-backup execution
+and the corresponding offsite Backblaze B2 object (2026-09-07 evidence in
+`registry/environments.yaml`, rechecked via Coolify on 2026-09-14 in
+`registry/services.yaml`). The owner confirms these backup checks were
+repeated and accepts this backup posture for moving to the next stage.
+Do not reopen a generic "backup missing" or "restore rehearsal blocks the
+governed pilot" action based on the older pgBackRest plan.
 
-| Field | Value |
-|---|---|
-| Repository | `Ivan-Shyla/adapteng-automation-platform` |
-| PR | [#140](https://github.com/Ivan-Shyla/adapteng-automation-platform/pull/140) — adds `services/adapteng-agent-runtime/**` to `adapter-tests.yml`'s matrix and a new `governed-agent-runtime-postgres-semantics` job, registers the path in `validate_rollout_ci_policy.py`, and corrects the stale header comment above |
-| Current state | Every real check is green (both `adapteng-agent-runtime` and `governed-agent-runtime-postgres-semantics` legs pass, on both push and pull_request). Only `Base-Trusted Rollout Authorization` fails, because the diff carries no signed receipt yet |
-| Steps | Run `scripts/approval/create_rollout_trust_receipt.ps1` (or `.sh`) locally per `docs/runbooks/authorize-rollout-policy-change.md` against PR #140's branch (`feat/agent-runtime-ci-wiring`), then push the resulting receipt to that branch |
-| Verification | The `Base-Trusted Rollout Authorization` check on PR #140 turns green; then squash-merge it |
-| What runs immediately after | Nothing further to build — `registry/services.yaml`'s `adapteng-agent-runtime.test_evidence.verdict` can then be corrected from `LOCAL-ONLY-NOT-CI-VERIFIED` to a real CI-verified state |
+The 2026-09-14 attempt did not restore the *production* backup into a disposable
+target. That statement remains in the evidence record; no restore success is
+being invented. A later production-backup restore exercise is a separate
+operational improvement, not a prerequisite to planning or the bounded pilot
+of the next workflow. Check backup freshness as normal preflight before
+production writes. Reopen the backup issue only on new evidence of a failed
+backup, missing offsite object, stale recovery point, or failed restoration.
 
-This item is **not required** for the pilot, which is fully live (see the
-DONE summary above) — only for getting the new service's test suite running
-inside this repository's own protected CI, which is a quality/trust
-improvement, not a blocker.
-
-### 2. DECIDE THE BACKUP-RESTORE-REHEARSAL PATH 🟡 — genuinely blocked, not just undone
-
-Attempted 2026-09-14 as part of governed-pilot closure: prove `adapteng_ops`'s
-backup can actually be restored, not just that it exists. The backup itself
-is real and current (Coolify's own scheduled backup, confirmed via
-`coolify-deploy.yml -f operation=backup-check`: newest successful run
-2026-09-14T07:30:35Z, 176323 bytes) — the restore step is what's blocked.
-Full detail in `registry/services.yaml`'s `postgres-adapteng-ops` entry,
-`coolify_backup_verification_2026_09_14` field.
-
-| Field | Value |
-|---|---|
-| Blocker | Every backup-related Coolify API endpoint this codebase has ever probed returns only execution metadata (timestamp/status/size), never a downloadable artifact or a restore-trigger endpoint. The actual bytes live in Backblaze B2, reachable only with `B2_MASTER_APPLICATION_KEY`/`B2_MASTER_KEY_ID` — a credential whose name suggests broad, account-level scope rather than a bucket-scoped key, so it was deliberately not wired into a new, unreviewed automation to fetch it |
-| Two ways to unblock, either is enough | (a) Confirm from Coolify's own admin UI (or its changelog for this version) whether a server-side "restore to new database" API endpoint exists that read-only probing has not found — if so, a restore rehearsal never needs the B2 credential at all. (b) If not, provision a bucket/prefix-scoped **read-only** B2 credential dedicated to backup verification, separate from the broad `B2_MASTER_*` key, and a restore-rehearsal operation can be built against it safely |
-| Not urgent | The backup itself is confirmed healthy and current; this is about proving recoverability, not about the recovery point being missing |
-
+The 2026-09-07 owner queue below is historical context; its backup and PR #140
+instructions are superseded by this closure update.
 ---
 
 ## Consolidated owner actions — 2026-09-07 (revised 17:05 UTC)
