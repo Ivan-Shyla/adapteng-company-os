@@ -1,0 +1,61 @@
+name: Coolify MCP gateway CI
+on:
+  pull_request:
+    paths:
+      - 'services/coolify-mcp-gateway/**'
+      - '.github/workflows/coolify-mcp-gateway-ci.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate-gateway:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install -r services/coolify-mcp-gateway/requirements.txt
+      - name: Verify OAuth runtime and instantiate MCP server offline
+        working-directory: services/coolify-mcp-gateway
+        run: |
+          python - <<'PY'
+          import os
+          import tempfile
+          from cryptography.fernet import Fernet
+          from fastmcp import FastMCP
+          from fastmcp.server.auth.providers.github import GitHubProvider
+          from key_value.aio.stores.disk import DiskStore
+          from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
+          os.environ.update({
+              "COOLIFY_READ_TOKEN": "synthetic-test-token",
+              "MCP_PUBLIC_BASE_URL": "https://ops-mcp.adapteng.com",
+              "MCP_ALLOWED_GITHUB_LOGIN": "Ivan-Shyla",
+              "GITHUB_CLIENT_ID": "synthetic-test-client-id",
+              "GITHUB_CLIENT_SECRET": "synthetic-test-secret",
+              "JWT_SIGNING_KEY": "x" * 48,
+              "STORAGE_ENCRYPTION_KEY": Fernet.generate_key().decode(),
+              "OAUTH_DATA_DIR": tempfile.mkdtemp(prefix="test-mcp-oauth-"),
+          })
+          from server import create_server
+          app = create_server()
+          assert app is not None
+          print("OAuth server startup (offline) OK")
+          PY
+      - name: Test read-only gateway policy
+        working-directory: services/coolify-mcp-gateway
+        run: python -m unittest -v test_gateway_core test_oauth_http
+      - name: Docker image build and non-root OAuth volume write smoke test
+        run: |
+          set -euo pipefail
+          docker build --tag adapteng-coolify-mcp:ci \
+            --file services/coolify-mcp-gateway/Dockerfile \
+            services/coolify-mcp-gateway
+          docker volume create adapteng-mcp-ci-oauth
+          trap 'docker volume rm adapteng-mcp-ci-oauth >/dev/null 2>&1 || true' EXIT
+          docker run --rm --volume adapteng-mcp-ci-oauth:/data/oauth \
+            --entrypoint python adapteng-coolify-mcp:ci \
+            -c 'from pathlib import Path; p=Path("/data/oauth/.write-check"); p.write_text("ready"); assert p.read_text()=="ready"; p.unlink(); print("UID 10001 OAuth named-volume write OK")'
+      - name: Syntax check
+        run: python -m compileall -q services/coolify-mcp-gateway
