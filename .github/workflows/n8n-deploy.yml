@@ -18,8 +18,14 @@ name: n8n deploy
 #
 # status confirms this is the self-hosted instance (n8n.adapteng.com), never
 # n8n Cloud -- the wrong-instance case that made building this necessary in
-# the first place. export fetches every live workflow's full definition and
-# uploads it as a build artifact, evidence of state before any write.
+# the first place. export lists the id, name and active flag of every live
+# workflow in the log and nothing else. This repository is public: its logs
+# and artifacts are readable by any signed-in GitHub user, and a full workflow
+# definition carries credential references and internal structure. So no
+# artifact is uploaded, and scripts/n8n_deploy.py writes definitions only when
+# EXPORT_DESTINATION_PRIVATE=true, which this workflow never sets (see
+# runbooks/n8n-operations.md). Earlier versions uploaded the full export as an
+# artifact; that step was removed.
 # import-canary fetches the reviewed canary workflow JSON from
 # adapteng-automation-platform's main branch (read-only, via the existing
 # cross-repo read token) and creates-or-updates exactly the one workflow
@@ -32,7 +38,7 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: "status and export read only; the rest touch exactly the MM-32 canary workflow"
+        description: "status and export read only (export prints ids and names, no files); the rest touch exactly the MM-32 canary workflow"
         required: true
         default: status
         type: choice
@@ -87,14 +93,4 @@ jobs:
           DRIVE_SERVICE_BEARER_TOKENS: ${{ inputs.operation == 'bind-canary-credentials' && secrets.DRIVE_SERVICE_BEARER_TOKENS || '' }}
         run: >-
           python scripts/n8n_deploy.py "$OPERATION"
-          --export-dir "$RUNNER_TEMP/n8n-export"
           --canary-file "$RUNNER_TEMP/mm-32-canary.json"
-
-      - name: Upload export evidence
-        if: inputs.operation == 'export'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: n8n-export-${{ github.run_id }}
-          path: ${{ runner.temp }}/n8n-export
-          if-no-files-found: error
-          retention-days: 30

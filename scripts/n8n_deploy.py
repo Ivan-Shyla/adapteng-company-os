@@ -11,8 +11,14 @@ registered for redaction before it is used anywhere.
 Operations:
   status         confirm reachability and that this is the self-hosted
                  instance, not n8n Cloud, by presence of known workflow ids
-  export         GET the full definition of every live workflow and upload
-                 it as a build artifact -- evidence of state before import
+  export         read only. By default prints the id, name and active flag of
+                 every live workflow and writes nothing: this repository is
+                 public, so its logs and artifacts are world-readable and a
+                 full definition (credential references, internal structure)
+                 must not reach either. The full, masked definitions are
+                 written to --export-dir only when EXPORT_DESTINATION_PRIVATE
+                 is "true", i.e. the caller declares a destination that is not
+                 a public artifact; the workflow never declares one
   import-canary  create-or-update exactly the MM-32 governed-agent-pilot
                  canary workflow, by name, from automation-platform's
                  reviewed n8n/workflows/experimental/ file, and never touch
@@ -92,6 +98,7 @@ CREDENTIAL_NAMES = {
     "drive-adapter": "Drive Adapter Bearer (canary)",
 }
 BASEROW_ADAPTER_ENV_KEY = "ADAPTER_SERVICE_TOKEN"
+PRIVATE_DESTINATION_VARIABLE = "EXPORT_DESTINATION_PRIVATE"
 
 # Known self-hosted workflow ids (runbooks/n8n-operations.md). Their presence
 # is the positive signal this is n8n.adapteng.com; their absence, combined
@@ -249,26 +256,56 @@ def operate_status(client: N8nClient) -> int:
     return driver.EXIT_OK
 
 
-def operate_export(client: N8nClient, output_dir: Path) -> int:
-    """Fetch every live workflow's full definition, one JSON file per id.
+def operate_export(
+    client: N8nClient, output_dir: Path, private_destination: bool = False
+) -> int:
+    """Inventory the live workflows; write definitions only to a private place.
 
-    This is the preservation step before import: a point-in-time snapshot of
-    exactly what the instance held, written as CI-artifact evidence rather
-    than committed to any repository (the exported bodies carry credential
-    references and internal structure that do not belong in Git history).
+    The repository is public, so build logs and artifacts are readable by any
+    signed-in GitHub user. Without a declared private destination this prints
+    only each workflow's id, name and active flag and writes nothing. With one
+    (EXPORT_DESTINATION_PRIVATE=true, see main) it writes one cleaned file per
+    id plus a manifest, reusing n8n_cloud_export.clean_workflow so pinned and
+    static data are dropped, credential references shrink to id and name, and
+    secret-shaped values are masked. Masking is best effort and counted in the
+    manifest; treat the output as confidential regardless.
     """
 
     driver.emit(f"--- export {client.base_url}")
     workflows = list_all_workflows(client)
+    for item in sorted(workflows, key=lambda w: str(w.get("name"))):
+        driver.emit(
+            f"    id={item.get('id')} active={item.get('active')} "
+            f"name={item.get('name')!r}"
+        )
+    if not private_destination:
+        driver.emit("")
+        driver.emit(
+            "    definitions not written: no private destination was declared "
+            f"({PRIVATE_DESTINATION_VARIABLE}=true). This repository is public, "
+            "so its logs and artifacts are world-readable."
+        )
+        driver.emit(f"RESULT export inventory workflows={len(workflows)} written=0")
+        return driver.EXIT_OK
+
+    # Imported here because n8n_cloud_export imports this module at load time.
+    import n8n_cloud_export
+
     output_dir.mkdir(parents=True, exist_ok=True)
     written = 0
+    redactions: dict[str, int] = {}
     for item in workflows:
         workflow_id = item.get("id")
         if not isinstance(workflow_id, str) or not workflow_id:
             continue
         full = call(client, "GET", f"/workflows/{urllib.parse.quote(workflow_id)}")
+        if not isinstance(full, dict):
+            raise driver.Abort(f"workflow {workflow_id} did not return an object")
+        cleaned, hits = n8n_cloud_export.clean_workflow(full)
+        if hits:
+            redactions[workflow_id] = hits
         target = output_dir / f"{workflow_id}.json"
-        target.write_text(json.dumps(full, indent=2, sort_keys=True), encoding="utf-8")
+        target.write_text(json.dumps(cleaned, indent=2, sort_keys=True), encoding="utf-8")
         written += 1
         driver.emit(f"    exported id={workflow_id} name={item.get('name')!r}")
 
@@ -276,6 +313,7 @@ def operate_export(client: N8nClient, output_dir: Path) -> int:
         "base_url": client.base_url,
         "workflow_count": len(workflows),
         "exported_count": written,
+        "redaction_counts": redactions,
         "workflow_ids": sorted(
             item.get("id") for item in workflows if isinstance(item.get("id"), str)
         ),
@@ -594,7 +632,8 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--export-dir",
         default=None,
-        help="directory to write export operation's JSON files into",
+        help="directory export writes masked JSON files into; used only when "
+        f"{PRIVATE_DESTINATION_VARIABLE}=true",
     )
     parser.add_argument(
         "--canary-file",
@@ -627,7 +666,8 @@ def main(argv: list[str]) -> int:
             return operate_status(client)
         if arguments.operation == "export":
             export_dir = Path(arguments.export_dir or "n8n-export")
-            return operate_export(client, export_dir)
+            private = os.environ.get(PRIVATE_DESTINATION_VARIABLE) == "true"
+            return operate_export(client, export_dir, private)
         if arguments.operation in ("import-canary", "bind-canary-credentials"):
             if not arguments.canary_file:
                 raise driver.Abort(f"--canary-file is required for {arguments.operation}")
