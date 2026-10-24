@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -112,12 +113,52 @@ class StatusTests(unittest.TestCase):
 
 
 class ExportTests(unittest.TestCase):
-    def test_export_writes_one_file_per_workflow_plus_a_manifest(self) -> None:
-        client = FakeN8nClient({
+    def workflow_client(self) -> FakeN8nClient:
+        return FakeN8nClient({
             ("GET", "/workflows"): workflows_page(SELF_HOSTED_SET),
             ("GET", f"/workflows/{AUT_001['id']}"): (200, {**AUT_001, "nodes": []}),
             ("GET", f"/workflows/{WEB_002['id']}"): (200, {**WEB_002, "nodes": []}),
             ("GET", f"/workflows/{L1_PROOF['id']}"): (200, {**L1_PROOF, "nodes": []}),
+        })
+
+    def test_default_export_prints_an_inventory_and_writes_nothing(self) -> None:
+        client = FakeN8nClient({("GET", "/workflows"): workflows_page(SELF_HOSTED_SET)})
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "export"
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                code = driver_module.operate_export(client, out)
+            self.assertEqual(code, driver.EXIT_OK)
+            self.assertFalse(out.exists())
+        output = buffer.getvalue()
+        expected_active = sum(item.get("active") is True for item in SELF_HOSTED_SET)
+        self.assertIn(
+            f"RESULT export inventory workflows=3 active={expected_active} written=0",
+            output,
+        )
+        for item in SELF_HOSTED_SET:
+            self.assertNotIn(item["id"], output)
+            self.assertNotIn(item["name"], output)
+        # Only the list is read: no per-workflow definition is fetched at all.
+        self.assertEqual([call[1] for call in client.calls], ["/workflows"])
+
+    def test_default_export_never_prints_definition_content(self) -> None:
+        sentinel = "SENTINEL-NODE-PARAMETER-VALUE"
+        listing = {**AUT_001, "nodes": [{"parameters": {"url": sentinel}}]}
+        client = FakeN8nClient({("GET", "/workflows"): workflows_page([listing])})
+        buffer = io.StringIO()
+        with TemporaryDirectory() as tmp, redirect_stdout(buffer):
+            driver_module.operate_export(client, Path(tmp) / "export")
+        self.assertNotIn(sentinel, buffer.getvalue())
+
+    def test_export_does_not_leak_sensitive_workflow_names_or_ids(self) -> None:
+        confidential = {
+            **AUT_001,
+            "id": "CONFIDENTIAL-INTERNAL-ID",
+            "name": "CONFIDENTIAL-CUSTOMER-NAME",
+        }
+        client = FakeN8nClient({
+            ("GET", "/workflows"): workflows_page([confidential]),
         })
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "export"
@@ -125,22 +166,116 @@ class ExportTests(unittest.TestCase):
             with redirect_stdout(buffer):
                 code = driver_module.operate_export(client, out)
             self.assertEqual(code, driver.EXIT_OK)
+            self.assertFalse(out.exists())
+        self.assertNotIn(confidential["name"], buffer.getvalue())
+        self.assertNotIn(confidential["id"], buffer.getvalue())
+        self.assertEqual([call[1] for call in client.calls], ["/workflows"])
+
+    def test_private_export_writes_one_file_per_workflow_plus_a_manifest(self) -> None:
+        client = self.workflow_client()
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "export"
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                code = driver_module.operate_export(client, out, private_destination=True)
+            self.assertEqual(code, driver.EXIT_OK)
             for item in SELF_HOSTED_SET:
                 self.assertTrue((out / f"{item['id']}.json").exists())
             manifest = json.loads((out / "_manifest.json").read_text())
             self.assertEqual(manifest["exported_count"], 3)
             self.assertEqual(len(manifest["workflow_ids"]), 3)
 
-    def test_export_never_issues_a_write(self) -> None:
+    def test_private_export_masks_secrets_and_drops_pinned_data(self) -> None:
+        # Built at runtime: a secret-shaped value (letters and digits, 16+ chars)
+        # that is not a literal in the repository.
+        leaked = "abcDEF12" * 2 + "34567890" * 2
+        definition = {
+            **AUT_001,
+            "pinData": {"Node": [{"json": {"leak": "PINNED-PAYLOAD"}}]},
+            "staticData": {"cursor": "STATIC-VALUE"},
+            "nodes": [{
+                "name": "Call",
+                "parameters": {"headerParameters": {"parameters": [
+                    {"name": "Authorization", "value": leaked},
+                ]}},
+                "credentials": {
+                    "httpHeaderAuth": {"id": "cred1", "name": "Bearer", "extra": "drop"}
+                },
+            }],
+        }
         client = FakeN8nClient({
             ("GET", "/workflows"): workflows_page([AUT_001]),
-            ("GET", f"/workflows/{AUT_001['id']}"): (200, {**AUT_001, "nodes": []}),
+            ("GET", f"/workflows/{AUT_001['id']}"): (200, definition),
         })
         with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "export"
             with redirect_stdout(io.StringIO()):
-                driver_module.operate_export(client, Path(tmp) / "export")
-        methods = {call[0] for call in client.calls}
-        self.assertEqual(methods, {"GET"})
+                driver_module.operate_export(client, out, private_destination=True)
+            text = (out / f"{AUT_001['id']}.json").read_text()
+            written = json.loads(text)
+            manifest = json.loads((out / "_manifest.json").read_text())
+        self.assertNotIn(leaked, text)
+        self.assertNotIn("PINNED-PAYLOAD", text)
+        self.assertNotIn("STATIC-VALUE", text)
+        self.assertEqual(
+            written["nodes"][0]["credentials"]["httpHeaderAuth"],
+            {"id": "cred1", "name": "Bearer"},
+        )
+        self.assertGreaterEqual(manifest["redaction_counts"][AUT_001["id"]], 1)
+
+    def test_export_never_issues_a_write(self) -> None:
+        for private in (False, True):
+            client = self.workflow_client()
+            with TemporaryDirectory() as tmp:
+                with redirect_stdout(io.StringIO()):
+                    driver_module.operate_export(client, Path(tmp) / "export", private)
+            self.assertEqual({call[0] for call in client.calls}, {"GET"})
+
+    def test_main_writes_only_when_the_destination_is_declared_private(self) -> None:
+        cases = (("true", True), ("TRUE", False), ("1", False), (None, False))
+        for declared, expect_files in cases:
+            environment = {
+                driver_module.BASE_URL_VARIABLE: "https://n8n.adapteng.com",
+                driver_module.CREDENTIAL_VARIABLE: "fake-credential",
+            }
+            if declared is not None:
+                environment[driver_module.PRIVATE_DESTINATION_VARIABLE] = declared
+            client = self.workflow_client()
+            with TemporaryDirectory() as tmp, mock.patch.dict(
+                "os.environ", environment
+            ), mock.patch.object(driver_module, "N8nClient", return_value=client):
+                if declared is None:
+                    os.environ.pop(driver_module.PRIVATE_DESTINATION_VARIABLE, None)
+                out = Path(tmp) / "export"
+                with redirect_stdout(io.StringIO()):
+                    code = driver_module.main(["export", "--export-dir", str(out)])
+                self.assertEqual(code, driver.EXIT_OK)
+                self.assertEqual(out.exists(), expect_files, declared)
+
+
+class DeployWorkflowFileTests(unittest.TestCase):
+    """The workflow lives in a public repository; its artifacts are world-readable."""
+
+    WORKFLOW = (
+        Path(__file__).resolve().parent.parent / ".github" / "workflows" / "n8n-deploy.yml"
+    )
+
+    def setUp(self) -> None:
+        self.text = self.WORKFLOW.read_text(encoding="utf-8")
+        self.code = "\n".join(
+            line for line in self.text.splitlines() if not line.lstrip().startswith("#")
+        )
+
+    def test_no_step_uploads_an_artifact(self) -> None:
+        self.assertNotIn("upload-artifact", self.code)
+        self.assertNotIn("n8n-export-", self.code)
+
+    def test_the_workflow_never_declares_a_private_destination(self) -> None:
+        self.assertNotIn(driver_module.PRIVATE_DESTINATION_VARIABLE, self.code)
+
+    def test_the_header_explains_why_export_is_log_only(self) -> None:
+        self.assertIn("public", self.text)
+        self.assertIn("EXPORT_DESTINATION_PRIVATE", self.text)
 
 
 class ImportCanaryTests(unittest.TestCase):

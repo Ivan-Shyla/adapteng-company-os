@@ -137,6 +137,28 @@ Keep all model-provider legal placeholders unpublished throughout this cutover.
 - Credentials referenced by id (not value): Postgres, adapter bearer, webhook
   header-auth. See `registry/services.yaml`.
 
+## Exporting workflows from the self-hosted instance
+
+The repository is public, so build logs and artifacts are readable by any
+signed-in GitHub user. A full workflow definition carries credential references
+and internal structure and must not reach either.
+
+- `.github/workflows/n8n-deploy.yml` operation `export` prints **only aggregate
+  workflow and active counts**, never individual workflow IDs/names, and uploads **no artifact**. An earlier
+  version uploaded the full definitions as `n8n-export-<run_id>`; that step was
+  removed. The only run that did so (run `34872636284`, 2026-09-14) had a
+  30-day retention, and no `n8n-export-*` artifact is listed any more.
+- `scripts/n8n_deploy.py export` writes definitions only when
+  `EXPORT_DESTINATION_PRIVATE=true` is set, and then through
+  `n8n_cloud_export.clean_workflow` (pinned and static data dropped, credential
+  references reduced to id and name, secret-shaped values masked, counts in
+  `_manifest.json`). Masking is best effort; treat the output as confidential.
+  The workflow never sets this variable. Run it only from a machine the owner
+  controls, into a private location, with `--export-dir`.
+- A point-in-time snapshot taken before a write is therefore a local, private
+  action, not CI evidence. [`n8n-cloud-export.md`](n8n-cloud-export.md) states
+  the same rule for the Cloud side.
+
 ## Create / update a workflow (PowerShell)
 
 ```powershell
