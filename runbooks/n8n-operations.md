@@ -143,8 +143,8 @@ The repository is public, so build logs and artifacts are readable by any
 signed-in GitHub user. A full workflow definition carries credential references
 and internal structure and must not reach either.
 
-- `.github/workflows/n8n-deploy.yml` operation `export` prints the id, name and
-  active flag of every live workflow and uploads **no artifact**. An earlier
+- `.github/workflows/n8n-deploy.yml` operation `export` prints **only aggregate
+  workflow and active counts**, never individual workflow IDs/names, and uploads **no artifact**. An earlier
   version uploaded the full definitions as `n8n-export-<run_id>`; that step was
   removed. The only run that did so (run `34872636284`, 2026-09-14) had a
   30-day retention, and no `n8n-export-*` artifact is listed any more.
