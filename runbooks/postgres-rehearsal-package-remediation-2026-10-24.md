@@ -33,6 +33,32 @@ Evidence: [run 40076562988](https://github.com/Ivan-Shyla/adapteng-company-os/ac
 Source: [pgBackRest upstream release assets](https://github.com/pgbackrest/pgbackrest/releases);
 [upstream security advisory](https://pgbackrest.org/news.html).
 
+
+## First owner-approved isolated B2 rehearsal — FAILED
+
+- GitHub run: https://github.com/Ivan-Shyla/adapteng-company-os/actions/runs/40128239401
+- Branch commit at execution: `6add716eff79dab75f0c9660ad26319caa5163c7`.
+- Source tarball SHA verification, PostgreSQL 16 setup, isolation guard,
+  B2 capabilities, stanza-create and `pgbackrest check` succeeded.
+- The check archived the first WAL segment successfully. Full backup began
+  but aborted with pgBackRest error `[082]`: next required WAL segment
+  `000000010000000000000002` was not archived within 60000 ms.
+- Post-failure B2 probes returned listing 200, archive.info 200,
+  absent-key 404. These observations rule out a blanket connectivity denial,
+  but do not identify why the PostgreSQL archiver did not deliver that WAL.
+- Immediate and WAL replay restore steps were skipped. Cleanup passed:
+  rehearsal prefix empty, production prefix object count 0 both before/after.
+- No data loss, production outage, or successful restore is evidenced.
+
+**Decision:** block merge and do not increase archive timeout blindly.
+Next patch adds a *failure-only, sanitized* local `pg_stat_archiver` query
+and counts of archive error categories/exit codes from the ephemeral logs;
+it does not print raw log contents and cannot read production state.
+
+**Next gate:** review green CI on the new diagnostic-only patch, then obtain
+a **new explicit owner approval** for another disposable B2 test. One failed
+test does not authorize unrestricted retries.
+
 ## Review and acceptance
 1. GitHub repo CI tests pass for this PR (static policy and unit tests).
 2. Reviewer verifies sha256 against upstream asset and code-level negative
