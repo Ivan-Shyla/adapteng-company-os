@@ -1,6 +1,7 @@
 # n8n Cloud export (read-only, bounded)
 
-Status: **built and tested, not dispatched.** Nothing here has read n8n Cloud.
+Status: `preflight` and `evidence` ran on 2026-10-24 (runs 40084327093 and 40084363965).
+`export-encrypted` is built and tested and has not been dispatched.
 
 **This repository is public.** Its build logs and artifacts can be read by anyone,
 so the workflow prints only aggregate facts and uploads **only ciphertext**. The first
