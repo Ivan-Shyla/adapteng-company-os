@@ -6,13 +6,17 @@ name: n8n Cloud export
 # self-hosted key or the self-hosted base URL.
 #
 # This repository is PUBLIC, so its build logs and artifacts are readable by
-# anyone. Nothing here uploads an artifact. The two operations are therefore
-# limited to what is safe in a public log:
-#   preflight  access and instance check; counts and table names only
-#   evidence   aggregate facts about MM-20 and MM-21; never a title, abstract,
-#              note, parameter value or payload
-# The full snapshot (script operation "export") is refused unless a private
-# destination is declared, and is deliberately not offered here.
+# anyone. Therefore:
+#   preflight          access and instance check; counts and table names only
+#   evidence           aggregate facts about MM-20 and MM-21; never a title,
+#                      abstract, note, parameter value or payload
+#   export-encrypted   the full snapshot, encrypted on the runner with a random
+#                      AES key that is itself wrapped with the PUBLIC key in
+#                      registry/n8n-export-transport.pub.pem. Only the matching
+#                      private key, which is held offline by the owner side and
+#                      is not in any repository or secret, can open it. The
+#                      plaintext directory is deleted on the runner and is never
+#                      uploaded. Only the two ciphertext files are.
 #
 # What it reads is fixed in scripts/n8n_cloud_export.py and described in
 # runbooks/n8n-cloud-export.md.
@@ -27,15 +31,16 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: "preflight checks access; evidence prints aggregate MM-20 and MM-21 facts. Neither writes anything."
+        description: "preflight and evidence print aggregates; export-encrypted uploads ciphertext only"
         required: true
         default: preflight
         type: choice
         options:
           - preflight
           - evidence
+          - export-encrypted
       since:
-        description: "evidence only: earliest execution start time for MM-20 and MM-21 (UTC)"
+        description: "evidence and export: earliest execution start time for MM-20 and MM-21 (UTC)"
         required: false
         default: "2026-06-01T00:00:00Z"
         type: string
@@ -51,7 +56,7 @@ jobs:
   read:
     name: n8n Cloud ${{ inputs.operation }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     environment: n8n-cloud-export
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -66,6 +71,33 @@ jobs:
           SINCE: ${{ inputs.since }}
           N8N_CLOUD_BASE_URL: ${{ vars.N8N_CLOUD_BASE_URL }}
           N8N_CLOUD_API_CREDENTIAL: ${{ secrets.N8N_CLOUD_API_KEY }}
-        run: >-
-          python scripts/n8n_cloud_export.py "$OPERATION"
-          --since "$SINCE"
+          EXPORT_DESTINATION_PRIVATE: ${{ inputs.operation == 'export-encrypted' && 'true' || 'false' }}
+        run: |
+          if [ "$OPERATION" = "export-encrypted" ]; then
+            python scripts/n8n_cloud_export.py export --output-dir "$RUNNER_TEMP/plain" --since "$SINCE"
+          else
+            python scripts/n8n_cloud_export.py "$OPERATION" --since "$SINCE"
+          fi
+
+      - name: Encrypt the snapshot
+        if: inputs.operation == 'export-encrypted'
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          mkdir enc
+          tar -czf plain.tgz plain
+          openssl rand -hex 32 > session.key
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 -in plain.tgz -out enc/export.tgz.enc -pass file:session.key
+          openssl pkeyutl -encrypt -pubin -inkey "$GITHUB_WORKSPACE/registry/n8n-export-transport.pub.pem" \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -in session.key -out enc/key.enc
+          rm -rf plain plain.tgz session.key
+          ls -l enc
+
+      - name: Upload ciphertext
+        if: inputs.operation == 'export-encrypted'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: n8n-cloud-export-encrypted-${{ github.run_id }}
+          path: ${{ runner.temp }}/enc
+          if-no-files-found: error
+          retention-days: 3

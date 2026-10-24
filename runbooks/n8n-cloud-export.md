@@ -1,9 +1,10 @@
 # n8n Cloud export (read-only, bounded)
 
-Status: **built and tested, not dispatched.** Nothing here has read n8n Cloud.
+Status: `preflight` and `evidence` ran on 2026-10-24 (runs 40084327093 and 40084363965).
+`export-encrypted` is built and tested and has not been dispatched.
 
 **This repository is public.** Its build logs and artifacts can be read by anyone,
-so the workflow uploads no artifact and prints only aggregate facts. The first
+so the workflow prints only aggregate facts and uploads **only ciphertext**. The first
 design of this tool uploaded a full snapshot as an artifact and described the
 repository as private; that was wrong and was fixed before merge.
 The code is `scripts/n8n_cloud_export.py`, the workflow is
@@ -61,7 +62,7 @@ same name stop the run. A missing table is reported, and the result is
 
 ## What is printed, and where the full snapshot may go
 
-The workflow offers two operations and uploads nothing.
+The workflow offers three operations. The first two upload nothing.
 
 - `preflight`: whether the key works, that the account is the legacy Cloud one,
   the workflow count, the data table path that answered, and which of the eight
@@ -77,14 +78,39 @@ The workflow offers two operations and uploads nothing.
   `[not printed]`. A test feeds it sentinel text in every such field and checks
   none appears.
 
-The full snapshot (`export` in the script) writes one cleaned file per
-workflow, the two execution lists, one file per table and a `_manifest.json` with
-counts, redaction counts and SHA-256 hashes. It is **refused** unless
-`EXPORT_DESTINATION_PRIVATE=true` is set, and the workflow does not offer it.
-Run it only on a machine the owner controls, writing to a private location, and
-never as a build artifact of this public repository. If table contents have to move
-to self-hosted n8n, that needs a separate reviewed path that writes directly to
-the destination.
+### The encrypted snapshot (`export-encrypted`)
+
+The full snapshot writes one cleaned file per workflow, the two execution
+lists, one file per table and a `_manifest.json` with counts, redaction counts
+and SHA-256 hashes. On the runner it is written to a temporary directory, packed,
+and encrypted with a fresh random AES-256 key (PBKDF2, 200000 rounds). That key is
+wrapped with the **public** RSA key in `registry/n8n-export-transport.pub.pem`
+(4096 bit, OAEP with SHA-256). The plaintext directory, the archive and the AES
+key are deleted before upload. Only `export.tgz.enc` and `key.enc` are uploaded,
+as the artifact `n8n-cloud-export-encrypted-<run id>`, kept 3 days.
+
+Anyone can download those two files from this public repository and none can read
+them. The matching private key is generated and held on the machine of whoever
+analyses the snapshot, outside every repository and every GitHub secret. If it is
+lost, the snapshot is unreadable and a new one is made; to change the key,
+replace the public key file in a reviewed PR.
+
+Open it locally, in an empty directory outside any repository:
+
+```
+openssl pkeyutl -decrypt -inkey <private key> -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -in key.enc -out session.key
+openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in export.tgz.enc -out export.tgz -pass file:session.key
+tar -xzf export.tgz
+```
+
+What is in it is still business data: workflow definitions with credential
+references (id and name only), execution metadata of MM-20 and MM-21, and the
+rows of the eight tables. The decrypted files must not be committed to this
+repository or posted. Cleaned workflow definitions that are needed for review go
+into the private `adapteng-automation-platform` repository, not here.
+
+The script itself refuses `export` unless `EXPORT_DESTINATION_PRIVATE=true`; the
+workflow sets that only for `export-encrypted`.
 
 ## How to review it before the first run
 
@@ -94,13 +120,15 @@ the destination.
    hosts, non-GET methods, forbidden paths, execution payload requests,
    non-allowlisted tables, redaction, the 401 message, the missing-table result
    the evidence output (no content), the export gate and the workflow file (manual
-   dispatch only, own environment, no artifact, two log-safe operations, no use of
+   dispatch only, own environment, ciphertext-only upload, no use of
    the self-hosted key).
 3. Dispatch `preflight` first. It checks the key, confirms the account is the
    legacy Cloud one (the known MM-08 workflow is present and no self-hosted
    workflow is), reports which of the eight tables exist and writes nothing.
 4. Only then dispatch `evidence`. `since` defaults to 2026-06-01, before the first
    source package files.
+5. Dispatch `export-encrypted` only when someone holds the private key and is
+   ready to open the result.
 
 ## What the 401 turned out to be
 
