@@ -221,7 +221,11 @@ def operate_status(client: N8nClient) -> int:
     workflows = list_all_workflows(client)
     ids = {item.get("id") for item in workflows}
     driver.emit(f"    workflow count: {len(workflows)}")
-    active_count = sum(item.get("active") is True for item in workflows)
+    for item in sorted(workflows, key=lambda w: str(w.get("name"))):
+        driver.emit(
+            f"    id={item.get('id')} active={item.get('active')} "
+            f"name={item.get('name')!r}"
+        )
 
     if KNOWN_N8N_CLOUD_WORKFLOW_ID in ids:
         driver.emit("")
@@ -269,11 +273,8 @@ def operate_export(
 
     driver.emit(f"--- export {client.base_url}")
     workflows = list_all_workflows(client)
-    for item in sorted(workflows, key=lambda w: str(w.get("name"))):
-        driver.emit(
-            f"    id={item.get('id')} active={item.get('active')} "
-            f"name={item.get('name')!r}"
-        )
+    active_count = sum(item.get("active") is True for item in workflows)
+    driver.emit(f"    workflow count: {len(workflows)} active: {active_count}")
     if not private_destination:
         driver.emit("")
         driver.emit(
