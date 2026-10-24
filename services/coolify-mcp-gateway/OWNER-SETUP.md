@@ -6,7 +6,7 @@ Target: separate application, no changes to existing Coolify control-plane, n8n,
 ## 1. Existing prerequisites — confirmed
 
 - GitHub OAuth App: `AdaptEng Coolify MCP`, owned by `Ivan-Shyla`. Redirect URL: `https://ops-mcp.adapteng.com/auth/callback`.
-- Coolify Root Team API token: `adapteng-chatgpt-readonly`, permission `read` only (owner screenshot, 2026-10-24); expiry `Never` (rotate on a calendar cadence). This is NOT the GitHub Actions Coolify token.
+- Owner has a dedicated Coolify Root Team read-only credential (verified by screenshot, 2026-10-24). Expiry is currently indefinite; establish a rotation schedule. This is separate from the existing GitHub Actions production credential.
 - Source: `Ivan-Shyla/adapteng-company-os`, PR #283. CI must be green on the exact release commit.
 - Both values stored by owner outside chat: GitHub OAuth client secret and Coolify read token.
 
