@@ -166,6 +166,24 @@ def protected_field_mappings(columns: dict) -> list[str]:
     return [field for field in PROTECTED_RADAR_FIELDS if field in columns]
 
 
+def dedupe_candidates(rows: list[dict]) -> list[dict]:
+    """Keep the first row per pub_id, in order, and drop rows without one.
+
+    MM-21 reads its candidates once per incoming item, so two approved items
+    returned the same two rows twice and produced four files. Applying this
+    before the Drive write makes the result independent of the fan-out.
+    """
+    seen: set[str] = set()
+    kept: list[dict] = []
+    for row in rows:
+        pub_id = str(row.get("pub_id") or "").strip()
+        if not pub_id or pub_id in seen:
+            continue
+        seen.add(pub_id)
+        kept.append(row)
+    return kept
+
+
 def should_write_source_package(row: dict, existing_names: set[str]) -> bool:
     """Decide whether MM-21 may create a source package for a radar row.
 

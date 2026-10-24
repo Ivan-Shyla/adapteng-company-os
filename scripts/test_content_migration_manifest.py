@@ -173,6 +173,12 @@ class ProcessedStateTests(unittest.TestCase):
             manifest_module.should_write_source_package(row, {"CROSSREF_10_1_x__title.txt"})
         )
 
+    def test_fan_out_candidates_are_reduced_to_one_per_publication(self) -> None:
+        rows = [{"pub_id": "A"}, {"pub_id": "B"}, {"pub_id": "A"}, {"pub_id": "B"}, {"pub_id": ""}, {}]
+        self.assertEqual(
+            manifest_module.dedupe_candidates(rows), [{"pub_id": "A"}, {"pub_id": "B"}]
+        )
+
     def test_row_without_pub_id_is_never_written(self) -> None:
         self.assertFalse(manifest_module.should_write_source_package({"drive_file_id": ""}, set()))
 
