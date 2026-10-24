@@ -71,5 +71,6 @@ jobs:
           scripts.test_drive_adapter_credentials
           scripts.test_gateway_readiness
           scripts.test_l1_github_status_snapshot
+          scripts.test_n8n_cloud_export
           scripts.test_content_migration_manifest
           scripts.test_pre_pr_commands_match_ci
