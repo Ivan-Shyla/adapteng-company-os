@@ -1,0 +1,49 @@
+name: pgBackRest rehearsal build preflight
+
+# Safe PR-only supply-chain preflight. No B2 credentials, PostgreSQL cluster,
+# backup, restore, or production secrets. The real rehearsal is separately gated.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/postgres-backup-rehearsal.yml
+      - .github/workflows/pgbackrest-rehearsal-build-ci.yml
+      - scripts/test_rehearsal_contour.py
+
+permissions:
+  contents: read
+
+jobs:
+  verify-distribution:
+    name: Verify archived source and compile pgBackRest (no B2)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      VERSION: '2.59.3'
+      SHA256: '14037901db002e5536a948bf9f0fc0ff6cde31f4e675d3e9b46f129071bf2e5f'
+    steps:
+      - name: Install build dependencies only
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            meson ninja-build gcc pkg-config libpq-dev libssl-dev \
+            libxml2-dev liblz4-dev libzstd-dev libbz2-dev zlib1g-dev \
+            libssh2-1-dev libsystemd-dev
+      - name: Verify upstream archive SHA256 and compile (isolated runner)
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/pgbackrest.tar.gz"
+          curl --fail --location --silent --show-error --retry 3 \
+            --output "$archive" \
+            "https://github.com/pgbackrest/pgbackrest/releases/download/release/$VERSION/pgbackrest-$VERSION.tar.gz"
+          printf '%s  %s\n' "$SHA256" "$archive" | sha256sum --check
+          tar -xzf "$archive" -C "$RUNNER_TEMP" \
+            --no-same-owner --no-same-permissions
+          meson setup "$RUNNER_TEMP/build" "$RUNNER_TEMP/pgbackrest-$VERSION" \
+            --prefix="$RUNNER_TEMP/bin" --buildtype=release
+          ninja -C "$RUNNER_TEMP/build"
+          ninja -C "$RUNNER_TEMP/build" install
+          binary="$RUNNER_TEMP/bin/bin/pgbackrest"
+          test -x "$binary"
+          test "$("$binary" version)" = "pgBackRest $VERSION"
+          echo "PASS: source checksum and compiled binary version"
