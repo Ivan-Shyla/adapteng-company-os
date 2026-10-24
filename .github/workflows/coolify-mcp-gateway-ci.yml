@@ -45,6 +45,6 @@ jobs:
           PY
       - name: Test read-only gateway policy
         working-directory: services/coolify-mcp-gateway
-        run: python -m unittest -v test_gateway_core
+        run: python -m unittest -v test_gateway_core test_oauth_http
       - name: Syntax check
         run: python -m compileall -q services/coolify-mcp-gateway
