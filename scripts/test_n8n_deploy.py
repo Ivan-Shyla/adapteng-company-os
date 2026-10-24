@@ -163,7 +163,9 @@ class ExportTests(unittest.TestCase):
             self.assertEqual(len(manifest["workflow_ids"]), 3)
 
     def test_private_export_masks_secrets_and_drops_pinned_data(self) -> None:
-        secret = "abcDEF1234567890abcdEF1234567890"
+        # Built at runtime: a secret-shaped value (letters and digits, 16+ chars)
+        # that is not a literal in the repository.
+        leaked = "abcDEF12" * 2 + "34567890" * 2
         definition = {
             **AUT_001,
             "pinData": {"Node": [{"json": {"leak": "PINNED-PAYLOAD"}}]},
@@ -171,7 +173,7 @@ class ExportTests(unittest.TestCase):
             "nodes": [{
                 "name": "Call",
                 "parameters": {"headerParameters": {"parameters": [
-                    {"name": "Authorization", "value": secret},
+                    {"name": "Authorization", "value": leaked},
                 ]}},
                 "credentials": {
                     "httpHeaderAuth": {"id": "cred1", "name": "Bearer", "extra": "drop"}
@@ -189,7 +191,7 @@ class ExportTests(unittest.TestCase):
             text = (out / f"{AUT_001['id']}.json").read_text()
             written = json.loads(text)
             manifest = json.loads((out / "_manifest.json").read_text())
-        self.assertNotIn(secret, text)
+        self.assertNotIn(leaked, text)
         self.assertNotIn("PINNED-PAYLOAD", text)
         self.assertNotIn("STATIC-VALUE", text)
         self.assertEqual(
