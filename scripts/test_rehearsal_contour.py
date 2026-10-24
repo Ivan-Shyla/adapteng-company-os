@@ -1151,7 +1151,7 @@ class RehearsalReleaseSourceTests(unittest.TestCase):
 
     def test_push_event_cannot_start_b2_rehearsal(self) -> None:
         text = self.workflow()
-        event_section = text.split("on:", 1)[1].split("permissions:", 1)[0]
+        event_section = text.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
         self.assertIn("workflow_dispatch:", event_section)
         self.assertIn("schedule:", event_section)
         self.assertNotRegex(event_section, r"(?m)^  push:")
