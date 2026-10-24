@@ -18,8 +18,8 @@ name: n8n deploy
 #
 # status confirms this is the self-hosted instance (n8n.adapteng.com), never
 # n8n Cloud -- the wrong-instance case that made building this necessary in
-# the first place. export lists the id, name and active flag of every live
-# workflow in the log and nothing else. This repository is public: its logs
+# the first place. export logs aggregate workflow counts only, with no
+# workflow names, IDs, definitions or file artifacts. This repository is public: its logs
 # and artifacts are readable by any signed-in GitHub user, and a full workflow
 # definition carries credential references and internal structure. So no
 # artifact is uploaded, and scripts/n8n_deploy.py writes definitions only when
