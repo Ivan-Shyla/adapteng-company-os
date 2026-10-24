@@ -55,13 +55,13 @@ def read_settings(env: Mapping[str, str] | None = None) -> Settings:
     login = env["MCP_ALLOWED_GITHUB_LOGIN"].strip()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,37}", login):
         raise ValueError("Expected one explicit GitHub login")
-    token = env["COOLIFY_READ_TOKEN"].strip()
-    if "\r" in token or "\n" in token:
+    coolify_credential = env["COOLIFY_READ_TOKEN"].strip()
+    if "\r" in coolify_credential or "\n" in coolify_credential:
         raise ValueError("Invalid token format")
     return Settings(
         base_url=https_origin(env.get("COOLIFY_API_BASE_URL", "https://coolify.adapteng.com"),
                               host="coolify.adapteng.com"),
-        read_token=token, public_url=https_origin(env["MCP_PUBLIC_BASE_URL"]),
+        read_token=coolify_credential, public_url=https_origin(env["MCP_PUBLIC_BASE_URL"]),
         github_client_id=env["GITHUB_CLIENT_ID"].strip(),
         github_client_secret=env["GITHUB_CLIENT_SECRET"].strip(),
         jwt_key=env["JWT_SIGNING_KEY"], storage_key=env["STORAGE_ENCRYPTION_KEY"].strip(),
