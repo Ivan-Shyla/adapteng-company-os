@@ -38,7 +38,7 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: "status and export read only (export prints ids and names, no files); the rest touch exactly the MM-32 canary workflow"
+        description: "status and export read only (export logs aggregate counts only); the rest touch exactly the MM-32 canary workflow"
         required: true
         default: status
         type: choice
