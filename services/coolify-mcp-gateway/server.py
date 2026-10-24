@@ -28,8 +28,8 @@ def create_server():
     backend = CoolifyClient(cfg)
 
     def owner_only():
-        token = get_access_token()
-        claims = getattr(token, "claims", None) if token else None
+        oauth_session = get_access_token()
+        claims = getattr(oauth_session, "claims", None) if oauth_session else None
         if not is_allowed_identity(claims, cfg.github_login):
             raise PermissionError("GitHub account not authorized")
 
