@@ -5,7 +5,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY gateway_core.py server.py ./
-RUN useradd --uid 10001 --create-home gateway && mkdir -p /data/oauth && chown -R 10001:10001 /data
+# Seed an empty named volume with an owned file so Docker propagates
+# UID 10001 metadata on first mount; the CI volume test validates write access.
+RUN useradd --uid 10001 --create-home gateway && mkdir -p /data/oauth && touch /data/oauth/.initialized && chown -R 10001:10001 /data
 USER 10001
 EXPOSE 8000
 # OAuth discovery proves that the HTTP server is serving requests; /mcp itself is protected.
