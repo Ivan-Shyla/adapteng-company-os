@@ -131,11 +131,14 @@ class ExportTests(unittest.TestCase):
             self.assertEqual(code, driver.EXIT_OK)
             self.assertFalse(out.exists())
         output = buffer.getvalue()
+        expected_active = sum(item.get("active") is True for item in SELF_HOSTED_SET)
+        self.assertIn(
+            f"RESULT export inventory workflows=3 active={expected_active} written=0",
+            output,
+        )
         for item in SELF_HOSTED_SET:
-            self.assertIn(
-                f"id={item['id']} active={item['active']} name={item['name']!r}", output
-            )
-        self.assertIn("RESULT export inventory workflows=3 written=0", output)
+            self.assertNotIn(item["id"], output)
+            self.assertNotIn(item["name"], output)
         # Only the list is read: no per-workflow definition is fetched at all.
         self.assertEqual([call[1] for call in client.calls], ["/workflows"])
 
@@ -147,6 +150,26 @@ class ExportTests(unittest.TestCase):
         with TemporaryDirectory() as tmp, redirect_stdout(buffer):
             driver_module.operate_export(client, Path(tmp) / "export")
         self.assertNotIn(sentinel, buffer.getvalue())
+
+    def test_export_does_not_leak_sensitive_workflow_names_or_ids(self) -> None:
+        confidential = {
+            **AUT_001,
+            "id": "CONFIDENTIAL-INTERNAL-ID",
+            "name": "CONFIDENTIAL-CUSTOMER-NAME",
+        }
+        client = FakeN8nClient({
+            ("GET", "/workflows"): workflows_page([confidential]),
+        })
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "export"
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                code = driver_module.operate_export(client, out)
+            self.assertEqual(code, driver.EXIT_OK)
+            self.assertFalse(out.exists())
+        self.assertNotIn(confidential["name"], buffer.getvalue())
+        self.assertNotIn(confidential["id"], buffer.getvalue())
+        self.assertEqual([call[1] for call in client.calls], ["/workflows"])
 
     def test_private_export_writes_one_file_per_workflow_plus_a_manifest(self) -> None:
         client = self.workflow_client()
