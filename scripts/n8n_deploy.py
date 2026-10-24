@@ -221,11 +221,7 @@ def operate_status(client: N8nClient) -> int:
     workflows = list_all_workflows(client)
     ids = {item.get("id") for item in workflows}
     driver.emit(f"    workflow count: {len(workflows)}")
-    for item in sorted(workflows, key=lambda w: str(w.get("name"))):
-        driver.emit(
-            f"    id={item.get('id')} active={item.get('active')} "
-            f"name={item.get('name')!r}"
-        )
+    active_count = sum(item.get("active") is True for item in workflows)
 
     if KNOWN_N8N_CLOUD_WORKFLOW_ID in ids:
         driver.emit("")
@@ -263,7 +259,7 @@ def operate_export(
 
     The repository is public, so build logs and artifacts are readable by any
     signed-in GitHub user. Without a declared private destination this prints
-    only each workflow's id, name and active flag and writes nothing. With one
+    only aggregate workflow counts and writes nothing. Names and IDs are never logged. With one
     (EXPORT_DESTINATION_PRIVATE=true, see main) it writes one cleaned file per
     id plus a manifest, reusing n8n_cloud_export.clean_workflow so pinned and
     static data are dropped, credential references shrink to id and name, and
@@ -285,7 +281,10 @@ def operate_export(
             f"({PRIVATE_DESTINATION_VARIABLE}=true). This repository is public, "
             "so its logs and artifacts are world-readable."
         )
-        driver.emit(f"RESULT export inventory workflows={len(workflows)} written=0")
+        driver.emit(
+            f"RESULT export inventory workflows={len(workflows)} "
+            f"active={active_count} written=0"
+        )
         return driver.EXIT_OK
 
     # Imported here because n8n_cloud_export imports this module at load time.
@@ -307,7 +306,7 @@ def operate_export(
         target = output_dir / f"{workflow_id}.json"
         target.write_text(json.dumps(cleaned, indent=2, sort_keys=True), encoding="utf-8")
         written += 1
-        driver.emit(f"    exported id={workflow_id} name={item.get('name')!r}")
+        # Do not log workflow names or IDs, even for a private export invocation.
 
     manifest = {
         "base_url": client.base_url,
