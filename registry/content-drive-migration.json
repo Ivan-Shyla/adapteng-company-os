@@ -1,0 +1,399 @@
+{
+  "schema": "adapteng.content-drive-migration/v1",
+  "status": "prepared-not-executed",
+  "evidence_date": "2026-10-24",
+  "evidence_basis": "Live n8n Cloud evidence from two governed runs of the n8n-cloud-export workflow on main (preflight 40084327093, evidence 40084363965), which print only structure, run times and radar status counts; the read-only listing of the connected personal Drive session; the public website sitemap; and repository exports, which are stale against the live graphs. This repository is public, so titles of unpublished drafts and their source links are withheld.",
+  "rules": {
+    "originals": "never moved, renamed, trashed or edited; copy only",
+    "identifiers": "no Drive IDs or URLs are recorded here; the governed manifest builder reads them at copy time",
+    "watched_folders": "no copy lands in a folder any active trigger watches; the only watched folder today is the personal 01_Inbox of MM-01",
+    "duplicate_guard": [
+      "legacy_key",
+      "source_sha256",
+      "ae_cgr_id",
+      "pub_id",
+      "processed-state protection"
+    ],
+    "article_ids": "AE-CGR numbers are reserved through the governed identity reservation, never chosen by hand; ae_cgr_id stays null until then",
+    "plan_status": "incomplete while any completion_gates entry is unsatisfied",
+    "public_repository_note": "titles of unpublished drafts, their source links and any Drive IDs stay out of this file"
+  },
+  "destination": {
+    "shared_drive": "AdaptEng Company",
+    "content_root_alias": "company-drive://40_Content",
+    "case_media_root_alias": "company-drive://00_Case_Uploads",
+    "article_folder_pattern": "AE-CGR-NNNN_short-title",
+    "article_subfolders": [
+      "01_Source",
+      "02_Drafts",
+      "03_Review",
+      "04_Approved",
+      "05_Published"
+    ],
+    "folders_created_so_far": [],
+    "folders_created_note": "None. The connected personal session cannot see Shared Drives and no governed folder operation was authorized for this step."
+  },
+  "workflow_map": [
+    {
+      "workflow": "MM-20 Publication Scout",
+      "live_id": "gJMEoOMUI0uS0D1Y",
+      "repo_export": "adapteng-automation-platform n8n/workflows/production/MM-20-publication-scout.json",
+      "repo_state": "production, active; the repository export is stale",
+      "reads": "Crossref and Semantic Scholar search",
+      "writes": [
+        "Publication_Radar"
+      ],
+      "writes_kind": "n8n Data Table, then MM-21 writes Drive files",
+      "dedupe_today": "Upsert matches on dedupe_key, but the same upsert writes status, drive_file_id and analysis_id from the newly discovered item, and the new item sets drive_file_id and analysis_id to empty strings. Confirmed in the repository export; the live graph is reported to map the same fields.",
+      "consequence_if_unchanged": "Each Monday the upsert writes the discovered status and empty drive_file_id and analysis_id over the existing row, so the same top-scored publications pass the auto-approval filter again and are fetched again.",
+      "change_before_cutover": "Existing radar rows are never written by discovery (insert only if absent). Status, drive_file_id and analysis_id are protected fields. Pause or gate this schedule before any Drive cutover.",
+      "live_state_verified": "Active. Weekly Monday 07:00 trigger and a manual trigger. After the upsert, a filter auto-approves candidates, a cap node limits it to 2 per run, Set Approved For Fetch writes status, then the chain calls MM-21, MM-22 (disabled), MM-23 and MM-24 in sequence. It also has OpenAlex and Europe PMC searches, a DOI canonical dedupe key step and a Telegram weekly digest, none of which are in the repository export.",
+      "downstream_to_check": "MM-23 and MM-24 run after MM-21 on every Monday run. Whether they created Website_Content, LinkedIn_Drafts rows or WordPress drafts each week has not been checked."
+    },
+    {
+      "workflow": "MM-01 Content Intake from Google Drive",
+      "live_id": "fTJVvxC0hviQy0im",
+      "repo_export": "adapteng-automation-platform n8n/workflows/production/MM-01-content-intake-from-google-drive.json",
+      "repo_state": "production, active",
+      "reads": "personal 01_Inbox (poll every minute, fileCreated)",
+      "writes": [
+        "Raw_Media",
+        "Content_Cases"
+      ],
+      "writes_kind": "n8n Data Tables",
+      "also": "sends an intake email notice",
+      "dedupe_today": "none: media_id is time and random based and both inserts are plain inserts",
+      "change_before_cutover": "add a drive_file_id existence check ahead of both inserts, then repoint the trigger to the corporate case intake folder"
+    },
+    {
+      "workflow": "MM-15 Photo Intake",
+      "live_id": "ih7XILrXI0JwB43U",
+      "repo_export": "adapteng-automation-platform n8n/workflows/paused/MM-15-photo-intake.json",
+      "repo_state": "paused, inactive",
+      "reads": "personal 01_Inbox (same folder as MM-01)",
+      "writes": [
+        "Photo_Content_Queue"
+      ],
+      "writes_kind": "n8n Data Table",
+      "dedupe_today": "none",
+      "change_before_cutover": "stay paused; two triggers on one folder would double-ingest"
+    },
+    {
+      "workflow": "MM-21 Publication Fetcher",
+      "live_id": "kB21JwdMDZt7nT5a",
+      "repo_export": "adapteng-automation-platform n8n/workflows/paused/MM-21-publication-fetcher.json",
+      "repo_state": "paused, inactive, manual trigger in the export; live is ACTIVE and has an Execute Workflow Trigger",
+      "reads": "Publication_Radar rows with status approved_for_fetch",
+      "writes": "source package .txt files to the personal My Drive root, then Publication_Radar drive_file_id and status",
+      "writes_kind": "Drive files plus an n8n Data Table",
+      "dedupe_today": "status gate only; the radar row moves to approved_for_analysis after a successful write",
+      "observed_conflict": "Each Monday MM-20 approves 2 candidates and MM-21 creates 4 files: 2 distinct publications, each twice, in one MM-21 execution. The fan-out cause is inferred: the table read node runs once per incoming item, so 2 incoming items return the 2 candidates twice. The file creation times (02:00:35 to 02:00:40 UTC) fall inside the MM-21 execution windows.",
+      "change_before_cutover": "Read the candidate table once, drop repeated pub_id values before the Drive write (dedupe_candidates), check the radar row and the destination folder before writing, and write to the article 01_Source folder, not the My Drive root.",
+      "live_state_verified": "Active, called by MM-20. Get Publication_Radar Candidates reads the table, Create Drive Source File writes to the My Drive root (folder_is_root=true), Update Publication_Radar writes drive_file_id, status and notes."
+    },
+    {
+      "workflow": "MM-23 Publication to Website Draft",
+      "live_id": "a9kv1zsJAvLcAs1u",
+      "repo_export": "adapteng-automation-platform n8n/workflows/experimental/MM-23-publication-to-website-draft.json",
+      "repo_state": "experimental, inactive, manual trigger",
+      "reads": "Publication_Analysis Data Table",
+      "writes": [
+        "Website_Content",
+        "LinkedIn_Drafts"
+      ],
+      "writes_kind": "n8n Data Tables",
+      "drive_dependency": "none",
+      "change_before_cutover": "none for Drive; Data Table export is the dependency"
+    },
+    {
+      "workflow": "MM-23C Google Docs Draft Exporter",
+      "live_id": "uawTyLkBJ6pp4u5y",
+      "repo_export": "adapteng-automation-platform n8n/workflows/experimental/MM-23C-google-docs-draft-exporter.json",
+      "repo_state": "experimental, inactive, manual trigger",
+      "reads": "Website_Content polished drafts",
+      "writes": "Google Docs to the personal My Drive root, then Website_Content review status",
+      "writes_kind": "Drive files plus an n8n Data Table",
+      "dedupe_today": "none visible in the export",
+      "change_before_cutover": "write into the article 03_Review folder of the corporate Shared Drive and look up the website_id before creating a document"
+    },
+    {
+      "workflow": "MM-23D Google Doc to Website_Content Sync",
+      "live_id": "92875J5AqzsmrUhM",
+      "repo_export": "adapteng-automation-platform n8n/workflows/paused/MM-23D-google-doc-to-website-content-sync.json",
+      "repo_state": "paused, inactive, manual trigger",
+      "reads": "an approved Google Doc by document ID, as text",
+      "writes": [
+        "Website_Content",
+        "Website_Content_Sync"
+      ],
+      "writes_kind": "n8n Data Tables",
+      "change_before_cutover": "the document ID column must point at the corporate copy; no folder constant to change"
+    },
+    {
+      "workflow": "MM-24 Website Draft to WordPress Draft",
+      "live_id": "skSadXstKOwHPVHs",
+      "repo_export": "adapteng-automation-platform n8n/workflows/experimental/MM-24-website-draft-to-wordpress-draft.json",
+      "repo_state": "experimental, inactive, manual trigger",
+      "reads": "Website_Content approved rows",
+      "writes": "WordPress draft post",
+      "writes_kind": "external site",
+      "drive_dependency": "none",
+      "change_before_cutover": "none for Drive; final publishing stays manual"
+    },
+    {
+      "workflow": "MM-41 Case Pipeline Orchestrator",
+      "live_id": "z2dYx1mvy9rXOsLY",
+      "repo_export": "none (live-only, recorded in docs/n8n/inventory-reconciliation-2026-07-26.md of the platform repository)",
+      "repo_state": "inactive, safety-frozen 2026-07-27",
+      "reads": "unknown: no export",
+      "writes": "unknown: no export",
+      "change_before_cutover": "export and sanitize before any decision; do not reactivate"
+    },
+    {
+      "workflow": "MM-03 LinkedIn Draft Factory",
+      "live_id": "uNX7fPyRiokonTzZ",
+      "repo_state": "experimental, inactive",
+      "note": "No LinkedIn autopublishing is assumed or planned."
+    }
+  ],
+  "source_classes": [
+    {
+      "class": "article-review-docs",
+      "description": "Google Docs exported for review by the draft exporter, sitting in the personal My Drive root",
+      "items": [
+        {
+          "legacy_key": "draft-2026-06-16-a",
+          "title": "unpublished review draft 1 (title withheld, repository is public)",
+          "created": "2026-06-16",
+          "linked_source": "source package created 2026-06-15",
+          "published_on_site": false,
+          "ae_cgr_id": null,
+          "destination": "40_Content/AE-CGR-NNNN_<slug-1>/03_Review",
+          "action": "copy",
+          "source_sha256": null
+        },
+        {
+          "legacy_key": "draft-2026-06-16-b",
+          "title": "unpublished review draft 2 (title withheld, repository is public)",
+          "created": "2026-06-16",
+          "linked_source": "source package created 2026-06-15",
+          "published_on_site": false,
+          "ae_cgr_id": null,
+          "destination": "40_Content/AE-CGR-NNNN_<slug-2>/03_Review",
+          "action": "copy",
+          "source_sha256": null
+        },
+        {
+          "legacy_key": "draft-2026-06-16-c",
+          "title": "unpublished review draft 3 (title withheld, repository is public)",
+          "created": "2026-06-16",
+          "linked_source": "source package created 2026-06-15",
+          "published_on_site": false,
+          "ae_cgr_id": null,
+          "destination": "40_Content/AE-CGR-NNNN_<slug-3>/03_Review",
+          "action": "copy",
+          "source_sha256": null
+        }
+      ]
+    },
+    {
+      "class": "source-packages-linked",
+      "description": "One-off source package text files that map to a draft above",
+      "count": 3,
+      "destination": "the 01_Source folder of the matching article",
+      "action": "copy",
+      "dedupe": "legacy_key plus source_sha256; DOI recorded as the cross-check"
+    },
+    {
+      "class": "source-packages-recurring-duplicates",
+      "description": "Weekly repeated source packages with no downstream article. Suspected cause is recurring_writer; not proven.",
+      "count": 39,
+      "distinct_sources": 5,
+      "repeats": {
+        "10.56127/juit.v5i1.2527": 20,
+        "10.1088/1742-6596/3298/1/012058": 6,
+        "10.48084/etasr.18689": 7,
+        "OPENALEX 10.1016/j.envint.2025.109594": 3,
+        "EUROPEPMC 10.1016/j.jenvman.2025.126219": 3
+      },
+      "destination": "none yet",
+      "action": "hold: copy at most one canonical file per DOI after the owner picks which sources become articles; leave the rest in place"
+    },
+    {
+      "class": "source-packages-test-fixtures",
+      "description": "Synthetic or test fetch outputs",
+      "count": 2,
+      "destination": "none",
+      "action": "exclude"
+    },
+    {
+      "class": "case-media",
+      "description": "CASE_GMS810_WOHLER_001: 3 photos, 1 video, 1 case note in the personal 01_Inbox",
+      "count": 5,
+      "destination": "company-drive://00_Case_Uploads/CASE-YYYY-NNN, per runbooks/company-drive.md; 40_Content/01_Source holds only a link manifest",
+      "action": "hold: copy after the owner confirms redaction review (EXIF/GPS and visual), because the file names say needs_manual_review",
+      "note": "The video is about 140 MB, so it needs the large-file path rather than text copy."
+    },
+    {
+      "class": "tracking-workbook",
+      "description": "AdaptEng Marketing System spreadsheet in the personal AdaptEng_Marketing folder",
+      "count": 1,
+      "destination": "none yet",
+      "action": "hold: legacy tracker superseded by Data Tables; owner decides keep, archive or copy as reference"
+    },
+    {
+      "class": "out-of-scope",
+      "description": "Two Russian-language technical documents in the personal My Drive root that are not marketing content",
+      "count": 2,
+      "destination": "none",
+      "action": "exclude"
+    }
+  ],
+  "published_articles": {
+    "source": "https://adapteng.com/sitemap-post-type-post.xml",
+    "count": 21,
+    "topics": [
+      "sensor selection",
+      "DAS/DIS integration",
+      "carbon metering",
+      "QAL2 and RATA practice",
+      "QAL1 certificate",
+      "QAL2 versus RATA",
+      "CEMS QA/QC procedure"
+    ],
+    "languages": [
+      "en",
+      "cz",
+      "ru"
+    ],
+    "note": "None of the three personal review docs matches a published article. The cems-qa-qc-procedure-1 post matches the earlier ART-2026-001 pilot, whose source package is covered by the platform repository's approved-asset migration runbook."
+  },
+  "cutover_order": [
+    "1. Owner provides Shared Drive access to the company service account path (see the runbook owner action).",
+    "2. Create the 40_Content article folders for the three review docs through the governed folder operation, with fixed idempotency keys.",
+    "3. Copy the three review docs and their three source packages; compare names, MIME types and SHA-256 against this manifest.",
+    "4. Replay the copy; confirm zero new files.",
+    "5. Export the n8n Data Tables from Cloud (Raw_Media, Content_Cases, Photo_Content_Queue, Publication_Radar, Publication_Analysis, Website_Content, Website_Content_Sync, LinkedIn_Drafts) and import to self-hosted.",
+    "6. Rebuild one workflow at a time on self-hosted inactive, run a manual canary against a test folder, then switch the single trigger.",
+    "7. Pause the Cloud twin only after the self-hosted canary passes and the rollback step below is written down."
+  ],
+  "rollback": "Originals are never touched, so rollback is: reactivate the Cloud twin (kept paused, not deleted) and delete only the corporate copies created under the recorded idempotency keys.",
+  "recurring_writer": {
+    "suspect": "MM-20 Publication Scout on its Monday trigger, then MM-21 Publication Fetcher: two causes that multiply. (1) Rediscovery resets status, drive_file_id and analysis_id, so the same publications are approved again every Monday. (2) MM-21 reads its candidates once per incoming item, so two approved items give four files.",
+    "status": "identified; reset mechanism strongly supported, not yet seen as a before and after change",
+    "evidence_for": [
+      "The live MM-20 graph is active with a Monday 07:00 trigger, auto-approval capped at 2 per run, and a call to MM-21.",
+      "MM-21 executions on 2026-10-19, 10-12, 10-05 and 09-28 start at 02:00:34 UTC; the source files of those days were created seconds later, 4 per Monday, 2 publications twice each.",
+      "The workflow time zone is five hours ahead of UTC, which resolves the earlier Monday 07:00 against Monday 02:00 UTC question.",
+      "44 source files exist in the personal root while only 5 radar rows are in a processed state (3 analyzed, 2 approved_for_analysis) and 62 rows are candidate_for_fetch, every listed one with empty drive and analysis ids. That is consistent with publications fetched in past weeks having been reset, but the listing shows only the first 60 rows.",
+      "The live upsert maps status, drive_file_id and analysis_id from the new item, whose last two are empty, as the owner confirmed."
+    ],
+    "evidence_against_or_open": [
+      "No row-level before and after of one publication exists, so the reset is inferred from state and graph, not observed.",
+      "Execution history before 2026-09-28 is not retained, so earlier weeks rest on file times only.",
+      "The 2026-10-05 and 2026-09-28 runs ended in error after the files were written; the failing step is unknown.",
+      "The fan-out cause of the doubled files is an inference."
+    ],
+    "confirm_with": [
+      "Snapshot the radar rows of the two publications approved on 2026-10-19 now, and again after the 2026-10-26 02:00 UTC run, without changing anything",
+      "Whether MM-23 and MM-24 created WordPress drafts, Website_Content rows or LinkedIn_Drafts rows on Monday runs"
+    ],
+    "protected_fields": [
+      "status",
+      "drive_file_id",
+      "analysis_id"
+    ],
+    "discovery_rule": "insert only if absent; never write protected fields on an existing row",
+    "fetch_rule": "MM-21 writes only when the radar row has no drive_file_id, the candidate list has no repeated pub_id, and the destination folder holds no file for that pub_id"
+  },
+  "completion_gates": [
+    {
+      "gate": "recurring writer identified from Cloud executions and rows",
+      "satisfied": true,
+      "evidence": "MM-20 to MM-21 on Mondays 02:00 UTC, matched to file creation times (run 40084363965)"
+    },
+    {
+      "gate": "MM-20 upsert no longer writes protected fields on existing rows",
+      "satisfied": false
+    },
+    {
+      "gate": "MM-21 reads candidates once and drops repeated pub_id before the Drive write",
+      "satisfied": false
+    },
+    {
+      "gate": "MM-21 write guarded by radar row and destination folder check",
+      "satisfied": false
+    },
+    {
+      "gate": "Cloud schedule for MM-20 paused or gated by the owner before any Drive cutover",
+      "satisfied": false
+    },
+    {
+      "gate": "MM-23 and MM-24 weekly side effects (drafts, rows) checked",
+      "satisfied": false
+    },
+    {
+      "gate": "Cloud Data Tables exported privately and row counts matched on self-hosted",
+      "satisfied": false
+    },
+    {
+      "gate": "copy, replay and manifest comparison recorded for the three review docs",
+      "satisfied": false
+    }
+  ],
+  "live_evidence": {
+    "cloud_workflows": 146,
+    "cloud_active_workflows": 32,
+    "data_tables_found": [
+      "Content_Cases",
+      "LinkedIn_Drafts",
+      "Photo_Content_Queue",
+      "Publication_Analysis",
+      "Publication_Radar",
+      "Raw_Media",
+      "Website_Content"
+    ],
+    "data_tables_missing": [
+      "Website_Content_Sync"
+    ],
+    "data_table_path": "/data-tables",
+    "publication_radar_rows": 254,
+    "publication_radar_by_status": {
+      "analyzed": 3,
+      "approved_for_analysis": 2,
+      "candidate_for_fetch": 62,
+      "keep_in_radar_only": 116,
+      "new": 4,
+      "review_required": 67
+    },
+    "publication_radar_repeated_dedupe_keys": 0,
+    "instance_timezone_inferred": "five hours ahead of UTC: Monday 07:00 workflow time equals Monday 02:00 UTC in every retained run",
+    "retained_executions": "MM-20 and MM-21 history is retained back to 2026-09-28 only (four Monday runs)",
+    "monday_runs": [
+      {
+        "date": "2026-10-19",
+        "mm20": "success",
+        "mm21": "success",
+        "source_files_created": 4
+      },
+      {
+        "date": "2026-10-12",
+        "mm20": "success",
+        "mm21": "success",
+        "source_files_created": 4
+      },
+      {
+        "date": "2026-10-05",
+        "mm20": "error",
+        "mm21": "error",
+        "source_files_created": 4
+      },
+      {
+        "date": "2026-09-28",
+        "mm20": "error",
+        "mm21": "error",
+        "source_files_created": 4
+      }
+    ]
+  }
+}
