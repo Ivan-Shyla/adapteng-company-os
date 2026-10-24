@@ -1,6 +1,17 @@
 # AdaptEng Coolify MCP Gateway — read-only OAuth bridge
 
-Status: IMPLEMENTED IN PR / NOT DEPLOYED / NOT YET ACCEPTED.
+Status: TEST DEPLOYED on 2026-10-24 / NOT YET ACCEPTED for production use.
+
+## Test deployment evidence — 2026-10-24
+
+- Owner explicitly approved a test deployment of the NEW Coolify gateway only, without changes to existing services.
+- Manually deployed commit `d0e4e6b892a04f1ea6ca4368596c889eef6ba56b` on the existing `localhost` Hetzner server through Coolify.
+- Deployment result: `Finished`; gateway application `Running`; Docker image built; OAuth named volume created; Dockerfile Healthcheck reported `healthy` with exit code `0`; rolling update completed.
+- One initial health probe was connection-refused during server initialization; a subsequent probe passed within the healthcheck start period.
+- Last known PR CI for that deployed commit: both general CI and dedicated gateway CI `success`.
+- Still OPEN: external HTTPS/TLS reachability, OAuth discovery, live GitHub OAuth login and PKCE, authorization deny check, read-only Coolify API tool execution, encrypted-session persistence after restart, offsite backup and restore drill, and existing-service post-checks.
+- Do NOT infer production acceptance from healthy Docker status. Auto-deploy remains manual-only; the production test runs a reviewed branch without merge to `main`.
+
 
 ## Architectural decision
 
