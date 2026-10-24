@@ -1170,6 +1170,18 @@ class RehearsalReleaseSourceTests(unittest.TestCase):
         self.assertNotIn('pgbackrest=$pinned_package', text)
         self.assertNotIn("apt-cache madison pgbackrest", text)
 
+    def test_failed_wal_archive_emits_metadata_without_raw_logs(self) -> None:
+        text = self.workflow()
+        diagnostic = text.split(
+            "- name: Diagnose WAL archiver failure using sanitized local metadata", 1
+        )[1].split("- name: Say why the object store refused", 1)[0]
+        self.assertIn("if: failure()", diagnostic)
+        self.assertIn("FROM pg_stat_archiver", diagnostic)
+        self.assertIn("last_failed_wal", diagnostic)
+        self.assertIn("raw_archive_logs_emitted=false", diagnostic)
+        self.assertNotIn("cat \"$REHEARSAL_ROOT/logs/source.log\"", diagnostic)
+        self.assertNotIn("tail -", diagnostic)
+
     def test_rehearsal_does_not_claim_to_test_production_restore(self) -> None:
         text = self.workflow()
         self.assertIn("REHEARSAL_SCOPE: ", text)
