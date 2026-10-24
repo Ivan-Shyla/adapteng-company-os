@@ -717,6 +717,66 @@ jobs:
             --expect equal --min-tables 5 --min-rows 40000 \
             --output "$EVIDENCE/compare-restore-latest.json"
 
+      - name: Diagnose WAL archiver failure using sanitized local metadata
+        if: failure()
+        run: |
+          # Only metadata from the disposable source cluster and counts/error
+          # categories from its logs. No raw PostgreSQL/pgBackRest log contents,
+          # credentials, customer rows or network connections are printed.
+          set +e
+          set -uo pipefail
+          echo "### PostgreSQL archiver diagnostic (disposable test cluster)"
+          if [ -f "$SOURCE_PGDATA/postmaster.pid" ]; then
+            psql --no-psqlrc --tuples-only --no-align \
+              --host="$SOURCE_SOCKET" --port="$SOURCE_PORT" \
+              --username=postgres --dbname=postgres \
+              --set=ON_ERROR_STOP=1 --command="
+                SELECT 'archived_count=' || archived_count ||
+                       ' failed_count=' || failed_count ||
+                       ' last_archived_wal=' || coalesce(last_archived_wal, 'none') ||
+                       ' last_failed_wal=' || coalesce(last_failed_wal, 'none')
+                FROM pg_stat_archiver;
+              " || echo "local archiver metadata unavailable"
+          else
+            echo "source PostgreSQL cluster not running"
+          fi
+
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          root = Path(os.environ["REHEARSAL_ROOT"]) / "logs"
+          files = [root / "source.log", *root.glob("*archive-push*.log")]
+          patterns = {
+              "archive_command_failed": r"archive command failed",
+              "archive_retry": r"archiv(?:e|ing).*(?:retry|failed)",
+              "permission_denied": r"permission denied|access denied",
+              "credential_rejected": r"unauthoriz|invalid.?credential",
+              "timeout": r"timed? out|timeout",
+              "network_error": r"connection refused|could not (?:connect|resolve)",
+              "repository_error": r"HTTP request failed|repo.*error",
+          }
+          counts = dict.fromkeys(patterns, 0)
+          exit_codes = set()
+          files_read = 0
+          for path in files:
+              if not path.is_file():
+                  continue
+              files_read += 1
+              for line in path.read_text(errors="replace").splitlines():
+                  for category, pattern in patterns.items():
+                      if re.search(pattern, line, re.I):
+                          counts[category] += 1
+                  for match in re.finditer(r"(?:exit code|exited with status)\s+(\d{1,3})", line, re.I):
+                      exit_codes.add(match.group(1))
+          print(f"diagnostic_log_files_read={files_read}")
+          for label, count in counts.items():
+              print(f"{label}_lines={count}")
+          print("archive_exit_codes=" + (",".join(sorted(exit_codes)) if exit_codes else "none"))
+          print("raw_archive_logs_emitted=false")
+          PY
+
       - name: Say why the object store refused, instead of leaving a bare status
         if: failure()
         env:
