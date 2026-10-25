@@ -379,14 +379,49 @@ class WorkflowFileTests(unittest.TestCase):
         self.assertIn("secrets.N8N_CLOUD_API_KEY", self.text)
         self.assertIn("vars.N8N_CLOUD_BASE_URL", self.text)
 
-    def test_public_repository_never_gets_an_artifact(self) -> None:
-        self.assertNotIn("upload-artifact", self.text)
-        self.assertNotIn("actions/upload", self.text)
+    def test_only_ciphertext_is_uploaded(self) -> None:
+        self.assertEqual(self.text.count("actions/upload-artifact@"), 1)
+        upload = self.text[self.text.index("actions/upload-artifact@"):]
+        self.assertIn("path: ${{ runner.temp }}/enc", upload)
+        self.assertIn("encrypted", upload)
+        self.assertNotIn("/plain", upload)
+        self.assertNotIn("plain.tgz", upload)
+        self.assertLessEqual(int(re.search(r"retention-days:\s*(\d+)", upload).group(1)), 3)
 
-    def test_only_log_safe_operations_are_offered(self) -> None:
-        options = re.search(r"options:\n((?:\s+- \w+\n)+)", self.text)
+    def test_plaintext_is_encrypted_with_the_public_key_and_removed_before_upload(self) -> None:
+        encrypt = self.text.index("Encrypt the snapshot")
+        upload = self.text.index("Upload ciphertext")
+        self.assertLess(encrypt, upload)
+        step = self.text[encrypt:upload]
+        self.assertIn("-pubin", step)
+        self.assertIn("rsa_padding_mode:oaep", step)
+        self.assertIn("-pbkdf2", step)
+        self.assertIn("registry/n8n-export-transport.pub.pem", step)
+        self.assertIn("rm -rf plain plain.tgz session.key", step)
+        self.assertNotIn("N8N_CLOUD_API", step)
+
+    def test_both_steps_run_only_for_the_encrypted_export(self) -> None:
+        for name in ("Encrypt the snapshot", "Upload ciphertext"):
+            start = self.text.index(name)
+            self.assertIn("if: inputs.operation == 'export-encrypted'", self.text[start:start + 200])
+
+    def test_private_destination_flag_is_set_only_for_the_encrypted_export(self) -> None:
+        self.assertIn(
+            "EXPORT_DESTINATION_PRIVATE: ${{ inputs.operation == 'export-encrypted' && 'true' || 'false' }}",
+            self.text,
+        )
+
+    def test_only_expected_operations_are_offered(self) -> None:
+        options = re.search(r"options:\n((?:\s+- [\w-]+\n)+)", self.text)
         self.assertIsNotNone(options)
-        self.assertEqual(re.findall(r"- (\w+)", options.group(1)), ["preflight", "evidence"])
+        self.assertEqual(
+            re.findall(r"- ([\w-]+)", options.group(1)), ["preflight", "evidence", "export-encrypted"]
+        )
+
+    def test_transport_key_file_is_a_public_key_only(self) -> None:
+        key = (REPOSITORY_ROOT / "registry" / "n8n-export-transport.pub.pem").read_text(encoding="utf-8")
+        self.assertTrue(key.startswith("-----BEGIN PUBLIC KEY-----"))
+        self.assertNotIn("PRIVATE", key)
 
     def test_read_only_permissions(self) -> None:
         self.assertIn("contents: read", self.text)
