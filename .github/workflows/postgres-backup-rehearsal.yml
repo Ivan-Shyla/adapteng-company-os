@@ -46,10 +46,8 @@ on:
   # scheduled on the hour are the ones most likely to be delayed under load.
   schedule:
     - cron: "17 3 * * *"
-  push:
-    paths:
-      - .github/workflows/postgres-backup-rehearsal.yml
-      - scripts/rehearsal_*
+  # Intentionally no push trigger. A PR edit must not launch a B2 restore.
+  # The existing nightly schedule remains on main until a reviewed merge.
 
 permissions:
   contents: read
@@ -99,7 +97,11 @@ jobs:
       # PGBACKREST_<OPTION> variable in the environment as configuration, so a
       # variable in that namespace naming no real option would make every
       # pgBackRest call in this job abort on an unknown option.
-      PINNED_PGBACKREST_VERSION: 2.59.0
+      # 2.59.3 fixes weak encryption subkeys in earlier 2.59.x builds.
+      # Disposable rehearsal only; this does not upgrade production.
+      PINNED_PGBACKREST_VERSION: 2.59.3
+      # Immutable GitHub Release asset SHA-256 (public upstream digest).
+      PINNED_PGBACKREST_DIST_SHA256: 14037901db002e5536a948bf9f0fc0ff6cde31f4e675d3e9b46f129071bf2e5f
       PGBIN: /usr/lib/postgresql/16/bin
       SOURCE_PORT: '55432'
       RESTORE_IMMEDIATE_PORT: '55433'
@@ -182,26 +184,38 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
           sudo apt-get update -qq
 
-          # The tool that writes the backup has to be a known quantity, and
-          # recording its version after the fact only observes it. Resolve the
-          # package revision that carries the pinned upstream version rather
-          # than hardcoding the full Debian version string, because that string
-          # embeds the distribution codename and would break silently the next
-          # time the runner image changes.
-          pinned_package=$(apt-cache madison pgbackrest \
-            | awk -v want="$PINNED_PGBACKREST_VERSION" '$3 ~ "^" want "-" { print $3; exit }')
-          if [ -z "$pinned_package" ]; then
-            echo "::error title=Pinned pgBackRest unavailable::PGDG no longer offers $PINNED_PGBACKREST_VERSION for ${VERSION_CODENAME}."
-            exit 1
-          fi
+          # Only PostgreSQL and build dependencies come from PGDG apt. pgBackRest
+          # itself is built from a digest-verified upstream distribution archive.
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-            postgresql-16 "pgbackrest=$pinned_package"
+            postgresql-16 meson ninja-build gcc pkg-config \
+            libpq-dev libssl-dev libxml2-dev liblz4-dev libzstd-dev \
+            libbz2-dev zlib1g-dev libssh2-1-dev libsystemd-dev
 
-          # The distribution packages create and start a cluster of their own.
-          # Removing it leaves exactly the clusters this job creates, so nothing
-          # else on the runner can be confused for the rehearsal source.
+          source_root="$RUNNER_TEMP/pgbackrest-$PINNED_PGBACKREST_VERSION"
+          archive="$RUNNER_TEMP/pgbackrest.tar.gz"
+          build_dir="$RUNNER_TEMP/pgbackrest-build"
+          curl --fail --location --silent --show-error --retry 3 \
+            --output "$archive" \
+            "https://github.com/pgbackrest/pgbackrest/releases/download/release/$PINNED_PGBACKREST_VERSION/pgbackrest-$PINNED_PGBACKREST_VERSION.tar.gz"
+          printf '%s  %s\n' "$PINNED_PGBACKREST_DIST_SHA256" "$archive" \
+            | sha256sum --check --status || {
+                echo "::error title=pgBackRest distribution digest mismatch::Refusing to build unverified source."
+                exit 1
+              }
+          tar --extract --gzip --file "$archive" \
+            --directory "$RUNNER_TEMP" --no-same-owner --no-same-permissions
+          test -d "$source_root" || {
+            echo "::error title=Distribution root missing::No expected pgBackRest directory."
+            exit 1
+          }
+          meson setup "$build_dir" "$source_root" --prefix=/usr/local \
+            --buildtype=release
+          ninja -C "$build_dir"
+          sudo ninja -C "$build_dir" install
+
+          # Remove packaged automatic clusters before building isolated ones.
           while read -r version cluster _; do
-            [ -n "${version:-}" ] || continue
+            [ -n "$version" ] || continue
             sudo pg_dropcluster --stop "$version" "$cluster"
           done < <(pg_lsclusters --no-header || true)
           if [ -n "$(pg_lsclusters --no-header || true)" ]; then
@@ -211,36 +225,24 @@ jobs:
 
           echo "$PGBIN" >>"$GITHUB_PATH"
           "$PGBIN/postgres" --version | tee "$EVIDENCE/postgres-version.txt"
-
-          # Asking for a version is not the same as getting it. Nothing so far
-          # has verified that the binary now on PATH is the one that was asked
-          # for, so state the requirement and fail closed if it is not met.
-          installed=$(pgbackrest version)
+          binary=/usr/local/bin/pgbackrest
+          test -x "$binary" || {
+            echo "::error title=pgBackRest missing::Compiled executable was not installed."
+            exit 1
+          }
+          installed=$("$binary" version)
           if [ "$installed" != "pgBackRest $PINNED_PGBACKREST_VERSION" ]; then
-            echo "::error title=pgBackRest is not the pinned version::Asked for pgBackRest $PINNED_PGBACKREST_VERSION, but the binary on PATH reports '$installed'."
+            echo "::error title=pgBackRest version mismatch::Refusing unexpected executable."
             exit 1
           fi
           printf '%s\n' "$installed" >"$EVIDENCE/pgbackrest-version.txt"
-
-          # Recorded, not asserted, and the PR says so: the package revision and
-          # the bytes are evidence of what actually ran, not a constraint on it.
-          #
-          # State the boundary here rather than only in a report, because a
-          # reader who finds a version assertion above will reasonably assume
-          # more was pinned than actually was. The version string is asserted
-          # and fails this job closed. The bytes are not: the sha256 below is
-          # observed after the fact and compared against nothing, so PGDG could
-          # rebuild and republish 2.59.0 with different bytes and this job would
-          # still pass. Phase 0's immutability gate asks for the bytes, so this
-          # workflow does NOT satisfy it. Closing it needs a digest to compare
-          # against, supplied by the owner as a Phase 0 artifact.
-          binary=$(command -v pgbackrest)
           {
-            printf 'asserted version: pgBackRest %s\n' "$PINNED_PGBACKREST_VERSION"
-            printf 'package revision: %s\n' "$pinned_package"
+            printf 'asserted version: %s\n' "$installed"
+            printf 'verified distribution sha256: %s\n' "$PINNED_PGBACKREST_DIST_SHA256"
             printf 'binary: %s\n' "$binary"
-            printf 'binary sha256: %s\n' "$(sha256sum "$binary" | cut -d' ' -f1)"
-            printf 'immutability gate: NOT satisfied - the version above is asserted, the bytes above are only recorded\n'
+            printf 'binary sha256 (observed, not immutable): %s\n' "$(sha256sum "$binary" | cut -d' ' -f1)"
+            printf 'toolchain: runner compiler/meson/ninja (not byte-pinned)\n'
+            printf 'immutability gate: PARTIAL - source pinned; binary and PostgreSQL packages not byte-pinned\n'
           } | tee "$EVIDENCE/pgbackrest-provenance.txt"
 
       - name: Create the disposable source cluster
@@ -714,6 +716,66 @@ jobs:
             --right "$EVIDENCE/digest-restored-latest.txt" --right-label restored_to_latest \
             --expect equal --min-tables 5 --min-rows 40000 \
             --output "$EVIDENCE/compare-restore-latest.json"
+
+      - name: Diagnose WAL archiver failure using sanitized local metadata
+        if: failure()
+        run: |
+          # Only metadata from the disposable source cluster and counts/error
+          # categories from its logs. No raw PostgreSQL/pgBackRest log contents,
+          # credentials, customer rows or network connections are printed.
+          set +e
+          set -uo pipefail
+          echo "### PostgreSQL archiver diagnostic (disposable test cluster)"
+          if [ -f "$SOURCE_PGDATA/postmaster.pid" ]; then
+            psql --no-psqlrc --tuples-only --no-align \
+              --host="$SOURCE_SOCKET" --port="$SOURCE_PORT" \
+              --username=postgres --dbname=postgres \
+              --set=ON_ERROR_STOP=1 --command="
+                SELECT 'archived_count=' || archived_count ||
+                       ' failed_count=' || failed_count ||
+                       ' last_archived_wal=' || coalesce(last_archived_wal, 'none') ||
+                       ' last_failed_wal=' || coalesce(last_failed_wal, 'none')
+                FROM pg_stat_archiver;
+              " || echo "local archiver metadata unavailable"
+          else
+            echo "source PostgreSQL cluster not running"
+          fi
+
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          root = Path(os.environ["REHEARSAL_ROOT"]) / "logs"
+          files = [root / "source.log", *root.glob("*archive-push*.log")]
+          patterns = {
+              "archive_command_failed": r"archive command failed",
+              "archive_retry": r"archiv(?:e|ing).*(?:retry|failed)",
+              "permission_denied": r"permission denied|access denied",
+              "credential_rejected": r"unauthoriz|invalid.?credential",
+              "timeout": r"timed? out|timeout",
+              "network_error": r"connection refused|could not (?:connect|resolve)",
+              "repository_error": r"HTTP request failed|repo.*error",
+          }
+          counts = dict.fromkeys(patterns, 0)
+          exit_codes = set()
+          files_read = 0
+          for path in files:
+              if not path.is_file():
+                  continue
+              files_read += 1
+              for line in path.read_text(errors="replace").splitlines():
+                  for category, pattern in patterns.items():
+                      if re.search(pattern, line, re.I):
+                          counts[category] += 1
+                  for match in re.finditer(r"(?:exit code|exited with status)\s+(\d{1,3})", line, re.I):
+                      exit_codes.add(match.group(1))
+          print(f"diagnostic_log_files_read={files_read}")
+          for label, count in counts.items():
+              print(f"{label}_lines={count}")
+          print("archive_exit_codes=" + (",".join(sorted(exit_codes)) if exit_codes else "none"))
+          print("raw_archive_logs_emitted=false")
+          PY
 
       - name: Say why the object store refused, instead of leaving a bare status
         if: failure()

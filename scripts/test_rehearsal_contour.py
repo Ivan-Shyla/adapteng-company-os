@@ -1140,3 +1140,51 @@ class TrackedRehearsalFileTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RehearsalReleaseSourceTests(unittest.TestCase):
+    """Rehearsal source change must never trigger a real B2 run on PR push."""
+
+    def workflow(self) -> str:
+        return (ROOT / ".github" / "workflows" /
+                "postgres-backup-rehearsal.yml").read_text(encoding="utf-8")
+
+    def test_push_event_cannot_start_b2_rehearsal(self) -> None:
+        text = self.workflow()
+        event_section = text.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
+        self.assertIn("workflow_dispatch:", event_section)
+        self.assertIn("schedule:", event_section)
+        self.assertNotRegex(event_section, r"(?m)^  push:")
+
+    def test_source_is_pinned_to_sha256_and_must_fail_closed(self) -> None:
+        text = self.workflow()
+        self.assertIn("PINNED_PGBACKREST_VERSION: 2.59.3", text)
+        self.assertIn(
+            "PINNED_PGBACKREST_DIST_SHA256: "
+            "14037901db002e5536a948bf9f0fc0ff6cde31f4e675d3e9b46f129071bf2e5f",
+            text,
+        )
+        self.assertIn("sha256sum --check --status", text)
+        self.assertIn("pgBackRest distribution digest mismatch", text)
+        self.assertIn("meson setup", text)
+        self.assertNotIn('pgbackrest=$pinned_package', text)
+        self.assertNotIn("apt-cache madison pgbackrest", text)
+
+    def test_failed_wal_archive_emits_metadata_without_raw_logs(self) -> None:
+        text = self.workflow()
+        diagnostic = text.split(
+            "- name: Diagnose WAL archiver failure using sanitized local metadata", 1
+        )[1].split("- name: Say why the object store refused", 1)[0]
+        self.assertIn("if: failure()", diagnostic)
+        self.assertIn("FROM pg_stat_archiver", diagnostic)
+        self.assertIn("last_failed_wal", diagnostic)
+        self.assertIn("raw_archive_logs_emitted=false", diagnostic)
+        self.assertNotIn("cat \"$REHEARSAL_ROOT/logs/source.log\"", diagnostic)
+        self.assertNotIn("tail -", diagnostic)
+
+    def test_rehearsal_does_not_claim_to_test_production_restore(self) -> None:
+        text = self.workflow()
+        self.assertIn("REHEARSAL_SCOPE: ", text)
+        self.assertIn("PGBACKREST_REPO1_PATH: /restore-rehearsal/", text)
+        self.assertIn("PARTIAL - source pinned", text)
+
