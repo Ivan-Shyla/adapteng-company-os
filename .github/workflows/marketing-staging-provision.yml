@@ -1,0 +1,118 @@
+name: Marketing staging provision
+
+# One fixed operation that prepares the isolated Marketing staging environment:
+# a schema and a least-privilege role in the existing Postgres, and six inactive
+# n8n workflows bound to one dedicated n8n credential.
+#
+# What can be chosen at dispatch time is the operation name and a confirmation
+# phrase. There is no field for a statement, a file, a path, a schema, a role or
+# a commit: all of that is written in scripts/marketing_staging.py and in the
+# pinned migration hashes, so what can run is what a reviewer can read.
+#
+#   preflight           read-only; container, state, pins, backup age, n8n instance
+#   verify              read-only; proves the role reaches nothing outside its schema
+#   provision-database  WRITE; needs the confirmation phrase and the environment
+#   configure-n8n       WRITE; needs the confirmation phrase and the environment
+#   import-workflows    WRITE; imports with the Postgres nodes DISABLED until a person
+#                       has checked the credential in the n8n editor
+#   enable-db-nodes     WRITE; enables them after that check
+#
+# The two database writes also need the owner's acknowledgement, inside the phrase,
+# that no production restore proof exists (a fresh backup is not that proof).
+#
+# Writes run in a separate job behind the protected environment
+# marketing-staging-provision (required reviewer, main branch only). Neither job
+# runs from any ref other than main. The role password is generated inside the
+# job, masked, sent to the database on stdin and to n8n in one request, and is
+# never stored or printed.
+#
+# The SSH channel this uses failed with a TCP timeout on port 22 in the previous
+# attempts. If it still does, the job stops with that exact reason before any
+# write; see runbooks/marketing-staging-provision.md for the owner-run fallback.
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Fixed operation to run; the two writes also need the phrase below"
+        required: true
+        type: choice
+        options:
+          - preflight
+          - provision-database
+          - configure-n8n
+          - import-workflows
+          - enable-db-nodes
+          - verify
+      confirm:
+        description: "For a write only, the exact phrase from the runbook; leave empty for a read"
+        required: false
+        type: string
+        default: ""
+      credential_id:
+        description: "import-workflows and enable-db-nodes only: the id of the n8n credential the owner created; empty otherwise"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marketing-staging-provision
+  cancel-in-progress: false
+
+jobs:
+  read:
+    name: Read ${{ inputs.operation }}
+    if: github.ref == 'refs/heads/main' && (inputs.operation == 'preflight' || inputs.operation == 'verify')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Run the committed operation
+        env:
+          OPERATION: ${{ inputs.operation }}
+          CONFIRM: ${{ inputs.confirm }}
+          PROD_SSH_HOST: ${{ vars.PROD_SSH_HOST }}
+          PROD_SSH_PORT: ${{ vars.PROD_SSH_PORT }}
+          PROD_SSH_USER: ${{ vars.PROD_SSH_USER }}
+          PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          PROD_SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+          GITHUB_READ_CREDENTIAL: ${{ secrets.ADAPTENG_GITHUB_READ_TOKEN }}
+          COOLIFY_URL: ${{ vars.COOLIFY_URL }}
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          N8N_BASE_URL: ${{ vars.N8N_BASE_URL }}
+          N8N_API_CREDENTIAL: ${{ secrets.X_N8N_API_KEY }}
+        run: python scripts/marketing_staging.py --operation "$OPERATION" --confirm "$CONFIRM"
+
+  write:
+    name: Write ${{ inputs.operation }}
+    if: github.ref == 'refs/heads/main' && (inputs.operation == 'provision-database' || inputs.operation == 'configure-n8n' || inputs.operation == 'import-workflows' || inputs.operation == 'enable-db-nodes')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: marketing-staging-provision
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Run the committed operation
+        env:
+          OPERATION: ${{ inputs.operation }}
+          CONFIRM: ${{ inputs.confirm }}
+          CREDENTIAL_ID: ${{ inputs.credential_id }}
+          PROD_SSH_HOST: ${{ vars.PROD_SSH_HOST }}
+          PROD_SSH_PORT: ${{ vars.PROD_SSH_PORT }}
+          PROD_SSH_USER: ${{ vars.PROD_SSH_USER }}
+          PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          PROD_SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+          GITHUB_READ_CREDENTIAL: ${{ secrets.ADAPTENG_GITHUB_READ_TOKEN }}
+          COOLIFY_URL: ${{ vars.COOLIFY_URL }}
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          N8N_BASE_URL: ${{ vars.N8N_BASE_URL }}
+          N8N_API_CREDENTIAL: ${{ secrets.X_N8N_API_KEY }}
+        run: python scripts/marketing_staging.py --operation "$OPERATION" --confirm "$CONFIRM" --credential-id "$CREDENTIAL_ID"

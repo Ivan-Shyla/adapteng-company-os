@@ -20,6 +20,7 @@ exists. Never infer live capability from documentation alone.
 | Runbook | Use when |
 |---|---|
 | [`company-drive.md`](company-drive.md) | Deciding where photos, case files, drafts and approved artifacts belong; migrating safely from personal Drive. |
+| [`marketing-staging-provision.md`](marketing-staging-provision.md) | Preparing the isolated Marketing staging schema, role, n8n credential and workflows; the SSH channel diagnosis and the owner-run fallback. |
 | [`n8n-cloud-export.md`](n8n-cloud-export.md) | Reading n8n Cloud workflows, run history and the eight migration Data Tables through the bounded, GET-only export. |
 | [`n8n-operations.md`](n8n-operations.md) | Building, activating, or debugging a governed n8n workflow via the API. |
 | [`apply-migration.md`](apply-migration.md) | Applying a Postgres migration to live `adapteng_ops`. |
