@@ -13,6 +13,12 @@ name: Marketing staging provision
 #   verify              read-only; proves the role reaches nothing outside its schema
 #   provision-database  WRITE; needs the confirmation phrase and the environment
 #   configure-n8n       WRITE; needs the confirmation phrase and the environment
+#   import-workflows    WRITE; imports with the Postgres nodes DISABLED until a person
+#                       has checked the credential in the n8n editor
+#   enable-db-nodes     WRITE; enables them after that check
+#
+# The two database writes also need the owner's acknowledgement, inside the phrase,
+# that no production restore proof exists (a fresh backup is not that proof).
 #
 # Writes run in a separate job behind the protected environment
 # marketing-staging-provision (required reviewer, main branch only). Neither job
@@ -36,6 +42,7 @@ on:
           - provision-database
           - configure-n8n
           - import-workflows
+          - enable-db-nodes
           - verify
       confirm:
         description: "For a write only, the exact phrase from the runbook; leave empty for a read"
@@ -43,7 +50,7 @@ on:
         type: string
         default: ""
       credential_id:
-        description: "import-workflows only: the id of the n8n credential the owner created; empty otherwise"
+        description: "import-workflows and enable-db-nodes only: the id of the n8n credential the owner created; empty otherwise"
         required: false
         type: string
         default: ""
@@ -84,7 +91,7 @@ jobs:
 
   write:
     name: Write ${{ inputs.operation }}
-    if: github.ref == 'refs/heads/main' && (inputs.operation == 'provision-database' || inputs.operation == 'configure-n8n' || inputs.operation == 'import-workflows')
+    if: github.ref == 'refs/heads/main' && (inputs.operation == 'provision-database' || inputs.operation == 'configure-n8n' || inputs.operation == 'import-workflows' || inputs.operation == 'enable-db-nodes')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: marketing-staging-provision

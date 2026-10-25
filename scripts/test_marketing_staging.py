@@ -179,6 +179,49 @@ class ProvisionSqlTests(unittest.TestCase):
             self.assertIn(fragment, self.sql)
         self.assertLess(self.sql.index("$isolation$;"), self.sql.index("COMMIT;"))
 
+    def owner(self) -> str:
+        return ms.owner_sql({path: text for path, text in zip(ms.MIGRATION_PINS, (MIGRATION_009, MIGRATION_010))})
+
+    def test_owner_sql_is_one_transaction_that_also_stores_the_password(self) -> None:
+        text = self.owner()
+        self.assertEqual(text.count("BEGIN;"), 1)
+        self.assertEqual(text.count("COMMIT;"), 1)
+        self.assertEqual(text.count("CREATE SCHEMA"), 1)
+        commit = text.index("COMMIT;")
+        self.assertLess(text.index("$isolation$;"), text.index("ALTER ROLE %I PASSWORD"))
+        self.assertLess(text.index("ALTER ROLE %I PASSWORD"), text.index(ms.APPLIED_MARK))
+        self.assertLess(text.index(ms.APPLIED_MARK), commit)
+        self.assertNotIn("\\echo :pw", text[:commit])
+        self.assertGreater(text.index("\\echo :pw"), commit)
+        self.assertEqual(text.count("\\echo :pw"), 1)
+
+    def test_the_password_is_shown_only_when_the_transaction_marked_itself_applied(self) -> None:
+        shown = ms.SHOW_PASSWORD_ONCE
+        self.assertTrue(shown.startswith("\\if :{?applied}\n"))
+        self.assertLess(shown.index("\\echo :pw"), shown.index("\\else"))
+        self.assertIn("NOT APPLIED", shown[shown.index("\\else"):])
+        self.assertTrue(shown.rstrip().endswith("\\endif"))
+
+    def test_a_replay_is_stopped_by_a_guard_before_anything_is_created(self) -> None:
+        for text in (self.sql, self.owner()):
+            self.assertLess(text.index("do not replay this script"), text.index("CREATE SCHEMA"))
+            self.assertLess(text.index("do not replay this script"), text.index("CREATE ROLE"))
+
+    def test_rotate_script_changes_only_the_password_and_refuses_when_nothing_exists(self) -> None:
+        text = ms.owner_rotate_sql()
+        self.assertEqual((text.count("BEGIN;"), text.count("COMMIT;")), (1, 1))
+        self.assertIn("nothing to rotate", text)
+        self.assertLess(text.index("nothing to rotate"), text.index("ALTER ROLE %I PASSWORD"))
+        for forbidden in ("CREATE SCHEMA", "CREATE ROLE", "CREATE TABLE", "GRANT", "DROP"):
+            self.assertNotIn(forbidden, text)
+        self.assertLess(text.index(ms.APPLIED_MARK), text.index("COMMIT;"))
+        self.assertGreater(text.index("\\echo :pw"), text.index("COMMIT;"))
+
+    def test_state_script_is_read_only(self) -> None:
+        text = ms.owner_state_sql()
+        self.assertIn("staging_state: ", text)
+        self.assertNotRegex(text, r"(?i)\b(CREATE|ALTER|DROP|GRANT|REVOKE|INSERT|UPDATE|DELETE|TRUNCATE|COMMIT|BEGIN)\b")
+
     def test_password_statement_keeps_the_value_out_of_sql_after_the_first_line(self) -> None:
         sql = ms.SET_PASSWORD_SQL.replace("{pw}", "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345")
         self.assertEqual(sql.count("ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"), 1)
@@ -341,6 +384,53 @@ class OperationTests(unittest.TestCase):
         self.assertNotIn(secret_value, out.getvalue())
         client.request.assert_not_called()  # the credential is not created when the role step fails
 
+    def test_the_database_writes_carry_the_no_restore_proof_acknowledgement(self) -> None:
+        for operation in ("provision-database", "configure-n8n"):
+            self.assertIn(ms.ACKNOWLEDGEMENT, ms.CONFIRMATION[operation])
+            with self.assertRaises(ms.Refused):  # the phrase without the acknowledgement is not enough
+                ms.require_confirmation(operation, ms.CONFIRMATION[operation].replace(f" {ms.ACKNOWLEDGEMENT}", ""))
+        for operation in ("import-workflows", "enable-db-nodes"):
+            self.assertNotIn(ms.ACKNOWLEDGEMENT, ms.CONFIRMATION[operation])
+        self.assertEqual(set(ms.CONFIRMATION), set(ms.WRITE_OPERATIONS))
+        self.assertEqual(len(set(ms.CONFIRMATION.values())), len(ms.CONFIRMATION))
+
+    def test_the_recovery_point_gate_states_what_it_does_not_prove(self) -> None:
+        out = io.StringIO()
+        with mock.patch.object(driver, "operate_backup_check", return_value=driver.EXIT_OK) as check, redirect_stdout(out):
+            ms.recovery_point_gate(object())
+        self.assertEqual(check.call_args.kwargs["max_age_hours"], ms.BACKUP_MAX_AGE_HOURS)
+        text = out.getvalue()
+        self.assertIn("does not show the backup can be restored", text)
+        self.assertIn("synthetic B2 rehearsal is not that proof", text)
+        self.assertNotRegex(text, r"(?i)restore (is )?(proven|verified|tested)|backup (is )?(good|valid)")
+
+    def test_preflight_reports_that_restore_proof_is_still_an_open_gate(self) -> None:
+        fetch = self.fetch()
+        out = io.StringIO()
+        with mock.patch.object(driver, "operate_backup_check", return_value=driver.EXIT_OK), redirect_stdout(out):
+            ms.op_preflight(FakeHost(GOOD_CONTAINERS), fetch=fetch, backup_client=object())
+        self.assertIn("restore proof: NOT established", out.getvalue())
+
+    def test_configure_n8n_creates_the_credential_for_the_restricted_role_and_imports_enabled(self) -> None:
+        fetch = self.fetch()
+        provisioned = "schema|present\nrole|present\nschema_tables|7\nschema_views|1\nrole_attrs_ok|true\nrole_memberships|0\nrole_has_password|false\nrole_search_path|search_path=marketing_staging, pg_temp\n"
+        host = FakeHost(GOOD_CONTAINERS, {"state": provisioned})
+        self_hosted = {"id": "NsWG1hD8VmIRRwCv", "name": "AUT-001", "active": True, "nodes": []}
+        client = FakeN8n([self_hosted])
+        secret_value = "Zz0123456789abcdefghijklmnopqrstuvwxyzAB"
+        out = io.StringIO()
+        with mock.patch.object(driver, "operate_backup_check", return_value=driver.EXIT_OK), redirect_stdout(out):
+            code = ms.op_configure_n8n(host, fetch=fetch, backup_client=object(), n8n_client=client, password_factory=lambda: secret_value)
+        self.assertEqual(code, driver.EXIT_OK)
+        self.assertNotIn(secret_value, out.getvalue())
+        created = client.created_credentials
+        self.assertEqual(len(created), 1)
+        self.assertEqual((created[0]["type"], created[0]["name"]), ("postgres", ms.CREDENTIAL_NAME))
+        self.assertEqual((created[0]["data"]["user"], created[0]["data"]["database"]), (ms.ROLE, ms.DATABASE))
+        staging = [w for w in client.workflows.values() if w["name"].startswith("STG ")]
+        self.assertEqual(len(staging), 6)
+        self.assertTrue(all("disabled" not in node for w in staging for node in postgres_nodes(w)))
+
     def test_generated_password_has_the_expected_alphabet_and_is_masked(self) -> None:
         out = io.StringIO()
         with redirect_stdout(out):
@@ -365,13 +455,46 @@ class WorkflowBindingTests(unittest.TestCase):
         self.assertNotIn("active", body)
 
 
-class FakeN8n:
-    """Just enough of the n8n public API for import and readback."""
+PRODUCTION_CREDENTIAL_NAME = "adapteng_ops Postgres (internal)"
+CREDENTIALS = {
+    "CRED1": ("postgres", ms.CREDENTIAL_NAME),
+    "StagingCred01": ("postgres", ms.CREDENTIAL_NAME),
+    "ProdCred0001": ("postgres", PRODUCTION_CREDENTIAL_NAME),
+    "WrongName001": ("postgres", "Some other Postgres"),
+    "DriveCred001": ("googleDriveOAuth2Api", ms.CREDENTIAL_NAME),
+}
 
-    def __init__(self, workflows: list[dict]) -> None:
+
+class FakeN8n:
+    """Just enough of the n8n public API for import and readback.
+
+    Saving a workflow resolves the credential reference of each ENABLED node (a disabled node is
+    stored as sent) the way n8n 2.31.5 does (measured against a disposable instance): a known id of the right type has its name
+    replaced by the credential's real name; an unknown id whose name belongs to a credential
+    is resolved to that credential's id; an unknown id and name are stored as sent.
+    """
+
+    def __init__(self, workflows: list[dict], credentials: dict | None = None) -> None:
         self.workflows = {w["id"]: w for w in workflows}
+        self.credentials = dict(CREDENTIALS if credentials is None else credentials)
         self.executions: dict[str, list] = {}
         self.calls: list[tuple[str, str]] = []
+        self.created_credentials: list[dict] = []
+
+    def resolve(self, body: dict) -> dict:
+        body = json.loads(json.dumps(body))
+        for node in body.get("nodes", []):
+            ref = (node.get("credentials") or {}).get("postgres")
+            if not isinstance(ref, dict) or node.get("disabled"):
+                continue  # measured: a disabled node is stored as sent, its credential is not resolved
+            known = self.credentials.get(ref.get("id"))
+            if known and known[0] == "postgres":
+                ref["name"] = known[1]
+            else:
+                by_name = [i for i, (kind, name) in self.credentials.items() if kind == "postgres" and name == ref.get("name")]
+                if len(by_name) == 1:
+                    ref["id"] = by_name[0]
+        return body
 
     def request(self, method, path, body=None, query=None):
         self.calls.append((method, path))
@@ -381,21 +504,36 @@ class FakeN8n:
             return 200, self.workflows[path.rsplit("/", 1)[1]]
         if method == "GET" and path == "/executions":
             return 200, {"data": self.executions.get(query["workflowId"], [])}
+        if method == "POST" and path == "/credentials":
+            credential_id = f"CredNew{len(self.credentials):05d}"
+            self.credentials[credential_id] = (body["type"], body["name"])
+            self.created_credentials.append(body)
+            return 200, {"id": credential_id, "name": body["name"], "type": body["type"]}
         if method == "POST" and path == "/workflows":
             workflow_id = f"NEW{len(self.workflows):04d}"
-            self.workflows[workflow_id] = {**body, "id": workflow_id, "active": False}
+            self.workflows[workflow_id] = {**self.resolve(body), "id": workflow_id, "active": False}
             return 200, self.workflows[workflow_id]
         if method == "PUT" and path.startswith("/workflows/"):
             workflow_id = path.rsplit("/", 1)[1]
-            self.workflows[workflow_id] = {**body, "id": workflow_id, "active": self.workflows[workflow_id].get("active", False)}
+            self.workflows[workflow_id] = {**self.resolve(body), "id": workflow_id, "active": self.workflows[workflow_id].get("active", False)}
             return 200, self.workflows[workflow_id]
         raise AssertionError(f"unscripted {method} {path}")
+
+
+def postgres_nodes(workflow: dict) -> list[dict]:
+    return [n for n in workflow["nodes"] if n["type"] == "n8n-nodes-base.postgres"]
 
 
 class ImportTests(unittest.TestCase):
     def setUp(self) -> None:
         files, mpins, wpins = fake_pins()
         self.workflows = {path: json.loads(files[path]) for path in wpins}
+
+    def imported(self, db_disabled: bool = False, credential_id: str = "CRED1") -> FakeN8n:
+        client = FakeN8n([])
+        with redirect_stdout(io.StringIO()):
+            ms.import_workflows(client, self.workflows, credential_id, db_disabled=db_disabled)
+        return client
 
     def test_creates_inactive_workflows_bound_to_the_credential(self) -> None:
         client = FakeN8n([])
@@ -404,20 +542,26 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(len(ids), 6)
         for workflow in client.workflows.values():
             self.assertFalse(workflow["active"])
-            for node in workflow["nodes"]:
-                if node["type"] == "n8n-nodes-base.postgres":
-                    self.assertEqual(node["credentials"]["postgres"]["id"], "CRED1")
+            for node in postgres_nodes(workflow):
+                self.assertEqual(node["credentials"]["postgres"], {"id": "CRED1", "name": ms.CREDENTIAL_NAME})
+                self.assertNotIn("disabled", node)
+
+    def test_the_database_nodes_can_be_imported_disabled(self) -> None:
+        client = self.imported(db_disabled=True)
+        for workflow in client.workflows.values():
+            self.assertTrue(all(node.get("disabled") is True for node in postgres_nodes(workflow)))
+            self.assertFalse(any(node.get("disabled") for node in workflow["nodes"] if node not in postgres_nodes(workflow)))
 
     def test_replaces_the_one_that_was_imported_with_the_wrong_credential(self) -> None:
         first = next(iter(self.workflows.values()))
         wrong = {"id": "91uUwiZrnky3ArZf", "name": first["name"], "active": False, "nodes": [
-            {"name": "Q", "type": "n8n-nodes-base.postgres", "disabled": True, "credentials": {"postgres": {"id": "PRODUCTION", "name": "adapteng_ops Postgres (internal)"}}}]}
+            {"name": "Q", "type": "n8n-nodes-base.postgres", "disabled": True, "credentials": {"postgres": {"id": "ProdCred0001", "name": PRODUCTION_CREDENTIAL_NAME}}}]}
         client = FakeN8n([wrong])
         with redirect_stdout(io.StringIO()):
             ms.import_workflows(client, self.workflows, "CRED1")
         fixed = client.workflows["91uUwiZrnky3ArZf"]
         self.assertEqual(fixed["nodes"][1]["credentials"]["postgres"]["id"], "CRED1")
-        self.assertNotIn("PRODUCTION", json.dumps(fixed))
+        self.assertNotIn("ProdCred0001", json.dumps(fixed))
         self.assertEqual(len(client.workflows), 6)
 
     def test_refuses_active_workflows_executed_workflows_and_duplicate_names(self) -> None:
@@ -433,23 +577,96 @@ class ImportTests(unittest.TestCase):
             with self.subTest(message=message), redirect_stdout(io.StringIO()), self.assertRaisesRegex(ms.Refused, message):
                 ms.import_workflows(client, self.workflows, "CRED1")
 
-    def test_readback_accepts_the_staging_state_and_rejects_everything_else(self) -> None:
+    # --- the credential is identified by n8n, not by the name written in the JSON ---
+
+    def test_an_unknown_id_is_refused_even_when_its_name_is_the_staging_name(self) -> None:
         client = FakeN8n([])
+        with redirect_stdout(io.StringIO()), self.assertRaisesRegex(ms.Refused, "no Postgres credential with that id"):
+            ms.import_workflows(client, self.workflows, "Unknown00001")
+        self.assertEqual(len(client.workflows), 1, "only the probe workflow may exist after a refused identity check")
+        for node in postgres_nodes(next(iter(client.workflows.values()))):
+            self.assertNotIn("credentials", node)
+            self.assertTrue(node["disabled"])
+
+    def test_an_id_that_belongs_to_the_production_credential_is_refused(self) -> None:
+        client = FakeN8n([])
+        with redirect_stdout(io.StringIO()), self.assertRaisesRegex(ms.Refused, "is named 'adapteng_ops Postgres"):
+            ms.import_workflows(client, self.workflows, "ProdCred0001")
+        self.assertEqual(len(client.workflows), 1)
+        self.assertNotIn("ProdCred0001", json.dumps(client.workflows))
+
+    def test_an_id_with_another_name_or_another_type_is_refused(self) -> None:
+        for credential_id, message in (("WrongName001", "is named 'Some other Postgres'"), ("DriveCred001", "no Postgres credential with that id")):
+            client = FakeN8n([])
+            with self.subTest(credential_id=credential_id), redirect_stdout(io.StringIO()), self.assertRaisesRegex(ms.Refused, message):
+                ms.import_workflows(client, self.workflows, credential_id)
+            self.assertEqual(len(client.workflows), 1)
+
+    def test_a_refused_identity_check_leaves_an_existing_workflow_with_no_credential_at_all(self) -> None:
+        first = next(iter(self.workflows.values()))
+        existing = {"id": "A1", "name": first["name"], "active": False, "nodes": [
+            {"name": "Q", "type": "n8n-nodes-base.postgres", "credentials": {"postgres": {"id": "ProdCred0001", "name": PRODUCTION_CREDENTIAL_NAME}}}]}
+        client = FakeN8n([existing])
+        with redirect_stdout(io.StringIO()), self.assertRaises(ms.Refused):
+            ms.import_workflows(client, self.workflows, "ProdCred0001")
+        self.assertNotIn("ProdCred0001", json.dumps(client.workflows["A1"]))
+        self.assertNotIn("credentials", json.dumps(client.workflows["A1"]))
+
+    # --- exact graph and parameters ---
+
+    def test_readback_accepts_the_staging_state_and_returns_what_it_found(self) -> None:
+        for disabled in (False, True):
+            client = self.imported(db_disabled=disabled)
+            with self.subTest(disabled=disabled), redirect_stdout(io.StringIO()):
+                self.assertEqual(ms.readback(client, self.workflows), ("CRED1", disabled))
+                self.assertEqual(ms.readback(client, self.workflows, "CRED1", disabled), ("CRED1", disabled))
+
+    def test_readback_demands_the_credential_and_the_state_it_was_given(self) -> None:
+        client = self.imported(db_disabled=True)
         with redirect_stdout(io.StringIO()):
-            ms.import_workflows(client, self.workflows, "CRED1")
-            self.assertEqual(ms.readback(client, self.workflows), "CRED1")
-            changes = {
-                "active": lambda w: w.update(active=True),
-                "wrong credential": lambda w: w["nodes"][1]["credentials"]["postgres"].update(name="adapteng_ops Postgres (internal)"),
-                "disabled node": lambda w: w["nodes"][1].update(disabled=True),
-                "extra trigger": lambda w: w["nodes"].append({"name": "T", "type": "n8n-nodes-base.scheduleTrigger", "parameters": {}}),
-            }
-            for label, change in changes.items():
-                fresh = FakeN8n([])
-                ms.import_workflows(fresh, self.workflows, "CRED1")
-                change(next(iter(fresh.workflows.values())))
-                with self.subTest(label=label), self.assertRaises(ms.Refused):
-                    ms.readback(fresh, self.workflows)
+            with self.assertRaisesRegex(ms.Refused, "different credential id"):
+                ms.readback(client, self.workflows, "StagingCred01", True)
+            with self.assertRaisesRegex(ms.Refused, "disabled, expected enabled"):
+                ms.readback(client, self.workflows, "CRED1", False)
+
+    def test_readback_rejects_every_kind_of_drift(self) -> None:
+        def first(w):
+            return w
+
+        changes = {
+            "active": lambda w: w.update(active=True),
+            "wrong credential name": lambda w: w["nodes"][1]["credentials"]["postgres"].update(name=PRODUCTION_CREDENTIAL_NAME),
+            "wrong credential id": lambda w: w["nodes"][1]["credentials"]["postgres"].update(id="OTHERCRED1"),
+            "disabled node": lambda w: w["nodes"][1].update(disabled=True),
+            "enabled node when disabled is expected": lambda w: w["nodes"][1].pop("disabled", None),
+            "extra trigger": lambda w: w["nodes"].append({"name": "T", "type": "n8n-nodes-base.scheduleTrigger", "parameters": {}}),
+            "removed node": lambda w: w["nodes"].pop(0),
+            "changed query": lambda w: w["nodes"][1]["parameters"].update(query="select * from adapteng_ops.accounts"),
+            "added parameter": lambda w: w["nodes"][1]["parameters"].update(options={"queryBatching": "single"}),
+            "changed node type": lambda w: w["nodes"][0].update(type="n8n-nodes-base.scheduleTrigger"),
+            "changed position": lambda w: w["nodes"][0].update(position=[1, 1]),
+            "added connection": lambda w: w["connections"].update({"Manual Trigger": {"main": [[{"node": "Q", "type": "main", "index": 0}]]}}),
+            "changed setting": lambda w: w["settings"].update(executionOrder="v0"),
+        }
+        for label, change in changes.items():
+            disabled = label == "enabled node when disabled is expected"
+            fresh = self.imported(db_disabled=disabled)
+            change(next(iter(fresh.workflows.values())))
+            with self.subTest(label=label), redirect_stdout(io.StringIO()), self.assertRaises(ms.Refused):
+                ms.readback(fresh, self.workflows)
+
+    def test_readback_rejects_a_second_credential_across_workflows(self) -> None:
+        client = self.imported()
+        second = list(client.workflows.values())[1]
+        second["nodes"][1]["credentials"]["postgres"]["id"] = "CRED2"
+        with redirect_stdout(io.StringIO()), self.assertRaisesRegex(ms.Refused, "2 different Postgres credentials"):
+            ms.readback(client, self.workflows)
+
+    def test_readback_rejects_a_mixed_enabled_and_disabled_state(self) -> None:
+        client = self.imported()
+        list(client.workflows.values())[2]["nodes"][1]["disabled"] = True
+        with redirect_stdout(io.StringIO()), self.assertRaisesRegex(ms.Refused, "not all in the same enabled or disabled state"):
+            ms.readback(client, self.workflows)
 
     def test_readback_refuses_when_another_workflow_uses_the_same_credential(self) -> None:
         client = FakeN8n([{"id": "OTHER1", "name": "AUT-001", "active": True, "nodes": [
@@ -460,12 +677,10 @@ class ImportTests(unittest.TestCase):
                 ms.readback(client, self.workflows)
 
     def test_a_workflow_that_has_run_fails_the_readback(self) -> None:
-        client = FakeN8n([])
-        with redirect_stdout(io.StringIO()):
-            ms.import_workflows(client, self.workflows, "CRED1")
-            client.executions[next(iter(client.workflows))] = [{"id": 1}]
-            with self.assertRaisesRegex(ms.Refused, "has executions"):
-                ms.readback(client, self.workflows)
+        client = self.imported()
+        client.executions[next(iter(client.workflows))] = [{"id": 1}]
+        with redirect_stdout(io.StringIO()), self.assertRaisesRegex(ms.Refused, "has executions"):
+            ms.readback(client, self.workflows)
 
 
 class ImportOperationTests(unittest.TestCase):
@@ -477,43 +692,176 @@ class ImportOperationTests(unittest.TestCase):
         self.fetch = lambda path: files[path]
         self.self_hosted = {"id": "NsWG1hD8VmIRRwCv", "name": "AUT-001", "active": True, "nodes": []}
 
+    def staging(self, client: FakeN8n) -> list[dict]:
+        return [w for w in client.workflows.values() if w["name"].startswith("STG ")]
+
     def test_malformed_credential_ids_are_refused_before_anything_is_read(self) -> None:
         client = FakeN8n([self.self_hosted])
-        for bad in ("", "short", "x" * 40, "abc def ghi", "id;DROP", "../etc/passwd"):
-            with self.subTest(bad=bad), redirect_stdout(io.StringIO()), self.assertRaises(ms.Refused):
-                ms.op_import_workflows(bad, fetch=self.fetch, n8n_client=client)
+        for operation in (ms.op_import_workflows, ms.op_enable_db_nodes):
+            for bad in ("", "short", "x" * 40, "abc def ghi", "id;DROP", "../etc/passwd"):
+                with self.subTest(operation=operation.__name__, bad=bad), redirect_stdout(io.StringIO()), self.assertRaises(ms.Refused):
+                    operation(bad, fetch=self.fetch, n8n_client=client)
         self.assertEqual(client.calls, [])
 
-    def test_imports_inactive_workflows_bound_to_the_given_id_and_needs_no_ssh(self) -> None:
+    def test_import_leaves_the_database_nodes_disabled_and_needs_no_ssh(self) -> None:
         client = FakeN8n([self.self_hosted])
-        with redirect_stdout(io.StringIO()):
+        out = io.StringIO()
+        with redirect_stdout(out):
             self.assertEqual(ms.op_import_workflows("StagingCred01", fetch=self.fetch, n8n_client=client), driver.EXIT_OK)
-        staging = [w for w in client.workflows.values() if w["name"].startswith("STG ")]
+        staging = self.staging(client)
         self.assertEqual(len(staging), 6)
         self.assertTrue(all(not w["active"] for w in staging))
+        self.assertTrue(all(node.get("disabled") is True for w in staging for node in postgres_nodes(w)))
+        self.assertIn("NOT yet usable", out.getvalue())
+        self.assertIn("enable-db-nodes", out.getvalue())
+
+    def test_enable_needs_a_prior_disabled_import_and_then_enables_exactly_the_database_nodes(self) -> None:
+        client = FakeN8n([self.self_hosted])
+        with redirect_stdout(io.StringIO()):
+            with self.assertRaises(ms.Refused):  # nothing imported yet
+                ms.op_enable_db_nodes("StagingCred01", fetch=self.fetch, n8n_client=client)
+            ms.op_import_workflows("StagingCred01", fetch=self.fetch, n8n_client=client)
+            self.assertEqual(ms.op_enable_db_nodes("StagingCred01", fetch=self.fetch, n8n_client=client), driver.EXIT_OK)
+        staging = self.staging(client)
+        self.assertEqual(len(staging), 6)
+        self.assertTrue(all(not w["active"] for w in staging))
+        self.assertTrue(all("disabled" not in node for w in staging for node in postgres_nodes(w)))
+
+    def test_enable_refuses_a_different_id_than_the_one_imported(self) -> None:
+        client = FakeN8n([self.self_hosted])
+        with redirect_stdout(io.StringIO()):
+            ms.op_import_workflows("StagingCred01", fetch=self.fetch, n8n_client=client)
+            writes = len([c for c in client.calls if c[0] in ("POST", "PUT")])
+            with self.assertRaisesRegex(ms.Refused, "different credential id"):
+                ms.op_enable_db_nodes("WrongName001", fetch=self.fetch, n8n_client=client)
+        self.assertEqual(len([c for c in client.calls if c[0] in ("POST", "PUT")]), writes)
+
+    def test_enable_refuses_drifted_workflows_and_changes_nothing(self) -> None:
+        client = FakeN8n([self.self_hosted])
+        with redirect_stdout(io.StringIO()):
+            ms.op_import_workflows("StagingCred01", fetch=self.fetch, n8n_client=client)
+            list(self.staging(client))[0]["nodes"][1]["parameters"]["query"] = "select 2"
+            writes = len([c for c in client.calls if c[0] in ("POST", "PUT")])
+            with self.assertRaisesRegex(ms.Refused, "differs from the pinned definition"):
+                ms.op_enable_db_nodes("StagingCred01", fetch=self.fetch, n8n_client=client)
+        self.assertEqual(len([c for c in client.calls if c[0] in ("POST", "PUT")]), writes)
 
     def test_refuses_an_id_that_a_non_staging_workflow_already_uses(self) -> None:
         production = {"id": "OTHER9999", "name": "WEB-002", "active": True, "nodes": [
-            {"name": "P", "type": "n8n-nodes-base.postgres", "credentials": {"postgres": {"id": "ProdCred0001", "name": "adapteng_ops Postgres (internal)"}}}]}
+            {"name": "P", "type": "n8n-nodes-base.postgres", "credentials": {"postgres": {"id": "ProdCred0001", "name": PRODUCTION_CREDENTIAL_NAME}}}]}
         client = FakeN8n([self.self_hosted, production])
         with redirect_stdout(io.StringIO()), self.assertRaisesRegex(ms.Refused, "not a staging one"):
             ms.op_import_workflows("ProdCred0001", fetch=self.fetch, n8n_client=client)
         self.assertFalse(any(call[0] in ("POST", "PUT") for call in client.calls))
 
+    def test_refuses_an_id_that_n8n_does_not_know_before_creating_more_than_the_probe(self) -> None:
+        client = FakeN8n([self.self_hosted])
+        with redirect_stdout(io.StringIO()), self.assertRaisesRegex(ms.Refused, "credential identity check failed"):
+            ms.op_import_workflows("Unknown00001", fetch=self.fetch, n8n_client=client)
+        self.assertEqual(len(self.staging(client)), 1)
+
     def test_refuses_an_instance_that_is_not_the_self_hosted_one(self) -> None:
         cloud = {"id": n8n_deploy_cloud_marker(), "name": "MM-08", "active": True, "nodes": []}
-        client = FakeN8n([cloud])
-        with redirect_stdout(io.StringIO()), self.assertRaisesRegex(ms.Refused, "self-hosted"):
-            ms.op_import_workflows("StagingCred01", fetch=self.fetch, n8n_client=client)
+        for operation in (ms.op_import_workflows, ms.op_enable_db_nodes):
+            client = FakeN8n([cloud])
+            with self.subTest(operation=operation.__name__), redirect_stdout(io.StringIO()), self.assertRaisesRegex(ms.Refused, "self-hosted"):
+                operation("StagingCred01", fetch=self.fetch, n8n_client=client)
+            self.assertFalse(any(call[0] in ("POST", "PUT") for call in client.calls))
 
 
 def n8n_deploy_cloud_marker() -> str:
     return ms.n8n_deploy.KNOWN_N8N_CLOUD_WORKFLOW_ID
 
 
+class OwnerScriptFileTests(unittest.TestCase):
+    """The local command that writes the SQL the owner pastes into the Coolify terminal."""
+
+    def test_a_path_inside_the_checkout_is_refused(self) -> None:
+        for inside in (ROOT / "x.sql", ROOT / "scripts" / "x.sql", ROOT):
+            with self.subTest(path=str(inside)), self.assertRaisesRegex(ms.Refused, "outside the git checkout"):
+                ms.outside_checkout(str(inside))
+        with self.assertRaisesRegex(ms.Refused, "--out is required"):
+            ms.outside_checkout("")
+
+    def test_a_path_outside_the_checkout_is_accepted(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "marketing_staging_provision.sql"
+            self.assertEqual(ms.outside_checkout(str(target)), target.resolve())
+
+    def test_run_writes_each_script_with_unix_line_endings_and_no_secret(self) -> None:
+        import tempfile
+
+        migrations = {path: text for path, text in zip(ms.MIGRATION_PINS, (MIGRATION_009, MIGRATION_010))}
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(ms, "load_pinned", return_value=(migrations, {})):
+            for operation, marker in (("owner-sql", "CREATE SCHEMA"), ("owner-sql-rotate", "nothing to rotate"), ("owner-sql-state", "staging_state: ")):
+                target = Path(folder) / f"{operation}.sql"
+                with redirect_stdout(io.StringIO()):
+                    self.assertEqual(ms.run(["--operation", operation, "--out", str(target)]), driver.EXIT_OK)
+                data = target.read_bytes()
+                self.assertNotIn(b"\r", data)
+                self.assertIn(marker, data.decode("utf-8"))
+                self.assertNotRegex(data.decode("utf-8"), r"[0-9a-f]{64}")
+
+    def test_run_refuses_a_path_inside_the_checkout_and_writes_nothing(self) -> None:
+        target = ROOT / "should_never_exist.sql"
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = ms.run(["--operation", "owner-sql-state", "--out", str(target)])
+        self.assertNotEqual(code, driver.EXIT_OK)
+        self.assertFalse(target.exists())
+
+    def test_owner_scripts_are_not_dispatchable_operations(self) -> None:
+        self.assertFalse(set(ms.OWNER_SCRIPTS) & set(ms.OPERATIONS))
+        self.assertNotRegex(WORKFLOW.read_text(encoding="utf-8"), "owner-sql")
+
+
+class RunbookTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.text = (ROOT / "runbooks" / "marketing-staging-provision.md").read_text(encoding="utf-8")
+
+    def test_the_file_command_is_valid_in_windows_powershell(self) -> None:
+        self.assertNotIn("%USERPROFILE%", self.text)  # that is cmd.exe syntax and is a literal in PowerShell
+        commands = re.findall(r"^python scripts/marketing_staging\.py --operation owner-sql[\w-]* .*$", self.text, re.M)
+        self.assertEqual(len(commands), 3)
+        for command in commands:
+            self.assertIn('--out "$env:USERPROFILE\\', command)
+
+    def test_every_command_in_the_runbook_names_a_real_operation(self) -> None:
+        named = set(re.findall(r"--operation ([\w-]+)", self.text))
+        self.assertTrue({"owner-sql", "owner-sql-state", "owner-sql-rotate"} <= named)
+        self.assertLessEqual(named, set(ms.OPERATIONS) | set(ms.OWNER_SCRIPTS))
+
+    def test_the_exact_confirmation_phrases_are_in_the_runbook(self) -> None:
+        for phrase in ms.CONFIRMATION.values():
+            self.assertIn(phrase, self.text)
+
+    def test_it_separates_a_recovery_point_from_a_restore_proof(self) -> None:
+        self.assertRegex(self.text, r"(?i)recovery point")
+        self.assertRegex(self.text, r"(?i)restore proof")
+        self.assertIn("synthetic", self.text)
+        self.assertNotRegex(self.text, r"(?i)\bbackup (is |was )?(verified|proven|restorable)\b")
+
+    def test_it_documents_partial_state_replay_and_a_rollback_for_each_step(self) -> None:
+        for phrase in ("owner-sql-state", "provisioned-no-password", "drifted", "owner-sql-rotate", "Rollback", "disabled", "enable-db-nodes", "NOT APPLIED"):
+            self.assertIn(phrase, self.text, phrase)
+        self.assertRegex(self.text, r"(?i)do not (run|paste|replay)")
+
+    def test_no_secret_shaped_value_is_in_the_runbook(self) -> None:
+        self.assertNotRegex(self.text, r"(?i)(password|passwd|secret|token)\s*[:=]\s*\S{12,}")
+        self.assertNotRegex(self.text, r"\b[0-9a-f]{64}\b")
+
+
 class WorkflowFileTests(unittest.TestCase):
     def setUp(self) -> None:
         self.text = WORKFLOW.read_text(encoding="utf-8")
+
+    def test_every_write_is_behind_the_environment_and_every_read_is_not(self) -> None:
+        write_if = re.search(r"  write:\n(?:.*\n)*?    if: (.*)\n", self.text).group(1)
+        read_if = re.search(r"  read:\n(?:.*\n)*?    if: (.*)\n", self.text).group(1)
+        self.assertEqual(set(re.findall(r"inputs\.operation == '([\w-]+)'", write_if)), set(ms.WRITE_OPERATIONS))
+        self.assertEqual(set(re.findall(r"inputs\.operation == '([\w-]+)'", read_if)), set(ms.OPERATIONS) - set(ms.WRITE_OPERATIONS))
 
     def test_manual_dispatch_only_and_three_inputs(self) -> None:
         self.assertIn("workflow_dispatch:", self.text)
@@ -672,12 +1020,154 @@ class PostgresIsolationTests(unittest.TestCase):
         self.assertIn("SECURITY DEFINER function public.open_door", result.stderr)
         self.assertEqual(ms.classify(ms.parse_pairs(self.psql(ms.STATE_SQL).stdout)), "absent")
 
+    @staticmethod
+    def shown_passwords(result: subprocess.CompletedProcess) -> list[str]:
+        return [line for line in result.stdout.splitlines() if re.fullmatch(r"[0-9a-f]{64}", line.strip())]
+
+    def paste(self, sql: str) -> subprocess.CompletedProcess:
+        """Emulate pasting into the Coolify terminal: psql carries on after an error.
+
+        An interactive psql does not stop a pasted script on an error, so the script's own
+        `\\set ON_ERROR_STOP on` line is removed and the statements after the failing one are
+        still executed (and rejected, because the transaction is aborted).
+        """
+
+        sql = sql.replace("\\set ON_ERROR_STOP on\n", "")
+        return subprocess.run(
+            ["docker", "exec", "-i", PG_CONTAINER, "psql", "--no-psqlrc", "-q", "-At", "-F", "|", "-U", "postgres", "-d", "adapteng_ops", "-f", "-"],
+            input=sql, capture_output=True, text=True, timeout=120,
+        )
+
+    def verdict(self) -> str:
+        return ms.classify(ms.parse_pairs(self.psql(ms.STATE_SQL).stdout))
+
+    def stored_verifier(self) -> str:
+        return self.psql("SELECT coalesce(rolpassword, '') FROM pg_authid WHERE rolname = 'marketing_staging_app';").stdout.strip()
+
+    def script_verdict(self) -> str:
+        output = self.psql(ms.owner_state_sql()).stdout
+        match = re.search(r"staging_state: (\S+)", output)
+        self.assertIsNotNone(match, output)
+        return match.group(1)
+
     def test_owner_sql_runs_and_prints_the_server_made_password_once(self) -> None:
         self.reset()
         result = self.psql(ms.owner_sql(self.migrations()))
-        shown = [line for line in result.stdout.splitlines() if re.fullmatch(r"[0-9a-f]{64}", line.strip())]
-        self.assertEqual(len(shown), 1)
-        self.assertEqual(ms.classify(ms.parse_pairs(self.psql(ms.STATE_SQL).stdout)), "exact")
+        self.assertEqual(len(self.shown_passwords(result)), 1)
+        self.assertEqual(self.verdict(), "exact")
+        self.assertTrue(self.stored_verifier().startswith("SCRAM-SHA-256$"))
+
+    def test_the_printed_password_is_the_one_the_role_actually_has(self) -> None:
+        self.reset()
+        shown = self.shown_passwords(self.psql(ms.owner_sql(self.migrations())))[0]
+        # Verify without a client round trip: recompute the SCRAM stored key from the stored verifier's salt.
+        verifier = self.stored_verifier()
+        import base64, hashlib, hmac
+
+        _, rest = verifier.split("$", 1)
+        iterations, salt_and_keys = rest.split(":", 1)
+        salt, keys = salt_and_keys.split("$", 1)
+        stored_key = keys.split(":", 1)[0]
+        salted = hashlib.pbkdf2_hmac("sha256", shown.encode(), base64.b64decode(salt), int(iterations))
+        client_key = hmac.new(salted, b"Client Key", hashlib.sha256).digest()
+        self.assertEqual(base64.b64encode(hashlib.sha256(client_key).digest()).decode(), stored_key)
+
+    def test_a_failure_in_the_one_transaction_leaves_no_role_no_schema_and_no_password(self) -> None:
+        self.reset()
+        self.psql("GRANT SELECT ON public.lead_identity TO PUBLIC;")
+        for label, runner in (("piped with ON_ERROR_STOP", lambda sql: self.psql(sql, check=False)), ("pasted", self.paste)):
+            with self.subTest(runner=label):
+                result = runner(ms.owner_sql(self.migrations()))
+                self.assertEqual(self.shown_passwords(result), [])
+                self.assertEqual(self.verdict(), "absent")
+                self.assertEqual(self.stored_verifier(), "")
+        self.assertIn("NOT APPLIED", self.paste(ms.owner_sql(self.migrations())).stdout)
+
+    def test_a_pasted_replay_on_a_finished_provisioning_prints_nothing_and_changes_nothing(self) -> None:
+        self.reset()
+        self.psql(ms.owner_sql(self.migrations()))
+        before = self.stored_verifier()
+        replay = self.paste(ms.owner_sql(self.migrations()))
+        self.assertEqual(self.shown_passwords(replay), [])
+        self.assertIn("NOT APPLIED", replay.stdout)
+        self.assertIn("do not replay this script", replay.stderr)
+        self.assertEqual(self.stored_verifier(), before)
+        self.assertEqual(self.verdict(), "exact")
+
+    def test_a_replay_after_a_partial_old_style_provisioning_does_not_touch_the_existing_objects(self) -> None:
+        self.reset()
+        self.psql(ms.provision_sql(self.migrations()))  # schema and role without a password, as an older two-step script left it
+        self.psql("INSERT INTO marketing_staging.marketing_publication_radar (dedupe_key, pub_id, is_synthetic) VALUES ('doi:10.0/keep', 'STG_KEEP', true);")
+        counts_before = self.counts()
+        for runner in (lambda sql: self.psql(sql, check=False), self.paste):
+            replay = runner(ms.owner_sql(self.migrations()))
+            self.assertEqual(self.shown_passwords(replay), [])
+        self.assertEqual(self.counts(), counts_before)
+        self.assertEqual(self.verdict(), "provisioned-no-password")
+        self.assertEqual(self.psql("SELECT count(*) FROM marketing_staging.marketing_publication_radar;").stdout.strip(), "1")
+
+    def test_rotate_sets_a_new_password_only_and_only_when_provisioned(self) -> None:
+        self.reset()
+        refused = self.paste(ms.owner_rotate_sql())
+        self.assertEqual(self.shown_passwords(refused), [])
+        self.assertIn("nothing to rotate", refused.stderr)
+        self.assertEqual(self.verdict(), "absent")
+        self.psql(ms.provision_sql(self.migrations()))
+        first = self.shown_passwords(self.psql(ms.owner_rotate_sql()))
+        self.assertEqual(len(first), 1)
+        self.assertEqual(self.verdict(), "exact")
+        verifier = self.stored_verifier()
+        second = self.shown_passwords(self.psql(ms.owner_rotate_sql()))
+        self.assertEqual(len(second), 1)
+        self.assertNotEqual(first, second)
+        self.assertNotEqual(self.stored_verifier(), verifier)
+        proof = ms.parse_pairs(self.psql(ms.VERIFY_SQL).stdout)
+        self.assertEqual(proof["outside_relations_reachable"], "0")
+
+    @staticmethod
+    def runbook_rollback() -> str:
+        text = (ROOT / "runbooks" / "marketing-staging-provision.md").read_text(encoding="utf-8")
+        block = re.search(r"```sql\n(-- rollback-database\n.*?)```", text, re.S)
+        assert block, "the runbook has no rollback-database block"
+        return block.group(1)
+
+    def test_the_rollback_in_the_runbook_removes_exactly_what_was_added(self) -> None:
+        self.reset()
+        before = self.counts()
+        self.psql(ms.owner_sql(self.migrations()))
+        self.assertEqual(self.verdict(), "exact")
+        self.psql(self.runbook_rollback())
+        self.assertEqual(self.verdict(), "absent")
+        self.assertEqual(self.counts(), before)
+        self.assertEqual(self.psql("SELECT count(*) FROM public.lead_identity;").stdout.strip(), "1")
+        # and the script can be used again afterwards
+        self.assertEqual(len(self.shown_passwords(self.psql(ms.owner_sql(self.migrations())))), 1)
+
+    def test_the_rollback_fails_closed_and_refuses_when_nothing_exists(self) -> None:
+        self.reset()
+        refused = self.psql(self.runbook_rollback(), check=False)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("nothing to roll back", refused.stderr)
+        self.psql(ms.owner_sql(self.migrations()))
+        self.psql("GRANT SELECT ON public.lead_identity TO marketing_staging_app;")  # the role now holds something outside the schema
+        self.addCleanup(self.psql, "REVOKE ALL ON public.lead_identity FROM marketing_staging_app;", check=False)
+        stuck = self.psql(self.runbook_rollback(), check=False)
+        self.assertNotEqual(stuck.returncode, 0)
+        self.assertEqual(self.verdict(), "exact", "a failed rollback must leave everything as it was")
+
+    def test_the_state_script_agrees_with_the_classifier_in_every_state(self) -> None:
+        self.reset()
+        self.assertEqual((self.script_verdict(), self.verdict()), ("absent", "absent"))
+        self.psql(ms.provision_sql(self.migrations()))
+        self.assertEqual((self.script_verdict(), self.verdict()), ("provisioned-no-password", "provisioned-no-password"))
+        self.psql(ms.owner_rotate_sql())
+        self.assertEqual((self.script_verdict(), self.verdict()), ("exact", "exact"))
+        self.psql("ALTER ROLE marketing_staging_app CONNECTION LIMIT 9;")
+        self.assertEqual((self.script_verdict(), self.verdict()), ("drifted", "drifted"))
+        self.reset()
+        self.psql("CREATE ROLE marketing_staging_app LOGIN;")
+        self.assertEqual((self.script_verdict(), self.verdict()), ("drifted", "drifted"))
+        self.psql("DROP ROLE marketing_staging_app;")
 
 
 if __name__ == "__main__":
