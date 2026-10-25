@@ -59,6 +59,35 @@ it does not print raw log contents and cannot read production state.
 a **new explicit owner approval** for another disposable B2 test. One failed
 test does not authorize unrestricted retries.
 
+
+## Second owner-approved isolated B2 rehearsal — PASSED (first green)
+
+- GitHub Actions: https://github.com/Ivan-Shyla/adapteng-company-os/actions/runs/40179960217
+- Timestamp: 2026-10-25, 09:16–09:19 UTC. Event: workflow_dispatch;
+  branch: fix/postgres-rehearsal-pinned-source-20261024;
+  tested head: `783608c6e3a86f0e216514cd46055694050759d1`.
+- All steps succeeded: source/archive verification, disposable PostgreSQL 16,
+  negative-control isolation guard, B2 access/stanza/check, full backup,
+  repository verification, independent restore and checksum verification,
+  WAL replay recovery and checksum verification, cleanup, sanitized evidence.
+- Immediate restore: **4 tables, 45,001 rows**; backed-up/restored set SHA-256:
+  `11942a24357a213f00cb469b5c0029f1c2970d2ac2aa2e9a7ce2b065e801abb3`.
+- WAL replay: **5 tables, 46,203 rows**; post-backup/restored-to-latest SHA-256:
+  `5271c90d227309af11f0d248a178ce13ff2ab747a975009c008ab1a9cc65f847`.
+- B2 rehearsal prefix `/restore-rehearsal/40179960217-1` cleaned successfully.
+  The checked production prefix `/adapteng-ops` remained **0 objects before
+  and after**. This count is only for that exact prefix and does NOT establish
+  that the production database has no backups elsewhere.
+- Prior run 40128239401 FAILED due WAL timeout; this was not a second green.
+  Therefore current independent green count: **1 of 2 required**.
+- The test does NOT restore the current production PostgreSQL backup, establish
+  production RPO/RTO, or prove production B2 archive health.
+
+**Decision:** keep this PR as Draft. Do not merge, change production backup
+configuration, or launch another B2 test without a new explicit approval.
+After two independently green disposable rehearsals, separately validate the
+actual offsite backup and production-derived restore in an isolated environment.
+
 ## Review and acceptance
 1. GitHub repo CI tests pass for this PR (static policy and unit tests).
 2. Reviewer verifies sha256 against upstream asset and code-level negative
